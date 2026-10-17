@@ -156,6 +156,22 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       })
     })
 
+    test('identity-aware squash exposes the actual landed trailer when inspection is supported', async () => {
+      await withForge(factory, undefined, async (harness) => {
+        const { pr } = await pushAndOpen(harness)
+        await harness.controls.prepareMergeable(pr.number)
+        await harness.forge.squashMerge(harness.workspacePath, pr.number, pr.headSha, {
+          buildSlug: 'contract-build',
+        })
+        const sha = await harness.controls.mergeSha(pr.number)
+        if (harness.forge.readCommitMessage !== undefined) {
+          expect(await harness.forge.readCommitMessage(harness.workspacePath, sha)).toContain(
+            'Autobuild-Build: contract-build',
+          )
+        }
+      })
+    })
+
     test('setAutoMerge acknowledges native state and is idempotent', async () => {
       await withForge(factory, { gated: true }, async (harness) => {
         if (harness.nativeAutoMerge === false) return

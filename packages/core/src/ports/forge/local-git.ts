@@ -1,3 +1,5 @@
+import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
+import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -88,7 +90,10 @@ export class LocalGitForge implements Forge {
   }
 
   private async sha(ref: string, cwd: string): Promise<string> {
-    const result = await this.command(['rev-parse', '--verify', `${ref}^{commit}`], cwd)
+    const result = await this.command(
+      ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`],
+      cwd,
+    )
     const sha = result.stdout.trim()
     if (!objectId.safeParse(sha).success) {
       throw new Error(
@@ -516,7 +521,30 @@ export class LocalGitForge implements Forge {
     }
   }
 
-  async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
+  async readCommitMessage(workspacePath: string, sha: string): Promise<string> {
+    const commit = await this.sha(sha, workspacePath)
+    return (await this.command(['show', '-s', '--format=%B', commit, '--'], workspacePath)).stdout
+  }
+
+  async containsBuild(workspacePath: string, branch: string, buildSlug: string): Promise<boolean> {
+    await this.assertRef(`refs/heads/${branch}`, workspacePath)
+    const tip = await this.sha(`refs/heads/${branch}`, workspacePath)
+    const forge = this
+    async function* messages() {
+      const history = await forge.command(['rev-list', tip, '--'], workspacePath)
+      for (const sha of history.stdout.trim().split('\n')) {
+        yield await forge.readCommitMessage(workspacePath, sha)
+      }
+    }
+    return historyContainsBuild(messages(), buildSlug)
+  }
+
+  async squashMerge(
+    workspacePath: string,
+    number: number,
+    expectedHeadSha: string,
+    options?: BuildLandingOptions,
+  ): Promise<void> {
     let { record } = await this.readRecord(workspacePath, number)
     if (record.status === 'merged') return
     const headRef = `refs/heads/${record.head}`
@@ -531,7 +559,17 @@ export class LocalGitForge implements Forge {
 
     if (record.pendingLanding !== undefined) {
       if (await this.isAncestor(workspacePath, record.pendingLanding.commitSha, baseSha)) return
-      if (record.pendingLanding.baseSha === baseSha && record.pendingLanding.headSha === headSha) {
+      if (
+        record.pendingLanding.baseSha === baseSha &&
+        record.pendingLanding.headSha === headSha &&
+        (options === undefined ||
+          (
+            await this.readCommitMessage(workspacePath, record.pendingLanding.commitSha)
+          ).trimEnd() ===
+            withBuildTrailer(record.mergeMessage, options.buildSlug, {
+              includesSubject: true,
+            }).trimEnd())
+      ) {
         // Resume the crash window after pending evidence but before ref update.
       } else {
         record = await this.updateRecord(workspacePath, number, (current) => ({
@@ -545,7 +583,14 @@ export class LocalGitForge implements Forge {
     if (pending === undefined) {
       const treeSha = await this.mergeTree(workspacePath, baseSha, headSha)
       if (treeSha === null) throw new Error(`local-git PR #${number} is not mergeable`)
-      const commitSha = await this.commitTree(workspacePath, treeSha, baseSha, record.mergeMessage)
+      const commitSha = await this.commitTree(
+        workspacePath,
+        treeSha,
+        baseSha,
+        options === undefined
+          ? record.mergeMessage
+          : withBuildTrailer(record.mergeMessage, options.buildSlug, { includesSubject: true }),
+      )
       pending = { baseSha, headSha, treeSha, commitSha }
       record = await this.updateRecord(workspacePath, number, (current) => ({
         ...current,

@@ -1,3 +1,4 @@
+import { hasBuildTrailer } from '../kernel/build-identity'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
@@ -47,7 +48,7 @@ import { createHash } from 'node:crypto'
 import type { Config } from '../config/schema'
 import type { LanguageModel } from 'ai'
 import { runOrchestratorTickStep } from './orchestrator-tick'
-import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload, PinnedAsset } from '../events/payloads'
@@ -1927,7 +1928,15 @@ export class Dispatcher {
         )
         await append(
           result.state === 'merged'
-            ? { actor: DISPATCHER, type: 'pr.merged', payload: { sha: result.sha } }
+            ? {
+                actor: DISPATCHER,
+                type: 'pr.merged',
+                payload: await this.mergeEvidence(
+                  record,
+                  this.forgeWorkspacePath(events),
+                  result.sha,
+                ),
+              }
             : { actor: DISPATCHER, type: 'pr.closed', payload: {} },
         )
       } catch (error) {
@@ -2059,6 +2068,32 @@ export class Dispatcher {
     report.discarded += 1
   }
 
+  /** Inspection is evidence, never a prerequisite for observing a merge. */
+  private async mergeEvidence(
+    record: BuildRecord,
+    workspacePath: string,
+    sha: string,
+  ): Promise<{ sha: string; buildTrailerPresent?: boolean }> {
+    const read = this.deps.forge.readCommitMessage
+    if (read === undefined) return { sha }
+    try {
+      const message = await read.call(this.deps.forge, workspacePath, sha)
+      return { sha, buildTrailerPresent: hasBuildTrailer(message, record.slug) }
+    } catch (error) {
+      await this.store.append(record.slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: {
+          id: this.deps.ids('obs'),
+          kind: 'followup',
+          summary: `Merged commit ${sha} identity inspection failed; inspect its Autobuild-Build trailer manually: ${error instanceof Error ? error.message : String(error)}`,
+          refs: [sha],
+        },
+      })
+      return { sha }
+    }
+  }
+
   /** Post-PR epilogue (§15.7): poll the forge, emit `pr.*` facts (deduped
    * against the reduced `prState`), release/complete, project to the ticket. */
   private async checkPr(
@@ -2131,24 +2166,53 @@ export class Dispatcher {
     // predicate. Only `applied` acknowledges native state. A direct merge is
     // owned solely by this janitor and only after the engine is parked at
     // awaiting-pr (all verify/finalize work complete).
-    if (prState.state === 'open' && autoMerge?.enabled === true) {
-      const result = await forge.setAutoMerge(workspacePath, pr.number, true)
+    const commandSeq = state.autoMerge.commandSeq
+    const canApply = async (): Promise<boolean> => {
+      await store.refreshBuild(record.slug)
+      const latest = await store.buildFacts(record.slug)
+      const decision = await this.decideBuild(record.slug, latest.state, latest.log, report)
+      return (
+        latest.state.pr?.number === pr.number &&
+        latest.state.prState === 'open' &&
+        latest.state.autoMerge.requested === true &&
+        latest.state.autoMerge.commandSeq === commandSeq &&
+        decision?.kind === 'wait' &&
+        decision.reason === 'awaiting-pr'
+      )
+    }
+    if (
+      prState.state === 'open' &&
+      state.autoMerge.requested === true &&
+      commandSeq !== undefined &&
+      (await canApply())
+    ) {
+      const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
+        buildSlug: record.slug,
+        canApply,
+      })
       if (result.kind === 'applied') {
-        await store.append(record.slug, {
-          actor: DISPATCHER,
-          type: autoMergeApplicationType(true),
-          payload: { commandSeq: autoMerge.commandSeq },
-        })
+        await store.refreshBuild(record.slug)
+        const pending = pendingAutoMerge((await store.buildFacts(record.slug)).state)
+        if (pending?.enabled === true && pending.commandSeq === commandSeq)
+          await store.append(record.slug, {
+            actor: DISPATCHER,
+            type: autoMergeApplicationType(true),
+            payload: { commandSeq },
+          })
       } else if (result.kind === 'deferred' && result.reason !== undefined) {
         await recordAutoMergeDeferralObservation(
           store,
           record.slug,
           result.reason,
           pr.number,
-          autoMerge.commandSeq,
+          commandSeq,
           this.deps.ids('obs'),
         )
-      } else if (result.kind === 'ungated' && prState.mergeable === true) {
+      } else if (
+        result.kind === 'ungated' &&
+        autoMerge?.enabled === true &&
+        prState.mergeable === true
+      ) {
         // Re-read at the last possible point. A cancellation, replacement
         // command, newly due pipeline work, or application fact suppresses
         // this attempt; the next tick reclassifies from fresh forge state.
@@ -2164,7 +2228,9 @@ export class Dispatcher {
           decision?.kind === 'wait' &&
           decision.reason === 'awaiting-pr'
         ) {
-          await forge.squashMerge(workspacePath, pr.number, result.headSha)
+          await forge.squashMerge(workspacePath, pr.number, result.headSha, {
+            buildSlug: record.slug,
+          })
         }
       }
     }
@@ -2179,7 +2245,7 @@ export class Dispatcher {
           await store.append(record.slug, {
             actor: DISPATCHER,
             type: 'pr.merged',
-            payload: { sha: prState.sha },
+            payload: await this.mergeEvidence(record, workspacePath, prState.sha),
           } satisfies EventWrite<'pr.merged'>)
         }
         await this.releaseWorkspace(record.slug, events)

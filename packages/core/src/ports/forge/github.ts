@@ -1,3 +1,5 @@
+import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
+import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
  * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
@@ -324,6 +326,42 @@ const ENABLE_AUTO_MERGE_MUTATION = `
     enablePullRequestAutoMerge(
       input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}
     ) {
+      pullRequest { id }
+    }
+  }
+`
+
+const SQUASH_MESSAGE_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        id headRefOid state
+        viewerMergeHeadlineText(mergeType: SQUASH)
+        viewerMergeBodyText(mergeType: SQUASH)
+        autoMergeRequest { commitHeadline commitBody mergeMethod }
+      }
+    }
+  }
+`
+const squashMessageData = z.object({
+  repository: z.object({
+    pullRequest: z.object({
+      id: z.string().min(1),
+      headRefOid: z.string().min(1),
+      state: z.enum(['OPEN', 'MERGED', 'CLOSED']),
+      viewerMergeHeadlineText: z.string(),
+      viewerMergeBodyText: z.string(),
+      autoMergeRequest: z
+        .object({ commitHeadline: z.string(), commitBody: z.string(), mergeMethod: z.string() })
+        .nullable(),
+    }),
+  }),
+})
+const ENABLE_IDENTITY_AUTO_MERGE_MUTATION = `
+  mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!,
+            $expectedHeadOid: GitObjectID!, $commitHeadline: String!, $commitBody: String!) {
+    enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod,
+      expectedHeadOid: $expectedHeadOid, commitHeadline: $commitHeadline, commitBody: $commitBody}) {
       pullRequest { id }
     }
   }
@@ -828,6 +866,7 @@ export class GitHubForge implements Forge {
    * fail-closed deferral rather than escaping into finalize or the janitor. */
   private async mergeGatePresence(
     baseRefName: string,
+    requireIdentity = false,
   ): Promise<
     | { kind: 'proved'; presence: MergeGatePresence }
     | { kind: 'deferred'; reason: AutoMergeDeferralReason }
@@ -876,7 +915,13 @@ export class GitHubForge implements Forge {
     let planLimited = false
     try {
       const rules = await this.request('GET', `${repoPath}/rules/branches/${baseRefName}`)
-      rulesetGate = rulesetsHaveMergeGate(this.parse(restRulesetRules, rules, 'ruleset probe'))
+      const parsed = this.parse(restRulesetRules, rules, 'ruleset probe')
+      if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
+        return unproven(
+          'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
+        )
+      }
+      rulesetGate = rulesetsHaveMergeGate(parsed)
     } catch (error) {
       if (
         error instanceof GitHubApiError &&
@@ -983,6 +1028,7 @@ export class GitHubForge implements Forge {
     _workspacePath: string,
     number: number,
     enabled: boolean,
+    options?: BuildLandingOptions,
   ): Promise<AutoMergeResult> {
     // Cancellation must remain usable when GitHub adds a merge-state enum:
     // inspect only the fields disabling actually needs. The mutation itself
@@ -1012,11 +1058,14 @@ export class GitHubForge implements Forge {
         repoPath,
         number,
       )
-      if (view.auto_merge !== null) return { kind: 'applied' }
+      if (view.auto_merge !== null && options === undefined) return { kind: 'applied' }
 
-      const gate = await this.mergeGatePresence(view.base.ref)
+      const gate = await this.mergeGatePresence(view.base.ref, options !== undefined)
       if (gate.kind === 'deferred') return gate
-      const disposition = classifyAutoMergeEnable(mergeState, gate.presence)
+      const disposition =
+        view.auto_merge !== null && options !== undefined && mergeState !== 'DIRTY'
+          ? { kind: 'native' as const }
+          : classifyAutoMergeEnable(mergeState, gate.presence)
       switch (disposition.kind) {
         case 'native': {
           const repository = await this.getJson(
@@ -1033,6 +1082,8 @@ export class GitHubForge implements Forge {
               },
             }
           }
+          if (options !== undefined)
+            return await this.applyIdentityAutoMerge(number, view.head.sha, options)
           await this.graphql(
             'enablePullRequestAutoMerge',
             enableAutoMergeData,
@@ -1111,6 +1162,104 @@ export class GitHubForge implements Forge {
     }
   }
 
+  private async squashMessage(number: number) {
+    const { owner, name } = await this.requireCoordinates()
+    const data = await this.graphql('squashMessage', squashMessageData, SQUASH_MESSAGE_QUERY, {
+      owner,
+      name,
+      number,
+    })
+    return data.repository.pullRequest
+  }
+
+  private async applyIdentityAutoMerge(
+    number: number,
+    expectedHead: string,
+    options: BuildLandingOptions,
+  ): Promise<AutoMergeResult> {
+    let message = await this.squashMessage(number)
+    const matches = (view: typeof message): boolean =>
+      view.autoMergeRequest !== null &&
+      view.autoMergeRequest.mergeMethod === 'SQUASH' &&
+      view.autoMergeRequest.commitHeadline === view.viewerMergeHeadlineText &&
+      view.autoMergeRequest.commitBody ===
+        withBuildTrailer(view.viewerMergeBodyText, options.buildSlug)
+    if (message.state !== 'OPEN' || message.headRefOid !== expectedHead) return { kind: 'deferred' }
+    if (matches(message)) return { kind: 'applied' }
+    if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
+    if (message.autoMergeRequest !== null) {
+      await this.graphql(
+        'disablePullRequestAutoMerge',
+        disableAutoMergeData,
+        DISABLE_AUTO_MERGE_MUTATION,
+        { pullRequestId: message.id },
+      )
+      message = await this.squashMessage(number)
+      if (
+        message.state !== 'OPEN' ||
+        message.headRefOid !== expectedHead ||
+        message.autoMergeRequest !== null
+      )
+        return { kind: 'deferred' }
+    }
+    if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
+    await this.graphql(
+      'enablePullRequestAutoMerge',
+      enableAutoMergeData,
+      ENABLE_IDENTITY_AUTO_MERGE_MUTATION,
+      {
+        pullRequestId: message.id,
+        mergeMethod: 'SQUASH',
+        expectedHeadOid: message.headRefOid,
+        commitHeadline: message.viewerMergeHeadlineText,
+        commitBody: withBuildTrailer(message.viewerMergeBodyText, options.buildSlug),
+      },
+    )
+    const after = await this.squashMessage(number)
+    return after.state === 'OPEN' && after.headRefOid === message.headRefOid && matches(after)
+      ? { kind: 'applied' }
+      : {
+          kind: 'deferred',
+          reason: {
+            code: 'unproven-gate-state',
+            detail: 'Native squash message was not confirmed; retry provider inspection',
+          },
+        }
+  }
+
+  async readCommitMessage(_workspacePath: string, sha: string): Promise<string> {
+    const { owner, name } = await this.requireCoordinates()
+    const view = await this.getJson(
+      z.object({ commit: z.object({ message: z.string() }) }),
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${encodeURIComponent(sha)}`,
+      'landed commit message',
+    )
+    return view.commit.message
+  }
+
+  async containsBuild(_workspacePath: string, branch: string, buildSlug: string): Promise<boolean> {
+    if (!isValidGitBranchName(branch)) throw new Error('invalid branch')
+    const { owner, name } = await this.requireCoordinates()
+    const forge = this
+    async function* messages() {
+      for (let page = 1; ; page++) {
+        const response = await forge.request(
+          'GET',
+          `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits`,
+          {
+            query: { sha: branch, per_page: '100', page: String(page) },
+          },
+        )
+        const commits = z
+          .array(z.object({ commit: z.object({ message: z.string() }) }))
+          .parse(response.json)
+        for (const commit of commits) yield commit.commit.message
+        if (commits.length < 100) return
+      }
+    }
+    return historyContainsBuild(messages(), buildSlug)
+  }
+
   /** Normal guarded squash — no admin, force, rebase, or native-auto flag.
    * A 409 (head moved) surfaces as a hard error, preserving the contract's
    * moved-head rejection. */
@@ -1118,13 +1267,30 @@ export class GitHubForge implements Forge {
     _workspacePath: string,
     number: number,
     expectedHeadSha: string,
+    options?: BuildLandingOptions,
   ): Promise<void> {
     const { owner, name } = await this.requireCoordinates()
+    const message = options === undefined ? undefined : await this.squashMessage(number)
+    if (
+      message !== undefined &&
+      (message.state !== 'OPEN' || message.headRefOid !== expectedHeadSha)
+    ) {
+      throw new Error('GitHub squash message head changed; retry inspection')
+    }
     await this.request(
       'PUT',
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
       {
-        body: { merge_method: 'squash', sha: expectedHeadSha },
+        body: {
+          merge_method: 'squash',
+          sha: expectedHeadSha,
+          ...(message !== undefined && options !== undefined
+            ? {
+                commit_title: message.viewerMergeHeadlineText,
+                commit_message: withBuildTrailer(message.viewerMergeBodyText, options.buildSlug),
+              }
+            : {}),
+        },
       },
     )
   }

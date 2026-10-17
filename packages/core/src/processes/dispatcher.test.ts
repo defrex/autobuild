@@ -3231,7 +3231,7 @@ describe('Dispatcher janitor', () => {
       'build.completed',
     ])
     const prMerged = events.find((e) => e.type === 'pr.merged')
-    expect(prMerged?.payload).toEqual({ sha: 'squash-1' })
+    expect(prMerged?.payload).toEqual({ sha: 'squash-1', buildTrailerPresent: false })
     expect(events.at(-1)?.payload).toEqual({ outcome: 'merged' })
     expect(h.forge.getPrStateCalls).toEqual([{ workspacePath: '/local/workspace-1', number: 1 }])
     expect(h.workspaces.releases).toEqual([
@@ -3433,7 +3433,7 @@ describe('Dispatcher janitor', () => {
 
   test('open PR: applies and acknowledges a post-PR auto-merge request exactly once', async () => {
     const h = harness()
-    const slug = await seedBuild(h, { pr: PR })
+    const slug = await seedAwaitingPr(h)
     const command = await h.store.append(slug, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
@@ -3456,15 +3456,17 @@ describe('Dispatcher janitor', () => {
     expect(applied?.actor).toEqual(DISPATCHER)
     expect(applied?.payload).toEqual({ commandSeq: command.seq })
 
-    // Matching command seq + value is settled; another poll does not call the
-    // forge at all (not merely another idempotent mutation).
+    // Acknowledged commands keep maintaining provider messages without another fact.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.forge.autoMergeCalls).toHaveLength(1)
+    expect(h.forge.autoMergeCalls).toHaveLength(2)
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'pr.auto-merge-enabled'),
+    ).toHaveLength(1)
   })
 
   test('finalize and janitor racing at conditional append record one deferral observation', async () => {
     const h = harness()
-    const slug = await seedBuild(h, { pr: PR })
+    const slug = await seedAwaitingPr(h)
     const command = await h.store.append(slug, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
@@ -3555,7 +3557,7 @@ describe('Dispatcher janitor', () => {
 
   test('call-before-event and failure windows retry through the idempotent setter', async () => {
     const h = harness()
-    const slug = await seedBuild(h, { pr: PR })
+    const slug = await seedAwaitingPr(h)
     const command = await h.store.append(slug, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
@@ -3603,7 +3605,7 @@ describe('Dispatcher janitor', () => {
 
   test('native auto-merge completion is observed by the ordinary next poll', async () => {
     const h = harness()
-    const slug = await seedBuild(h, { pr: PR })
+    const slug = await seedAwaitingPr(h)
     await h.store.append(slug, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
@@ -3762,6 +3764,7 @@ describe('Dispatcher janitor', () => {
         workspacePath: `/ws/ab/${slug}`,
         number: 1,
         expectedHeadSha: PR.headSha,
+        buildSlug: slug,
       },
     ])
     const afterMergeCall = await h.store.getEvents(slug)
@@ -3982,76 +3985,94 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.squashMergeCalls).toHaveLength(1)
   })
 
-  test('fallback waits for the full post-reconcile verify cycle', async () => {
-    const toml = [
-      '[commands]',
-      'test = "bun test"',
-      '[verify]',
-      'steps = ["unit"]',
-      '[verify.unit]',
-      'kind = "check"',
-      'command = "test"',
-    ].join('\n')
-    const h = harness({ toml })
-    const slug = await seedBuild(h)
-    await seedLoopsApproved(h, slug)
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.started',
-      payload: { step: 'unit', attempt: 1 },
-    })
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.completed',
-      payload: { step: 'unit', attempt: 1, pass: true },
-    })
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: { pr: PR },
-    })
-    await h.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: 'base-old' },
-    })
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'base-old' },
-    })
-    await h.store.append(slug, {
-      actor: agentActor('reconcile', 's_9'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-1',
-        artifact: { kind: 'reconcile-notes', rev: 0 },
-      },
-    })
-    await h.store.append(slug, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    h.forge.setPrState(1, { state: 'open', mergeable: true })
-    h.forge.setGatePresence(1, 'absent')
-    await h.store.claimLease(slug, 'runner-live', 60_000)
+  test.each([false, true])(
+    'landing and native maintenance wait for post-reconcile verify (maintenance=%s)',
+    async (maintenance) => {
+      const toml = [
+        '[commands]',
+        'test = "bun test"',
+        '[verify]',
+        'steps = ["unit"]',
+        '[verify.unit]',
+        'kind = "check"',
+        'command = "test"',
+      ].join('\n')
+      const h = harness({ toml })
+      const slug = await seedBuild(h)
+      await seedLoopsApproved(h, slug)
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { step: 'unit', attempt: 1 },
+      })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step: 'unit', attempt: 1, pass: true },
+      })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: PR },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'base-old' },
+      })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'reconcile.started',
+        payload: { attempt: 1, baseSha: 'base-old' },
+      })
+      await h.store.append(slug, {
+        actor: agentActor('reconcile', 's_9'),
+        type: 'reconcile.completed',
+        payload: {
+          mergeCommit: 'merge-1',
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        },
+      })
+      const command = await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      if (maintenance) {
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'pr.auto-merge-enabled',
+          payload: { commandSeq: command.seq },
+        })
+      }
+      h.forge.setPrState(1, { state: 'open', mergeable: true })
+      if (maintenance) h.forge.setAutoMergeState(1, true)
+      h.forge.setGatePresence(1, maintenance ? 'present' : 'absent')
+      await h.store.claimLease(slug, 'runner-live', 60_000)
 
-    await h.dispatcher.tick()
-    expect(h.forge.squashMergeCalls).toEqual([])
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.started',
-      payload: { step: 'unit', attempt: 2 },
-    })
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.completed',
-      payload: { step: 'unit', attempt: 2, pass: true },
-    })
-    await h.dispatcher.tick()
-    expect(h.forge.squashMergeCalls).toHaveLength(1)
-  })
+      await h.dispatcher.tick()
+      expect(h.forge.squashMergeCalls).toEqual([])
+      expect(h.forge.autoMergeCalls).toEqual([])
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { step: 'unit', attempt: 2 },
+      })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step: 'unit', attempt: 2, pass: true },
+      })
+      await h.dispatcher.tick()
+      expect(h.forge.squashMergeCalls).toHaveLength(maintenance ? 0 : 1)
+      expect(h.forge.autoMergeCalls).toHaveLength(1)
+      expect(h.forge.buildSlugs.get(1)).toBe(slug)
+      if (maintenance)
+        expect(
+          (await h.store.getEvents(slug)).filter((e) => e.type === 'pr.auto-merge-enabled'),
+        ).toHaveLength(1)
+    },
+  )
 
   test('a pending cancellation disables native auto-merge before recording a new conflict', async () => {
     const h = harness()
@@ -4629,6 +4650,7 @@ describe('Dispatcher janitor', () => {
       if (fact === 'pr.merged') {
         expect(events.find((event) => event.type === 'pr.merged')?.payload).toEqual({
           sha: 'landing-sha',
+          buildTrailerPresent: false,
         })
       }
     },
@@ -8920,5 +8942,115 @@ command = "run"
     await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
     expect(h.forge.squashMergeCalls).toHaveLength(0)
     expect(h.launches).toEqual([slug])
+  })
+})
+
+describe('stable merged-build evidence and native maintenance', () => {
+  test.each([
+    ['Subject\n\nAutobuild-Build: auth-limit\n', true],
+    ['Subject\n\nAutobuild-Build: other-build\n', false],
+    ['Mention Autobuild-Build: auth-limit', false],
+  ])('human merge records inspected evidence (%j)', async (message, present) => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.commitMessages.set('human-sha', message)
+    h.forge.setPrState(1, { state: 'merged', sha: 'human-sha' })
+    expect(await h.dispatcher.tick()).toMatchObject({ merged: 1, janitorDiagnostics: [] })
+    await h.dispatcher.tick()
+    const facts = (await h.store.getEvents(slug)).filter((event) => event.type === 'pr.merged')
+    expect(facts).toHaveLength(1)
+    expect(facts[0]?.payload).toEqual({ sha: 'human-sha', buildTrailerPresent: present })
+  })
+  test.each([false, true])(
+    'unreadable or unsupported evidence does not strand merged PR (unsupported=%s)',
+    async (unsupported) => {
+      const h = harness()
+      const slug = await seedAwaitingPr(h)
+      Object.defineProperty(h.forge, 'readCommitMessage', {
+        value: unsupported
+          ? undefined
+          : async () => {
+              throw new Error('provider unavailable')
+            },
+      })
+      h.forge.setPrState(1, { state: 'merged', sha: 'human-sha' })
+      expect(await h.dispatcher.tick()).toMatchObject({ merged: 1, janitorDiagnostics: [] })
+      const facts = await h.store.getEvents(slug)
+      expect(facts.find((e) => e.type === 'pr.merged')?.payload).toEqual({ sha: 'human-sha' })
+      expect(facts.filter((e) => e.type === 'observation.recorded')).toHaveLength(
+        unsupported ? 0 : 1,
+      )
+      expect(reduceBuild(facts).outcome).toBe('merged')
+    },
+  )
+  test('abort close racing a trailered merge records the same evidence', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.closePr = async () => ({ state: 'merged', sha: 'raced-sha' })
+    h.forge.commitMessages.set('raced-sha', 'Subject\n\nAutobuild-Build: auth-limit\n')
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    expect((await h.dispatcher.tick()).abandoned).toBe(1)
+    expect((await h.store.getEvents(slug)).find((e) => e.type === 'pr.merged')?.payload).toEqual({
+      sha: 'raced-sha',
+      buildTrailerPresent: true,
+    })
+  })
+  test('acknowledged native consent is maintained without another acknowledgement or direct merge', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.auto-merge-enabled',
+      payload: { commandSeq: command.seq },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    let attempts = 0
+    h.forge.setAutoMerge = async (_path, _number, enabled, options) => {
+      expect(enabled).toBe(true)
+      expect(options?.buildSlug).toBe(slug)
+      expect(await options?.canApply?.()).toBe(true)
+      attempts++
+      return attempts === 1 ? { kind: 'applied' } : { kind: 'ungated', headSha: 'new-head' }
+    }
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(attempts).toBe(2)
+    expect(h.forge.squashMergeCalls).toEqual([])
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'pr.auto-merge-enabled'),
+    ).toHaveLength(1)
+  })
+  test('maintenance guard refreshes cancellation between provider mutations', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.auto-merge-enabled',
+      payload: { commandSeq: command.seq },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setAutoMerge = async (_path, _number, _enabled, options) => {
+      expect(await options?.canApply?.()).toBe(true)
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+      expect(await options?.canApply?.()).toBe(false)
+      return { kind: 'deferred' }
+    }
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.store.getEvents(slug)).autoMerge.requested).toBe(false)
   })
 })

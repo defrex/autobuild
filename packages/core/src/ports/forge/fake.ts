@@ -1,3 +1,5 @@
+import { hasBuildTrailer, withBuildTrailer } from '../../kernel/build-identity'
+import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
  * FakeForge (SPEC §3.2): in-memory Forge for seam tests. Gate existence and
@@ -56,6 +58,7 @@ export interface AutoMergeRecord {
 }
 
 export interface SquashMergeRecord {
+  buildSlug?: string
   workspacePath: string
   number: number
   expectedHeadSha: string
@@ -90,6 +93,8 @@ export class FakeForge implements Forge {
    * not-found contract as the production adapters. */
   readonly remoteBranches = new Map<string, string>()
   readonly files = new Map<string, string>()
+  readonly commitMessages = new Map<string, string>()
+  readonly buildSlugs = new Map<number, string>()
 
   /** Journals — public so tests assert directly on call order and args. */
   readonly pushes: PushRecord[] = []
@@ -425,7 +430,11 @@ export class FakeForge implements Forge {
     workspacePath: string,
     number: number,
     enabled: boolean,
+    options?: BuildLandingOptions,
   ): Promise<AutoMergeResult> {
+    if (enabled && options?.canApply !== undefined && !(await options.canApply()))
+      return { kind: 'deferred' }
+    if (enabled && options !== undefined) this.buildSlugs.set(number, options.buildSlug)
     this.assertPr(number)
     const currentlyEnabled = this.autoMerge.get(number) ?? false
 
@@ -484,7 +493,12 @@ export class FakeForge implements Forge {
     }
   }
 
-  async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
+  async squashMerge(
+    workspacePath: string,
+    number: number,
+    expectedHeadSha: string,
+    options?: BuildLandingOptions,
+  ): Promise<void> {
     this.assertPr(number)
     const error = this.squashErrors.get(number)
     if (error !== undefined) throw new Error(error)
@@ -509,8 +523,28 @@ export class FakeForge implements Forge {
       throw new Error(`FakeForge: PR #${number} is no longer direct-merge eligible`)
     }
 
-    this.squashMergeCalls.push({ workspacePath, number, expectedHeadSha })
+    this.squashMergeCalls.push({
+      workspacePath,
+      number,
+      expectedHeadSha,
+      ...(options === undefined ? {} : { buildSlug: options.buildSlug }),
+    })
+    const message = this.opened[number - 1]?.mergeMessage ?? this.opened[number - 1]?.body ?? ''
+    this.commitMessages.set(
+      this.resolveMergeSha(number),
+      options === undefined ? message : withBuildTrailer(message, options.buildSlug),
+    )
     this.prs.set(number, { state: 'merged', sha: this.resolveMergeSha(number) })
+  }
+
+  async readCommitMessage(_workspacePath: string, sha: string): Promise<string> {
+    return this.commitMessages.get(sha) ?? ''
+  }
+
+  async containsBuild(_workspacePath: string, branch: string, buildSlug: string): Promise<boolean> {
+    const sha = this.remoteBranches.get(branch)
+    if (sha === undefined) throw new Error(`FakeForge: unknown branch ${branch}`)
+    return hasBuildTrailer(await this.readCommitMessage(_workspacePath, sha), buildSlug)
   }
 
   async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {

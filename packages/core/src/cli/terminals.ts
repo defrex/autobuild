@@ -297,7 +297,17 @@ export async function completeFinalizePr(
   const autoMergeResult =
     autoMerge === undefined
       ? undefined
-      : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled)
+      : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled, {
+          buildSlug: env.build,
+          canApply: async () => {
+            const current = (await readBuildFacts(store, env.build)).value.state
+            return (
+              current.autoMerge.requested === true &&
+              current.autoMerge.commandSeq === autoMerge.commandSeq &&
+              current.status !== 'aborted'
+            )
+          },
+        })
 
   const event = await store.append(env.build, {
     actor: KERNEL,
