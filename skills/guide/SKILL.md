@@ -13,8 +13,26 @@ This skill describes the *system*. It drives no phase and changes no files.
 Tickets have `kind = "work"` by default, or `kind = "node"` for a named
 integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
-These fields currently describe intent only: dispatch, branches and landing
-behavior are unchanged in this increment. Blockers remain a separate graph.
+A ready node ticket opens an integration build on `ab-node/<slug>`, cut
+from its parent's sampled head. Opening intent and acknowledgement are durable;
+the branch is open to targeting tickets immediately, without a PR. Integration
+builds use no workspace, runner, lease, or dispatch capacity while collecting.
+An empty node has no PR and reports `integration`, `target`, and `empty`.
+Once it holds commits its current parent lacks, the dispatcher opens or adopts
+its PR. No placeholder commit is created; parent-only advancement is still empty.
+
+Claims targeting an open node freeze its build identity and branch as their base.
+Their PR, auto-merge and reconcile all use that frozen base, even after source
+metadata changes. Missing, unopened, landed, closed or aborted targets remain
+queued with a diagnostic. The newest generation wins; a closed generation never
+falls back to an older open one. Blockers remain a separate graph.
+
+Humans land node PRs. The janitor records landing and completes the node ticket.
+Closing without merge or aborting closes admission and returns the ticket to
+triage; children already claimed retain their frozen base. Nested nodes work.
+Node verification, automatic landing, restacking and reparenting are not provided
+by this increment. A forge plugin needs node branch creation, comparison and
+head-read capabilities to admit node tickets.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;

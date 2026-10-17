@@ -81,6 +81,8 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   return {
     revision: 'fixture',
     ref: { source: 'fake', id, title },
+    ...(over.kind !== undefined ? { kind: over.kind } : {}),
+    ...(over.target !== undefined ? { target: over.target } : {}),
     ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
     body: over.body ?? CONFORMING_BODY,
@@ -9247,4 +9249,143 @@ test('acknowledged unchanged native maintenance does not refresh consent or load
   expect(
     (await h.store.getEvents(slug)).filter((event) => event.type === 'pr.auto-merge-enabled'),
   ).toHaveLength(1)
+})
+
+describe('integration node dispatch', () => {
+  test('empty node opens without workspace, runner, lease or PR and accepts nested targets', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N', { kind: 'node', title: 'Root node' }),
+        readyTicket('CHILD', { target: 'N', title: 'Child work' }),
+        readyTicket('NESTED', { kind: 'node', target: 'N', title: 'Nested node' }),
+      ],
+    })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    let records = await h.store.listBuilds()
+    const root = records.find((r) => r.ticket?.id === 'N')!
+    expect(root.branch).toStartWith('ab-node/')
+    expect(root.lease).toBeUndefined()
+    const state = reduceBuild(await h.store.getEvents(root.slug))
+    expect(state.status).toBe('collecting')
+    expect(state.nodeOpened?.sha).toBe(BASE_SHA)
+    expect(h.launches).not.toContain(root.slug)
+    expect(
+      (await h.store.getEvents(root.slug)).some((e) => e.type === 'workspace.provisioned'),
+    ).toBe(false)
+    expect(h.forge.opened).toHaveLength(0)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    records = await h.store.listBuilds()
+    for (const id of ['CHILD', 'NESTED']) {
+      const record = records.find((r) => r.ticket?.id === id)!
+      const child = reduceBuild(await h.store.getEvents(record.slug))
+      expect(child.target?.build).toBe(root.slug)
+      expect(child.baseBranch).toBe(root.branch)
+    }
+    const nested = records.find((r) => r.ticket?.id === 'NESTED')!
+    expect(h.launches).not.toContain(nested.slug)
+    expect(h.forge.opened).toHaveLength(0)
+  })
+
+  test('node PR opens lazily, never auto-merges, and human landing completes ticket', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(0)
+    h.forge.remoteBranches.set(node.branch!, 'child-commit')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(h.forge.opened[0]?.base).toBe('main')
+    const state = reduceBuild(await h.store.getEvents(node.slug))
+    expect(state.pr).toBeDefined()
+    await h.dispatcher.tick()
+    expect(h.forge.autoMergeCalls).toHaveLength(0)
+    expect(h.forge.squashMergeCalls).toHaveLength(0)
+    expect(h.launches).toHaveLength(0)
+    h.forge.setPrState(state.pr!.number, { state: 'merged', sha: 'merged-node' })
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe('done')
+  })
+
+  test('unclaimed and aborted target nodes stay queued with a diagnostic', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N', { kind: 'node', title: 'Root node' }),
+        readyTicket('CHILD', { target: 'MISSING', title: 'Child work' }),
+      ],
+    })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    const first = await h.dispatcher.tick()
+    expect(first.dependencyDiagnostics.join(' ')).toContain('MISSING')
+    const node = (await h.store.listBuilds())[0]!
+    await h.store.append(node.slug, {
+      actor: humanActor('test'),
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    expect(h.launches).toHaveLength(0)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe('done')
+  })
+})
+
+describe('integration crash boundaries', () => {
+  test('opening response loss retries the durable SHA and adopts child commits without a runner', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    const create = h.forge.createNodeBranch.bind(h.forge)
+    let fail = true
+    h.forge.createNodeBranch = async (branch, sha) => {
+      const head = await create(branch, sha)
+      if (fail) {
+        fail = false
+        h.forge.remoteBranches.set(branch, 'advanced-child')
+        h.forge.nodeAncestors.set('advanced-child', new Set([sha]))
+        throw new Error('response lost after opening')
+      }
+      return head
+    }
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    expect(reduceBuild(await h.store.getEvents(node.slug)).nodeOpened).toBeUndefined()
+    h.forge.remoteBranches.set('main', 'parent-moved')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.dispatcher.tick({ resumeCurrent: true })
+    const state = reduceBuild(await h.store.getEvents(node.slug))
+    expect(state.nodeOpening?.sha).toBe(BASE_SHA)
+    expect(state.nodeOpened?.sha).toBe('advanced-child')
+    expect(h.forge.remoteBranches.get(node.branch!)).toBe('advanced-child')
+    expect(h.forge.nodeOpenings.map((open) => open.sha)).toEqual([BASE_SHA, BASE_SHA])
+    expect(h.launches).toHaveLength(0)
+    expect((await h.store.getBuild(node.slug))?.lease).toBeUndefined()
+  })
+
+  test('PR publication followed by append failure adopts the same PR on retry', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    h.forge.remoteBranches.set(node.branch!, 'child')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    const append = h.store.append.bind(h.store)
+    let fail = true
+    h.store.append = (async (slug, event) => {
+      if (event.type === 'pr.opened' && fail) {
+        fail = false
+        throw new Error('lost PR append')
+      }
+      return append(slug, event)
+    }) as typeof h.store.append
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr).toBeUndefined()
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr?.number).toBe(1)
+    expect(h.launches).toHaveLength(0)
+  })
 })

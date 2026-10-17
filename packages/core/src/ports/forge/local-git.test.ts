@@ -39,7 +39,7 @@ async function fixture() {
   await writeFile(join(workspace, 'feature.txt'), 'feature\n')
   await git(workspace, 'add', 'feature.txt')
   await git(workspace, 'commit', '-m', 'feature')
-  return { root, workspace, head, forge: new LocalGitForge() }
+  return { root, workspace, head, forge: new LocalGitForge({ repoRoot: root }) }
 }
 
 const localContractFactory: ForgeContractFactory = async () => {
@@ -495,4 +495,24 @@ test('containsBuild reads reachable messages with one history process regardless
   expect(await forge.containsBuild(f.root, 'history-scan', 'absent')).toBe(false)
   expect(calls.map((cmd) => cmd[1])).toEqual(['check-ref-format', 'rev-parse', 'log'])
   expect(calls[2]).toEqual(['git', 'log', '--format=%B%x00', tip, '--'])
+})
+
+test('node opening adopts advanced history and reachability distinguishes a moving parent', async () => {
+  const f = await fixture()
+  const forge = new LocalGitForge({ repoRoot: f.root })
+  const opening = await forge.remoteBranchSha('main')
+  const node = 'ab-node/integration'
+  expect(await forge.createNodeBranch(node, opening)).toBe(opening)
+  expect((await forge.compareBranches('main', node)).ahead).toBe(0)
+  await writeFile(join(f.root, 'parent-only.txt'), 'parent\n')
+  await git(f.root, 'add', '.')
+  await git(f.root, 'commit', '-m', 'advance parent')
+  expect((await forge.compareBranches('main', node)).ahead).toBe(0)
+  const child = await git(f.workspace, 'rev-parse', 'HEAD')
+  await git(f.root, 'update-ref', `refs/heads/${node}`, child)
+  expect((await forge.compareBranches('main', node)).ahead).toBe(1)
+  expect(await forge.createNodeBranch(node, opening)).toBe(child)
+  const unrelated = await git(f.root, 'commit-tree', `${child}^{tree}`, '-m', 'unrelated')
+  await git(f.root, 'update-ref', 'refs/heads/ab-node/collision', unrelated)
+  await expect(forge.createNodeBranch('ab-node/collision', opening)).rejects.toThrow('collision')
 })

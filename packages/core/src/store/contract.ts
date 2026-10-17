@@ -287,6 +287,61 @@ function atT0(offsetMs: number): string {
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
     describe('builds', () => {
+      test('integration facts replay through cached reads and digests without a runner', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const input = sampleBuildInput('integration-node')
+          await store.createBuild({
+            ...input,
+            branch: 'ab-node/integration-node',
+            created: {
+              actor: DISPATCHER,
+              type: 'build.created',
+              payload: {
+                ticket: input.ticket!,
+                repo: input.repo,
+                baseBranch: 'main',
+                kind: 'node',
+                target: { ticket: { source: 'file', id: 'parent' }, build: 'parent-build' },
+              },
+            },
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.opening',
+            payload: { branch: 'ab-node/integration-node', parent: 'main', sha: 'opening' },
+          })
+          await readBuildFacts(store, input.slug)
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.opened',
+            payload: { sha: 'opening' },
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.compared',
+            payload: { parentSha: 'parent', headSha: 'opening', ahead: 0 },
+          })
+          const current = (await readBuildFacts(store, input.slug)).value.state
+          expect(current).toEqual(reduceBuild(await store.getEvents(input.slug)))
+          expect(current.status).toBe('collecting')
+          expect(current.target?.build).toBe('parent-build')
+          expect((await store.getRepoBuildDigests(input.repo)).get(input.slug)).toMatchObject({
+            kind: 'node',
+            nodeOpened: true,
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'pr.opened',
+            payload: {
+              pr: { number: 1, url: 'https://example.test/pr/1', headSha: 'child' },
+            },
+          })
+          await store.append(input.slug, { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+          expect((await store.getRepoBuildDigests(input.repo)).get(input.slug)?.prClosed).toBe(true)
+          expect((await store.getBuild(input.slug))?.lease).toBeUndefined()
+        })
+      })
+
       test('createBuild returns a record with store-assigned createdAt/updatedAt', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {

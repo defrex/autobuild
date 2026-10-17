@@ -3548,7 +3548,7 @@ class DispatchLoop {
       const state = buildSnapshot.states.get(this.abortConfirmation.slug)
       if (
         state === undefined ||
-        !['queued', 'running', 'paused', 'blocked'].includes(state.status) ||
+        !['queued', 'running', 'collecting', 'paused', 'blocked'].includes(state.status) ||
         state.pendingCommands.some((command) => command.command === 'abort')
       ) {
         // Another process may have durably requested the abort while this
@@ -3564,7 +3564,7 @@ class DispatchLoop {
         repo: this.repoIdentity,
         queued: this.queuedCount,
         activeCount: [...buildSnapshot.states.values()].filter(
-          (state) => state.status !== 'done' && state.status !== 'aborted',
+          (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,

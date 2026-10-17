@@ -15,6 +15,7 @@ export function dashboardBuildControl(status: EffectiveStatus): DashboardBuildCo
     case 'paused':
     case 'blocked':
       return { key: 'r', action: 'resume', label: 'resume' }
+    case 'collecting':
     case 'queued':
     case 'resuming':
     case 'aborting':
@@ -36,9 +37,11 @@ export function buildActionAvailability(build: DashboardBuild): DashboardActionA
     ...(dashboardBuildControl(build.status)
       ? { primary: dashboardBuildControl(build.status)!.action }
       : {}),
-    abort: ['queued', 'running', 'pausing', 'paused', 'resuming', 'blocked'].includes(build.status),
-    discard: build.status === 'queued',
-    autoMerge: !['aborting', 'cleaning'].includes(build.status),
+    abort: ['queued', 'running', 'collecting', 'pausing', 'paused', 'resuming', 'blocked'].includes(
+      build.status,
+    ),
+    discard: build.kind !== 'integration' && build.status === 'queued',
+    autoMerge: build.kind !== 'integration' && !['aborting', 'cleaning'].includes(build.status),
     answer: build.blockers.length > 0,
   }
 }

@@ -127,6 +127,29 @@ export class FakeForge implements Forge {
   private readonly deleteBranchErrors: string[] = []
   private readonly publishedBranches = new Set<string>()
 
+  readonly nodeOpenings: { branch: string; sha: string }[] = []
+  readonly nodeComparisons = new Map<string, number>()
+  readonly nodeAncestors = new Map<string, Set<string>>()
+  async createNodeBranch(branch: string, sha: string): Promise<string> {
+    this.nodeOpenings.push({ branch, sha })
+    const existing = this.remoteBranches.get(branch)
+    if (existing !== undefined) {
+      if (existing !== sha && !this.nodeAncestors.get(existing)?.has(sha))
+        throw new Error(`node branch collision: ${branch}`)
+      return existing
+    }
+    this.remoteBranches.set(branch, sha)
+    return sha
+  }
+  async compareBranches(parent: string, head: string) {
+    const parentSha = await this.remoteBranchSha(parent)
+    const headSha = await this.remoteBranchSha(head)
+    const ahead = this.nodeComparisons.get(`${parent}...${head}`)
+    if (ahead === undefined && parentSha !== headSha)
+      throw new Error('seed fake node comparison for differing heads')
+    return { parentSha, headSha, ahead: ahead ?? 0 }
+  }
+
   constructor(
     opts: {
       headSha?: HeadSha
@@ -370,6 +393,10 @@ export class FakeForge implements Forge {
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
     this.pushes.push({ workspacePath, branch })
     this.publishedBranches.add(branch)
+    this.remoteBranches.set(
+      branch,
+      typeof this.headSha === 'string' ? this.headSha : this.headSha(this.nextNumber),
+    )
   }
 
   async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
@@ -388,6 +415,7 @@ export class FakeForge implements Forge {
     const error = this.deleteBranchErrors.shift()
     if (error !== undefined) throw new Error(error)
     this.publishedBranches.delete(branch)
+    this.remoteBranches.delete(branch)
   }
 
   async openPr(opts: {
@@ -401,7 +429,7 @@ export class FakeForge implements Forge {
     // Idempotent by head branch, mirroring GitHubForge (SPEC §8.7).
     for (let i = this.opened.length - 1; i >= 0; i -= 1) {
       const number = i + 1
-      if (this.opened[i]!.head !== opts.head) continue
+      if (this.opened[i]!.head !== opts.head || this.opened[i]!.base !== opts.base) continue
       if (this.prs.get(number)?.state !== 'open') continue
       return {
         number,

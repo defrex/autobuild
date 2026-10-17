@@ -148,6 +148,13 @@ export interface AutoMergeProjection {
 export type ObservationRecord = EventPayload<'observation.recorded'>
 
 export interface BuildState {
+  kind?: 'work' | 'node'
+  target?: EventPayload<'build.created'>['target']
+  baseBranch?: string
+  nodeOpening?: EventPayload<'node.opening'>
+  nodeOpened?: EventPayload<'node.opened'>
+  nodeComparison?: EventPayload<'node.compared'>
+
   /**
    * §15.5: 'queued' until `runner.attached`, 'running' after;
    * 'blocked' ≡ open escalation; 'paused' ≡ `build.paused` without a later
@@ -308,6 +315,13 @@ export function discardInFlight(state: Pick<BuildState, 'discardRequest'>): bool
  * trip through `JSON.stringify` — the foundation for incremental advancement
  * and cached state. */
 export interface BuildAcc {
+  kind?: 'work' | 'node'
+  target?: EventPayload<'build.created'>['target']
+  baseBranch?: string
+  nodeOpening?: EventPayload<'node.opening'>
+  nodeOpened?: EventPayload<'node.opened'>
+  nodeComparison?: EventPayload<'node.compared'>
+
   attached: boolean
   pausedFlag: boolean
   terminal?: 'done' | 'aborted'
@@ -350,7 +364,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 1
+export const BUILD_REDUCER_VERSION = 2
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -454,7 +468,23 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     switch (event.type) {
       // Facts the projection does not need (workspace liveness is the
       // dispatcher's concern; finalize post-steps are failure-tolerant §5).
+      case 'node.opening':
+        acc.nodeOpening = event.payload
+        break
+      case 'node.opened':
+        acc.nodeOpened = event.payload
+        break
+      case 'node.compared':
+        acc.nodeComparison = event.payload
+        break
+      case 'pr.opened':
+        pr = event.payload.pr
+        prState = 'open'
+        break
       case 'build.created':
+        acc.kind = event.payload.kind
+        acc.target = event.payload.target
+        acc.baseBranch = event.payload.baseBranch
         pinnedAssets = event.payload.assets ?? []
         break
       case 'workspace.provisioned':
@@ -875,13 +905,21 @@ function finishBuild(acc: BuildAcc): BuildState {
       ? 'paused'
       : acc.openEscalations.length > 0
         ? 'blocked'
-        : attached
-          ? 'running'
-          : 'queued')
+        : acc.kind === 'node' && acc.nodeOpened !== undefined
+          ? 'collecting'
+          : attached
+            ? 'running'
+            : 'queued')
 
   const active = currentPhase ?? lastCompletedPhase
 
   return {
+    kind: acc.kind,
+    target: acc.target,
+    baseBranch: acc.baseBranch,
+    nodeOpening: acc.nodeOpening,
+    nodeOpened: acc.nodeOpened,
+    nodeComparison: acc.nodeComparison,
     status,
     outcome: acc.outcome,
     phase: active?.phase,

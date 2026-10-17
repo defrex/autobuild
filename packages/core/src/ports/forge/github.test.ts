@@ -79,7 +79,8 @@ const paths = (calls: ApiCall[]): string[] => calls.map((call) => `${call.method
 const PR_REF = {
   number: 123,
   html_url: 'https://github.com/acme/app/pull/123',
-  head: { sha: 'abc123def' },
+  head: { sha: 'abc123def', ref: 'ab/fix-login' },
+  base: { ref: 'main' },
 }
 
 describe('GitHubForge.pushBranch', () => {
@@ -134,7 +135,7 @@ describe('GitHubForge.openPr', () => {
     await forge.openPr(opts)
     expect(calls[0]).toEqual({
       method: 'GET',
-      path: 'repos/acme/app/pulls?head=acme%3Aab%2Ffix-login&state=open',
+      path: 'repos/acme/app/pulls?head=acme%3Aab%2Ffix-login&base=main&state=open',
     })
     expect(calls[1]).toEqual({
       method: 'POST',
@@ -164,6 +165,7 @@ describe('GitHubForge.openPr', () => {
     const { forge } = makeForge([
       { json: [] },
       { status: 422, json: { message: 'A pull request already exists' } },
+      { json: [] },
     ])
     await expect(forge.openPr(opts)).rejects.toThrow('A pull request already exists')
   })
@@ -1304,7 +1306,9 @@ describe('GitHubForge repository coordinates', () => {
   })
 
   test('AB_REPOSITORY supplies coordinates when no explicit option is given', async () => {
-    const { transport, calls } = makeTransport([{ json: [PR_REF] }])
+    const { transport, calls } = makeTransport([
+      { json: [{ ...PR_REF, head: { ...PR_REF.head, ref: 'ab/x' } }] },
+    ])
     const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'other/app' } })
     await forge.openPr({
       workspacePath: '/ws',
@@ -1813,5 +1817,46 @@ describe('GitHub stable build identity', () => {
     expect(await forge.containsBuild('/absent', 'feature', 'stable-build')).toBe(false)
     await expect(forge.containsBuild('/absent', 'missing', 'stable-build')).rejects.toThrow()
     await expect(forge.containsBuild('/absent', '--all', 'stable-build')).rejects.toThrow()
+  })
+})
+
+describe('GitHub integration refs', () => {
+  test('creates exact ref at frozen SHA after authoritative absence', async () => {
+    const { forge, calls } = makeForge([
+      { status: 404 },
+      { json: { ref: 'refs/heads/ab-node/n', object: { sha: 'opening' } } },
+    ])
+    expect(await forge.createNodeBranch('ab-node/n', 'opening')).toBe('opening')
+    expect(calls[1]).toEqual({
+      method: 'POST',
+      path: 'repos/acme/app/git/refs',
+      opts: { body: { ref: 'refs/heads/ab-node/n', sha: 'opening' } },
+    })
+  })
+  test('adopts an advanced ref without resetting and rejects unrelated history', async () => {
+    const { forge, calls } = makeForge([
+      { json: { object: { sha: 'advanced' } } },
+      { json: { ahead_by: 2, behind_by: 0 } },
+    ])
+    expect(await forge.createNodeBranch('ab-node/n', 'opening')).toBe('advanced')
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+    const bad = makeForge([
+      { json: { object: { sha: 'unrelated' } } },
+      { json: { ahead_by: 2, behind_by: 1 } },
+    ])
+    await expect(bad.forge.createNodeBranch('ab-node/n', 'opening')).rejects.toThrow('collision')
+  })
+  test('compares sampled exact SHAs and uses ahead count with parent-only movement', async () => {
+    const { forge, calls } = makeForge([
+      { json: { object: { sha: 'parent' } } },
+      { json: { object: { sha: 'node' } } },
+      { json: { ahead_by: 0, behind_by: 4 } },
+    ])
+    expect(await forge.compareBranches('main', 'ab-node/n')).toEqual({
+      parentSha: 'parent',
+      headSha: 'node',
+      ahead: 0,
+    })
+    expect(calls[2]?.path).toBe('repos/acme/app/compare/parent...node')
   })
 })

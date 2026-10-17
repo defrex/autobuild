@@ -109,6 +109,7 @@ type Tone = 'alert' | 'warn' | 'live' | 'ok'
 /** The terminal renderer's status color map, as tones. */
 function statusTone(status: DashboardBuild['status'] | DashboardHarvest['status']): Tone {
   switch (status) {
+    case 'collecting':
     case 'queued':
     case 'resuming':
       return 'live'
@@ -584,7 +585,15 @@ function BuildRow({
       ) : row.dispatch !== undefined ? (
         <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
       ) : (
-        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
+        <>
+          {row.target && (
+            <div>
+              {row.kind ?? 'work'} · target {row.target}
+              {row.integration ? ` · ${row.integration}` : ''}
+            </div>
+          )}
+          <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
+        </>
       )}
       {row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
@@ -740,6 +749,12 @@ function BuildDetail({
   return (
     <article className="detail" id={id} aria-label={`${build.slug} detail`}>
       <div className="kv">
+        {build.target && (
+          <span>
+            {build.kind ?? 'work'} · target {build.target}
+            {build.integration ? ` · ${build.integration}` : ''}
+          </span>
+        )}
         {build.ticketId && (
           <span>
             <span className="k">ticket </span>

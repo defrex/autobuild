@@ -1,5 +1,5 @@
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
-import type { BuildLandingOptions } from '../types'
+import { NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
  * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
@@ -734,27 +734,41 @@ export class GitHubForge implements Forge {
     // for implement.
     const { owner, name } = await this.requireCoordinates()
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-    const listed = await this.getJson(
-      z.array(restPrRef),
-      `${repoPath}/pulls?head=${encodeURIComponent(`${owner}:${opts.head}`)}&state=open`,
-      'open PR probe',
-    )
-    const existing = listed[0]
-    if (existing !== undefined) {
-      return {
-        number: existing.number,
-        url: existing.html_url,
-        headSha: existing.head.sha,
-      }
+    const probe = async () => {
+      const listed = await this.getJson(
+        z.array(
+          restPrRef.extend({
+            head: z.object({ sha: z.string().min(1), ref: z.string().min(1) }),
+            base: z.object({ ref: z.string().min(1) }),
+          }),
+        ),
+        `${repoPath}/pulls?head=${encodeURIComponent(`${owner}:${opts.head}`)}&base=${encodeURIComponent(opts.base)}&state=open`,
+        'open PR probe',
+      )
+      const existing = listed.find((pr) => pr.head.ref === opts.head && pr.base.ref === opts.base)
+      if (existing === undefined) return undefined
+      return { number: existing.number, url: existing.html_url, headSha: existing.head.sha }
     }
-    const created = this.parse(
-      restPrRef,
-      await this.request('POST', `${repoPath}/pulls`, {
-        body: { title: opts.title, head: opts.head, base: opts.base, body: opts.body },
-      }),
-      'PR create',
-    )
-    return { number: created.number, url: created.html_url, headSha: created.head.sha }
+    const existing = await probe()
+    if (existing) return existing
+    try {
+      const created = this.parse(
+        restPrRef,
+        await this.request('POST', `${repoPath}/pulls`, {
+          body: { title: opts.title, head: opts.head, base: opts.base, body: opts.body },
+        }),
+        'PR create',
+      )
+      return { number: created.number, url: created.html_url, headSha: created.head.sha }
+    } catch (error) {
+      if (error instanceof GitHubApiError && error.status === 422) {
+        const raced = await probe()
+        if (raced) return raced
+        if (/no commits between/i.test(error.message))
+          throw new NoCommitsBetweenBranchesError(error.message)
+      }
+      throw error
+    }
   }
 
   /** Janitor poll (SPEC §15.7): merged / closed / mergeability for one PR.
@@ -1390,6 +1404,69 @@ export class GitHubForge implements Forge {
 
   /** Current tip of a remote branch. Throws (including 404) when the branch
    * does not exist; the provider seam maps that to `undefined`. */
+  private async nodeRef(branch: string): Promise<string> {
+    if (!isValidGitBranchName(branch)) throw new Error('invalid node branch')
+    const { owner, name } = await this.requireCoordinates()
+    const result = await this.getJson(
+      z.object({ object: z.object({ sha: z.string().min(1) }) }),
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${branch}`,
+      'node ref',
+    )
+    return result.object.sha
+  }
+
+  private async compareShas(parentSha: string, headSha: string) {
+    const { owner, name } = await this.requireCoordinates()
+    return this.getJson(
+      z.object({
+        ahead_by: z.number().int().nonnegative(),
+        behind_by: z.number().int().nonnegative(),
+      }),
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(parentSha)}...${encodeURIComponent(headSha)}`,
+      'node comparison',
+    )
+  }
+
+  async createNodeBranch(branch: string, sha: string): Promise<string> {
+    if (!isValidGitBranchName(branch)) throw new Error('invalid node branch')
+    const { owner, name } = await this.requireCoordinates()
+    const adopt = async () => {
+      const head = await this.nodeRef(branch)
+      if ((await this.compareShas(sha, head)).behind_by !== 0)
+        throw new Error(`node branch collision: ${branch} does not contain opening commit ${sha}`)
+      return head
+    }
+    try {
+      return await adopt()
+    } catch (error) {
+      if (!(error instanceof GitHubApiError && error.status === 404)) throw error
+    }
+    try {
+      const result = this.parse(
+        z.object({
+          ref: z.literal(`refs/heads/${branch}`),
+          object: z.object({ sha: z.literal(sha) }),
+        }),
+        await this.request(
+          'POST',
+          `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs`,
+          { body: { ref: `refs/heads/${branch}`, sha } },
+        ),
+        'node branch create',
+      )
+      return result.object.sha
+    } catch (error) {
+      if (!(error instanceof GitHubApiError && error.status === 422)) throw error
+      return adopt()
+    }
+  }
+
+  async compareBranches(parent: string, head: string) {
+    const parentSha = await this.nodeRef(parent)
+    const headSha = await this.nodeRef(head)
+    return { parentSha, headSha, ahead: (await this.compareShas(parentSha, headSha)).ahead_by }
+  }
+
   async remoteBranchSha(branch: string): Promise<string> {
     const { owner, name } = await this.requireCoordinates()
     const branchHead = await this.getJson(

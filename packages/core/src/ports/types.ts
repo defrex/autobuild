@@ -447,7 +447,26 @@ export interface BuildLandingOptions {
   canApply?: () => Promise<boolean>
 }
 
+export class NoCommitsBetweenBranchesError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NoCommitsBetweenBranchesError'
+  }
+}
+
 export interface Forge {
+  /** Create once at sha; retries adopt only descendants of that opening commit. */
+  createNodeBranch?(branch: string, sha: string): Promise<string>
+  /** Observe exact heads and count commits reachable only from head. */
+  compareBranches?(
+    parent: string,
+    head: string,
+  ): Promise<{
+    parentSha: string
+    headSha: string
+    ahead: number
+  }>
+
   readonly name: string
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting

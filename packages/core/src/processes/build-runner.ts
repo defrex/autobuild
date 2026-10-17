@@ -700,6 +700,8 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<AttachmentResult> {
+    if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.state.kind === 'node')
+      throw new Error('integration builds are owned by the dispatcher and cannot attach runners')
     const config = await this.captureConfig()
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
@@ -878,6 +880,8 @@ export class BuildRunner {
    * already deposited — see module doc).
    */
   async run(): Promise<BuildState> {
+    const initial = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    if (initial.kind === 'node') return initial
     if (!this.attached) {
       const attachment = await this.attach()
       if (attachment.kind === 'control-acknowledged') {

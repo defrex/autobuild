@@ -10,6 +10,10 @@ import type { RepoViewStore } from './repo-view'
 /** Every new event must explicitly choose whether it advances build work. */
 export const executionProgress = {
   'build.created': 'progress',
+  'node.opening': 'progress',
+  'node.opened': 'progress',
+  'node.compared': 'bookkeeping',
+  'pr.opened': 'progress',
   'build.completed': 'progress',
   'runner.attached': 'bookkeeping',
   'runner.setup-failed': 'failure',
@@ -87,7 +91,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 1,
+  version: 2,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {

@@ -106,6 +106,9 @@ export interface ArtifactMeta {
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
 export interface BuildDigest {
+  kind?: 'work' | 'node'
+  nodeOpened?: true
+  prClosed?: true
   /** Latest merge, completion or abort fact sequence. */
   readinessChangeSeq?: number
   slug: string

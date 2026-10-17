@@ -55,7 +55,7 @@ const autoMergeDefaultObserved = z.strictObject({
 })
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
-const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
+const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'branch', 'launch'])
 const infrastructureOperation = z.enum([
   'provision',
   'start',
@@ -229,6 +229,8 @@ export const eventPayloadSchemas = {
     ticket: ticketRefSchema,
     repo: z.string().min(1),
     baseBranch: z.string().min(1),
+    kind: z.enum(['work', 'node']).optional(),
+    target: z.strictObject({ ticket: ticketRefSchema, build: z.string().min(1) }).optional(),
     /** Claim-time auto-merge intent retained across dispatch recovery until the
      * ordinary human-authored command fact can be materialized. */
     autoMergeRequestedBy: z.string().min(1).optional(),
@@ -246,6 +248,24 @@ export const eventPayloadSchemas = {
     /** Ticket assets frozen at claim time. Omitted when the ticket had none
      * and in historical logs. */
     assets: z.array(pinnedAssetSchema).optional(),
+  }),
+  'node.opening': z.strictObject({
+    branch: z.string().min(1),
+    parent: z.string().min(1),
+    sha: z.string().min(1),
+  }),
+  'node.opened': z.strictObject({ sha: z.string().min(1) }),
+  'node.compared': z.strictObject({
+    parentSha: z.string().min(1),
+    headSha: z.string().min(1),
+    ahead: z.number().int().nonnegative(),
+  }),
+  'pr.opened': z.strictObject({
+    pr: z.strictObject({
+      number: z.number().int().positive(),
+      url: z.string().min(1),
+      headSha: z.string().min(1),
+    }),
   }),
   'build.completed': z.strictObject({ outcome: buildOutcomeSchema }),
   'runner.attached': z.strictObject({

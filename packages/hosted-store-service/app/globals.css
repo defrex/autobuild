@@ -641,7 +641,8 @@ input.short {
   font-weight: 700;
   white-space: nowrap;
 }
-.status[data-status="queued"] {
+.status[data-status="queued"],
+.status[data-status="collecting"] {
   color: var(--status-queued);
 }
 .status[data-status="running"] {
