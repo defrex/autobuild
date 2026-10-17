@@ -218,14 +218,12 @@ const releasedTicketSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 
-test.each(['0.10.0', '0.11.0', '0.12.0', '0.12.1'])(
+test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
   'released %s ticket decoders accept get, list-ready and create responses',
   async (version) => {
     const { source, server } = harness()
     const existing = await source.create({ title: 'Existing', body: 'Body' })
-    const schema = version.startsWith('0.10.')
-      ? releasedTicketSchema.omit({ resolved: true, blockersResolved: true })
-      : releasedTicketSchema
+    const schema = releasedTicketSchema
     for (const [operation, input] of [
       ['get', { id: existing.ref.id }],
       ['list-ready', {}],
@@ -318,8 +316,7 @@ test('comments require explicit capability independently of client version on ev
   const { server, source } = harness(backend)
   expect((await source.get('AUT-1'))?.comments).toEqual(comments)
   const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
-  const { ticketWireSchema: old } = await import('./compatibility-fixtures/tickets-v0.9')
-  for (const version of ['0.10.0', '0.11.0', '0.12.0']) {
+  for (const version of ['0.11.0', '0.12.0', '0.13.0']) {
     for (const [capability, revisionCapability] of [
       [undefined, undefined],
       ['', undefined],
@@ -354,9 +351,9 @@ test('comments require explicit capability independently of client version on ev
         const value = operation === 'list-ready' ? result.tickets[0] : result
         expect(value.comments).toEqual(capability === '1' ? comments : undefined)
         expect(value.revision).toBe(revisionCapability === '1' ? 'fixture-revision' : undefined)
-        expect(value.resolved).toBe(version === '0.10.0' ? undefined : false)
+        expect(value.resolved).toBe(false)
         if (capability !== '1' && revisionCapability !== '1') {
-          expect((version === '0.10.0' ? old : published).safeParse(value).success).toBe(true)
+          expect(published.safeParse(value).success).toBe(true)
         }
       }
     }
