@@ -894,7 +894,7 @@ command = "postgres"
     // persisted fact read per rendered build. Pinned-config reads stay gated
     // to those same builds; actual SQL row costs are checked separately.
     expect(counting.counts.get('listBuilds')).toBe(1)
-    expect(counting.counts.get('getRepo')).toBe(2)
+    expect(counting.counts.get('getRepo')).toBe(1)
     expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)

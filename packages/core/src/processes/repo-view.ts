@@ -142,8 +142,10 @@ export class RepoViewStore implements BuildStore {
   async refreshJournal(): Promise<void> {
     if (this.journalWindow) this.journalWindow.dirty = true
     await this.journalChain.run(async () => {
-      this.recorded = (await this.backing.getRepo(this.repo)) !== null
-      this.repoFacts = (await readRepositoryFacts(this.backing, this.repo)).value
+      const recorded = (await this.backing.getRepo(this.repo)) !== null
+      const facts = (await readRepositoryFacts(this.backing, this.repo, recorded)).value
+      this.recorded = recorded
+      this.repoFacts = facts
     })
   }
   repositoryFacts(): RepositoryReadFacts {
