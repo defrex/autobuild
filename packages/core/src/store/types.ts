@@ -266,6 +266,12 @@ export interface BuildStore {
   createBuild(input: NewBuildInput): Promise<BuildRecord>
   getBuild(slug: string): Promise<BuildRecord | null>
   listBuilds(): Promise<BuildRecord[]>
+  /**
+   * Optional read-only exact-repo listing, ordered by creation time then slug.
+   * Records (including ticket projection) match the filtered global listing.
+   * Unknown/build-less repos return [] without creating a repository journal.
+   */
+  listBuildsForRepo?(repo: string): Promise<BuildRecord[]>
 
   /**
    * Append one validated event; the store assigns `seq` (per-build,
