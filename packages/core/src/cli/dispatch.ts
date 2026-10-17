@@ -165,7 +165,13 @@ import {
 } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { DispatchFrontend } from './dispatch-frontend'
-import { systemClock, type BuildStore, type Clock } from '../store/types'
+import {
+  systemClock,
+  type BuildStore,
+  type Clock,
+  type RepoTickCompletion,
+  type RepoTickFinish,
+} from '../store/types'
 import { availableRelease } from './self-update'
 import {
   startUpgradeNotice,
@@ -2862,12 +2868,7 @@ class DispatchLoop {
             completed,
           ]
         : []
-      const result = await this.repoView.finishRepoTick(
-        this.repoIdentity,
-        this.runId,
-        { outcome: 'completed', counters },
-        events,
-      )
+      const result = await this.finishTick({ outcome: 'completed', counters }, events)
       if (result === null) {
         this.superseded = true
         throw new Error('repository tick lease lost')
@@ -2883,6 +2884,42 @@ class DispatchLoop {
     return merged
   }
 
+  /** A remote finish can commit before its response is lost. Confirm that
+   * exact tick through durable telemetry before acknowledging its counters;
+   * never try to close an already committed boundary as a second failure. */
+  private async finishTick(
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    try {
+      return await this.repoView.finishRepoTick(this.repoIdentity, this.runId, completion, events)
+    } catch (error) {
+      const observation = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))
+        ?.tick
+      const finished = observation?.finished
+      if (
+        observation?.run !== this.runId ||
+        observation.open ||
+        finished?.run !== this.runId ||
+        finished.startedAt !== this.tickStartedAt ||
+        finished.outcome !== completion.outcome ||
+        (finished.outcome === 'failed' &&
+          completion.outcome === 'failed' &&
+          finished.error !== completion.error) ||
+        (finished.outcome === 'completed' &&
+          completion.outcome === 'completed' &&
+          Object.entries(completion.counters).some(
+            ([key, value]) => finished.counters[key as keyof typeof finished.counters] !== value,
+          ))
+      )
+        throw error
+      // The failed response bypassed the view's own-write fold. Refresh its
+      // cursor from the journal, including any committed boundary pair.
+      await this.repoView.refresh()
+      return { observation, events: [] }
+    }
+  }
+
   private async publishTickFailure(error: unknown): Promise<void> {
     const failed = {
       actor: DISPATCHER,
@@ -2893,19 +2930,14 @@ class DispatchLoop {
       await this.appendStatus(failed)
       return
     }
-    const result = await this.repoView.finishRepoTick(
-      this.repoIdentity,
-      this.runId,
-      { outcome: 'failed', error: failed.payload.error },
-      [
-        {
-          actor: DISPATCHER,
-          type: 'dispatcher.tick-started',
-          payload: { run: this.runId, startedAt: this.tickStartedAt },
-        },
-        failed,
-      ],
-    )
+    const result = await this.finishTick({ outcome: 'failed', error: failed.payload.error }, [
+      {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: this.runId, startedAt: this.tickStartedAt },
+      },
+      failed,
+    ])
     if (result === null) {
       this.superseded = true
       return

@@ -11170,3 +11170,67 @@ test('a holder change at begin fences the tick before ticket work', async () => 
     await fx.cleanup()
   }
 })
+
+for (const lost of ['recorded', 'idle', 'failed'] as const) {
+  test(`watch survives a lost finish response after a committed ${lost} tick`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const finish = fx.store.finishRepoTick.bind(fx.store)
+    let finishes = 0
+    let lostResponses = 0
+    let ticks = 0
+    fx.store.finishRepoTick = async (...args) => {
+      const result = await finish(...args)
+      finishes++
+      if (finishes === (lost === 'idle' ? 2 : 1)) {
+        expect(result).not.toBeNull()
+        lostResponses++
+        throw new Error('injected response loss after commit')
+      }
+      return result
+    }
+    if (lost === 'failed') {
+      const listReady = fx.tickets.listReady.bind(fx.tickets)
+      let scans = 0
+      fx.tickets.listReady = async (...args) => {
+        if (++scans === 1) throw new Error('injected ticket scan failure')
+        return listReady(...args)
+      }
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        kernelRunId: 'lost-finish-response',
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          expect((await fx.store.getRepo(fx.origin))!.tick!.finished!.completedAt).toBe(
+            clock().toISOString(),
+          )
+          if (++ticks === 3) stop.abort()
+          clock.advance(1000)
+        },
+      })
+      expect(ticks).toBe(3)
+      expect(finishes).toBe(3)
+      expect(lostResponses).toBe(1)
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(events.filter((event) => event.type === 'dispatcher.tick-completed')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'dispatcher.tick-failed')).toHaveLength(
+        lost === 'failed' ? 1 : 0,
+      )
+      expect(events.findLast((event) => event.type === 'dispatcher.run-stopped')).toMatchObject({
+        payload: { outcome: 'normal' },
+      })
+      expect(fx.err).toEqual(lost === 'failed' ? ['tick failed: injected ticket scan failure'] : [])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
