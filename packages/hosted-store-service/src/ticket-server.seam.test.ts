@@ -220,7 +220,7 @@ const releasedTicketSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 
-test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION])])(
+test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', '0.13.0', AUTOBUILD_VERSION])])(
   'released %s ticket responses honor the supported client window',
   async (version) => {
     const { source, server } = harness()
@@ -237,9 +237,8 @@ test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION
           headers: {
             authorization: `Bearer ${operator}`,
             [AUTOBUILD_VERSION_HEADER]: version,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-              ? REMOTE_STORE_PROTOCOL_VERSION
-              : '3',
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+              version === AUTOBUILD_VERSION ? REMOTE_STORE_PROTOCOL_VERSION : '3',
             'content-type': 'application/json',
           },
           body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
@@ -361,7 +360,7 @@ test('comments require explicit capability independently of client version on ev
   const { server, source } = harness(backend)
   expect((await source.get('AUT-1'))?.comments).toEqual(comments)
   const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
-  for (const version of new Set(['0.10.0', '0.11.0', '0.12.0', AUTOBUILD_VERSION])) {
+  for (const version of new Set(['0.10.0', '0.11.0', '0.12.0', '0.13.0', AUTOBUILD_VERSION])) {
     for (const [capability, revisionCapability] of [
       [undefined, undefined],
       ['', undefined],
@@ -379,9 +378,8 @@ test('comments require explicit capability independently of client version on ev
         const headers: Record<string, string> = {
           authorization: `Bearer ${operator}`,
           [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-            ? REMOTE_STORE_PROTOCOL_VERSION
-            : '3',
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+            version === AUTOBUILD_VERSION ? REMOTE_STORE_PROTOCOL_VERSION : '3',
           'content-type': 'application/json',
         }
         if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability
