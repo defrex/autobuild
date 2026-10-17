@@ -1,3 +1,5 @@
+import { delegationFactKey } from '@defrex/autobuild/remote-store'
+import type { BuildDelegationFacts, HarvestDelegationFacts } from '@defrex/autobuild/remote-store'
 import {
   mintToken,
   delegateCredentialBodySchema,
@@ -18,19 +20,61 @@ export async function delegationActive(
   claims: Delegation,
   now: Date,
 ): Promise<boolean> {
-  if (claims.kind.startsWith('build')) {
-    const build = await store.getBuild(claims.id)
-    if (build?.repo !== claims.repo) return false
-    return evaluateDelegationLifecycle(
-      claims,
-      { build, buildEvents: await store.getEvents(claims.id) },
-      now,
+  const build = claims.kind.startsWith('build') ? await store.getBuild(claims.id) : null
+  if (claims.kind.startsWith('build') && build?.repo !== claims.repo) return false
+  const facts = await delegationFacts(store, claims)
+  return evaluateDelegationFacts(claims, facts, now)
+}
+
+async function delegationFacts(
+  store: BuildStore,
+  target: { kind: string; id: string; repo: string },
+) {
+  const build = target.kind.startsWith('build')
+  const answer = await store.getReducerValue(
+    build ? { kind: 'build', slug: target.id } : { kind: 'repo', repo: target.repo },
+    { reducer: build ? 'buildDelegation' : 'harvestDelegation' },
+  )
+  return answer.value as unknown as BuildDelegationFacts | HarvestDelegationFacts
+}
+export function evaluateDelegationFacts(
+  claims: Delegation,
+  facts: BuildDelegationFacts | HarvestDelegationFacts,
+  now: Date,
+): boolean {
+  if (claims.anchor < 1 || claims.anchor > facts.lastSeq) return false
+  let endings: string[]
+  if ('terminals' in facts) {
+    const session = claims.session ? facts.sessions[delegationFactKey(claims.session)] : undefined
+    if (claims.session && !session?.starts.includes(claims.anchor)) return false
+    endings = [...facts.terminals, ...(session?.endings ?? [])]
+      .filter((event) => event.seq >= claims.anchor)
+      .map((event) => event.at)
+    if (facts.terminals.length > 0 && endings.length === 0) return false
+  } else {
+    const authorized =
+      facts.authorizations[delegationFactKey(claims.id)]?.[delegationFactKey(claims.execution!)]
+    if (!facts.runs[delegationFactKey(claims.id)] || !authorized) return false
+    if (
+      claims.kind === 'harvest-runner' &&
+      (claims.anchor !== authorized.seq || claims.leaseHolder !== authorized.leaseHolder)
     )
+      return false
+    const session = claims.session
+      ? facts.sessions[delegationFactKey(claims.id)]?.[delegationFactKey(claims.session)]
+      : undefined
+    if (claims.session && !session?.starts.includes(claims.anchor)) return false
+    endings = [
+      ...(facts.releases[delegationFactKey(claims.execution!)] ?? []),
+      ...[...(facts.endings[delegationFactKey(claims.id)] ?? []), ...(session?.endings ?? [])]
+        .filter((event) => event.seq >= authorized.seq)
+        .map((event) => event.at),
+    ]
   }
-  return evaluateDelegationLifecycle(
-    claims,
-    { repositoryEvents: await store.getRepoStateEvents(claims.repo) },
-    now,
+  return endings.every(
+    (at) =>
+      Number.isFinite(Date.parse(at)) &&
+      now.getTime() < Date.parse(at) + DELEGATION_TERMINAL_GRACE_MS,
   )
 }
 
@@ -178,25 +222,17 @@ export function createDelegationHandler(options: {
           : principal.kind === 'delegated'
             ? principal.delegation.execution
             : undefined
-      const events = build
-        ? await options.store.getEvents(target.id)
-        : await options.store.getRepoStateEvents(repo)
-      let anchor: number | undefined
-      if ('session' in target) {
-        anchor = events.find(
-          (event) =>
-            (event.type === 'session.started' || event.type === 'harvest.session.started') &&
-            event.payload.session === target.session &&
-            (!('run' in event.payload) || event.payload.run === target.id),
-        )?.seq
-      } else if (build) anchor = events.at(-1)?.seq
-      else
-        anchor = events.find(
-          (event) =>
-            event.type === 'harvest.execution.authorized' &&
-            event.payload.execution === execution &&
-            event.payload.run === target.id,
-        )?.seq
+      const facts = await delegationFacts(options.store, { kind: target.kind, id: target.id, repo })
+      const anchor =
+        'session' in target
+          ? ('terminals' in facts
+              ? facts.sessions[delegationFactKey(target.session)]
+              : facts.sessions[delegationFactKey(target.id)]?.[delegationFactKey(target.session)]
+            )?.starts[0]
+          : 'terminals' in facts
+            ? facts.lastSeq || undefined
+            : facts.authorizations[delegationFactKey(target.id)]?.[delegationFactKey(execution!)]
+                ?.seq
       if (
         principal.kind === 'delegated' &&
         anchor !== undefined &&

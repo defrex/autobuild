@@ -36,6 +36,16 @@ export const reducerSnapshotWireSchema = z.object({
  * path segment and a SQL key. */
 export const SNAPSHOT_REDUCER_NAME = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/
 
+/** Value checkpoints are written only by the adapter's private reduction path.
+ * Generic snapshot clients must never supply state used for named answers. */
+export const REDUCER_VALUE_SNAPSHOT_PREFIX = 'value.'
+
+export function assertPublicSnapshotReducer(reducer: string): void {
+  if (reducer.startsWith(REDUCER_VALUE_SNAPSHOT_PREFIX)) {
+    throw new Error('reserved reducer value snapshot namespace')
+  }
+}
+
 export function snapshotScopeKey(scope: SnapshotScope): string {
   return scope.kind === 'build' ? `build:${scope.slug}` : `repo:${scope.repo}`
 }

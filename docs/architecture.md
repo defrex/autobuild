@@ -173,6 +173,39 @@ reads every snapshot as missing and replays (SQLSTATE `42P01` is never an
 error), and an older client never asks. Run `bun run postgres:migrate` once to
 gain the table; until then the dispatcher and every other reader replay in full.
 
+**Named reducer values.** `BuildStore.getReducerValue(scope, {reducer, args?})`
+returns `{version, cursor, value}` for each eligible entry in the executable
+reducer registry. Eligible reducers consume build or repository events and finish
+as plain JSON; raw journal-event lists, operator-session reducers, collections,
+selector functions, and top-level optional results are explicitly excluded with
+reasons. Factory arguments are validated and participate in a bounded digest
+cache key. The persisted envelope also records the canonical scope, arguments,
+name and version, and nested accumulator shapes are validated before restore.
+The `value.*` namespace is reserved: public snapshot reads and writes reject it,
+and the engine persists through private adapter hooks. Versioned cache keys
+exclude checkpoints produced while the old namespace was publicly writable.
+`tools/reducer-value-shapes.ts` regenerates those structural validators from the
+declared accumulator types.
+
+Memory, SQLite and Postgres use the same algorithm: capture the authoritative
+high-water, load persisted state on every call, fold the indexed contiguous delta
+through that boundary, persist, and return an independent JSON value. There is
+no process-local accumulator cache. A foreign checkpoint newer than the initial
+boundary causes a fresh high-water check. Normal writes are monotone; corrupt,
+wrong-version or ahead-of-log rows are repaired only by comparing the exact row
+observed, atomically with the log boundary. A losing writer still returns its
+correct prefix. Missing or unreadable cache state replays; log failures propagate.
+
+The remote adapter makes one value request; only the finished answer crosses the
+wire. The service uses named effective-configuration references for hosted ticket
+operations (including policy publication) and semantic build/harvest lifecycle
+facts for delegated authentication and issuance. Lifecycle snapshots keep session,
+execution and terminal evidence, including historical endings, without dispatcher
+tick tails. Anchor membership follows the contiguous log prefix. The legacy
+state-events route remains a deprecated compatibility exception to flat event-row
+reads. Existing work bundles and generic snapshot routes remain separate and
+compatible; the repository view's journal tail remains in memory only.
+
 **Dispatcher repository view.** A dispatcher process builds its view of the
 repository once and refreshes it by deltas
 (`packages/core/src/processes/repo-view.ts`). `RepoViewStore` decorates the
@@ -198,9 +231,11 @@ lowest session cursor. A `--once` invocation builds the view cold and reads each
 log once; a long-running dispatcher pays that replay at its first tick and not
 again.
 
-The view restores from reducer snapshots on cold start. The journal comes from
-the `journalView` reducer (the journal pruned on arrival: durable types plus the
-tail from the latest `dispatcher.run-started`); each work build comes from one
+On cold start, the view loads the journal through the bounded state-events
+query: durable types, latest-only facts, and the tail from the latest
+`dispatcher.run-started`. The journal tail is held only in memory; legacy
+`journalView` snapshots are neither loaded nor written. Each work build restores
+from one
 `work` snapshot row — the `build`, `logIndex`, `openExecution`,
 `openBuildWorkspace`, `publicationState`, `lastExecutionOutcome`, `buildDigest`,
 `dashboardFacts` and `currentDeferralObservation` accumulators at a single
@@ -210,8 +245,10 @@ derived from the component reducer versions, so a stale bundle misses and the
 build is replayed once. The view
 reads only the events newer than that cursor and holds, for a snapshot-backed
 build, just that delta plus the reduced state of everything before it, so a tick
-with no new events reads zero event rows (apart from the discovery listing and
-digests) and one with M new events reads exactly M. Tick stages that run for every
+with no new build events reads zero build event rows (apart from the discovery
+listing and digests) and one with M new build events reads exactly M. A cold
+journal load still reads the bounded state-events subset; a resident view
+reads only its journal delta. Tick stages that run for every
 build each tick take `buildFacts(slug)` (state, log index, open execution, open
 workspace, publication view) instead of the event array, and read raw history
 only on the branches that act on it. `persistSnapshots()` writes the advanced

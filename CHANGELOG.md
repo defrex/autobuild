@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#628](https://github.com/defrex/autobuild/pull/628) — Serve reducer values from persisted state
 - [#627](https://github.com/defrex/autobuild/pull/627) — Suppress unchanged idle dispatcher ticks
 - [#626](https://github.com/defrex/autobuild/pull/626) — Read interactive dashboard repository events incrementally
 ## v0.13.0 — 2026-10-16

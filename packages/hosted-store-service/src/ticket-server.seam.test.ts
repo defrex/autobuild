@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
+  classifyClient,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -218,8 +220,8 @@ const releasedTicketSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 
-test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
-  'released %s ticket decoders accept get, list-ready and create responses',
+test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION])])(
+  'released %s ticket responses honor the supported client window',
   async (version) => {
     const { source, server } = harness()
     const existing = await source.create({ title: 'Existing', body: 'Body' })
@@ -243,6 +245,11 @@ test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
           body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
         }),
       )
+      if (classifyClient(version, supportedClientRange()) !== 'supported') {
+        expect(response.status).toBe(409)
+        expect((await response.json()).error).toContain('version mismatch')
+        continue
+      }
       expect(response.status).toBe(operation === 'create' ? 201 : 200)
       const body = await response.json()
       if (operation === 'list-ready') {
@@ -354,7 +361,7 @@ test('comments require explicit capability independently of client version on ev
   const { server, source } = harness(backend)
   expect((await source.get('AUT-1'))?.comments).toEqual(comments)
   const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
-  for (const version of ['0.11.0', '0.12.0', '0.13.0']) {
+  for (const version of new Set(['0.10.0', '0.11.0', '0.12.0', AUTOBUILD_VERSION])) {
     for (const [capability, revisionCapability] of [
       [undefined, undefined],
       ['', undefined],
@@ -386,6 +393,11 @@ test('comments require explicit capability independently of client version on ev
             body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
           }),
         )
+        if (classifyClient(version, supportedClientRange()) !== 'supported') {
+          expect(response.status).toBe(409)
+          expect((await response.json()).error).toContain('version mismatch')
+          continue
+        }
         expect(response.status).toBe(operation === 'create' ? 201 : 200)
         const result = await response.json()
         const value = operation === 'list-ready' ? result.tickets[0] : result

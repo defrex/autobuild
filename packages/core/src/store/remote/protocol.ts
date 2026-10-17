@@ -478,6 +478,7 @@ export const delegateCredentialBodySchema = z.discriminatedUnion('kind', [
 export type DelegateCredentialTarget = z.infer<typeof delegateCredentialBodySchema>
 export const delegateCredentialResponseSchema = z.strictObject({ token: z.string().min(1) })
 
+export { reducerValueRequestSchema, reducerValueSchema } from '../reducer-values'
 export const beginRepoTickResponseSchema = z.iso.datetime().nullable()
 export const finishRepoTickBodySchema = z.object({
   holder: z.string().min(1),

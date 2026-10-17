@@ -13,7 +13,15 @@ import {
   type BuildStore,
 } from '@defrex/autobuild/plugin-sdk'
 import { getOperatorDashboard } from '@defrex/autobuild/operator'
-import { AuthError, RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
+import {
+  AuthError,
+  RemoteBuildStore,
+  mintToken,
+  AUTOBUILD_VERSION_HEADER,
+  AUTOBUILD_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+} from '@defrex/autobuild/remote-store'
 import { DISPATCHER, KERNEL, humanActor, parseConfig, type Via } from '@defrex/autobuild/testing'
 import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
 import { openPostgresBuildStore } from '@defrex/autobuild-postgres-store/store'
@@ -173,7 +181,7 @@ if (!testUrl) {
     })
   })
   describe('operator dashboard over hosted PostgreSQL snapshots', () => {
-    test('polls through reducer snapshots, reading no rows at idle and matching a full replay', async () => {
+    test('restores build snapshots, reloads the bounded journal, and matches a full replay', async () => {
       const database = await isolatedDatabase()
       const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
         clock: systemClock,
@@ -251,13 +259,13 @@ steps = []
           'live-aborted',
           'live-running',
         ])
-        // The second poll restores from the snapshots the first one left: no
-        // event rows, same response.
+        // The second poll restores build snapshots and reloads the one-row
+        // bounded journal. The response stays unchanged.
         rows = 0
         const second = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(0)
+        expect(rows).toBe(1)
         expect(second).toEqual(first)
-        // New events cost exactly their own rows, and the answer still equals
+        // New build events add only their own rows to the journal load. The answer equals
         // the one a replay with every snapshot deleted gives.
         await backing.append('live-running', {
           actor: KERNEL,
@@ -266,7 +274,7 @@ steps = []
         })
         rows = 0
         const third = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(1)
+        expect(rows).toBe(2)
         expect(third).toEqual(await getOperatorDashboard({ store: withoutSnapshots, repo, clock }))
       } finally {
         await backing.close()
@@ -789,3 +797,263 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+/** Count returned SQL rows, including auth/config paths and cache failures. */
+function countStoreRows(store: BuildStore) {
+  const costs = { events: 0, metadata: 0 }
+  const run = Reflect.get(store, 'run').bind(store)
+  Reflect.set(store, 'run', (body: (q: unknown) => Promise<unknown>) =>
+    run((q: unknown) =>
+      body(
+        new Proxy(q as object, {
+          get(target, key) {
+            const method = Reflect.get(target, key)
+            if (key === 'unsafe' && typeof method === 'function')
+              return (...args: unknown[]) =>
+                Promise.resolve(Reflect.apply(method, target, args)).then((rows) => {
+                  const events = /SELECT \* FROM (?:repo_)?events\b/i.test(String(args[0]))
+                  costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+                  return rows
+                })
+            return typeof method === 'function' ? method.bind(target) : method
+          },
+          apply(target, thisArg, args) {
+            const result = Reflect.apply(target as CallableFunction, thisArg, args)
+            const events = /SELECT \* FROM (?:repo_)?events\b/i.test(args[0].join(' '))
+            return Promise.resolve(result).then((rows) => {
+              costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+              return rows
+            })
+          },
+        }),
+      ),
+    ),
+  )
+  return costs
+}
+
+if (testUrl)
+  test('fresh hosted policy publication and delegated requests have flat SQL row cost', async () => {
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const { MemoryTicketPolicyStore } = await import(
+      '@defrex/autobuild-postgres-store/ticket-policy'
+    )
+    const { sampleEventWrite, harvestStartedWrite } = await import('@defrex/autobuild/plugin-sdk')
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const blobs = new MemoryBlobStore()
+    const writer = await openPostgresBuildStore(database.url, blobs)
+    const projects = new PostgresProjectRegistry(sql)
+    const credentials = new PostgresCredentialStore(sql, projects)
+    const tickets = await openPostgresTicketDatabase(database.url)
+    const handles: BuildStore[] = []
+    const ticketPolicy = {
+      version: 1 as const,
+      tickets: {
+        source: 'hosted' as const,
+        teamKey: 'ENG',
+        triageState: 'Inbox',
+        readyState: 'Ready',
+        claimedState: 'Active',
+        doneState: 'Done',
+        createState: 'Inbox',
+        proposalState: 'Inbox',
+      },
+    }
+    const compose = async () => {
+      const backing = await openPostgresBuildStore(database.url, blobs)
+      handles.push(backing)
+      const costs = countStoreRows(backing)
+      const service = createHostedStoreService({
+        env: {
+          AB_STORE_SECRET: 'cost-secret',
+          AB_POSTGRES_URL: database.url,
+          AB_BLOB_BACKEND: 's3',
+          AB_S3_BUCKET: 'unused',
+          AB_S3_REGION: 'unused',
+          AB_S3_ACCESS_KEY_ID: 'unused',
+          AB_S3_SECRET_ACCESS_KEY: 'unused',
+        },
+        openStore: async () => backing,
+        openProjectRegistry: async () => projects,
+        openCredentials: async () => credentials,
+        openTicketDatabase: async () => tickets,
+        openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+      })
+      const fetchFn = async (input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(new Request(input, init))
+      return { backing, costs, fetchFn }
+    }
+    try {
+      for (const count of [10, 3000])
+        for (const reference of [false, true]) {
+          const repo = `https://github.com/acme/cost-${count}-${reference}`
+          await projects.add(repo, 'owner')
+          const { token } = await credentials.issue(repo, 'owner')
+          await writer.ensureRepo(repo)
+          if (reference) {
+            const { verify, finalize, ...root } = parseConfig(
+              '[tickets]\nsource="hosted"\nteamKey="ENG"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+            )
+            const artifact = await writer.putRepoArtifact(repo, {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                ...root,
+                verify: { steps: verify.steps },
+                finalize: { steps: finalize.steps },
+              }),
+            })
+            await writer.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.run-started',
+              payload: {
+                run: 'cost-run',
+                pid: 1,
+                effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+                roleWarnings: [],
+              },
+            })
+          }
+          const start = reference ? 2 : 1
+          await sql`INSERT INTO repo_events(repo,seq,ts,actor,type,payload) SELECT ${repo},n,now(),'{"kind":"human","user":"operator"}'::jsonb,'dispatcher.intake-set','{"enabled":true}'::jsonb FROM generate_series(${start}::integer,${start + count - 1}::integer) n`
+          await writer.getReducerValue({ kind: 'repo', repo }, { reducer: 'effectiveConfig' })
+          for (const delta of [0, 3]) {
+            for (let i = 0; i < delta; i++)
+              await writer.appendRepo(repo, {
+                actor: humanActor('operator'),
+                type: 'dispatcher.intake-set',
+                payload: { enabled: true },
+              })
+            const { backing, costs, fetchFn } = await compose()
+            const client = new HostedTicketSource({
+              url: 'http://test',
+              token,
+              repo,
+              teamKey: 'ENG',
+              fetchFn,
+            })
+            await client.synchronizePolicy(ticketPolicy)
+            expect(costs.events).toBe(delta)
+            expect(costs.metadata).toBeLessThan(20)
+            await client.listStates()
+            expect(costs.events).toBe(delta)
+            await backing.close()
+            handles.pop()
+          }
+        }
+      const repo = 'https://github.com/acme/cost-3000-true'
+      const { token } = await credentials.issue(repo, 'owner')
+      await writer.createBuild(sampleBuildInput('cost-build', { repo }))
+      const event = sampleEventWrite()
+      await sql`INSERT INTO events(build,seq,ts,actor,type,payload) SELECT 'cost-build',n,now(),${JSON.stringify(event.actor)}::jsonb,${event.type},${JSON.stringify(event.payload)}::jsonb FROM generate_series(1,3000) n`
+      await writer.appendRepo(repo, harvestStartedWrite('cost-harvest'))
+      await writer.claimRepoLease(repo, 'cost-holder', 60000)
+      await writer.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: {
+          run: 'cost-harvest',
+          execution: 'cost-execution',
+          leaseHolder: 'cost-holder',
+          launch: 'started',
+        },
+      })
+      for (const target of [
+        { kind: 'build-runner' as const, id: 'cost-build' },
+        {
+          kind: 'harvest-runner' as const,
+          id: 'cost-harvest',
+          repo,
+          execution: 'cost-execution',
+          leaseHolder: 'cost-holder',
+        },
+      ]) {
+        // Warm issuance and authentication facts once, then discard all handlers.
+        let current = await compose()
+        const issue = async (fetchFn: typeof current.fetchFn) => {
+          const response = await fetchFn('http://test/credentials/delegate', {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${token}`,
+              'content-type': 'application/json',
+              [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            },
+            body: JSON.stringify(target),
+          })
+          expect(response.status).toBe(200)
+          return (await response.json()).token as string
+        }
+        const delegated = await issue(current.fetchFn)
+        const client = new RemoteBuildStore({
+          url: 'http://test',
+          token: delegated,
+          fetchFn: current.fetchFn as typeof fetch,
+        })
+        if (target.kind === 'build-runner') await client.getBuild('cost-build')
+        else await client.getRepo(repo)
+        await current.backing.close()
+        handles.pop()
+        current = await compose()
+        const again = await issue(current.fetchFn)
+        expect(current.costs.events).toBe(0)
+        const fresh = new RemoteBuildStore({
+          url: 'http://test',
+          token: again,
+          fetchFn: current.fetchFn as typeof fetch,
+        })
+        if (target.kind === 'build-runner')
+          await fresh.getReducerValue(
+            { kind: 'build', slug: 'cost-build' },
+            { reducer: 'setupStreak' },
+          )
+        else await fresh.getReducerValue({ kind: 'repo', repo }, { reducer: 'effectiveConfig' })
+        // setupStreak needs its own initial checkpoint; repeat on a fresh handler.
+        await current.backing.close()
+        handles.pop()
+        current = await compose()
+        const answer = new RemoteBuildStore({
+          url: 'http://test',
+          token: again,
+          fetchFn: current.fetchFn as typeof fetch,
+        })
+        if (target.kind === 'build-runner')
+          await answer.getReducerValue(
+            { kind: 'build', slug: 'cost-build' },
+            { reducer: 'setupStreak' },
+          )
+        else await answer.getReducerValue({ kind: 'repo', repo }, { reducer: 'effectiveConfig' })
+        expect(current.costs.events).toBe(0)
+        expect(current.costs.metadata).toBeLessThan(20)
+        await current.backing.close()
+        handles.pop()
+        for (let index = 0; index < 3; index++) {
+          if (target.kind === 'build-runner') await writer.append('cost-build', sampleEventWrite())
+          else
+            await writer.appendRepo(repo, {
+              actor: humanActor('operator'),
+              type: 'dispatcher.intake-set',
+              payload: { enabled: true },
+            })
+        }
+        current = await compose()
+        const latest = await issue(current.fetchFn)
+        const latestClient = new RemoteBuildStore({
+          url: 'http://test',
+          token: latest,
+          fetchFn: current.fetchFn as typeof fetch,
+        })
+        if (target.kind === 'build-runner') await latestClient.getBuild('cost-build')
+        else await latestClient.getRepo(repo)
+        expect(current.costs.events).toBe(3)
+        expect(current.costs.metadata).toBeLessThan(30)
+        await current.backing.close()
+        handles.pop()
+      }
+    } finally {
+      for (const handle of handles) await handle.close()
+      await writer.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 30_000)

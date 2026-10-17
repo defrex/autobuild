@@ -1288,6 +1288,84 @@ test('a store that predates the snapshot routes reads as no snapshots, never an 
   }
 })
 
+test('remote value reads send one bounded request and receive only a small JSON answer', async () => {
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo('value-wire')
+  await backing.createBuild(sampleBuildInput('value-wire'))
+  for (let index = 0; index < 3000; index++) {
+    await backing.appendRepo('value-wire', {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+    await backing.append('value-wire', sampleEventWrite())
+  }
+  const server = createStoreServer({ store: backing })
+  const paths: string[] = []
+  let body = ''
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req = new Request(input, init)
+    paths.push(new URL(req.url).pathname)
+    const response = await server.fetch(req)
+    body = await response.clone().text()
+    return response
+  }) as typeof fetch
+  const remote = new RemoteBuildStore({ url: 'http://test', fetchFn })
+  for (const scope of [
+    { kind: 'build' as const, slug: 'value-wire' },
+    { kind: 'repo' as const, repo: 'value-wire' },
+  ]) {
+    paths.length = 0
+    const answer = await remote.getReducerValue(scope, {
+      reducer: scope.kind === 'build' ? 'setupStreak' : 'dispatchSettings',
+    })
+    expect(answer.cursor).toBe(3000)
+    expect(paths).toEqual([
+      scope.kind === 'build'
+        ? '/builds/value-wire/reducer-values'
+        : '/repos/value-wire/reducer-values',
+    ])
+    expect(body.length).toBeLessThan(200)
+    expect(Object.keys(JSON.parse(body)).sort()).toEqual(['cursor', 'value', 'version'])
+  }
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+    'content-type': 'application/json',
+  }
+  for (const body of [
+    { reducer: 'unknown' },
+    { reducer: 'journalView' },
+    { reducer: 'build' },
+    { reducer: 'openTick', args: { run: 7 } },
+    { reducer: 'dispatchSettings', state: {} },
+  ]) {
+    expect(
+      (
+        await server.fetch(
+          new Request('http://test/repos/value-wire/reducer-values', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+          }),
+        )
+      ).status,
+    ).toBe(400)
+  }
+  expect(
+    (
+      await server.fetch(
+        new Request('http://test/repos/value-wire/reducer-values', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ reducer: 'openTick', args: { run: 'a'.repeat(5000) } }),
+        }),
+      )
+    ).status,
+  ).toBe(413)
+  await backing.close()
+})
+
 test('hosted frontend read budget stays flat across thousands of journal events', async () => {
   const { dispatchReadBudget } = await import('@defrex/autobuild/testing')
   const backing = new MemoryBuildStore()

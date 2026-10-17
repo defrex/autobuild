@@ -1,8 +1,9 @@
 /**
  * Cold-start snapshots (store/snapshots.ts): a view that restores reducer state
  * and reads only events newer than the stored cursor answers exactly what a
- * full replay does, reads zero rows when nothing happened, and exactly the new
- * rows when something did.
+ * full replay does, reads zero build rows when nothing happened, and exactly
+ * the new build rows when something did. The journal tail stays in memory and
+ * is loaded through the bounded state-events query at cold start.
  */
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, humanActor } from '../events/envelope'
@@ -122,14 +123,14 @@ async function snapshotsOf(store: MemoryBuildStore, view: RepoViewStore): Promis
 }
 
 describe('RepoViewStore cold start from reducer snapshots', () => {
-  test('a second cold view over an unchanged log reads zero event rows', async () => {
+  test('a second cold view replays the journal and restores build snapshots', async () => {
     const store = new CountingStore()
     await seededRepo(store)
     await snapshotsOf(store, fresh(store))
     store.reset()
     const view = fresh(store)
     await view.refresh()
-    expect(store.totalRows()).toBe(0)
+    expect(store.rows.events).toBe(0)
     expect(view.recordedJournal().map((event) => event.type)).toEqual([
       'dispatcher.intake-set',
       'dispatcher.run-started',
@@ -137,7 +138,7 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     ])
     const facts = await view.buildFacts('b')
     expect(facts.state.status).toBe('paused')
-    expect(store.totalRows()).toBe(0)
+    expect(store.rows.events).toBe(0)
   })
 
   test('M events appended between runs cost exactly M rows', async () => {
@@ -152,8 +153,9 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     store.reset()
     const view = fresh(store)
     await view.refresh()
-    expect(store.totalRows()).toBe(5)
-    expect(store.rows.repoEvents).toBe(2)
+    expect(store.totalRows()).toBe(8)
+    expect(store.rows.repoState).toBe(5)
+    expect(store.rows.repoEvents).toBe(0)
     expect(store.rows.events).toBe(3)
   })
 
@@ -168,7 +170,7 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     store.reset()
     const next = fresh(store)
     await next.refresh()
-    expect(store.totalRows()).toBe(0)
+    expect(store.rows.events).toBe(0)
     expect((await next.buildFacts('a')).state.status).toBe('paused')
   })
 
@@ -272,7 +274,7 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     store.reset()
     const view = fresh(store)
     await view.refresh()
-    expect(store.totalRows()).toBe(0)
+    expect(store.rows.events).toBe(0)
   })
 
   for (const seed of [1, 2, 3, 4, 5]) {
@@ -349,7 +351,7 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
   })
 })
 
-describe('a journal snapshot whose retained payload is invalid', () => {
+describe('an ignored legacy journal snapshot with an invalid retained payload', () => {
   test.each([
     ['missing', undefined],
     ['of the wrong shape', { enabled: 'yes' }],
@@ -371,7 +373,7 @@ describe('a journal snapshot whose retained payload is invalid', () => {
   })
 })
 
-describe('a malformed journal snapshot at a quiet tail', () => {
+describe('an ignored legacy malformed journal snapshot at a quiet tail', () => {
   test.each([
     ['a null entry', { retained: [null] }],
     ['an entry without a type', { retained: [{ repo: REPO, seq: 1, ts: 't', actor: {} }] }],
@@ -662,3 +664,34 @@ for (const malformed of [
     expect(store.rows.events).toBeGreaterThan(0)
   })
 }
+
+test('journal snapshots are never loaded or rewritten, including oversized legacy rows', async () => {
+  const store = new CountingStore()
+  await seededRepo(store)
+  await store.putReducerSnapshot({ kind: 'repo', repo: REPO }, 'journalView', {
+    version: 4,
+    cursor: 3,
+    state: { retained: Array(4000).fill({ type: 'dispatcher.tick-started' }) },
+  })
+  const legacy = await store.getReducerSnapshot({ kind: 'repo', repo: REPO }, 'journalView', 4)
+  const reads: string[] = []
+  const writes: string[] = []
+  const get = store.getReducerSnapshot.bind(store)
+  const put = store.putReducerSnapshot.bind(store)
+  store.getReducerSnapshot = async (...args) => {
+    reads.push(args[1])
+    return get(...args)
+  }
+  store.putReducerSnapshot = async (...args) => {
+    writes.push(args[1])
+    return put(...args)
+  }
+  const view = fresh(store)
+  await view.startJournal()
+  await view.refresh()
+  await view.appendRepo(REPO, tickStarted('r1'))
+  await view.persistSnapshots({ force: true })
+  expect(reads).not.toContain('journalView')
+  expect(writes).not.toContain('journalView')
+  expect(await get({ kind: 'repo', repo: REPO }, 'journalView', 4)).toEqual(legacy)
+})

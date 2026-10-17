@@ -797,3 +797,233 @@ test('composed ticket routing binds delegated harvest access to its authenticate
   expect((await service.fetch(request('/tickets/list-ready', f.token, {}))).status).toBe(403)
   expect(opened).toEqual([A])
 })
+
+test('persisted lifecycle facts match full replay for historical anchors, duplicates, retries and invalid endings', async () => {
+  const { resolveReducerValue } = await import('@defrex/autobuild/remote-store')
+  const { evaluateDelegationLifecycle, evaluateDelegationFacts } = await import(
+    './delegated-authority'
+  )
+  const { MemoryBuildStore, sampleBuildInput } = await import('@defrex/autobuild/plugin-sdk')
+  const store = new MemoryBuildStore()
+  const build = await store.createBuild(sampleBuildInput('oracle', { repo: A }))
+  const at = '2026-01-01T00:00:00.000Z'
+  const buildSpecs = [
+    ['observation.recorded', { id: 'o', kind: 'followup', summary: 'test' }],
+    [
+      'session.started',
+      { session: 'phase', phase: 'implement', round: 1, role: 'implement', runner: 'test' },
+    ],
+    [
+      'session.started',
+      { session: 'phase', phase: 'implement', round: 1, role: 'implement', runner: 'test' },
+    ],
+    ['session.ended', { session: 'wrong', outcome: 'completed' }],
+    ['session.ended', { session: 'phase', outcome: 'completed' }],
+    ['build.aborted', {}],
+  ] as const
+  const repoSpecs = [
+    ['harvest.started', { run: 'run', observations: [], scan: { kind: 'scan', rev: 0 } }],
+    [
+      'harvest.execution.authorized',
+      { run: 'run', execution: 'exec', leaseHolder: 'holder', launch: 'started' },
+    ],
+    [
+      'harvest.session.started',
+      {
+        run: 'run',
+        session: 'phase',
+        step: 'synthesize',
+        round: 1,
+        role: 'harvest',
+        runner: 'test',
+        args: [],
+      },
+    ],
+    [
+      'harvest.session.started',
+      {
+        run: 'run',
+        session: 'phase',
+        step: 'synthesize',
+        round: 1,
+        role: 'harvest',
+        runner: 'test',
+        args: [],
+      },
+    ],
+    [
+      'harvest.failed',
+      { run: 'run', step: 'synthesize', round: 1, attempt: 1, error: 'test', willRetry: true },
+    ],
+    ['harvest.session.ended', { run: 'run', session: 'wrong', outcome: 'completed' }],
+    ['harvest.session.ended', { run: 'run', session: 'phase', outcome: 'completed' }],
+    [
+      'harvest.execution.released',
+      { execution: 'exec', environmentId: 'env', snapshots: { outcome: 'confirmed' } },
+    ],
+    [
+      'harvest.failed',
+      { run: 'run', step: 'synthesize', round: 1, attempt: 2, error: 'test', willRetry: false },
+    ],
+  ] as const
+  for (const domain of ['build', 'repo'] as const) {
+    const specs = domain === 'build' ? buildSpecs : repoSpecs
+    for (const invalid of [false, true]) {
+      const events = specs.map(([type, payload], index) => ({
+        [domain === 'build' ? 'build' : 'repo']: domain === 'build' ? 'oracle' : A,
+        seq: index + 1,
+        ts: invalid && index === specs.length - 1 ? 'invalid timestamp' : at,
+        type,
+        payload,
+        actor: { kind: 'kernel' },
+      }))
+      for (let length = 0; length <= events.length; length++) {
+        const prefix = events.slice(0, length)
+        const { reducer } = resolveReducerValue(
+          domain === 'build' ? { kind: 'build', slug: 'oracle' } : { kind: 'repo', repo: A },
+          { reducer: domain === 'build' ? 'buildDelegation' : 'harvestDelegation' },
+        )
+        const facts = reducer.finish(
+          reducer.advance(reducer.advance(reducer.initial(), prefix.slice(0, 2)), prefix.slice(2)),
+        )
+        for (const anchor of [1, 2, 3, 4, 5, 99])
+          for (const session of [undefined, 'phase', 'wrong'])
+            for (const offset of [-1, 59999, 60000, 60001]) {
+              const claims = {
+                repo: A,
+                id: domain === 'build' ? 'oracle' : 'run',
+                anchor,
+                kind:
+                  domain === 'build'
+                    ? session
+                      ? 'build-phase'
+                      : 'build-runner'
+                    : session
+                      ? 'harvest-phase'
+                      : 'harvest-runner',
+                ...(domain === 'repo' ? { execution: 'exec', leaseHolder: 'holder' } : {}),
+                ...(session ? { session } : {}),
+              } as DelegatedTokenScope['delegation']
+              const lifecycle =
+                domain === 'build'
+                  ? {
+                      build,
+                      buildEvents:
+                        prefix as unknown as import('@defrex/autobuild/plugin-sdk').AbEvent[],
+                    }
+                  : {
+                      repositoryEvents:
+                        prefix as unknown as import('@defrex/autobuild/remote-store').RepositoryEvent[],
+                    }
+              const now = new Date(Date.parse(at) + offset)
+              expect(evaluateDelegationFacts(claims, facts, now)).toBe(
+                evaluateDelegationLifecycle(claims, lifecycle, now),
+              )
+            }
+      }
+    }
+  }
+  await store.close()
+})
+
+test('delegated credentials cannot forge value checkpoints or extend an ended lifecycle', async () => {
+  const { resolveReducerValue } = await import('@defrex/autobuild/remote-store')
+  const f = await fixture()
+  const started = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: {
+      session: 'ended-phase',
+      role: 'implement',
+      phase: 'implement',
+      round: 1,
+      runner: 'test',
+    },
+  })
+  const issued = await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'ended-phase' })
+  expect(issued.status).toBe(200)
+  const phaseToken = (await issued.json()).token as string
+  const ended = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.ended',
+    payload: {
+      session: 'ended-phase',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'replacement', resumedFromSeq: started.seq },
+    },
+  })
+  const scope = { kind: 'build' as const, slug: 'one' }
+  const resolved = resolveReducerValue(scope, { reducer: 'buildDelegation' })
+  const legacyKey = `value.${new Bun.CryptoHasher('sha256').update(resolved.identity).digest('hex').slice(0, 56)}`
+  const forged = {
+    version: resolved.reducer.version,
+    cursor: ended.seq,
+    state: {
+      identity: resolved.identity,
+      acc: {
+        lastSeq: ended.seq,
+        sessions: {
+          'id:ended-phase': { starts: [started.seq], endings: [] },
+          'id:never-started': { starts: [started.seq], endings: [] },
+        },
+        terminals: [],
+      },
+    },
+  }
+  for (const token of [phaseToken, f.token, f.project.token])
+    for (const key of [resolved.key, legacyKey, 'value.arbitrary']) {
+      const path = `/builds/one/snapshots/${key}`
+      expect((await f.server.fetch(request(path, token, forged, 'PUT'))).status).toBe(400)
+      expect((await f.server.fetch(request(`${path}?version=1`, token))).status).toBe(400)
+    }
+  // Generic snapshots retain their historical API outside the reserved prefix.
+  expect(
+    (
+      await f.server.fetch(
+        request(
+          '/builds/one/snapshots/legacy-client',
+          phaseToken,
+          { version: 1, cursor: ended.seq, state: { ok: true } },
+          'PUT',
+        ),
+      )
+    ).status,
+  ).toBe(200)
+  expect(
+    (await f.server.fetch(request('/builds/one/snapshots/legacy-client?version=1', phaseToken)))
+      .status,
+  ).toBe(200)
+  expect(
+    (await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'never-started' })).status,
+  ).toBe(404)
+  // A checkpoint forged through the prior release must not survive an upgrade.
+  const snapshots = Reflect.get(f.store, 'snapshots') as Map<string, typeof forged>
+  snapshots.set(`build:one\u0000${legacyKey}`, forged)
+  snapshots.delete(`build:one\u0000${resolved.key}`)
+  f.advance(59999)
+  expect((await f.server.fetch(request('/builds/one', phaseToken))).status).toBe(200)
+  f.advance(1)
+  expect((await f.server.fetch(request('/builds/one', phaseToken))).status).toBe(401)
+  expect(
+    (await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'never-started' })).status,
+  ).toBe(404)
+  const terminal = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'build.aborted',
+    payload: {},
+  })
+  expect(
+    (
+      await f.server.fetch(
+        request(
+          `/builds/one/snapshots/${resolved.key}`,
+          f.token,
+          { ...forged, cursor: terminal.seq },
+          'PUT',
+        ),
+      )
+    ).status,
+  ).toBe(400)
+  f.advance(60000)
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(401)
+})

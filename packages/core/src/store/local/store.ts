@@ -1,3 +1,10 @@
+import { assertPublicSnapshotReducer } from '../snapshots'
+import {
+  readReducerValue,
+  resolveReducerValue,
+  type ReducerValueRequest,
+  type ReducerValue,
+} from '../reducer-values'
 import { validateTickFinish } from '../repo-tick'
 import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from '../types'
 /**
@@ -1104,11 +1111,91 @@ export class SqliteBuildStore implements BuildStore {
     return row?.tail
   }
 
+  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    // Reject invalid requests before touching storage.
+    resolveReducerValue(scope, request)
+    return readReducerValue(scope, request, {
+      highWater: async () => {
+        const tail = this.snapshotTail(scope)
+        if (tail === undefined) throw new Error('unknown reducer scope')
+        return tail
+      },
+      events: async (since, through) => {
+        const key = scope.kind === 'build' ? scope.slug : scope.repo
+        const rows = this.sqlite
+          .query(
+            scope.kind === 'build'
+              ? 'SELECT * FROM events WHERE build=?1 AND seq>?2 AND seq<=?3 ORDER BY seq'
+              : 'SELECT * FROM repo_events WHERE repo=?1 AND seq>?2 AND seq<=?3 ORDER BY seq',
+          )
+          .all(key, since, through) as {
+          build?: string
+          repo?: string
+          seq: number
+          ts: string
+          actor: string
+          type: string
+          payload: string
+        }[]
+        return rows.map((row) => ({
+          ...row,
+          actor: JSON.parse(row.actor),
+          payload: JSON.parse(row.payload),
+        })) as (AbEvent | RepositoryEvent)[]
+      },
+      put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
+      read: async (key) => {
+        const row = this.sqlite
+          .query(
+            'SELECT version, cursor, state FROM reducer_snapshots WHERE scope_kind=?1 AND scope_key=?2 AND reducer=?3',
+          )
+          .get(scope.kind, scope.kind === 'build' ? scope.slug : scope.repo, key) as {
+          version: number
+          cursor: number
+          state: string
+        } | null
+        if (!row) return null
+        let state: unknown = null
+        try {
+          state = JSON.parse(row.state)
+        } catch {
+          /* malformed cache */
+        }
+        return { snapshot: { version: row.version, cursor: row.cursor, state }, token: row.state }
+      },
+      repair: async (key, observed, snapshot) => {
+        return this.sqlite.transaction(() => {
+          const tail = this.snapshotTail(scope)
+          if (tail === undefined || snapshot.cursor > tail) return false
+          return (
+            this.sqlite
+              .query(
+                `UPDATE reducer_snapshots SET version=?1, cursor=?2, state=?3, updated_at=?4 WHERE scope_kind=?5 AND scope_key=?6 AND reducer=?7 AND version=?8 AND cursor=?9 AND state=?10`,
+              )
+              .run(
+                snapshot.version,
+                snapshot.cursor,
+                JSON.stringify(snapshot.state),
+                this.clock().toISOString(),
+                scope.kind,
+                scope.kind === 'build' ? scope.slug : scope.repo,
+                key,
+                observed.snapshot.version,
+                observed.snapshot.cursor,
+                observed.token,
+              ).changes > 0
+          )
+        })()
+      },
+    })
+  }
+
   async getReducerSnapshot(
     scope: SnapshotScope,
     reducer: string,
     version: number,
   ): Promise<ReducerSnapshot | null> {
+    assertPublicSnapshotReducer(reducer)
     const tail = this.snapshotTail(scope)
     if (tail === undefined) return null
     const row = this.sqlite
@@ -1129,6 +1216,15 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    assertPublicSnapshotReducer(reducer)
+    return this.putSnapshot(scope, reducer, snapshot)
+  }
+
+  private async putSnapshot(
     scope: SnapshotScope,
     reducer: string,
     snapshot: ReducerSnapshot,

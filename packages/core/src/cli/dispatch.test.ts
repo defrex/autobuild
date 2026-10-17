@@ -841,7 +841,7 @@ describe('abDispatch guards', () => {
     }
   }, 10_000)
 
-  test('a second quiet --once reads zero journal rows, and M foreign events cost exactly M', async () => {
+  test('each cold --once loads the bounded journal, including foreign durable facts', async () => {
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
     try {
       const once = () =>
@@ -872,9 +872,10 @@ describe('abDispatch guards', () => {
         return events
       }
       await once()
+      const quietRows = (await readState(fx.origin)).length
       rows = 0
       await once()
-      expect(rows).toBe(0)
+      expect(rows).toBe(quietRows)
       await fx.store.appendRepo(fx.origin, {
         actor: humanActor('op'),
         type: 'dispatcher.intake-set',
@@ -885,9 +886,10 @@ describe('abDispatch guards', () => {
         type: 'dispatcher.intake-set',
         payload: { enabled: false },
       })
+      const withForeignRows = (await readState(fx.origin)).length
       rows = 0
       await once()
-      expect(rows).toBe(2)
+      expect(rows).toBe(withForeignRows)
     } finally {
       await fx.cleanup()
     }

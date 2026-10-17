@@ -1,3 +1,4 @@
+import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 import type { ReducerSnapshot, SnapshotScope } from './snapshots'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
@@ -193,6 +194,16 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     getRepoHighWater(repo: string): Promise<number> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoHighWater', repo))
+    },
+    async getReducerValue(
+      target: SnapshotScope,
+      request: ReducerValueRequest,
+    ): Promise<ReducerValue> {
+      if (target.kind !== 'build') {
+        throw new BuildScopeError(scope, 'getReducerValue', target.repo)
+      }
+      own('getReducerValue', target.slug)
+      return store.getReducerValue(target, request)
     },
     async getReducerSnapshot(
       target: SnapshotScope,

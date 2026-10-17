@@ -1,3 +1,5 @@
+import { assertPublicSnapshotReducer } from '@defrex/autobuild/remote-store'
+import { reducerValueRequestSchema, resolveReducerValue } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import { randomBytes } from 'node:crypto'
 import {
@@ -436,7 +438,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     else repo = (await store.getSession(id))?.repo
     if (kind !== 'repo' && (repo === undefined || repo !== value.repo)) throw unavailable()
     requireProject(value, repo!)
-    if (value.kind === 'delegated' && req.method !== 'GET') {
+    const valueRead =
+      req.method === 'POST' &&
+      new URL(req.url).pathname.endsWith('/reducer-values') &&
+      (kind === 'build' || kind === 'repo')
+    if (value.kind === 'delegated' && req.method !== 'GET' && !valueRead) {
       const grant = value.delegation
       if (kind === 'build') {
         if (!grant.kind.startsWith('build') || grant.id !== id)
@@ -654,6 +660,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments[0] === 'snapshots' && segments.length === 2) {
       return snapshotRoute(req, url, { kind: 'repo', repo }, segments[1]!)
     }
+    if (rest === 'reducer-values') return valueRoute(req, { kind: 'repo', repo })
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
@@ -898,6 +905,22 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
   }
 
+  async function valueRoute(req: Request, scope: SnapshotScope): Promise<Response> {
+    if (req.method !== 'POST')
+      return fail(404, 'not-found', `no route: ${req.method} reducer-values`)
+    const text = await req.text()
+    if (utf8.encode(text).length > 4096)
+      throw new RequestError(413, 'validation', 'reducer request exceeds 4 KiB')
+    let body: ReturnType<typeof reducerValueRequestSchema.parse>
+    try {
+      body = reducerValueRequestSchema.parse(JSON.parse(text))
+      resolveReducerValue(scope, body)
+    } catch (error) {
+      throw new RequestError(400, 'validation', String(error))
+    }
+    return json(200, await store.getReducerValue(scope, body))
+  }
+
   /** A body ceiling for one snapshot: generous for a long build's accumulator,
    * still a bound, so an oversized or hostile write is a 413 and never reaches
    * the store. */
@@ -913,6 +936,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     scope: SnapshotScope,
     reducer: string,
   ): Promise<Response> {
+    try {
+      assertPublicSnapshotReducer(reducer)
+    } catch (error) {
+      throw new RequestError(400, 'validation', (error as Error).message)
+    }
     if (!SNAPSHOT_REDUCER_NAME.test(reducer)) {
       throw new RequestError(400, 'validation', `invalid reducer name "${reducer}"`)
     }
@@ -958,6 +986,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments[0] === 'snapshots' && segments.length === 2) {
       return snapshotRoute(req, url, { kind: 'build', slug }, segments[1]!)
     }
+    if (rest === 'reducer-values') return valueRoute(req, { kind: 'build', slug })
     switch (`${req.method} ${rest}`) {
       // The build's frozen ticket assets (SPEC §6.3): read through the build's
       // own events, so a build-scoped token needs no ticket-asset authority.

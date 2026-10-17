@@ -1,3 +1,4 @@
+import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 /**
  * Local ambient phase-session wrapper for a BuildStore.
  *
@@ -332,6 +333,14 @@ export function scopeLocalStoreToPhaseSession(
     async getRepoHighWater(repo: string): Promise<number> {
       own('getRepoHighWater', 'repo', repo)
       return store.getRepoHighWater(repo)
+    },
+    async getReducerValue(
+      target: SnapshotScope,
+      request: ReducerValueRequest,
+    ): Promise<ReducerValue> {
+      if (target.kind === 'build') own('getReducerValue', 'build', target.slug)
+      else own('getReducerValue', 'repo', target.repo)
+      return store.getReducerValue(target, request)
     },
     async getReducerSnapshot(
       target: SnapshotScope,

@@ -82,7 +82,12 @@ function unionFingerprint(name: string, reducer: RegisteredReducer['reducer']): 
 
 /** Reducers whose empty accumulator already has every field, so the corpora
  * cannot add paths to it. */
-const COMPLETE_WHEN_EMPTY = new Set(['dispatchSettings', 'lastExecutionOutcome'])
+const COMPLETE_WHEN_EMPTY = new Set([
+  'dispatchSettings',
+  'lastExecutionOutcome',
+  'buildDelegation',
+  'harvestDelegation',
+])
 
 /** Names that are neither the in-place half of a registered reducer, covered
  * by a registered reducer, nor excluded with a reason. */
@@ -103,6 +108,7 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 1,
         "build": 1,
+        "buildDelegation": 1,
         "buildDigest": 3,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
@@ -111,9 +117,11 @@ describe('reducer registry', () => {
         "dispatchFrontend": 2,
         "dispatchSettings": 1,
         "dispatchStatus": 2,
+        "effectiveConfig": 1,
         "executionNoProgress": 1,
         "frozenPrImageHost": 1,
         "harvest": 1,
+        "harvestDelegation": 1,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
         "journalView": 4,

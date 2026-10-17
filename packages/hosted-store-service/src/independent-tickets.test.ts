@@ -276,3 +276,104 @@ test('a local harvest files proposals and origin blockers through read/create ti
     await rm(workspace, { recursive: true, force: true })
   }
 })
+
+test('policy publication uses named config existence, preserves decode errors and resets on run rollover', async () => {
+  const { parseConfig, DISPATCHER } = await import('@defrex/autobuild/testing')
+  const policy = {
+    version: 1 as const,
+    tickets: {
+      source: 'hosted' as const,
+      teamKey: 'ENG',
+      triageState: 'Inbox',
+      readyState: 'Ready',
+      claimedState: 'Active',
+      doneState: 'Done',
+      createState: 'Inbox',
+      proposalState: 'Inbox',
+    },
+  }
+  for (const scenario of [
+    'no-repo',
+    'no-run',
+    'missing-artifact',
+    'invalid-artifact',
+    'valid',
+    'rollover',
+    'prior-policy',
+  ]) {
+    const store = new MemoryBuildStore()
+    const projects = testProjects([repo])
+    const credentials = testCredentials(projects, 'secret').store
+    const { token } = await credentials.issue(repo, 'owner')
+    const policies = new MemoryTicketPolicyStore()
+    if (scenario === 'prior-policy') await policies.put(repo, policy, 'owner')
+    if (scenario !== 'no-repo' && scenario !== 'prior-policy') await store.ensureRepo(repo)
+    if (['missing-artifact', 'invalid-artifact', 'valid', 'rollover'].includes(scenario)) {
+      let reference: { kind: string; rev: number } | undefined
+      if (scenario === 'missing-artifact')
+        reference = { kind: 'dispatcher-effective-config', rev: 99 }
+      if (['invalid-artifact', 'valid', 'rollover'].includes(scenario)) {
+        const { verify, finalize, ...config } = parseConfig(
+          '[tickets]\nsource="hosted"\nteamKey="ENG"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+        )
+        const artifact = await store.putRepoArtifact(repo, {
+          kind: 'dispatcher-effective-config',
+          content:
+            scenario === 'invalid-artifact'
+              ? 'invalid JSON'
+              : JSON.stringify({
+                  ...config,
+                  verify: { steps: verify.steps },
+                  finalize: { steps: finalize.steps },
+                }),
+        })
+        reference = { kind: artifact.kind, rev: artifact.revision }
+      }
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: { run: 'first', pid: 1, roleWarnings: [], effectiveConfig: reference! },
+      })
+      if (scenario === 'rollover')
+        await store.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: 'second',
+            pid: 2,
+            roleWarnings: [],
+            effectiveConfig: { kind: 'new-run-config', rev: 0 },
+          },
+        })
+    }
+    store.getRepoEvents = async () => {
+      throw new Error('raw journal reads are forbidden')
+    }
+    store.getRepoStateEvents = async () => {
+      throw new Error('raw state reads are forbidden')
+    }
+    const service = createHostedStoreService({
+      env,
+      openStore: async () => store,
+      openProjectRegistry: async () => projects,
+      openCredentials: async () => credentials,
+      openTicketPolicy: async () => policies,
+      sourceFor: () => new FakeTicketSource(),
+    })
+    const fetchFn = async (input: string | URL | Request, init?: RequestInit) =>
+      service.fetch(new Request(input, init))
+    const client = new HostedTicketSource({
+      url: 'http://test',
+      token,
+      repo,
+      teamKey: 'ENG',
+      fetchFn,
+    })
+    if (scenario === 'missing-artifact' || scenario === 'rollover')
+      await expect(client.synchronizePolicy(policy)).rejects.toThrow('not retrievable')
+    else if (scenario === 'invalid-artifact')
+      await expect(client.synchronizePolicy(policy)).rejects.toThrow()
+    else await client.synchronizePolicy(policy)
+    await store.close()
+  }
+})
