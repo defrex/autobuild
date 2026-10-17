@@ -1054,3 +1054,24 @@ Hosted ticket detail reads expose complete, oldest-first structured comments in
 HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
 decoders retain compatible responses. File comments remain embedded in the body;
 Linear comment reads are unchanged.
+
+### Reconcile restacking
+
+The kernel prepares a detached replay of one net build change on the base frozen
+by `reconcile.started`. The contribution baseline is the initial branch-cut base
+or latest successfully reconciled base. The resolver continues that one replay;
+completion requires one parent at the frozen base and the build identity trailer.
+Historical merge completions retain their original shape and semantics.
+
+The optional grouped Forge rewrite capability owns authoritative head snapshots,
+immutable `refs/autobuild/archive/<slug>/<sha>` publication and expected-head CAS.
+GitHub uses explicit Git transport leases; local-git uses shared-database
+`update-ref` CAS without network calls. Trusted remote publication archives before
+replacement after guest teardown; it never uses ordinary append-only publication
+for restacks. Prepared, replayed, intended and rewritten facts support recovery.
+A contended rewrite preserves the observed work and retries on the same base.
+
+GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
+`ports/forge/github.live.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
+explicit disposable `AB_GITHUB_CONTRACT_REPO`. Offline transport tests are not
+live provider evidence.

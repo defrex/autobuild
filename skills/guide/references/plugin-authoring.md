@@ -18,6 +18,18 @@ paths are not API.
 | `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. |
 | `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
 
+Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
+actual build branch into a build-private ref, publish immutable exact-SHA refs
+under `refs/autobuild/archive/<slug>/<sha>`, and replace the explicit branch with
+an explicit expected remote head. Return `lease-mismatch` separately from
+transport, auth and policy failures. Never overwrite unknown work or silently
+fall back to merging, ordinary pushes, archive branches or tags. Older forge
+plugins remain loadable and receive an actionable refusal at reconcile time.
+Remote workspace providers additionally need trusted `WorkspacePublication.rewrite`
+after guest execution teardown; ordinary `publish` cannot publish a restack.
+A local-ref acknowledgement has its own `localExpected` guard, separate from
+the authoritative remote lease when another writer advanced the remote branch.
+
 Plugin API 1.3 adds the optional AgentRunner failure `cause` and the
 `exhaustion-failure` shared-contract scenario. Legacy failures without `cause`
 remain supported: `permanent: false` is eligible for a configured alternate,
