@@ -1,3 +1,4 @@
+import { leafRestackReducer } from './leaf-restack-state'
 import { terminalGuardReducer } from './terminal-guard'
 import { repositoryAttentionReducer } from './repository-attention'
 import {
@@ -81,6 +82,7 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
+  leafRestack: { reducer: leafRestackReducer, covers: ['advanceLeafRestack'] },
   baseBranchValue: { reducer: optionalValue(baseBranchReducer), covers: [] },
   publishedBranchHeadValue: { reducer: optionalValue(publishedBranchHeadReducer), covers: [] },
   verifyDiffBaseValue: { reducer: optionalValue(verifyDiffBaseReducer), covers: [] },

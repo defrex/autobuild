@@ -41,7 +41,7 @@ export function referencedGitTips(events: readonly AbEvent[]): string[] {
   }
   for (const event of events) {
     if (
-      /^(workspace\.provisioned|implement\.completed|code-review\.|reconcile\.|finalize\.|pr\.)/.test(
+      /^(workspace\.provisioned|implement\.completed|code-review\.|restack\.|reconcile\.|finalize\.|pr\.)/.test(
         event.type,
       )
     )

@@ -52,6 +52,7 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
         'fetch',
         '--no-tags',
         '--no-write-fetch-head',
+        '--refmap=',
         'origin',
         `+${ref}:${input.destinationRef}`,
       ])

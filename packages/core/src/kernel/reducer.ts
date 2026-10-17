@@ -110,6 +110,9 @@ export interface OpenSession {
  * the aggregate attempt high-water and cannot identify the current cycle in
  * the window between a verify failure and the next `verify.started`. */
 export interface VerifyResult {
+  baseSha?: string
+  headSha?: string
+  restackId?: string
   step: string
   attempt: number
   outcome: VerifyOutcome
@@ -351,7 +354,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 3
+export const BUILD_REDUCER_VERSION = 4
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -692,6 +695,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         const result = normalizeVerifyCompletion(event.payload)
         verify.maxAttemptSeen = Math.max(verify.maxAttemptSeen, result.attempt)
         verify.results.push({
+          ...(result.baseSha === undefined ? {} : { baseSha: result.baseSha }),
+          ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
+          ...(result.restackId === undefined ? {} : { restackId: result.restackId }),
           step: result.step,
           attempt: result.attempt,
           outcome: result.outcome,
@@ -747,6 +753,18 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           attempt: event.payload.attempt,
           seq: event.seq,
         })
+        break
+      case 'restack.rewritten':
+      case 'restack.completed':
+        if (event.type === 'restack.completed' && prState === 'conflicted') prState = 'open'
+        if (pr !== undefined)
+          pr = {
+            ...pr,
+            headSha:
+              event.type === 'restack.rewritten'
+                ? (event.payload.observedHead ?? event.payload.headSha)
+                : event.payload.headSha,
+          }
         break
       case 'reconcile.rewritten':
         if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }

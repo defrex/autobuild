@@ -40,6 +40,13 @@ export interface EventWrite<T extends EventType = EventType> {
  * catalog tables in SPEC §15.3.
  */
 export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
+  'target.moved': ['dispatcher', 'kernel'],
+  'restack.prepared': ['kernel', 'dispatcher'],
+  'restack.replayed': ['kernel', 'dispatcher'],
+  'restack.publish-intended': ['kernel', 'dispatcher'],
+  'restack.rewritten': ['kernel', 'dispatcher'],
+  'restack.contended': ['kernel', 'dispatcher'],
+  'restack.completed': ['kernel', 'dispatcher'],
   'build.created': ['dispatcher', 'human'],
   'build.completed': ['dispatcher'],
   'runner.attached': ['kernel'],
@@ -116,7 +123,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.replayed': ['kernel'],
   'reconcile.publish-intended': ['kernel'],
   'reconcile.rewritten': ['kernel', 'dispatcher'],
-  'reconcile.completed': ['agent', 'dispatcher'],
+  'reconcile.completed': ['agent', 'dispatcher', 'kernel'],
 
   'observation.recorded': ['kernel', 'agent'],
   'escalation.raised': ['agent', 'kernel', 'dispatcher'],

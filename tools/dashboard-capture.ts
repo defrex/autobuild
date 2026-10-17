@@ -594,6 +594,15 @@ async function seedHappyBuild(
     type: 'build.created',
     payload: { ticket, repo: harness.origin, baseBranch: 'main' },
   })
+  const target = await spawnExec(['git', 'rev-parse', 'refs/heads/main'], { cwd: harness.origin })
+  if (target.exitCode !== 0) throw new Error(target.stderr)
+  await harness.store.append(build.slug, {
+    actor: DISPATCHER,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: target.stdout.trim() },
+  })
+  // Keep the established visual timeline when adding this observation fact.
+  harness.clock.advance(-1000)
   await harness.store.append(build.slug, {
     actor: DISPATCHER,
     type: 'workspace.provisioned',

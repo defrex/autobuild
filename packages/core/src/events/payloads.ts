@@ -38,6 +38,7 @@ const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
 export const reconcileTransactionSchema = z.strictObject({
   id: z.string().min(1),
   attempt: z.number().int().positive(),
+  restackId: z.string().min(1).optional(),
   branch: z.string().min(1),
   oldHead: gitOid,
   oldBase: gitOid,
@@ -45,6 +46,12 @@ export const reconcileTransactionSchema = z.strictObject({
   changeSha: gitOid,
   workspaceHead: gitOid,
   localBranchHead: gitOid,
+})
+export const leafRestackSchema = reconcileTransactionSchema.omit({ attempt: true }).extend({
+  trigger: z.enum(['verify-entry', 'awaiting-landing']),
+  cycle: z.number().int().nonnegative(),
+  observation: z.number().int().positive(),
+  message: z.string().min(1),
 })
 const archiveEntry = z.strictObject({
   ref: z.string().startsWith('refs/autobuild/archive/'),
@@ -159,6 +166,9 @@ const verifyStepSelectionSchema = z
   })
 
 const verifyCompletionBase = {
+  baseSha: gitOid.optional(),
+  headSha: gitOid.optional(),
+  restackId: z.string().min(1).optional(),
   step: z.string().min(1),
   attempt,
 }
@@ -385,6 +395,12 @@ export const eventPayloadSchemas = {
    * lease are gone, then appends the ordinary phase completion fact. */
   'publication.requested': z.discriminatedUnion('operation', [
     z.strictObject({
+      operation: z.literal('restack'),
+      branch: z.string().min(1),
+      sha: gitOid,
+      rewrite: leafRestackSchema.extend({ headSha: gitOid }),
+    }),
+    z.strictObject({
       operation: z.literal('implement'),
       branch: z.string().min(1),
       sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
@@ -424,7 +440,7 @@ export const eventPayloadSchemas = {
   'publication.lost': z.strictObject({
     /** seq of the lost `publication.requested` event. */
     request: z.number().int().positive(),
-    operation: z.enum(['implement', 'reconcile', 'finalize', 'finalize-step']),
+    operation: z.enum(['implement', 'reconcile', 'restack', 'finalize', 'finalize-step']),
     branch: z.string().min(1),
     sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
     reason: z.string().trim().min(1),
@@ -551,6 +567,9 @@ export const eventPayloadSchemas = {
 
   // ── Verify / finalize ──────────────────────────────────────────────────────
   'verify.started': z.strictObject({
+    baseSha: gitOid.optional(),
+    headSha: gitOid.optional(),
+    restackId: z.string().min(1).optional(),
     step: z.string().min(1),
     attempt,
     /** An answered escalation raised by this agent verifier returns to the
@@ -637,7 +656,26 @@ export const eventPayloadSchemas = {
     attempt,
     baseSha: z.string().min(1),
   }),
-  'reconcile.started': z.strictObject({ attempt, baseSha: z.string().min(1) }),
+  'target.moved': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
+  'restack.prepared': leafRestackSchema,
+  'restack.replayed': z.strictObject({ id: z.string().min(1), conflicted: z.boolean() }),
+  'restack.publish-intended': leafRestackSchema.extend({ headSha: gitOid }),
+  'restack.rewritten': leafRestackSchema.extend({
+    headSha: gitOid,
+    archives: z.array(archiveEntry),
+    observedHead: gitOid.nullable().optional(),
+  }),
+  'restack.contended': z.strictObject({
+    id: z.string().min(1),
+    request: z.number().int().positive(),
+    actual: gitOid.nullable(),
+  }),
+  'restack.completed': leafRestackSchema.extend({ headSha: gitOid }),
+  'reconcile.started': z.strictObject({
+    attempt,
+    baseSha: z.string().min(1),
+    restackId: z.string().min(1).optional(),
+  }),
   'reconcile.prepared': reconcileTransactionSchema,
   'reconcile.contended': z.strictObject({
     id: z.string().min(1),
@@ -713,6 +751,9 @@ export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloadSche
 
 /** Canonical read shape shared by the reducer, engine, and query surfaces. */
 export interface NormalizedVerifyCompletion {
+  baseSha?: string
+  headSha?: string
+  restackId?: string
   step: string
   attempt: number
   outcome: VerifyOutcome
@@ -730,6 +771,9 @@ export function normalizeVerifyCompletion(
 ): NormalizedVerifyCompletion {
   if ('pass' in payload) {
     return {
+      baseSha: payload.baseSha,
+      headSha: payload.headSha,
+      restackId: payload.restackId,
       step: payload.step,
       attempt: payload.attempt,
       outcome: payload.pass ? 'pass' : 'fail',
@@ -738,6 +782,9 @@ export function normalizeVerifyCompletion(
   }
   if (payload.outcome === 'skipped') {
     return {
+      baseSha: payload.baseSha,
+      headSha: payload.headSha,
+      restackId: payload.restackId,
       step: payload.step,
       attempt: payload.attempt,
       outcome: 'skipped',
@@ -746,6 +793,9 @@ export function normalizeVerifyCompletion(
     }
   }
   return {
+    baseSha: payload.baseSha,
+    headSha: payload.headSha,
+    restackId: payload.restackId,
     step: payload.step,
     attempt: payload.attempt,
     outcome: payload.outcome,

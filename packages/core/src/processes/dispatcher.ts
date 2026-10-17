@@ -1,6 +1,6 @@
 import { hasBuildTrailer } from '../kernel/build-identity'
 import { readBuildDigests } from '../store/reduced-reads'
-import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
+import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
@@ -1202,6 +1202,16 @@ export class Dispatcher {
   ): Promise<LaunchRunnerResult> {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
+    const facts = (await readBuildFacts(this.store, slug)).value
+    if (facts.log.restack.target === undefined && facts.lastCreated !== undefined) {
+      const branch = facts.lastCreated.payload.baseBranch
+      const sha = await this.baseSha(branch)
+      await this.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'target.moved',
+        payload: { branch, sha },
+      })
+    }
     if (
       !(await ensureExecutionProgress(
         this.store,
@@ -1768,7 +1778,7 @@ export class Dispatcher {
         // Once a record is known, contain its complete janitor path: loading
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
         // Existing partial facts leave the same work due on the next tick.
-        const { state, workspace } = await this.store.buildFacts(record.slug)
+        let { state, workspace, log } = await this.store.buildFacts(record.slug)
         const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Raw history, read at most once and only by a branch that acts on it:
         // the facts above answer every quiet-path question without it.
@@ -1818,6 +1828,21 @@ export class Dispatcher {
         if (!executionLeaseLive && state.status === 'aborted') {
           await this.cleanupAborted(record, await history(), report)
           continue
+        }
+        if (state.status !== 'aborted' && state.status !== 'queued') {
+          const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
+          if (branch !== undefined) {
+            const sha = await this.baseSha(branch)
+            if (log.restack.target?.sha !== sha) {
+              await this.store.append(record.slug, {
+                actor: DISPATCHER,
+                type: 'target.moved',
+                payload: { branch, sha },
+              })
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+          }
         }
         if (state.pr) {
           await this.checkPr(

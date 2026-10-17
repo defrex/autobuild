@@ -6,7 +6,13 @@ import { seedStore, BUILD, BRANCH } from '../cli/testkit'
 import { bunExec, GitHubForge } from '../ports/forge/github'
 import { LocalGitForge } from '../ports/forge/local-git'
 import { DISPATCHER, KERNEL } from '../events/envelope'
-import { archiveTips, prepareRestack, publishRestack, validateRestack } from './reconcile-restack'
+import {
+  archiveTips,
+  prepareRestack,
+  publishRestack,
+  validateRestack,
+  retainReplay,
+} from './reconcile-restack'
 import { buildTrailers } from './build-identity'
 
 for (const mode of ['clean', 'conflict', 'empty'] as const) {
@@ -148,6 +154,25 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
         type: 'reconcile.publish-intended',
         payload: intent,
       })
+      if (mode === 'clean') {
+        await retainReplay(deps, head, target)
+        await git(['checkout', '-q', BRANCH])
+        const replacement = `${cwd}-replacement`
+        try {
+          await git(['clone', '--no-local', '-q', cwd, replacement])
+          const absent = await bunExec(['git', 'cat-file', '-e', `${head}^{commit}`], {
+            cwd: replacement,
+          })
+          expect(absent.exitCode).not.toBe(0)
+          await prepareRestack({ ...deps, workspacePath: replacement }, input)
+          const restored = await bunExec(['git', 'rev-parse', 'HEAD'], { cwd: replacement })
+          expect(restored.stdout.trim()).toBe(head)
+          await validateRestack({ ...deps, workspacePath: replacement }, transaction, head)
+        } finally {
+          await rm(replacement, { recursive: true, force: true })
+        }
+        await git(['checkout', '--detach', head])
+      }
       if (mode === 'clean') {
         crashAfterCas = true
         await expect(publishRestack(deps, intent)).rejects.toThrow('crash after CAS')

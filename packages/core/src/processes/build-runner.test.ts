@@ -1366,6 +1366,7 @@ describe('step', () => {
           'fetch',
           '--no-tags',
           '--no-write-fetch-head',
+          '--refmap=',
           'origin',
           `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
         ],

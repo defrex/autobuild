@@ -77,6 +77,7 @@ const HAPPY_PREFIX = [
   'workspace.provisioned',
   'spec.imported',
   'dispatch.comment-posted',
+  'target.moved',
   'runner.attached',
   'plan.started',
   'session.started',
@@ -95,6 +96,11 @@ const HAPPY_PREFIX = [
   'session.started',
   'code-review.verdict',
   'session.ended',
+  'restack.prepared',
+  'restack.replayed',
+  'restack.publish-intended',
+  'restack.rewritten',
+  'restack.completed',
   'verify.started',
   'verify.completed',
   'finalize.started',
@@ -120,6 +126,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'workspace.provisioned',
     'spec.imported',
     'dispatch.comment-posted',
+    'target.moved',
   ])
   const created = ofType(afterDispatch, 'build.created')[0]!
   expect(created.actor).toEqual({ kind: 'dispatcher' })
@@ -155,7 +162,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 
   // Rule-boundary payloads.
-  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(4)
+  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(5)
   const planCompleted = ofType(events, 'plan.completed')[0]!
   expect(planCompleted.payload).toEqual({
     round: 1,
@@ -166,7 +173,14 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const implemented = ofType(events, 'implement.completed')[0]!
   const head = await git(['rev-parse', 'HEAD'], ws)
   const base = await git(['rev-parse', 'main'], h.origin)
-  expect(implemented.payload.commits).toEqual({ base, head })
+  expect(implemented.payload.commits.base).toBe(base)
+  expect(ofType(events, 'restack.completed')[0]!.payload.headSha).toBe(head)
+  expect(
+    await git(
+      ['rev-parse', `refs/autobuild/archive/${SLUG}/${implemented.payload.commits.head}`],
+      h.remote,
+    ),
+  ).toBe(implemented.payload.commits.head)
   expect(implemented.actor).toEqual({ kind: 'agent', role: 'implement', session: 's_3' })
   const observed = ofType(events, 'observation.recorded')[0]!
   expect(observed.payload).toEqual({
@@ -174,10 +188,10 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     kind: 'refactor',
     summary: 'extract limiter config into settings',
   })
-  expect(ofType(events, 'verify.started')[0]!.payload).toEqual({ step: 'unit', attempt: 1 })
+  expect(ofType(events, 'verify.started')[0]!.payload).toMatchObject({ step: 'unit', attempt: 1 })
   const verified = ofType(events, 'verify.completed')[0]!
   expect(verified.actor).toEqual({ kind: 'kernel' }) // deterministic check, no session (§8.2)
-  expect(verified.payload).toEqual({ step: 'unit', attempt: 1, outcome: 'pass' })
+  expect(verified.payload).toMatchObject({ step: 'unit', attempt: 1, outcome: 'pass' })
   expect(ofType(events, 'finalize.completed')[0]!.actor).toEqual({ kind: 'kernel' }) // D7
 
   // FakeForge journal: the push (real branch) and the PR (title = the
@@ -209,6 +223,8 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'plan@0',
     'plan-review@0',
     'pr-description@0',
+    expect.stringMatching(/^reconcile-change-[a-f0-9]{40}@0$/),
+    expect.stringMatching(/^replay-objects-[a-f0-9]{40}@0$/),
     'spec@0',
     'transcript@0',
     'transcript@1',
@@ -234,7 +250,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   })
 
   // The real branch carries the implement commit (D3: code via the Forge/repo).
-  expect(await git(['log', '--format=%s'], ws)).toBe('implement: rate limiting r1\ninitial')
+  expect(await git(['log', '--format=%s'], ws)).toBe('Add rate limiting\ninitial')
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
 
   // Janitor epilogue (§15.7, D1): merged → release → complete → ticket Done.
@@ -290,6 +306,7 @@ dir = "tickets"
       mode: 'logical',
     })
     const forge = new FakeForge()
+    forge.seedBranch('main', 'a'.repeat(40))
     const ids = sequentialIds()
     const launched: string[] = []
     const scanClock = steppingClock()
@@ -519,7 +536,7 @@ test('content-producing finalize post-steps extend the open PR branch through ke
 
   const events = await h.events(SLUG)
   const workspace = ofType(events, 'workspace.provisioned')[0]!.payload.ref
-  const implementHead = ofType(events, 'implement.completed')[0]!.payload.commits.head
+  const implementHead = ofType(events, 'restack.completed')[0]!.payload.headSha
   const steps = ofType(events, 'finalize.step-completed')
   expect(steps.map((event) => event.payload)).toEqual([
     {
@@ -541,7 +558,7 @@ test('content-producing finalize post-steps extend the open PR branch through ke
     '1',
   )
   expect(await git(['log', '--format=%s'], workspace)).toBe(
-    'finalize: add repository content\nimplement: rate limiting r1\ninitial',
+    'finalize: add repository content\nAdd rate limiting\ninitial',
   )
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(finalizeHead)
 
@@ -628,7 +645,7 @@ test('a0. approved plan selects optional verification while mandatory gates rema
     // Authored order cannot reorder execution.
     verifySteps: ['mandatory', 'selected'],
   })
-  expect(ofType(events, 'verify.started').map((event) => event.payload.step)).toEqual([
+  expect(ofType(events, 'verify.started').map((event) => event.payload.step)).toMatchObject([
     'mandatory',
     'omitted-check',
     'omitted-agent',
@@ -636,7 +653,7 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   ])
   expect(
     ofType(events, 'verify.completed').map((event) => normalizeVerifyCompletion(event.payload)),
-  ).toEqual([
+  ).toMatchObject([
     { step: 'mandatory', attempt: 1, outcome: 'pass' },
     {
       step: 'omitted-check',
@@ -721,6 +738,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     'workspace.provisioned',
     'spec.imported',
     'dispatch.comment-posted',
+    'target.moved',
   ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
@@ -794,6 +812,7 @@ test('a1. unavailable origin still dispatches from local main and records why', 
     'workspace.provisioned',
     'spec.imported',
     'dispatch.comment-posted',
+    'target.moved',
   ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base.source).toBe('local')
@@ -1132,7 +1151,7 @@ test('a2. reconcile replays one change onto the current base after conflict dete
     baseSha: currentBase,
   })
   expect(ofType(events, 'escalation.raised')).toEqual([])
-  expect(ofType(events, 'verify.completed').map((event) => event.payload)).toEqual([
+  expect(ofType(events, 'verify.completed').map((event) => event.payload)).toMatchObject([
     { step: 'unit', attempt: 1, outcome: 'pass' },
     { step: 'unit', attempt: 2, outcome: 'pass' },
   ])
@@ -1244,7 +1263,7 @@ test.each([false, true])(
       baseSha: currentBase,
     })
     expect(ofType(events, 'escalation.raised')).toEqual([])
-    expect(ofType(events, 'verify.completed').map((event) => event.payload)).toEqual([
+    expect(ofType(events, 'verify.completed').map((event) => event.payload)).toMatchObject([
       { step: 'unit', attempt: 1, outcome: 'pass' },
       { step: 'extra', attempt: 1, outcome: 'pass' },
       keepUnit
@@ -1367,10 +1386,10 @@ test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile
   expect((await h.runLatest()).prState).toBe('open')
 
   const events = await h.events(SLUG)
-  expect(ofType(events, 'reconcile.started')[0]?.payload.baseSha).toBe(advancedBase)
-  expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
+  expect(ofType(events, 'restack.completed').at(-1)?.payload.targetBase).toBe(advancedBase)
+  expect(ofType(events, 'reconcile.completed')).toHaveLength(0)
   expect(relocatedImplementNotes).toBeDefined()
-  expect(relocatedReconcileInput).toBeDefined()
+  expect(relocatedReconcileInput).toBeUndefined()
   const trackedObservations = ofType(events, 'observation.recorded').filter((event) =>
     event.payload.refs?.includes('phase-scratch:tracked-at-provisioned-base'),
   )
@@ -1551,6 +1570,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'workspace.provisioned',
     'spec.imported',
     'dispatch.comment-posted',
+    'target.moved',
     'runner.attached',
     'plan.started',
     'session.started',
@@ -1568,6 +1588,11 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'session.started',
     'code-review.verdict',
     'session.ended',
+    'restack.prepared',
+    'restack.replayed',
+    'restack.publish-intended',
+    'restack.rewritten',
+    'restack.completed',
     'verify.started', // attempt 1: fail + report (D6 atomic bundle)
     'verify.completed',
     'implement.started', // r2, carrying the verify feedback
@@ -1578,6 +1603,11 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'session.started',
     'code-review.verdict',
     'session.ended',
+    'restack.prepared',
+    'restack.replayed',
+    'restack.publish-intended',
+    'restack.rewritten',
+    'restack.completed',
     'verify.started', // attempt 2, from the first step
     'verify.completed',
     'finalize.started',
@@ -1590,7 +1620,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
 
   // The failed check: verify.completed{outcome:fail} with the report artifact.
   const [fail, pass] = ofType(events, 'verify.completed')
-  expect(fail!.payload).toEqual({
+  expect(fail!.payload).toMatchObject({
     step: 'unit',
     attempt: 1,
     outcome: 'fail',
@@ -1617,11 +1647,11 @@ test('b. verify failure routes back to implement with the report, then re-verifi
   expect(roundsWithReport).toEqual([2])
 
   // Verify re-ran from the first step at attempt 2 and passed.
-  expect(ofType(events, 'verify.started').map((e) => e.payload)).toEqual([
+  expect(ofType(events, 'verify.started').map((e) => e.payload)).toMatchObject([
     { step: 'unit', attempt: 1 },
     { step: 'unit', attempt: 2 },
   ])
-  expect(pass!.payload).toEqual({ step: 'unit', attempt: 2, outcome: 'pass' })
+  expect(pass!.payload).toMatchObject({ step: 'unit', attempt: 2, outcome: 'pass' })
 
   // One more code-review round; the reviewer is a FRESH session each round.
   const verdicts = ofType(events, 'code-review.verdict')
@@ -1641,9 +1671,9 @@ test('b. verify failure routes back to implement with the report, then re-verifi
   const implJournals = [...h.agents.sessions.values()].filter(
     (j) => j.opts.skill === 'ab-implement',
   )
-  expect(implJournals).toHaveLength(1) // ONE continued runner session…
-  expect(implJournals[0]!.turns).toHaveLength(2) // …with a turn per round
-  expect(implJournals[0]!.messages[0]).toContain('verify:unit failed')
+  // A successful restack ends the old workspace session before rewriting.
+  expect(implJournals).toHaveLength(2)
+  expect(implJournals.map((j) => j.turns.length)).toEqual([1, 1])
   // …and round 2's bracket still deposited its own transcript (§7.1).
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
   expect(transcripts).toHaveLength(7)
@@ -1739,6 +1769,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'workspace.provisioned',
     'spec.imported',
     'dispatch.comment-posted',
+    'target.moved',
     'runner.attached',
     'plan.started',
     'session.started',
@@ -1816,6 +1847,11 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'session.started',
     'code-review.verdict',
     'session.ended',
+    'restack.prepared',
+    'restack.replayed',
+    'restack.publish-intended',
+    'restack.rewritten',
+    'restack.completed',
     'verify.started',
     'verify.completed',
     'finalize.started',
@@ -1862,7 +1898,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   const finalVerdict = ofType(events, 'code-review.verdict')[3]!
   expect(finalVerdict.payload.round).toBe(4)
   expect(finalVerdict.payload.verdict).toBe('approve')
-  expect(ofType(events, 'verify.completed')[0]!.payload).toEqual({
+  expect(ofType(events, 'verify.completed')[0]!.payload).toMatchObject({
     step: 'unit',
     attempt: 1,
     outcome: 'pass',

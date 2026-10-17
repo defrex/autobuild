@@ -55,6 +55,7 @@ export type VerifyAction =
 export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
 
 export type Decision =
+  | { kind: 'restack'; trigger: 'verify-entry' | 'awaiting-landing'; cycle: number }
   | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
@@ -306,6 +307,24 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
       ? { kind: 'run-phase', phase: 'implement', round }
       : { kind: 'run-phase', phase: 'implement', round, feedback }
   }
+  // A frozen transaction always wins over a new observation. The runner owns
+  // workspace mutation; the dispatcher only records target movement.
+  if (log.restack.active !== undefined) {
+    if (log.restack.replay?.conflicted) {
+      const round = log.restack.reconcileAttempt ?? state.reconcileAttempts + 1
+      return { kind: 'run-phase', phase: 'reconcile', round, reconcile: { attempt: round } }
+    }
+    return { kind: 'restack', trigger: log.restack.active.trigger, cycle: log.restack.active.cycle }
+  }
+  if (
+    log.restack.target !== undefined &&
+    log.restack.gates[String(cycleBoundary)] === undefined &&
+    (log.restack.finalizedAt ?? 0) < cycleBoundary &&
+    !log.verifyStarted.some((v) => v.seq > cycleBoundary) &&
+    cycleResults.length === 0
+  ) {
+    return { kind: 'restack', trigger: 'verify-entry', cycle: cycleBoundary }
+  }
   // Attempt numbering (§15.6-A): every step in one cycle shares one attempt.
   // A cycle already underway (started or completed events after the boundary)
   // keeps its number — a crashed step re-runs at the SAME attempt (§15.6-C);
@@ -321,10 +340,17 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   const reconcileCycle =
     log.lastReconcileCompletedSeq > Math.max(log.code.latestApproveSeq, log.restartSeq)
   const policy =
-    reconcileCycle && log.reconcilePolicy?.reconcileSeq === cycleBoundary
+    reconcileCycle &&
+    !log.restack.initialVerification &&
+    log.reconcilePolicy?.reconcileSeq === cycleBoundary
       ? log.reconcilePolicy
       : undefined
-  if (reconcileCycle && policy === undefined && cycleAttempts.length === 0) {
+  if (
+    reconcileCycle &&
+    !log.restack.initialVerification &&
+    policy === undefined &&
+    cycleAttempts.length === 0
+  ) {
     return { kind: 'capture-reconcile-policy', reconcileSeq: cycleBoundary }
   }
   const approvedPlan = log.plan.approvedPlan
@@ -431,6 +457,12 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // ── 9. Post-PR epilogue (§15.7): finalize → (conflicted → reconcile →
   // verify:*)* → merged | closed. The dispatcher's janitor emits pr.* and
   // completes the build; the engine only ever runs reconcile here.
+  if (
+    log.restack.target !== undefined &&
+    log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase)
+  ) {
+    return { kind: 'restack', trigger: 'awaiting-landing', cycle: cycleBoundary }
+  }
   if (state.prState === 'conflicted' && log.lastConflict !== undefined) {
     if (log.conflictReconcileStarted !== undefined) {
       // Crashed reconcile: re-run the SAME attempt from its start (§15.6-C) —

@@ -32,6 +32,7 @@ import {
   FakeForge,
   FakeTicketSource,
   GIT_ID,
+  gitRewrite,
   git,
   LeaseHeldError,
   MemoryBuildStore,
@@ -314,8 +315,15 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   const ids = sequentialIds()
   const uuids = randomUuids()
   const fakeForge = new FakeForge()
+  fakeForge.rewrite = gitRewrite(spawnExec, false)
+  const recordPush = fakeForge.pushBranch.bind(fakeForge)
+  fakeForge.pushBranch = async (cwd, branch) => {
+    await recordPush(cwd, branch)
+    await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
+  }
   const guestRemote = await initGuestRemote(tmp)
   const { seed, baseSha } = await initSeed(tmp)
+  fakeForge.remoteBranches.set('main', baseSha)
   const guestRuns = new Map<string, GuestRun>()
 
   const backing = new MemoryBuildStore({ clock })

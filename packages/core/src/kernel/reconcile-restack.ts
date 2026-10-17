@@ -1,6 +1,6 @@
 import { readBuildFacts } from '../store/reduced-reads'
 import { isRemoteWorkspace } from '../events/workspace-remote'
-import type { AbEvent } from '../events/catalog'
+import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { KERNEL } from '../events/envelope'
 import type { BuildStore } from '../store/types'
@@ -16,6 +16,45 @@ export interface RestackDeps {
   workspacePath: string
   forge: Forge
   exec: Exec
+  beforeRewrite?: () => Promise<void>
+  automatic?: Pick<
+    EventPayload<'restack.prepared'>,
+    'trigger' | 'cycle' | 'observation' | 'message'
+  >
+}
+/** The replay algorithm uses the reconcile record shape internally. Automatic
+ * transactions have their own durable vocabulary and never fabricate a phase. */
+async function replayHistory(deps: RestackDeps): Promise<readonly AbEvent[]> {
+  const facts = (await readBuildFacts(deps.store, deps.slug)).value
+  if (deps.automatic === undefined) return facts.reconcileHistory
+  const mapped: AbEvent[] = [
+    ...facts.reconcileHistory.filter((e) => e.type === 'workspace.provisioned'),
+  ]
+  for (const event of facts.restackHistory) {
+    const type = event.type.replace('restack.', 'reconcile.')
+    const payload = { ...event.payload, attempt: 1 }
+    // Only replay mechanics consume these records; external writes below are
+    // validated in the automatic vocabulary by the BuildStore.
+    mapped.push({ ...event, type, payload } as AbEvent)
+  }
+  return mapped
+}
+async function replayAppend(deps: RestackDeps, write: EventWrite) {
+  if (deps.automatic === undefined) return deps.store.append(deps.slug, write)
+  if (!write.type.startsWith('reconcile.')) throw new Error('invalid replay fact')
+  const payload = { ...write.payload } as Record<string, unknown>
+  delete payload.attempt
+  delete payload.artifact
+  delete payload.conflicted
+  if (write.type === 'reconcile.replayed')
+    payload.conflicted = (write.payload as EventPayload<'reconcile.replayed'>).conflicted
+  if (write.type !== 'reconcile.replayed' && write.type !== 'reconcile.contended')
+    Object.assign(payload, deps.automatic)
+  return deps.store.append(deps.slug, {
+    ...write,
+    type: write.type.replace('reconcile.', 'restack.'),
+    payload,
+  } as EventWrite)
 }
 async function git(deps: RestackDeps, args: string[], allowFailure = false) {
   const result = await deps.exec(['git', ...args], { cwd: deps.workspacePath })
@@ -26,6 +65,24 @@ async function git(deps: RestackDeps, args: string[], allowFailure = false) {
 async function output(deps: RestackDeps, args: string[]) {
   return (await git(deps, args)).stdout.trim()
 }
+/** Automatic canonicalization must not introduce a repository identity
+ * requirement before landing. If config is absent, preserve the recorded
+ * change's committer for this command only; never change repository config. */
+async function commitGit(deps: RestackDeps, source: string, args: string[], allowFailure = false) {
+  const config: string[] = []
+  for (const [key, format] of [
+    ['user.name', '%cn'],
+    ['user.email', '%ce'],
+  ]) {
+    const configured = await git(deps, ['config', '--get', key!], true)
+    if (configured.exitCode === 1 || configured.stdout.trim() === '')
+      config.push(
+        '-c',
+        `${key}=${await output(deps, ['show', '-s', `--format=${format}`, source])}`,
+      )
+  }
+  return git(deps, [...config, ...args], allowFailure)
+}
 export function requireRewrite(forge: Forge) {
   if (forge.rewrite === undefined)
     throw new Error(
@@ -34,10 +91,80 @@ export function requireRewrite(forge: Forge) {
   return forge.rewrite
 }
 
+/** Retain the resolved commit and its new trees/blobs before durable intent.
+ * Commit bytes alone cannot reconstruct a cherry-pick's combined tree after a
+ * disposable guest disappears. Base history remains in the authoritative Git
+ * repository; this pack retains only objects introduced above that base. */
+export async function retainReplay(deps: RestackDeps, head: string, base: string) {
+  const result = await deps.exec(
+    [
+      'bash',
+      '-o',
+      'pipefail',
+      '-c',
+      'printf "%s\\n" "$1" "^$2" | git pack-objects --stdout --revs | base64 -w0',
+      'retain-replay',
+      head,
+      base,
+    ],
+    { cwd: deps.workspacePath },
+  )
+  if (result.exitCode !== 0 || result.stdout.trim() === '')
+    throw new Error(`cannot retain replay objects: ${result.stderr}`)
+  await deps.store.putArtifact(deps.slug, {
+    kind: `replay-objects-${head}`,
+    content: result.stdout.trim(),
+  })
+}
+async function restoreReplay(deps: RestackDeps, sha: string): Promise<boolean> {
+  const artifact = await deps.store.getArtifact(deps.slug, `replay-objects-${sha}`)
+  if (artifact === null) return false
+  const content = new TextDecoder().decode(artifact.content)
+  if (!/^[A-Za-z0-9+/=]+$/.test(content)) throw new Error('invalid retained replay pack')
+  const temporary = (await deps.exec(['mktemp'], { cwd: deps.workspacePath })).stdout.trim()
+  if (temporary === '') throw new Error('cannot create retained replay input')
+  try {
+    for (let offset = 0; offset < content.length; offset += 16_384) {
+      const written = await deps.exec(
+        [
+          'sh',
+          '-c',
+          'printf %s "$1" >> "$2"',
+          'replay-chunk',
+          content.slice(offset, offset + 16_384),
+          temporary,
+        ],
+        { cwd: deps.workspacePath },
+      )
+      if (written.exitCode !== 0) throw new Error('cannot stage retained replay input')
+    }
+    const result = await deps.exec(
+      [
+        'bash',
+        '-o',
+        'pipefail',
+        '-c',
+        'base64 -d "$1" | git unpack-objects -q',
+        'restore-replay',
+        temporary,
+      ],
+      { cwd: deps.workspacePath },
+    )
+    if (
+      result.exitCode !== 0 ||
+      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0
+    )
+      throw new Error(`cannot restore replay objects ${sha}`)
+  } finally {
+    await deps.exec(['rm', '-f', temporary], { cwd: deps.workspacePath })
+  }
+  return true
+}
+
 /** Restore a sandbox-only change from durable bytes without remote write access. */
 async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
   const artifact = await deps.store.getArtifact(deps.slug, `reconcile-change-${sha}`)
-  if (artifact === null) return false
+  if (artifact === null) return restoreReplay(deps, sha)
   const content = new TextDecoder().decode(artifact.content)
   const quoted = `'${content.replaceAll("'", "'\\''")}'`
   const result = await deps.exec(
@@ -82,12 +209,17 @@ export async function prepareRestack(
     targetBase: string
     id: string
     oldHead?: string
+    restackId?: string
   },
 ): Promise<ReconcileTransaction> {
   const capability = requireRewrite(deps.forge)
-  const events = (await readBuildFacts(deps.store, deps.slug)).value.reconcileHistory
+  const events = await replayHistory(deps)
   const prior = events.findLast(
-    (e) => e.type === 'reconcile.prepared' && e.payload.attempt === input.attempt,
+    (e) =>
+      e.type === 'reconcile.prepared' &&
+      (deps.automatic === undefined
+        ? e.payload.attempt === input.attempt
+        : e.payload.id === input.id),
   )
   if (prior?.type === 'reconcile.prepared' && input.oldHead === undefined) {
     if (prior.payload.targetBase !== input.targetBase)
@@ -119,6 +251,8 @@ export async function prepareRestack(
         throw new Error(`build branch diverged to ${observed}; operator provenance review required`)
       return prepareRestack(deps, {
         ...input,
+        ...(deps.automatic === undefined ? {} : { id: `${input.id}-retry` }),
+        restackId: prior.payload.restackId,
         oldHead: observed,
         oldBase: basedOnCandidate ? prior.payload.targetBase : prior.payload.oldBase,
       })
@@ -158,12 +292,17 @@ export async function prepareRestack(
       `local branch ${input.branch} has unknown work at ${localBranchHead}; preserve and reconcile it with the authoritative head before retrying`,
     )
   const description = await deps.store.getArtifact(deps.slug, 'pr-description')
-  if (description === null) throw new Error('reconcile requires the deposited PR description')
-  const message = withBuildTrailer(new TextDecoder().decode(description.content), deps.slug, {
-    includesSubject: true,
-  })
+  if (description === null && deps.automatic === undefined)
+    throw new Error('reconcile requires the deposited PR description')
+  const message =
+    deps.automatic?.message ??
+    withBuildTrailer(new TextDecoder().decode(description!.content), deps.slug, {
+      includesSubject: true,
+    })
   const tree = await output(deps, ['rev-parse', `${oldHead}^{tree}`])
-  const changeSha = await output(deps, ['commit-tree', tree, '-p', input.oldBase, '-m', message])
+  const changeSha = (
+    await commitGit(deps, oldHead, ['commit-tree', tree, '-p', input.oldBase, '-m', message])
+  ).stdout.trim()
   // Persist exact bytes before the event: a released remote sandbox may be the
   // only Git database containing this temporary commit. Its tree and parent are
   // retained inputs, so restoring the commit object reconstructs the same SHA.
@@ -175,6 +314,7 @@ export async function prepareRestack(
   await git(deps, ['update-ref', `refs/autobuild/reconcile/${deps.slug}/${input.id}`, changeSha])
   const transaction: ReconcileTransaction = {
     id: input.id,
+    ...(input.restackId === undefined ? {} : { restackId: input.restackId }),
     attempt: input.attempt,
     branch: input.branch,
     oldHead,
@@ -184,7 +324,7 @@ export async function prepareRestack(
     workspaceHead: await output(deps, ['rev-parse', 'HEAD']),
     localBranchHead,
   }
-  await deps.store.append(deps.slug, {
+  await replayAppend(deps, {
     actor: KERNEL,
     type: 'reconcile.prepared',
     payload: transaction,
@@ -231,17 +371,21 @@ async function continuePreparation(
         throw new Error('another cherry-pick occupies the recovered reconcile workspace')
       return
     }
-    if (parent === transaction.targetBase) return
+    const currentHead = await output(deps, ['rev-parse', 'HEAD'])
     const intent = events.findLast(
       (e) => e.type === 'reconcile.publish-intended' && e.payload.id === transaction.id,
     )
     if (intent?.type === 'reconcile.publish-intended') {
+      if (currentHead === intent.payload.headSha && parent === transaction.targetBase) return
       if ((await output(deps, ['status', '--porcelain', '--untracked-files=no'])) !== '')
         throw new Error(
           'cannot restore an intended replay over local changes; preserve and inspect them',
         )
       const candidate = intent.payload.headSha
-      if ((await git(deps, ['cat-file', '-e', `${candidate}^{commit}`], true)).exitCode !== 0)
+      if (
+        (await git(deps, ['cat-file', '-e', `${candidate}^{commit}`], true)).exitCode !== 0 &&
+        !(await restoreReplay(deps, candidate))
+      )
         await git(deps, [
           'fetch',
           '--no-tags',
@@ -249,9 +393,16 @@ async function continuePreparation(
           'origin',
           `refs/autobuild/archive/${deps.slug}/${candidate}`,
         ])
+      await deps.beforeRewrite?.()
       await git(deps, ['checkout', '--detach', candidate])
       return
     }
+    if (
+      parent === transaction.targetBase &&
+      currentHead !== transaction.workspaceHead &&
+      buildTrailers(await output(deps, ['show', '-s', '--format=%B', 'HEAD'])).join() === deps.slug
+    )
+      return
     // A replacement workspace without a resolved intent replays the same durable
     // change; no resolver-authored result is discarded.
   }
@@ -287,8 +438,14 @@ async function continuePreparation(
         throw new Error(
           'reconcile preparation requires a clean tracked worktree; preserve and inspect local work',
         )
+      await deps.beforeRewrite?.()
       await git(deps, ['checkout', '--detach', transaction.targetBase])
-      const result = await git(deps, ['cherry-pick', '--allow-empty', transaction.changeSha], true)
+      const result = await commitGit(
+        deps,
+        transaction.oldHead,
+        ['cherry-pick', '--allow-empty', transaction.changeSha],
+        true,
+      )
       if (result.exitCode !== 0) {
         conflicted = (await output(deps, ['ls-files', '-u'])) !== ''
         if (!conflicted) {
@@ -298,12 +455,18 @@ async function continuePreparation(
           // Redundant replay still represents this build as one empty commit.
           if ((await output(deps, ['diff', '--cached', '--name-only'])) !== '')
             throw new Error(`replay failed without an unmerged index: ${result.stderr}`)
-          await git(deps, ['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '--no-edit'])
+          await commitGit(deps, transaction.oldHead, [
+            '-c',
+            'commit.gpgsign=false',
+            'commit',
+            '--allow-empty',
+            '--no-edit',
+          ])
         }
       }
     }
   }
-  await deps.store.append(deps.slug, {
+  await replayAppend(deps, {
     actor: KERNEL,
     type: 'reconcile.replayed',
     payload: { id: transaction.id, conflicted },
@@ -349,14 +512,18 @@ export async function publishRestack(
   intent: EventPayload<'reconcile.publish-intended'>,
 ) {
   const capability = requireRewrite(deps.forge)
-  const events = (await readBuildFacts(deps.store, deps.slug)).value.reconcileHistory
+  const events = await replayHistory(deps)
   const start = events.findLast(
     (e) => e.type === 'reconcile.started' && e.payload.attempt === intent.attempt,
   )
-  if (start?.type !== 'reconcile.started' || start.payload.baseSha !== intent.targetBase)
+  if (
+    deps.automatic === undefined &&
+    (start?.type !== 'reconcile.started' || start.payload.baseSha !== intent.targetBase)
+  )
     throw new Error('rewrite target does not equal the authoritative reconcile start')
   await validateRestack(deps, intent, intent.headSha)
   const archives = await archiveTips(deps, [intent.headSha])
+  await deps.beforeRewrite?.()
   const result = await capability.replace({
     workspacePath: deps.workspacePath,
     branch: intent.branch,
@@ -369,7 +536,7 @@ export async function publishRestack(
     !events.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === intent.id)
   ) {
     const { artifact: _, ...rewrite } = intent
-    await deps.store.append(deps.slug, {
+    await replayAppend(deps, {
       actor: KERNEL,
       type: 'reconcile.rewritten',
       payload: {

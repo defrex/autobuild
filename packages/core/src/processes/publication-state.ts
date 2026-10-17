@@ -14,6 +14,7 @@ type LedgerItem =
   | { t: 'released'; seq: number; ref?: string | null }
   | { t: 'implement'; seq: number; round: number; base: string; head: string }
   | { t: 'reconcile'; seq: number; mergeCommit: string; rewriteId?: string }
+  | { t: 'restack'; seq: number; id: string; head: string }
   | { t: 'finalize'; seq: number; headSha: string }
   | { t: 'step'; seq: number; step: string; ok: boolean; headSha?: string }
   /** A maximal run of consecutive irrelevant events. Only its max seq
@@ -30,12 +31,15 @@ export interface PublicationLedger {
 }
 
 /** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 4
+export const PUBLICATION_STATE_REDUCER_VERSION = 5
 
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
     case 'publication.requested':
       return { t: 'request', seq: event.seq, event }
+    case 'restack.completed':
+      return { t: 'restack', seq: event.seq, id: event.payload.id, head: event.payload.headSha }
+    case 'restack.contended':
     case 'reconcile.contended':
       return { t: 'cancelled', seq: event.seq, request: event.payload.request }
     case 'publication.lost':
@@ -84,6 +88,8 @@ function compact(event: AbEvent): LedgerItem | undefined {
 function itemCompletes(item: LedgerItem, request: PublicationRequest): boolean {
   if (item.seq <= request.seq) return false
   const payload = request.payload
+  if (payload.operation === 'restack')
+    return item.t === 'restack' && item.id === payload.rewrite.id && item.head === payload.sha
   if (payload.operation === 'implement')
     return (
       item.t === 'implement' &&

@@ -364,6 +364,17 @@ kernel-prepared single-change replay onto a frozen refreshed base, with agent
 conflict resolution and the captured post-reconcile `verify:*` policy — repeating
 until merge or close.
 
+Leaf branches are collapsed into one build change and restacked onto the frozen
+target branch's current head at verify entry, before any verifier or exclusion.
+This is kernel work within the fixed grammar, not another phase. A verify failure
+returns to implementation; its new commits append to the canonical change, and
+the next approved cycle collapses and restacks again. While waiting to land after
+finalize and its post-steps, an observed target move also schedules a restack.
+Clean waiting restacks retain existing verification; conflicts use reconcile and
+its captured post-reconcile policy. A conflict before initial verification cannot
+skip initial checks through that policy.
+
+
 ## 6. The spec
 
 Two things wear the name:
@@ -826,33 +837,40 @@ sandbox can resume a build a dead sandbox started: pull events, rehydrate
 scratch from latest artifact revisions, continue. The pilot structurally could not
 do this.
 
-Four base-selection invariants make this safe with Git:
+The base-selection invariants make this safe with Git:
 
 - **The base is chosen once, at first branch creation**, from the freshly
   fetched origin tip of the configured base branch (fetched into a
   build-scoped internal ref so concurrent dispatches cannot clobber each
   other or the operator's refs). If the remote is unavailable, creation falls
   back to the local base and records the diagnostic.
-- **Re-provisioning never re-cuts.** An existing build branch is resumed at
-  its current tip — never rewound, rebased, or re-created from a newer base.
-  The first `workspace.provisioned` base remains immutable branch-cut
-  provenance; later `existing` facts are resume evidence, not new cuts.
-- **Each implementation completion records the branch's effective target
-  divergence.** `ab done` asks the selected Forge to snapshot its authoritative
-  base when that capability exists; otherwise it fetches the frozen target
-  branch's current remote tip into a build-scoped private ref. It requires
-  exactly one merge-base with
-  the implementation `HEAD`. That merge-base and head become the durable
-  `implement.completed {commits}` range, so target history already absorbed by
-  the build is excluded while every branch-unique commit remains reviewable.
-  Resolution is refreshed across review rounds and sandbox resumption. Fetch,
-  ref, missing-ancestor, malformed-output, or ambiguous-base failure rejects
-  the terminal before push, artifact deposit, or completion event; there is no
-  stale fallback. This interrogation never moves the build branch, rewrites
-  history, writes `FETCH_HEAD`, or updates operator/remote-tracking refs.
-- **Conditional verify keeps its own durable diff base.** Path applicability
-  still uses the initial branch-cut SHA until a completed reconcile promotes
-  that attempt's refreshed target. It does not consume the focused review base.
+- **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
+  resumes the published branch. The kernel collapses and restacks at verify
+  entry and after target moves while awaiting landing. The first
+  `workspace.provisioned` base stays immutable branch-cut provenance; later
+  `existing` facts are resume evidence, not new cuts.
+- **Review loops keep their starting effective base.** The initial loop uses
+  the original cut; after a successful verify-entry restack, later failure
+  loops use that restacked contribution base. Plan, implementation and
+  code-review never rewrite the branch. Previously recorded review ranges
+  remain immutable, including between rounds.
+- **Each implementation completion records effective target divergence.**
+  `ab done` snapshots the authoritative frozen target branch in a build-private
+  ref and requires exactly one merge-base with implementation HEAD. The focused
+  `implement.completed {commits}` range excludes target history already absorbed
+  by the branch. This interrogation never moves the build branch. The original
+  cut remains provenance, and successful restacks establish the contribution
+  baseline for later loops and collapses. Recorded review ranges stay immutable.
+- **Verification names its actual base.** Successful restack or reconcile
+  publication promotes the contribution/path base. Every new verify start and
+  result, including skips, cites the cycle's base and head. Those citations stay
+  frozen throughout the cycle and survive clean waiting restacks; historical
+  facts without citations remain readable. Upstream-only paths are excluded.
+- **Observation never mutates a running workspace.** `target.moved` records an
+  exact observed head, even during a session. Transactions freeze their target;
+  later observations coalesce into one follow-on transaction for the newest
+  snapshot at the next eligible point. Session and execution settlement fence
+  rewrites, and trusted publication waits for remote guest teardown.
 
 ### 7.5 What the PR gets
 
@@ -2130,9 +2148,10 @@ with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome, skipCause?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
+| Leaf restacking | `target.moved {branch, sha}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -2426,6 +2445,17 @@ until publication. Confirmed publication reattaches the matching workspace HEAD
 to the build branch so a later verify → implement cycle can publish normally.
 Missing third-party forge capabilities refuse actionably.
 
+Automatic leaf transactions use `restack.*`, independently of reconcile attempt
+numbers. Preparation freezes the trigger, verify-cycle boundary, absorbed target
+observation, old base/head, target base, single-change commit, workspace/local
+branch tips and canonical message. Publication intent precedes guarded replacement;
+`restack.rewritten` retains archives and proven writes even if readback observes a
+later writer. Completion requires confirmed publication. Clean transactions start
+no agent and do not fabricate `reconcile.completed`. A conflicted replay is adopted
+by `reconcile.started {restackId}` without another collapse or target selection.
+Resolver completion links back to the automatic transaction. Retained commit bytes
+and replay object packs recover disposable-workspace objects before publication.
+
 `reconcile.prepared` records transaction identity, attempt, branch, old head,
 effective old base, target base and temporary single-change SHA before checkout.
 Before that fact is appended, the exact temporary commit bytes are deposited as a
@@ -2435,7 +2465,9 @@ without requiring prepare-time remote write credentials. Retained trees and
 parents supply the rest of its object graph; trusted publication still archives
 the temporary commit before replacing the branch.
 `reconcile.replayed` records whether replay conflicted. Notes and the resolved
-head are deposited with `reconcile.publish-intended` before publication;
+head are deposited with `reconcile.publish-intended` before publication.
+`ab done` records a publication request; local kernels wait for the resolver
+session to end and remote kernels wait for guest teardown before replacement;
 `reconcile.rewritten` records old/new heads, old/new change SHAs, frozen base,
 conflict outcome and archive refs after confirmed publication. A successful CAS
 that is overtaken before readback still records its receipt, with `observedHead`

@@ -1595,17 +1595,18 @@ describe('ab done — reconcile', () => {
       { attempt: 1, branch: BRANCH, oldBase: base, targetBase: target, id: 'rewrite-1' },
     )
   })
-  test('publishes one detached replay with archived evidence and a correlated completion', async () => {
+  test('deposits one detached replay intent without rewriting during the resolver session', async () => {
     expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
     const event = await done(deps, { notes: await stash('rec.md', 'Checked replay') })
-    expect(event.type).toBe('reconcile.completed')
+    expect(event.type).toBe('publication.requested')
     const head = await runGit(['rev-parse', 'HEAD'], workspace)
-    expect(event.payload).toEqual({
-      headSha: head,
-      rewriteId: 'rewrite-1',
+    expect(event.payload).toMatchObject({
+      operation: 'reconcile',
+      sha: head,
+      rewrite: { id: 'rewrite-1' },
       artifact: { kind: 'reconcile-notes', rev: 0 },
     })
-    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(head)
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
     expect(await runGit(['show', '-s', '--format=%P', head], workspace)).toBe(target)
     expect(
       await runGit(['rev-parse', `refs/autobuild/archive/${BUILD}/${oldHead}`], workspace),
@@ -1647,9 +1648,10 @@ describe('ab done — reconcile', () => {
     deps.forge.rewrite.replace = async () => {
       throw new Error('remote rejected reconciliation')
     }
-    await expect(done(deps, { notes: await stash('refused.md', 'Checked') })).rejects.toThrow(
-      'remote rejected reconciliation',
+    expect((await done(deps, { notes: await stash('refused.md', 'Checked') })).type).toBe(
+      'publication.requested',
     )
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
     expect(await eventTypes()).toContain('reconcile.publish-intended')
     expect(await eventTypes()).not.toContain('reconcile.completed')
     expect(await store.getArtifact(BUILD, 'reconcile-notes')).not.toBeNull()
