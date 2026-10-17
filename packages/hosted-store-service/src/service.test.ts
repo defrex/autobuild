@@ -616,6 +616,36 @@ describe('hosted store service', () => {
   })
 
   test('without scheduleBackground the detached-promise default still runs the turn to a durable failure', async () => {
+    if (process.env.TEST_SERVICE_BACKGROUND_CHILD !== '1') {
+      // Gateway resolution reads process.env rather than the service's env.
+      // Isolate this test without credentials or dotenv loading so failure is
+      // local and deterministic, without mutating the parent suite's globals.
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          '--no-env-file',
+          'test',
+          import.meta.path,
+          '-t',
+          'without scheduleBackground the detached-promise default',
+        ],
+        {
+          env: { PATH: process.env.PATH, TEST_SERVICE_BACKGROUND_CHILD: '1' },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      expect({ exitCode, output: stdout + stderr }).toMatchObject({
+        exitCode: 0,
+        output: expect.stringContaining('credential-free background turn verified'),
+      })
+      return
+    }
     const backing = new MemoryBuildStore({ clock })
     await publishOrchestratorConfig(backing)
     // Neither scheduleBackground nor a reporter: pin only what the default
@@ -643,21 +673,18 @@ describe('hosted store service', () => {
 
     // The detached-promise default ran the loop to its durable outcome: the
     // turn reaches a terminal failed state without anyone awaiting it.
-    // Only `state: 'failed'` is pinned — the failure `kind` is
-    // environment-dependent. `resolveGatewayModel` reads `process.env`
-    // directly (bypassing the `env` object handed to the service), so in a
-    // gateway-backed environment the configured `test/mock` model answers
-    // 404 `model_not_found` and classifies as `configuration`, while a
-    // gateway-less environment classifies as `credentials`. There is no
-    // model seam at the service boundary (the runner factory is inline by
-    // design), and mutating `process.env` here would be global test-state
-    // mutation — so the environment-independent invariant is the pin.
+    // The child has no gateway credentials, so no remote request is needed.
     const deadline = Date.now() + 5_000
     for (;;) {
       const state = reduceSession(await backing.getSessionEvents(created.id))
       const turn = state.turns.find((candidate) => candidate.turn === body.turn)
       if (turn !== undefined && (turn.state === 'completed' || turn.state === 'failed')) {
         expect(turn.state).toBe('failed')
+        expect(
+          (await backing.getSessionEvents(created.id)).find(
+            (event) => event.type === 'turn.failed',
+          ),
+        ).toMatchObject({ payload: { kind: 'credentials' } })
         break
       }
       if (Date.now() > deadline) {
@@ -667,6 +694,7 @@ describe('hosted store service', () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
+    console.log('credential-free background turn verified')
   })
 })
 
