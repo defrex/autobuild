@@ -348,7 +348,7 @@ for (const outcome of ['equal-cursor', 'unavailable']) {
   })
 }
 
-test('a restarted partial identity cache correlates an older takeover holder and persists complete history', async () => {
+test('a restarted partial identity cache correlates an older takeover holder and persists its bounded correlation', async () => {
   const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
   const store = new MemoryBuildStore({ clock })
   await store.ensureRepo(repo)
@@ -386,18 +386,18 @@ test('a restarted partial identity cache correlates an older takeover holder and
   await store.claimRepoLease(repo, 'older-owner', 60000)
   expect(await resolver.refresh('self', undefined, clock())).toContain('older-owner; pid 1;')
   expect([bounded, full]).toEqual([0, 0])
-  expect(restarted.incompleteIdentities).toBe(false)
+  expect(restarted.incompleteIdentities).toBe(true)
   await resolver.refresh('self', undefined, clock())
   expect([bounded, full]).toEqual([0, 0])
 
   // Snapshot puts are monotone: a later journal delta publishes the newly
-  // correlated identities and completeness mark at its advanced cursor.
+  // correlated identity without claiming completeness at its advanced cursor.
   await setting(store)
   await restarted.refresh()
   await restarted.save(true)
   const complete = new DispatchRepositoryFeed(store, repo, clock)
   await complete.warm()
-  expect(complete.incompleteIdentities).toBe(false)
+  expect(complete.incompleteIdentities).toBe(true)
   const warm = new StandbyIdentityResolver(store, repo, {
     allowLookup: () => complete.incompleteIdentities,
     remember: (events, all) => complete.remember(events, all),
@@ -407,7 +407,7 @@ test('a restarted partial identity cache correlates an older takeover holder and
   expect([bounded, full]).toEqual([0, 0])
 })
 
-test('persisted identity correlation completes the identity cache without history replay', async () => {
+test('persisted holder correlation keeps unqueried identities incomplete without replay', async () => {
   const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
   const store = new MemoryBuildStore({ clock })
   await store.ensureRepo(repo)
@@ -424,10 +424,10 @@ test('persisted identity correlation completes the identity cache without histor
   })
   resolver.ingest(feed.identities)
   expect(await resolver.refresh('self', undefined, clock())).toContain('new-holder; pid 1;')
-  expect(feed.incompleteIdentities).toBe(false)
+  expect(feed.incompleteIdentities).toBe(true)
   await feed.refresh()
   await feed.save(true)
   const restarted = new DispatchRepositoryFeed(store, repo, clock)
   await restarted.warm()
-  expect(restarted.incompleteIdentities).toBe(false)
+  expect(restarted.incompleteIdentities).toBe(true)
 })
