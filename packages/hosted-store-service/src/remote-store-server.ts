@@ -625,11 +625,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return json(201, await store.createBuild(body as NewBuildInput))
     }
     if (req.method === 'GET') {
+      const records =
+        owner && owner.kind !== 'admin' && store.listBuildsForRepo
+          ? await store.listBuildsForRepo(owner.repo)
+          : await store.listBuilds()
       return json(
         200,
-        (await store.listBuilds()).filter(
-          (record) => !owner || owner.kind === 'admin' || record.repo === owner.repo,
-        ),
+        records.filter((record) => !owner || owner.kind === 'admin' || record.repo === owner.repo),
       )
     }
     return fail(404, 'not-found', `no route: ${req.method} /builds`)
