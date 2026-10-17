@@ -5220,12 +5220,12 @@ describe('abDispatch --once with an interactive terminal', () => {
       tearingDown = true
       teardownStarted.resolve()
     })
-    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
+    const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
     let firstRead = true
-    fx.store.listBuilds = async () => {
+    fx.store.listBuildsForRepo = async (repo) => {
       if (firstRead) {
         firstRead = false
-        const staleSnapshot = await originalListBuilds()
+        const staleSnapshot = await originalListBuilds(repo)
         oldPollStarted.resolve()
         await oldPoll.promise
         return staleSnapshot
@@ -5235,7 +5235,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         finalReadStarted.resolve()
         await finalRead.promise
       }
-      return originalListBuilds()
+      return originalListBuilds(repo)
     }
 
     let run: Promise<void> | undefined
@@ -5326,8 +5326,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       tearingDown = true
       teardownStarted.resolve()
     })
-    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
-    fx.store.listBuilds = async () => {
+    const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
+    fx.store.listBuildsForRepo = async (repo) => {
       if (gateNextPoll) {
         gateNextPoll = false
         pollStarted.resolve()
@@ -5338,7 +5338,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         finalReads += 1
         throw new Error('final read failed during shutdown')
       }
-      return originalListBuilds()
+      return originalListBuilds(repo)
     }
 
     let run: Promise<void> | undefined
@@ -5411,11 +5411,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       tearingDown = true
       teardownStarted.resolve()
     })
-    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
-    fx.store.listBuilds = async () => {
+    const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
+    fx.store.listBuildsForRepo = async (repo) => {
       if (gateNextPoll) {
         gateNextPoll = false
-        const staleSnapshot = await originalListBuilds()
+        const staleSnapshot = await originalListBuilds(repo)
         pollStarted.resolve()
         await pollGate.promise
         return staleSnapshot
@@ -5424,7 +5424,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         finalReads += 1
         throw new Error('exceptional-exit final read failed')
       }
-      return originalListBuilds()
+      return originalListBuilds(repo)
     }
 
     let run: Promise<void> | undefined
