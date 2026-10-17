@@ -237,9 +237,8 @@ test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION
           headers: {
             authorization: `Bearer ${operator}`,
             [AUTOBUILD_VERSION_HEADER]: version,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-              ? REMOTE_STORE_PROTOCOL_VERSION
-              : '3',
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+              version === AUTOBUILD_VERSION ? REMOTE_STORE_PROTOCOL_VERSION : '3',
             'content-type': 'application/json',
           },
           body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
@@ -379,9 +378,8 @@ test('comments require explicit capability independently of client version on ev
         const headers: Record<string, string> = {
           authorization: `Bearer ${operator}`,
           [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-            ? REMOTE_STORE_PROTOCOL_VERSION
-            : '3',
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+            version === AUTOBUILD_VERSION ? REMOTE_STORE_PROTOCOL_VERSION : '3',
           'content-type': 'application/json',
         }
         if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability

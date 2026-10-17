@@ -70,6 +70,7 @@ export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
   '0.12': '3',
   // v0.13.0 shipped protocol 3. Protocol 4 requires the next minor line.
   '0.13': '3',
+  '0.14': '4',
 }
 
 export function clientIdentityError(
