@@ -60,8 +60,6 @@ export function createMachineAuth(options: {
           throw error
         }
         if (!credential) throw new MachineAuthError(401, 'unknown or revoked credential')
-        if (!(await options.projects.has(credential.repo)))
-          throw new MachineAuthError(403, 'project not registered')
         return { kind: 'project', repo: credential.repo, user: credential.createdBy, credential }
       }
       const scope = verifyToken(options.secret, token, now)

@@ -1048,7 +1048,14 @@ access rather than falling back to operator authority. `AB_STORE` and
 Dispatcher machine authority is an opaque, revocable credential for exactly one
 registered project. The service keeps only a digest of its random secret and
 credential metadata (creator, creation, last use, expiry and revocation), and
-checks both credential status and project registration on each request. It
+checks both credential status and project registration in one fresh database
+read on each request. Last-use metadata is written at most once per 60 seconds,
+with a database cutoff fencing concurrent writers; it trails actual use by at
+most 60 seconds. Requests starting after revocation, expiry, or deregistration
+are refused; an authentication already in flight may complete. Authentication
+is shared only within a handled request. Repository record/existence reads may
+also be reused within that request, including compound operator reads, but
+events, reducer tails, and mutation locks remain fresh. It
 checks actual build/session/stream ownership and filters collections server-side.
 Explicit project mismatch is 403; missing and foreign indirect IDs share 404.
 Remote project build creation allocates a fresh slug and branch; the returned

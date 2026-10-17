@@ -1148,3 +1148,289 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+;(testUrl ? test : test.skip)(
+  'repository HTTP operations read repo_streams once, including compound and polling reads',
+  async () => {
+    const { PostgresBuildStore } = await import('@defrex/autobuild-postgres-store/store')
+    const { countSql } = await import('./testing/count-sql')
+    const { createStoreServer } = await import('./remote-store-server')
+    const { createOperatorServer } = await import('./operator-server')
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const statements: string[] = []
+    const store = new PostgresBuildStore(countSql(sql, statements), {
+      blobs: new MemoryBlobStore(),
+    })
+    const repo = 'query-budget'
+    const headers = {
+      [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+      [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+    }
+    const event = {
+      actor: humanActor('owner'),
+      type: 'dispatcher.auto-merge-default-set' as const,
+      payload: { enabled: false },
+    }
+    try {
+      await store.ensureRepo(repo)
+      const server = createStoreServer({ store })
+      const reads = () => statements.filter((s) => /\b(FROM|JOIN)\s+repo_streams\b/i.test(s))
+      const invoke = async (method: string, path: string, body?: unknown, expected = 200) => {
+        statements.length = 0
+        const response = await server.fetch(
+          new Request(`http://test/repos/${repo}${path}`, {
+            method,
+            headers,
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          }),
+        )
+        const data = await response.json()
+        expect({
+          path,
+          status: response.status,
+          data: response.status >= 400 ? data : undefined,
+        }).toEqual({ path, status: expected, data: undefined })
+        expect(reads().length).toBeLessThanOrEqual(1)
+        if (path !== '/reducer-values') expect(reads().length).toBe(1)
+        return data
+      }
+      await invoke('GET', '')
+      await invoke('GET', '/events?wait=1')
+      expect(statements.filter((s) => /FROM repo_events/i.test(s)).length).toBeGreaterThan(1)
+      await invoke('GET', '/high-water')
+      await invoke('GET', '/state-events')
+      await invoke('POST', '/reducer-values', { reducer: 'dispatchSettings' })
+      await invoke('POST', '/reducer-values', { reducer: 'dispatchSettings' })
+      await invoke('POST', '/events', event, 201)
+      await invoke('POST', '/reducer-values', { reducer: 'dispatchSettings' })
+      await sql`UPDATE reducer_snapshots SET state='null'::jsonb WHERE scope_key=${repo}`
+      await invoke('POST', '/reducer-values', { reducer: 'dispatchSettings' })
+      await invoke('PUT', '/snapshots/test', { version: 1, cursor: 1, state: {} })
+      await invoke('GET', '/snapshots/test?version=1')
+      await invoke('POST', '/artifacts', { kind: 'test', contentBase64: btoa('hello') }, 201)
+      await invoke('GET', '/artifacts?kind=test')
+      await invoke('GET', '/artifact-list')
+      await invoke(
+        'POST',
+        '/deposits',
+        {
+          event,
+          artifacts: [{ kind: 'test', contentBase64: btoa('hello') }],
+        },
+        201,
+      )
+      await invoke('POST', '/lease/claim', { holder: 'dispatcher', ttlMs: 60_000 })
+      await invoke('POST', '/lease/heartbeat', { holder: 'dispatcher' })
+      await invoke('POST', '/tick/begin', { holder: 'dispatcher' })
+      await invoke('POST', '/tick/finish', {
+        holder: 'dispatcher',
+        completion: { outcome: 'failed', error: 'test failure' },
+        events: [
+          { actor: DISPATCHER, type: 'dispatcher.tick-started', payload: { run: 'dispatcher' } },
+          {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-failed',
+            payload: { run: 'dispatcher', error: 'test failure' },
+          },
+        ],
+      })
+      await invoke('POST', '/lease/release', { holder: 'dispatcher' })
+      await invoke('POST', '/streams', { label: 'output' }, 201)
+      await invoke('GET', '/streams')
+      const config = parseConfig(
+        '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+      )
+      const artifact = await store.putRepoArtifact(repo, {
+        kind: 'dispatcher-effective-config',
+        content: JSON.stringify({ ...config, verify: { steps: [] }, finalize: { steps: [] } }),
+      })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'dispatcher',
+          pid: 1,
+          effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+          roleWarnings: [],
+        },
+      })
+      const operator = createOperatorServer({
+        secret: 'secret',
+        store,
+        projects: { has: async () => true, list: async () => [] },
+        auth: { authenticate: async () => ({ kind: 'internal', repo, user: 'owner' }) },
+      })
+      statements.length = 0
+      const response = await operator.fetch(
+        new Request(`http://test/operator/v1/repos/${repo}/dashboard`, { headers }),
+      )
+      expect(response.status).toBe(200)
+      expect(reads()).toHaveLength(1)
+      const { harvestStartedWrite } = await import('@defrex/autobuild/plugin-sdk')
+      const { createMachineAuth } = await import('./machine-auth')
+      await store.appendRepo(repo, harvestStartedWrite('budget-harvest'))
+      const authorization = await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: {
+          run: 'budget-harvest',
+          execution: 'budget-execution',
+          leaseHolder: 'dispatcher',
+          launch: 'started',
+        },
+      })
+      const delegated = createStoreServer({
+        store,
+        auth: createMachineAuth({
+          secret: 'secret',
+          store,
+          projects: { has: async () => true, list: async () => [] },
+          credentials: { authenticate: async () => null },
+        }),
+      })
+      const token = mintToken('secret', {
+        version: 2,
+        delegation: {
+          kind: 'harvest-runner',
+          id: 'budget-harvest',
+          repo,
+          execution: 'budget-execution',
+          leaseHolder: 'dispatcher',
+          anchor: authorization.seq,
+        },
+      })
+      for (let i = 0; i < 2; i++) {
+        statements.length = 0
+        const response = await delegated.fetch(
+          new Request(`http://test/repos/${repo}/lease/claim`, {
+            method: 'POST',
+            headers: { ...headers, authorization: `Bearer ${token}` },
+            body: JSON.stringify({ holder: 'dispatcher', ttlMs: 60_000 }),
+          }),
+        )
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true })
+        expect(reads()).toHaveLength(1)
+      }
+      for (const path of ['/events', '/reducer-values', '/snapshots/test?version=1', '/streams']) {
+        const response = await server.fetch(
+          new Request(`http://test/repos/missing${path}`, {
+            headers,
+            ...(path === '/reducer-values'
+              ? { method: 'POST', body: JSON.stringify({ reducer: 'dispatchSettings' }) }
+              : {}),
+          }),
+        )
+        expect(response.status).toBe(404)
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+)
+
+;(testUrl ? test : test.skip)(
+  'credential authentication uses one fresh read and database-fenced coarse last use',
+  async () => {
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const { countSql } = await import('./testing/count-sql')
+    const { createMachineAuth } = await import('./machine-auth')
+    const admin = new SQL(testUrl!)
+    const schema = `auth_${crypto.randomUUID().replaceAll('-', '')}`
+    await admin.unsafe(`CREATE SCHEMA ${schema}`)
+    const url = new URL(testUrl!)
+    url.searchParams.set('options', `-csearch_path=${schema}`)
+    let sql: SQL | undefined
+    try {
+      await migratePostgres(url.href)
+      sql = new SQL(url.href)
+      const statements: string[] = []
+      const counted = countSql(sql, statements)
+      const registry = new PostgresProjectRegistry(sql)
+      const repo = 'https://github.com/example/auth'
+      await registry.add(repo, 'owner')
+      const stores = Array.from({ length: 8 }, () => new PostgresCredentialStore(counted, registry))
+      const issued = await stores[0]!.issue(repo, 'owner')
+      await sql.unsafe('CREATE TABLE credential_updates (used_at timestamptz)')
+      await sql.unsafe(`CREATE FUNCTION audit_use() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN INSERT INTO credential_updates VALUES (NEW.last_used_at); RETURN NEW; END $$`)
+      await sql.unsafe(`CREATE TRIGGER audit_use AFTER UPDATE OF last_used_at ON project_credentials
+      FOR EACH ROW EXECUTE FUNCTION audit_use()`)
+      let now = new Date(Date.now() + 86_400_000)
+      let hasCalls = 0
+      const auth = createMachineAuth({
+        secret: 'secret',
+        credentials: stores[0]!,
+        projects: {
+          list: () => registry.list(),
+          has: async (repo) => {
+            hasCalls++
+            return registry.has(repo)
+          },
+        },
+        clock: () => now,
+      })
+      const request = new Request('http://test', {
+        headers: { authorization: `Bearer ${issued.token}` },
+      })
+      const authenticate = async (updates: number) => {
+        statements.length = 0
+        await auth.authenticate(request)
+        expect(statements.filter((s) => /^SELECT/i.test(s))).toHaveLength(1)
+        expect(statements.filter((s) => /^UPDATE/i.test(s))).toHaveLength(updates)
+        expect(hasCalls).toBe(0)
+      }
+      await authenticate(1)
+      const start = now.getTime()
+      now = new Date(start + 59_999)
+      await authenticate(0)
+      now = new Date(start - 1)
+      await authenticate(0)
+      for (let minute = 1; minute <= 3; minute++) {
+        now = new Date(start + minute * 60_000)
+        await Promise.all(stores.map((store) => store.authenticate(issued.token, now)))
+        const [count] = await sql`SELECT COUNT(*)::int AS n FROM credential_updates`
+        expect(count.n).toBe(minute + 1)
+        await authenticate(0)
+      }
+      now = new Date(start + 600_000)
+      await Promise.all([
+        stores[0]!.authenticate(issued.token, now),
+        stores[1]!.authenticate(issued.token, new Date(now.getTime() - 1)),
+      ])
+      const [last] =
+        await sql`SELECT last_used_at FROM project_credentials WHERE id=${issued.credential.id}`
+      expect(new Date(last.last_used_at).getTime()).toBeGreaterThanOrEqual(now.getTime() - 1)
+      const [count] = await sql`SELECT COUNT(*)::int AS n FROM credential_updates`
+      expect(count.n).toBe(5)
+      await registry.remove(repo, 'owner')
+      await expect(auth.authenticate(request)).rejects.toThrow('project not registered')
+      await expect(auth.authenticate(new Request(request))).rejects.toThrow(
+        'project not registered',
+      )
+      await expect(
+        auth.authenticate(
+          new Request('http://test', {
+            headers: {
+              authorization: `Bearer ${issued.token.slice(0, -1)}${issued.token.endsWith('0') ? '1' : '0'}`,
+            },
+          }),
+        ),
+      ).rejects.toThrow()
+      await registry.add(repo, 'owner')
+      await authenticate(0)
+      await stores[0]!.revoke(repo, issued.credential.id, 'owner')
+      await expect(auth.authenticate(request)).rejects.toThrow('unknown or revoked')
+      const expiresAt = new Date(now.getTime() + 86_400_000)
+      const expiring = await stores[0]!.issue(repo, 'owner', { expiresAt })
+      expect(await stores[0]!.authenticate(expiring.token, now)).not.toBeNull()
+      expect(await stores[0]!.authenticate(expiring.token, expiresAt)).toBeNull()
+    } finally {
+      await sql?.close()
+      await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+      await admin.close()
+    }
+  },
+)
