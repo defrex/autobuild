@@ -64,3 +64,5 @@ export { resolveHarvestCliEnv } from '../cli/env'
 export { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } from '../cli/harvest'
 export { abConnect, abDisconnect } from '../cli/connect'
 export { ProjectCredentials } from '../cli/project-credentials'
+
+export { dispatchReadBudget } from './dispatch-read-budget'

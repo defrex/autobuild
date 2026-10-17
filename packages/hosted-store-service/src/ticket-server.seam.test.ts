@@ -3,8 +3,6 @@ import { z } from 'zod'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
-  classifyClient,
-  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -220,42 +218,77 @@ const releasedTicketSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 
-test.each(
-  ['0.10.0', '0.11.0', '0.12.0', '0.12.1'].filter(
-    (version) => classifyClient(version, supportedClientRange()) === 'supported',
-  ),
-)('released %s ticket decoders accept get, list-ready and create responses', async (version) => {
-  const { source, server } = harness()
-  const existing = await source.create({ title: 'Existing', body: 'Body' })
-  const schema = version.startsWith('0.10.')
-    ? releasedTicketSchema.omit({ resolved: true, blockersResolved: true })
-    : releasedTicketSchema
-  for (const [operation, input] of [
-    ['get', { id: existing.ref.id }],
-    ['list-ready', {}],
-    ['create', { draft: { title: 'Legacy create', body: 'Body' } }],
-  ] as const) {
-    const response = await server.fetch(
-      new Request(`https://tickets.example/tickets/${operation}`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${operator}`,
-          [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '3',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
-      }),
-    )
-    expect(response.status).toBe(operation === 'create' ? 201 : 200)
-    const body = await response.json()
-    if (operation === 'list-ready') {
-      expect(
-        z.strictObject({ tickets: z.array(schema), diagnostics: z.array(z.string()) }).parse(body)
-          .tickets,
-      ).toHaveLength(1)
-    } else expect(schema.parse(body).title).toBe(operation === 'get' ? 'Existing' : 'Legacy create')
+test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
+  'released %s ticket decoders accept get, list-ready and create responses',
+  async (version) => {
+    const { source, server } = harness()
+    const existing = await source.create({ title: 'Existing', body: 'Body' })
+    const schema = releasedTicketSchema
+    for (const [operation, input] of [
+      ['get', { id: existing.ref.id }],
+      ['list-ready', {}],
+      ['create', { draft: { title: 'Legacy create', body: 'Body' } }],
+    ] as const) {
+      const response = await server.fetch(
+        new Request(`https://tickets.example/tickets/${operation}`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${operator}`,
+            [AUTOBUILD_VERSION_HEADER]: version,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
+              ? REMOTE_STORE_PROTOCOL_VERSION
+              : '3',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+        }),
+      )
+      expect(response.status).toBe(operation === 'create' ? 201 : 200)
+      const body = await response.json()
+      if (operation === 'list-ready') {
+        expect(
+          z.strictObject({ tickets: z.array(schema), diagnostics: z.array(z.string()) }).parse(body)
+            .tickets,
+        ).toHaveLength(1)
+      } else
+        expect(schema.parse(body).title).toBe(operation === 'get' ? 'Existing' : 'Legacy create')
+    }
+  },
+)
+
+test('retired 0.10 clients are rejected before ticket source access, regardless of capability opt-ins', async () => {
+  const { server, contexts } = harness()
+  for (const capability of [undefined, '1']) {
+    for (const [operation, input] of [
+      ['get', { id: 'AUT-1' }],
+      ['list-ready', {}],
+      ['create', { draft: { title: 'Retired client', body: 'Body' } }],
+    ] as const) {
+      const headers = new Headers({
+        authorization: `Bearer ${operator}`,
+        [AUTOBUILD_VERSION_HEADER]: '0.10.0',
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        'content-type': 'application/json',
+      })
+      if (capability !== undefined) {
+        headers.set('x-autobuild-ticket-comments', capability)
+        headers.set(TICKET_REVISIONS_HEADER, capability)
+      }
+      const response = await server.fetch(
+        new Request(`https://tickets.example/tickets/${operation}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+        }),
+      )
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({
+        kind: 'conflict',
+        error: expect.stringContaining("upgrade the project's Autobuild"),
+      })
+    }
   }
+  expect(contexts).toEqual([])
 })
 
 test('revision opt-in distinguishes new and released clients reporting the same 0.12.0 version', async () => {
@@ -321,10 +354,7 @@ test('comments require explicit capability independently of client version on ev
   const { server, source } = harness(backend)
   expect((await source.get('AUT-1'))?.comments).toEqual(comments)
   const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
-  const { ticketWireSchema: old } = await import('./compatibility-fixtures/tickets-v0.9')
-  for (const version of ['0.10.0', '0.11.0', '0.12.0'].filter(
-    (version) => classifyClient(version, supportedClientRange()) === 'supported',
-  )) {
+  for (const version of ['0.11.0', '0.12.0', '0.13.0']) {
     for (const [capability, revisionCapability] of [
       [undefined, undefined],
       ['', undefined],
@@ -342,7 +372,9 @@ test('comments require explicit capability independently of client version on ev
         const headers: Record<string, string> = {
           authorization: `Bearer ${operator}`,
           [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '3',
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
+            ? REMOTE_STORE_PROTOCOL_VERSION
+            : '3',
           'content-type': 'application/json',
         }
         if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability
@@ -359,9 +391,9 @@ test('comments require explicit capability independently of client version on ev
         const value = operation === 'list-ready' ? result.tickets[0] : result
         expect(value.comments).toEqual(capability === '1' ? comments : undefined)
         expect(value.revision).toBe(revisionCapability === '1' ? 'fixture-revision' : undefined)
-        expect(value.resolved).toBe(version === '0.10.0' ? undefined : false)
+        expect(value.resolved).toBe(false)
         if (capability !== '1' && revisionCapability !== '1') {
-          expect((version === '0.10.0' ? old : published).safeParse(value).success).toBe(true)
+          expect(published.safeParse(value).success).toBe(true)
         }
       }
     }

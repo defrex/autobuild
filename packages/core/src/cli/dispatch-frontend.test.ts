@@ -2360,20 +2360,19 @@ test('the interactive frontend seeds its initial fold with the bounded read befo
   const probe = frontendProbe(backing)
   const frames = await runBoundedSeed({ repo, backing, probe })
 
-  // Exactly one pre-launch store call — the bounded seed read — and it
-  // completes before `launchChild` is invoked.
+  // The bounded seed completes before launch; other initialization reads
+  // capture the high-water boundary and fetch its contiguous tail.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
-  expect(preLaunch).toHaveLength(1)
+  expect(preLaunch.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(1)
   expect(preLaunch[0]).toEqual({
     method: 'getRepoStateEvents',
     order: preLaunch[0]!.order,
     failed: false,
   })
 
-  // Every journal read after the seed is a delta read from the subset's end —
-  // no whole-journal read remains on the successful path. The independent
-  // observation scan's own bounded reads are not journal reads.
+  // Warm reads use the consumed cursor; observation counting adds no
+  // independent repository history scan.
   const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
   expect(post.length).toBeGreaterThan(0)
   expect(post.every((call) => call.method !== 'getRepoEvents' || (call.sinceSeq ?? 0) > 0)).toBe(
@@ -2394,20 +2393,18 @@ test('the interactive frontend seeds its initial fold with the bounded read befo
   expect(model.observations.limit).toBe(9)
 })
 
-test('a failed bounded seed falls back to the full journal read within the same pre-launch attempt (AUT-534)', async () => {
+test('a failed bounded seed launches immediately and recovers from the prelaunch boundary', async () => {
   const repo = '/bounded-fallback-repo'
   const backing = new MemoryBuildStore({ clock: steppingClock() })
   await seedAgedJournal(backing, repo)
   const probe = frontendProbe(backing, { failBounded: true })
   const frames = await runBoundedSeed({ repo, backing, probe })
 
-  // Pre-launch: the bounded read failed, the fallback full read served the
-  // seed — the exact pre-AUT-534 behavior — and both happened before launch.
+  // A failed bounded seed does not trigger a prelaunch retry or full replay.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
   expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
     ['getRepoStateEvents', null, true],
-    ['getRepoEvents', 0, false],
   ])
 
   // The frame is complete and identical in shape to the bounded run's.
@@ -2418,12 +2415,11 @@ test('a failed bounded seed falls back to the full journal read within the same 
   expect(model.warningLines).toEqual(['durable role warning'])
 })
 
-test('a post-launch seed attempt takes the full read and survives a competitor anchor (AUT-534)', async () => {
+test('post-launch recovery survives a competitor anchor', async () => {
   const repo = '/post-launch-seed-repo'
   const backing = new MemoryBuildStore({ clock: steppingClock() })
   await seedAgedJournal(backing, repo)
-  // Both warm-up reads reject, so the seed flag stays unset and the first
-  // post-launch seed attempt decides the path. The competitor's run-started
+  // Warm-up fails after capturing high water. The competitor's run-started
   // lands AFTER the child's facts: it is the journal's latest anchor, so a
   // bounded subset taken now would drop the child's run-started and the
   // frame would never render.
@@ -2449,24 +2445,18 @@ test('a post-launch seed attempt takes the full read and survives a competitor a
     },
   })
 
-  // Pre-launch: both reads failed (bounded, then the full fallback).
+  // Prelaunch attempts the bounded seed only.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
   expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
     ['getRepoStateEvents', null, true],
-    ['getRepoEvents', 0, true],
   ])
 
-  // Post-launch: the first repository read is the full `getRepoEvents(repo, 0)`
-  // seed — never a bounded read — and the frame renders with the child's own
-  // facts despite the competitor's later anchor.
+  // Recovery folds every event newer than the prelaunch boundary, even
+  // though the bounded seed now excludes this child's start.
   const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
-  expect(post[0]).toEqual({
-    method: 'getRepoEvents',
-    sinceSeq: 0,
-    order: post[0]!.order,
-    failed: false,
-  })
+  expect(post.some((call) => call.method === 'getRepoEvents' && call.sinceSeq === 10)).toBe(true)
+  expect(post.some((call) => call.method === 'getRepoEvents' && call.sinceSeq === 0)).toBe(false)
   const model = JSON.parse(
     frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,
   ) as DashboardModel
@@ -2474,7 +2464,7 @@ test('a post-launch seed attempt takes the full read and survives a competitor a
   expect(model.warningLines).toEqual(['durable role warning'])
 })
 
-test('once mode keeps its unbounded teardown fold (AUT-534 exclusion)', async () => {
+test('once mode warms before launch and folds only the final delta', async () => {
   const repo = '/once-exclusion-repo'
   const backing = new MemoryBuildStore({ clock: steppingClock() })
   await seedAgedJournal(backing, repo)
@@ -2549,14 +2539,10 @@ test('once mode keeps its unbounded teardown fold (AUT-534 exclusion)', async ()
   })
   await frontend.run()
 
-  // Once mode's single fold runs from `finishPresentation()` after the child
-  // exits — with the child set, the guard routes it to the full read. The
-  // journal's first read is that full read, never a bounded one: at teardown
-  // the child's run-scoped facts are in the journal and a bounded subset
-  // cannot guarantee their inclusion under a competitor's later anchor.
+  // Once mode also seeds before launch, then renders the child's delta
+  // during final presentation.
   expect(probe.calls[0]).toEqual({
-    method: 'getRepoEvents',
-    sinceSeq: 0,
+    method: 'getRepoStateEvents',
     order: probe.calls[0]!.order,
     failed: false,
   })
