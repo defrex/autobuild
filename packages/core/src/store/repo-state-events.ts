@@ -142,7 +142,7 @@ export const repositoryStateEventsReducer: IncrementalReducer<
  * `RepositoryStateEventsAcc` it prunes on every `dispatcher.run-started`
  * (everything before the new anchor that is not durable leaves the tail), which
  * is exact for seq-ordered input — the only input a real journal produces — and
- * keeps the accumulator bounded, so it is the one a snapshot stores. */
+ * holds the tail only in process memory. It is never persisted as a snapshot. */
 export interface JournalViewAcc {
   anchor?: number
   retained: RepositoryEvent[]

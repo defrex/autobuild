@@ -198,9 +198,11 @@ lowest session cursor. A `--once` invocation builds the view cold and reads each
 log once; a long-running dispatcher pays that replay at its first tick and not
 again.
 
-The view restores from reducer snapshots on cold start. The journal comes from
-the `journalView` reducer (the journal pruned on arrival: durable types plus the
-tail from the latest `dispatcher.run-started`); each work build comes from one
+On cold start, the view loads the journal through the bounded state-events
+query: durable types, latest-only facts, and the tail from the latest
+`dispatcher.run-started`. The journal tail is held only in memory; legacy
+`journalView` snapshots are neither loaded nor written. Each work build restores
+from one
 `work` snapshot row — the `build`, `logIndex`, `openExecution`,
 `openBuildWorkspace`, `publicationState`, `lastExecutionOutcome`, `buildDigest`,
 `dashboardFacts` and `currentDeferralObservation` accumulators at a single
@@ -210,8 +212,10 @@ derived from the component reducer versions, so a stale bundle misses and the
 build is replayed once. The view
 reads only the events newer than that cursor and holds, for a snapshot-backed
 build, just that delta plus the reduced state of everything before it, so a tick
-with no new events reads zero event rows (apart from the discovery listing and
-digests) and one with M new events reads exactly M. Tick stages that run for every
+with no new build events reads zero build event rows (apart from the discovery
+listing and digests) and one with M new build events reads exactly M. A cold
+journal load still reads the bounded state-events subset; a resident view
+reads only its journal delta. Tick stages that run for every
 build each tick take `buildFacts(slug)` (state, log index, open execution, open
 workspace, publication view) instead of the event array, and read raw history
 only on the branches that act on it. `persistSnapshots()` writes the advanced

@@ -173,7 +173,7 @@ if (!testUrl) {
     })
   })
   describe('operator dashboard over hosted PostgreSQL snapshots', () => {
-    test('polls through reducer snapshots, reading no rows at idle and matching a full replay', async () => {
+    test('restores build snapshots, reloads the bounded journal, and matches a full replay', async () => {
       const database = await isolatedDatabase()
       const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
         clock: systemClock,
@@ -251,13 +251,13 @@ steps = []
           'live-aborted',
           'live-running',
         ])
-        // The second poll restores from the snapshots the first one left: no
-        // event rows, same response.
+        // The second poll restores build snapshots and reloads the one-row
+        // bounded journal. The response stays unchanged.
         rows = 0
         const second = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(0)
+        expect(rows).toBe(1)
         expect(second).toEqual(first)
-        // New events cost exactly their own rows, and the answer still equals
+        // New build events add only their own rows to the journal load. The answer equals
         // the one a replay with every snapshot deleted gives.
         await backing.append('live-running', {
           actor: KERNEL,
@@ -266,7 +266,7 @@ steps = []
         })
         rows = 0
         const third = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(1)
+        expect(rows).toBe(2)
         expect(third).toEqual(await getOperatorDashboard({ store: withoutSnapshots, repo, clock }))
       } finally {
         await backing.close()
