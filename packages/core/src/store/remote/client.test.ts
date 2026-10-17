@@ -343,6 +343,18 @@ describe('request construction', () => {
         path: '/builds/build-a',
         method: 'GET',
       },
+      getRepoChangePosition: {
+        responses: [{ body: { position: '0' } }],
+        act: (s) => s.getRepoChangePosition('repo'),
+        path: '/repos/repo/change-position',
+        method: 'GET',
+      },
+      listBuildsForRepo: {
+        responses: [{ body: [] }],
+        act: (s) => s.listBuildsForRepo('repo'),
+        path: '/repos/repo/builds',
+        method: 'GET',
+      },
       listBuilds: {
         responses: [{ body: [] }],
         act: (s) => s.listBuilds(),
@@ -1184,4 +1196,18 @@ describe('scoped tokens (D8)', () => {
     const signature = createHmac('sha256', 'secret').update(payload).digest('base64url')
     expect(verifyToken('secret', `${payload}.${signature}`, now)).toBeNull()
   })
+})
+
+test('repository invalidation and discovery are single encoded requests with decimal precision', async () => {
+  const { store, calls } = makeStore([{ body: { position: '9007199254740993' } }, { body: [] }])
+  expect(await store.getRepoChangePosition('org/repo ?')).toBe('9007199254740993')
+  expect(calls).toHaveLength(1)
+  expect(calls[0]!.url).toContain('/repos/org%2Frepo%20%3F/change-position')
+  expect(await store.listBuildsForRepo('org/repo ?')).toEqual([])
+  expect(calls).toHaveLength(2)
+  expect(calls[1]!.url).toContain('/repos/org%2Frepo%20%3F/builds')
+  for (const position of [-1, 1, '-1', '01', '1.0', '', '1e3']) {
+    const invalid = makeStore([{ body: { position } }]).store
+    await expect(invalid.getRepoChangePosition('repo')).rejects.toThrow()
+  }
 })

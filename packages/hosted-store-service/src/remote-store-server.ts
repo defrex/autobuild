@@ -1294,6 +1294,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
       }
+      if (segments.length === 3 && req.method === 'GET') {
+        if (segments[2] === 'change-position')
+          return json(200, { position: await store.getRepoChangePosition(repo) })
+        if (segments[2] === 'builds') return json(200, await store.listBuildsForRepo(repo))
+      }
       if (segments.length === 3 && segments[2] === 'build-digests') {
         return buildDigestRoute(req, repo)
       }

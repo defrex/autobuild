@@ -1376,3 +1376,43 @@ test('hosted frontend read budget stays flat across thousands of journal events'
     server.stop()
   }
 })
+
+test('position endpoint reads only the counter and supports build-only and unknown repositories', async () => {
+  const backing = new MemoryBuildStore()
+  await backing.createBuild({ slug: 'counter-only', repo: 'org/repo' })
+  const calls: string[] = []
+  const store = new Proxy(backing, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        calls.push(String(key))
+        return Reflect.apply(value, target, args)
+      }
+    },
+  })
+  const server = createStoreServer({ store })
+  const response = await server.fetch(
+    new Request('http://store/repos/org%2Frepo/change-position', {
+      headers: {
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+    }),
+  )
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ position: '1' })
+  expect(calls).toEqual(['getRepoChangePosition'])
+  calls.length = 0
+  const unknown = await server.fetch(
+    new Request('http://store/repos/unknown/change-position', {
+      headers: {
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+    }),
+  )
+  expect(await unknown.json()).toEqual({ position: '0' })
+  expect(calls).toEqual(['getRepoChangePosition'])
+  expect(await backing.getRepo('org/repo')).toBeNull()
+})

@@ -215,6 +215,14 @@ export function scopeLocalStoreToPhaseSession(
       own('getBuild', 'build', slug)
       return store.getBuild(slug)
     },
+    async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+      own('listBuildsForRepo', 'repo', repo)
+      return store.listBuildsForRepo(repo)
+    },
+    async getRepoChangePosition(repo: string): Promise<string> {
+      own('getRepoChangePosition', 'repo', repo)
+      return store.getRepoChangePosition(repo)
+    },
     async listBuilds(): Promise<BuildRecord[]> {
       return admin('listBuilds')
     },

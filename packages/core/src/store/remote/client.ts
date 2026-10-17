@@ -102,6 +102,7 @@ import {
   eventListSchema,
   repositoryEventEnvelopeWireSchema,
   repoHighWaterSchema,
+  repoChangePositionSchema,
   repositoryEventListSchema,
   okResponseSchema,
   reducerSnapshotPutResponseSchema,
@@ -593,6 +594,18 @@ export class RemoteBuildStore implements BuildStore {
     if (response.status === 404 || response.status === 405) return false
     if (!response.ok) throw await this.toError(response)
     return reducerSnapshotPutResponseSchema.parse(await response.json()).written
+  }
+
+  async getRepoChangePosition(repo: string): Promise<string> {
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/change-position`,
+      repoChangePositionSchema,
+    ).then((body) => body.position)
+  }
+
+  async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+    return this.requestJson('GET', `${this.repoPath(repo)}/builds`, buildRecordListSchema)
   }
 
   async getRepoHighWater(repo: string): Promise<number> {

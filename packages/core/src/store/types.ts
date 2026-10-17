@@ -267,11 +267,19 @@ export interface BuildStore {
   getBuild(slug: string): Promise<BuildRecord | null>
   listBuilds(): Promise<BuildRecord[]>
   /**
-   * Optional read-only exact-repo listing, ordered by creation time then slug.
+   * Read-only exact-repo listing, ordered by creation time then slug.
    * Records (including ticket projection) match the filtered global listing.
    * Unknown/build-less repos return [] without creating a repository journal.
    */
-  listBuildsForRepo?(repo: string): Promise<BuildRecord[]>
+  listBuildsForRepo(repo: string): Promise<BuildRecord[]>
+
+  /** Repository-wide invalidation position, a canonical unsigned decimal string.
+   * Advances atomically with repository/build event insertions, build creation,
+   * and stored repository lease holder transitions. Unknown repos return "0"
+   * without creating state. Renewals/heartbeats and passive expiry do not move
+   * it. Independent of event cursors; consumers compare only for equality and
+   * periodically refresh mutable facts outside its coverage. */
+  getRepoChangePosition(repo: string): Promise<string>
 
   /**
    * Append one validated event; the store assigns `seq` (per-build,

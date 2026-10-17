@@ -15,19 +15,23 @@ import type { TicketRef } from '../../ontology'
 import type { TicketAssetEntry } from '../ticket-assets'
 import type { StreamPart } from '../streams/types'
 
-export const builds = sqliteTable('builds', {
-  slug: text('slug').primaryKey(),
-  repo: text('repo').notNull(),
-  repoOrigin: text('repo_origin'),
-  ticket: text('ticket', { mode: 'json' }).$type<TicketRef>(),
-  branch: text('branch'),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
-  leaseHolder: text('lease_holder'),
-  leaseExpiresAt: text('lease_expires_at'),
-  leaseTtlMs: integer('lease_ttl_ms'),
-  heartbeatAt: text('heartbeat_at'),
-})
+export const builds = sqliteTable(
+  'builds',
+  {
+    slug: text('slug').primaryKey(),
+    repo: text('repo').notNull(),
+    repoOrigin: text('repo_origin'),
+    ticket: text('ticket', { mode: 'json' }).$type<TicketRef>(),
+    branch: text('branch'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    leaseHolder: text('lease_holder'),
+    leaseExpiresAt: text('lease_expires_at'),
+    leaseTtlMs: integer('lease_ttl_ms'),
+    heartbeatAt: text('heartbeat_at'),
+  },
+  (t) => [index('builds_repo_created_slug').on(t.repo, t.createdAt, t.slug)],
+)
 
 export const events = sqliteTable(
   'events',
@@ -223,3 +227,8 @@ export const streamChunks = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.stream, t.seq] })],
 )
+
+export const repoChangePositions = sqliteTable('repo_change_positions', {
+  repo: text('repo').primaryKey(),
+  position: integer('position').notNull(),
+})

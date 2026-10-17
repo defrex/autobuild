@@ -1489,6 +1489,7 @@ export async function migratePostgres(
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
+      await tx.unsafe(REPO_CHANGE_DDL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
@@ -1820,3 +1821,31 @@ export async function migratePostgres(
     await sql.close()
   }
 }
+
+/** Additive invalidation plumbing; independent of the core lockstep marker. */
+export const REPO_CHANGE_DDL = `
+CREATE TABLE IF NOT EXISTS repo_change_positions (repo text PRIMARY KEY, position bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS builds_repo_created_slug ON builds(repo, created_at, slug);
+CREATE OR REPLACE FUNCTION ab_repo_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = repo_change_positions.position + 1;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION ab_build_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO repo_change_positions(repo, position)
+ SELECT repo, 1 FROM builds WHERE slug = NEW.build
+ ON CONFLICT(repo) DO UPDATE SET position = repo_change_positions.position + 1;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS builds_repo_change ON builds;
+CREATE TRIGGER builds_repo_change AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_repo_changed();
+DROP TRIGGER IF EXISTS repo_events_repo_change ON repo_events;
+CREATE TRIGGER repo_events_repo_change AFTER INSERT ON repo_events FOR EACH ROW EXECUTE FUNCTION ab_repo_changed();
+DROP TRIGGER IF EXISTS events_repo_change ON events;
+CREATE TRIGGER events_repo_change AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_changed();
+DROP TRIGGER IF EXISTS repo_holder_change ON repo_streams;
+CREATE TRIGGER repo_holder_change AFTER UPDATE OF lease_holder ON repo_streams
+FOR EACH ROW WHEN (OLD.lease_holder IS DISTINCT FROM NEW.lease_holder) EXECUTE FUNCTION ab_repo_changed();
+`
