@@ -931,7 +931,6 @@ export class Dispatcher {
     next?: TicketSourceDegradation,
     successfulOperation?: 'ready-scan' | 'dependency-check',
   ): Promise<void> {
-    await this.store.refreshJournal()
     const current = this.store.repositoryFacts().health
     if (next !== undefined && current?.cause === next.cause && current.source === next.source) {
       if (
@@ -1023,25 +1022,23 @@ export class Dispatcher {
    * disabled. It shares the active-ticket exclusion with dispatch but performs
    * no dependency fetch, claim, bounce, build, workspace, or launch side
    * effect, and deliberately does not alter TickReport compatibility. */
-  async observeReady(): Promise<{
+  async observeReady(opts: Pick<TickOpts, 'viewRefreshed'> = {}): Promise<{
     queued: number
     invalidTickets: number
     ticketDiagnostics: string[]
   }> {
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
-    await this.store.refresh()
+    if (opts.viewRefreshed !== true) await this.store.refresh()
     const report = emptyTickReport()
     this.restoreScan(report)
     const checkpoint = await this.scanCheckpoint('observation')
     if (checkpoint.due) {
-      await this.store.refreshJournal()
       const listing = await this.listReady()
       const refs: TicketRef[] = []
       for (const { record, digest } of await this.repoBuildDigests()) {
         if (record.ticket && digest.terminal === undefined) refs.push(record.ticket)
       }
       const activeTicketIds = await this.activeTicketIdentities(refs, listing.tickets)
-      await this.store.refreshJournal()
       report.queued = listing.tickets.filter(
         (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
       ).length
@@ -1186,9 +1183,7 @@ export class Dispatcher {
   private async triggerHarvest(): Promise<void> {
     const start = this.deps.startHarvest
     if (start === undefined) return
-    // The journal moves under foreign harvest writers while the stages run, so
-    // take the delta before deciding.
-    await this.store.refreshJournal()
+    // Use the tick sample, advanced by any local repository append.
     if (!this.store.journalRecorded()) {
       start()
       return
@@ -1280,20 +1275,7 @@ export class Dispatcher {
    * repository lease. */
   private async settleHarvestExecutions(opts: TickOpts = {}): Promise<void> {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
-    let facts: ReturnType<RepoViewStore['repositoryFacts']>
-    try {
-      // The earlier stages awaited providers; take the journal delta so a
-      // foreign append (operator activity, harvest facts) made meanwhile is
-      // seen before any destructive decision below.
-      await this.store.refreshJournal()
-      facts = this.store.repositoryFacts()
-    } catch {
-      // The read itself failed (a transient store error — a missing record
-      // answers `[]` inside the helper, so it never reaches this arm):
-      // skipping this settlement stage for this tick while the rest of the
-      // tick proceeds, and the next tick retries what remains.
-      return
-    }
+    const facts = this.store.repositoryFacts()
     for (const execution of facts.openHarvest) {
       if (active.has(execution.execution)) continue
       // Budget gate: once spent, stop settling further harvest executions;
@@ -1383,22 +1365,9 @@ export class Dispatcher {
     const capability = this.deps.workspaces.orchestratorSandbox
     if (capability === undefined) return
     const providerName = this.deps.workspaces.name
-    let facts: ReturnType<RepoViewStore['repositoryFacts']>
-    try {
-      // The earlier stages awaited providers; take the journal delta so a
-      // foreign append (operator activity, harvest facts) made meanwhile is
-      // seen before any destructive decision below.
-      await this.store.refreshJournal()
-      facts = this.store.repositoryFacts()
-    } catch {
-      // The read itself failed (a transient store error — a missing record
-      // answers `[]` inside the helper, so it never reaches this arm):
-      // skipping this settlement stage for this tick while the rest of the
-      // tick proceeds, and the next tick retries what remains.
-      return
-    }
+    const facts = this.store.repositoryFacts()
     const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
-    for (const environment of facts.sandboxes) {
+    for (let environment of facts.sandboxes) {
       if (environment.state !== 'live') continue
       // Budget gate: once spent, stop settling further environments; the
       // next tick retries what remains.
@@ -1408,6 +1377,25 @@ export class Dispatcher {
         continue
       }
       try {
+        // Other processes may have recorded activity while earlier tick work
+        // awaited an outside read. Revalidate only an impending disposition.
+        await this.store.refreshJournal()
+        const current = this.store
+          .repositoryFacts()
+          .sandboxes.find(
+            (candidate) =>
+              candidate.operator === environment.operator &&
+              candidate.environmentId === environment.environmentId,
+          )
+        if (current === undefined || current.state !== 'live') continue
+        const currentEvidence = Date.parse(current.lastEvidenceTs)
+        if (
+          Number.isFinite(currentEvidence) &&
+          this.deps.clock().getTime() - currentEvidence < idleMs
+        ) {
+          continue
+        }
+        environment = current
         if (environment.provider !== providerName) {
           // Provider-mismatch disposition (AUT-377): the journaled provider no
           // longer matches the wired provider, so environmentIds are out of this
@@ -3201,11 +3189,12 @@ export class Dispatcher {
     // standing queue-depth report and must stay honest exactly when the
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
-    await this.store.refreshJournal()
     const journalBeforeReady = this.store.repositoryFacts().harvest
     const listing = await this.listReady()
     const activeTicketIds = await this.activeTicketIdentities(activeRefs, listing.tickets)
-    await this.store.refreshJournal()
+    // A provider listing can race reservation and blocker filing. Preserve
+    // the before/after union, refreshing once only when admission is possible.
+    if (listing.tickets.length > 0) await this.store.refreshJournal()
     const journalAfterReady = this.store.repositoryFacts()
     if (journalAfterReady.health?.cause === 'ready-scan-failed') {
       await this.sourceCondition(undefined, 'ready-scan')

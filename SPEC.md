@@ -1911,6 +1911,19 @@ signal, and error evidence. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 
+Interactive watch presentation enables xterm focus reporting (mode 1004) only
+while it owns terminal input. A focus-out report pauses all automatic dashboard
+reads, including session feeds; focus-in refreshes immediately. Terminals that
+send no reports remain focused. Every operator key requests an immediate refresh
+unless one is already running and holds the 500 ms cadence for at least 30
+seconds. Otherwise retained nonterminal builds (including abort cleanup) use
+500 ms polling and an empty dashboard uses 5 seconds. Cached elapsed counters
+may repaint without reads. Focus never pauses the dispatcher kernel. Job-control
+suspension restores owned terminal modes and raw input before stopping; resume
+reenables them, assumes focus, and refreshes immediately. Teardown disables focus
+reporting even when no frame painted, with synchronous process restoration for
+catchable faults. Plain, non-TTY, and once runs never enable focus reporting.
+
 Durable operator settings (intake, the repository-wide pause, the auto-merge
 default, the harvest gate) are repository-journal facts: they survive restarts,
 propagate between dispatchers by ordinary polling, and are never optimistically

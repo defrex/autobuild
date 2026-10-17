@@ -44,6 +44,9 @@ export type TerminalInputEvent =
   | { type: 'paste'; text: string }
 
 export interface TerminalInputHooks {
+  onFocus?(focused: boolean): void
+  onInteraction?(): void
+  onSuspend?(): void
   onListening?(): void
   onKeyboardFlags?(flags: number): void
   onDeviceAttributes?(): void
@@ -169,6 +172,9 @@ export function createTerminalInputDecoder(hooks: TerminalInputHooks = {}): Term
   let watch: string | undefined
 
   const reportEvent = (report: CsiReport): TerminalInputEvent | undefined => {
+    if (report.kind === 'suspend') hooks.onSuspend?.()
+    if (report.kind === 'focus') hooks.onFocus?.(report.focused)
+    if (report.kind === 'ignored') hooks.onInteraction?.()
     if (report.kind === 'input') return report.event
     if (report.kind === 'keyboard-flags') hooks.onKeyboardFlags?.(report.flags)
     if (report.kind === 'device-attributes') hooks.onDeviceAttributes?.()
@@ -267,11 +273,15 @@ export function createTerminalInputDecoder(hooks: TerminalInputHooks = {}): Term
       }
 
       const restart = fragment.startsWith('\x1b[')
-      if (csi !== undefined || (key.name === 'undefined' && restart)) {
+      if (csi !== undefined || restart) {
         const consumed = consumeCsi(fragment, restart)
         if (consumed.consumed) return consumed.event
       }
 
+      if (key.ctrl === true && key.name === 'z') {
+        hooks.onSuspend?.()
+        return undefined
+      }
       if (key.name === 'up') return { type: 'up' }
       if (key.name === 'down') return { type: 'down' }
       if (key.name === 'left') return { type: 'left' }
@@ -287,7 +297,10 @@ export function createTerminalInputDecoder(hooks: TerminalInputHooks = {}): Term
       }
       if (key.name === 'escape' || key.sequence === '\u001b') return { type: 'escape' }
 
-      if (key.ctrl === true || key.meta === true) return undefined
+      if (key.ctrl === true || key.meta === true) {
+        hooks.onInteraction?.()
+        return undefined
+      }
       const printable =
         text ??
         (key.name?.length === 1 ? key.name : key.sequence !== undefined ? key.sequence : undefined)
@@ -296,6 +309,7 @@ export function createTerminalInputDecoder(hooks: TerminalInputHooks = {}): Term
         printable.length === 0 ||
         /[\u0000-\u001f\u007f]/u.test(printable)
       ) {
+        hooks.onInteraction?.()
         return undefined
       }
       return { type: 'text', text: printable }

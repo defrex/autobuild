@@ -160,3 +160,37 @@ test('own appends refresh only the changed digest; leases do not repeat discover
   expect(batches).toBe(1)
   expect(singles).toEqual(['a'])
 })
+
+test('journal refresh samples metadata once and publishes facts atomically', async () => {
+  const { store, view } = await setup()
+  const calls: string[] = []
+  const backing = new Proxy(store, {
+    get(target, key) {
+      const value = Reflect.get(target, key)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        calls.push(String(key))
+        return value.apply(target, args)
+      }
+    },
+  })
+  const counted = new RepoViewStore(backing, { repo: 'repo' })
+  await counted.refreshJournal()
+  expect(calls).toEqual(['getRepo', 'getReducerValue'])
+  await view.appendRepo('repo', {
+    actor: humanActor('human'),
+    type: 'dispatcher.intake-set',
+    payload: { enabled: false },
+  })
+  expect(counted.repositoryFacts().settings.intake).toBe(true)
+  const read = store.getReducerValue.bind(store)
+  store.getReducerValue = async () => {
+    throw new Error('unavailable')
+  }
+  await expect(counted.refreshJournal()).rejects.toThrow('unavailable')
+  expect(counted.journalRecorded()).toBe(true)
+  expect(counted.repositoryFacts().settings.intake).toBe(true)
+  store.getReducerValue = read
+  await counted.refreshJournal()
+  expect(counted.repositoryFacts().settings.intake).toBe(false)
+})

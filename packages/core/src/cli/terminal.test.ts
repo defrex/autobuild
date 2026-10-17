@@ -539,3 +539,40 @@ describe('processTerminalInput: bracketed paste', () => {
     expect(decoder.press(undefined, { name: 'paste-end', sequence: '\x1b[201~' })).toBeUndefined()
   })
 })
+
+test('readline focus reports never become text or interaction, including split CSI', async () => {
+  const stream = inputStream()
+  const inputs: TerminalInputEvent[] = []
+  const focuses: boolean[] = []
+  let ignoredKeys = 0
+  let suspends = 0
+  const cleanup = processTerminalInput(stream).start((event) => inputs.push(event), {
+    onFocus: (focused) => focuses.push(focused),
+    onInteraction: () => {
+      ignoredKeys++
+    },
+    onSuspend: () => {
+      suspends++
+    },
+  })
+  stream.write('\x1b[I\x1b[O')
+  await Bun.sleep(10)
+  expect(focuses).toEqual([true, false])
+  expect(inputs).toEqual([])
+  expect(ignoredKeys).toBe(0)
+  // Also pin both known and unknown readline CSI shapes and decoder fragments.
+  stream.emit('keypress', undefined, { name: 'focus', sequence: '\x1b[I' })
+  stream.emit('keypress', undefined, { name: 'undefined', sequence: '\x1b[' })
+  stream.emit('keypress', 'O', { name: 'o', sequence: 'O' })
+  expect(focuses).toEqual([true, false, true, false])
+  stream.emit('keypress', '\t', { name: 'tab', sequence: '\t' })
+  expect(ignoredKeys).toBe(1)
+  stream.write('\x1a')
+  await Bun.sleep(10)
+  expect(suspends).toBe(1)
+  stream.write('\x1b[122;5u')
+  await Bun.sleep(10)
+  expect(suspends).toBe(2)
+  expect(inputs).toEqual([])
+  cleanup()
+})

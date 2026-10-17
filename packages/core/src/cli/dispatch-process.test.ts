@@ -518,7 +518,7 @@ await withDispatchTerminalRestore('dispatch', terminal, () => abDispatch({ targe
           while (Date.now() < deadline && child.exitCode === null) {
             if (
               (await opened.store.getRepo(state.repo))?.lease &&
-              (!interactive || terminalOutput.includes('\x1b['))
+              (!interactive || terminalOutput.includes('\x1b[?1049h'))
             ) {
               acquired = true
               break
@@ -540,7 +540,10 @@ await withDispatchTerminalRestore('dispatch', terminal, () => abDispatch({ targe
           expect(stops[0]?.payload).toMatchObject({ outcome: 'normal', signal })
           expect((await opened.store.getRepo(state.repo))?.lease).toBeUndefined()
           await outputDone
-          if (interactive) expect(terminalOutput).toContain('\x1b[?25h')
+          if (interactive) {
+            expect(terminalOutput).toContain('\x1b[?25h')
+            expect(terminalOutput).toContain('\x1b[?1004l')
+          } else expect(terminalOutput).not.toContain('\x1b[?1004')
           await abDispatch({
             targetRepo: repo,
             env: {},
@@ -648,3 +651,84 @@ test('another run telemetry cannot close a historical unsafe tick', async () => 
   child.finish(0)
   await stopping
 })
+
+test('real process stops after restoring focus, resumes twice, and restores on an uncaught crash', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ab-focus-job-'))
+  let driver: ReturnType<typeof Bun.spawn> | undefined
+  try {
+    const entry = join(dir, 'job.ts')
+    await writeFile(
+      entry,
+      `
+import { createTerminalModeController, FOCUS_REPORTING_MODE, installPresentationSuspension, installTerminalRestoreHook } from ${JSON.stringify(join(import.meta.dir, 'terminal-restore.ts'))}
+import { writeSync } from 'node:fs'
+const write = (chunk: string) => { writeSync(1, chunk) }
+const modes = createTerminalModeController(write, write)
+installTerminalRestoreHook(modes)
+installPresentationSuspension(modes, () => write('PAUSE'), () => write('RESUME'))
+modes.enter(FOCUS_REPORTING_MODE)
+write('READY')
+process.stdin.on('data', () => { throw new Error('intentional crash') })
+setInterval(() => {}, 1000)
+`,
+    )
+    const script = `
+import os, signal, subprocess, sys, time, select, json
+p = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setpgrp)
+output = b''
+def until(marker):
+ global output
+ deadline = time.monotonic() + 3
+ while marker not in output:
+  if time.monotonic() > deadline: raise Exception('missing marker: ' + repr(marker))
+  if select.select([p.stdout], [], [], .05)[0]: output += os.read(p.stdout.fileno(), 4096)
+try:
+ until(b'READY')
+ for n in range(2):
+  output = b''
+  os.kill(p.pid, signal.SIGTSTP)
+  deadline = time.monotonic() + 3
+  while True:
+   pid, status = os.waitpid(p.pid, os.WUNTRACED | os.WNOHANG)
+   if pid:
+    assert os.WIFSTOPPED(status), status
+    break
+   if time.monotonic() > deadline: raise Exception('SIGTSTP was swallowed')
+   time.sleep(.01)
+  until(b'\\x1b[?1004l')
+  assert b'PAUSE' in output
+  output = b''
+  os.kill(p.pid, signal.SIGCONT)
+  until(b'RESUME')
+  until(b'\\x1b[?1004h')
+  assert b'\\x1b[?1004h' in output
+ output = b''
+ p.stdin.write(b'crash'); p.stdin.flush()
+ rest, errors = p.communicate(timeout=3)
+ output += rest
+ assert p.returncode != 0
+ assert b'\\x1b[?1004l' in output
+ print('stopped twice; resumed twice; crash restored focus')
+finally:
+ if p.poll() is None:
+  os.kill(p.pid, signal.SIGCONT)
+  p.kill()
+  p.wait()
+`
+    driver = Bun.spawn(['python3', '-c', script, process.execPath, entry], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      driver.exited,
+      new Response(driver.stdout as ReadableStream<Uint8Array>).text(),
+      new Response(driver.stderr as ReadableStream<Uint8Array>).text(),
+    ])
+    expect(stderr).toBe('')
+    expect(code).toBe(0)
+    expect(stdout).toContain('crash restored focus')
+  } finally {
+    driver?.kill()
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 15_000)

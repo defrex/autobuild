@@ -32,6 +32,13 @@ export const BRACKETED_PASTE_MODE = {
   restoreOrder: 20,
 } as const satisfies TerminalMode
 
+export const FOCUS_REPORTING_MODE = {
+  name: 'focus-reporting',
+  enter: '\x1b[?1004h',
+  restore: '\x1b[?1004l',
+  restoreOrder: 5,
+} as const satisfies TerminalMode
+
 export const KITTY_KEYBOARD_FLAGS = 0b1_1101
 
 export const KITTY_KEYBOARD_MODE = {
@@ -169,6 +176,53 @@ export function installTerminalRestoreHook(
       // Replay only after the supervised child has drained and the handlers are
       // gone, preserving the operating system's terminating-signal semantics.
       if (pendingSignal !== undefined) boundary.kill(boundary.pid, pendingSignal)
+    },
+  }
+}
+
+/** Presentation-owned job control. The kernel is a separately supervised
+ * process and is deliberately absent from these callbacks. */
+export function installPresentationSuspension(
+  modes: TerminalModeController,
+  suspend: () => void,
+  resume: () => void,
+  boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
+): { close(): void; suspend(): void } {
+  let closed = false
+  let paused = false
+  let saved: readonly TerminalMode[] = []
+  const onContinue = (): void => {
+    if (closed || !paused) return
+    paused = false
+    resume()
+    for (const mode of saved) modes.enter(mode)
+    saved = []
+  }
+  const onStop = (): void => {
+    if (closed || paused) return
+    paused = true
+    saved = modes.activeModes
+    modes.restoreAll()
+    suspend()
+    boundary.removeListener('SIGTSTP', onStop)
+    // Replay with the default disposition. SIGCONT reinstalls our handler.
+    boundary.kill(boundary.pid, 'SIGTSTP')
+  }
+  const continued = (): void => {
+    if (closed) return
+    boundary.removeListener('SIGTSTP', onStop)
+    boundary.on('SIGTSTP', onStop)
+    onContinue()
+  }
+  boundary.on('SIGTSTP', onStop)
+  boundary.on('SIGCONT', continued)
+  return {
+    suspend: onStop,
+    close(): void {
+      closed = true
+      saved = []
+      boundary.removeListener('SIGTSTP', onStop)
+      boundary.removeListener('SIGCONT', continued)
     },
   }
 }

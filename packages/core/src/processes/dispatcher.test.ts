@@ -6624,6 +6624,76 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxIdleStops).toBe(0)
   })
 
+  for (const change of ['released', 'replaced', 'read-failed'] as const) {
+    test(`idle settlement revalidates a sandbox ${change} mid-tick`, async () => {
+      let hook: (() => Promise<void>) | undefined
+      let rejectRead = false
+      class HookStore extends MemoryBuildStore {
+        override async getRepoBuildDigests(repo: string) {
+          const pending = hook
+          hook = undefined
+          await pending?.()
+          return super.getRepoBuildDigests(repo)
+        }
+        override async getRepo(repo: string) {
+          if (rejectRead) throw new Error('decision read failed')
+          return super.getRepo(repo)
+        }
+      }
+      const storeClock = manualClock()
+      const store = new HookStore({ clock: storeClock })
+      const h = harness({
+        store,
+        toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+      })
+      await seedLiveSandbox(h)
+      h.clock.advance(31 * 60_000)
+      storeClock.advance(31 * 60_000)
+      hook = async () => {
+        if (change === 'read-failed') {
+          rejectRead = true
+          return
+        }
+        await store.appendRepo(REPO, {
+          actor: humanActor('ops'),
+          type: 'orchestrator.sandbox.released',
+          payload: {
+            operator: 'ops',
+            environmentId: 'env-1',
+            snapshots: { outcome: 'unknown', error: 'released elsewhere' },
+          },
+        })
+        if (change === 'replaced') await seedLiveSandbox(h, { environmentId: 'env-2' })
+      }
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(report.sandboxIdleStops).toBe(0)
+      expect(report.sandboxSettleFailures).toBe(change === 'read-failed' ? 1 : 0)
+      expect(
+        (await store.getRepoEvents(REPO)).some(
+          (event) => event.type === 'orchestrator.sandbox.stopped',
+        ),
+      ).toBe(false)
+    })
+  }
+
+  for (const idle of [false, true]) {
+    test(`sandbox decision refresh is conditional on idleness: ${idle}`, async () => {
+      const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+      await seedLiveSandbox(h)
+      h.clock.advance((idle ? 31 : 10) * 60_000)
+      let reads = 0
+      const getRepo = h.store.getRepo.bind(h.store)
+      h.store.getRepo = async (repo) => {
+        reads++
+        return getRepo(repo)
+      }
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      // Initial sample, plus an impending stop and its append refresh when idle.
+      expect(reads).toBe(idle ? 3 : 1)
+      expect(report.sandboxIdleStops).toBe(idle ? 1 : 0)
+    })
+  }
+
   test('a sandbox inside the threshold is left alone', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
@@ -8945,6 +9015,89 @@ command = "run"
   })
 })
 
+describe('dispatcher admission journal boundary', () => {
+  test('a newly ready ticket is claimed on the first due scan', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { state: 'Triage' })],
+      toml: 'ticketScanIntervalSeconds = 60\n',
+    })
+    await h.dispatcher.tick()
+    await h.tickets.transition('T-1', 'Ready')
+    h.clock.advance(59_999)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    expect(h.tickets.claims).toEqual([])
+    h.clock.advance(1)
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.claims).toEqual(['T-1'])
+  })
+
+  for (const nonempty of [false, true]) {
+    test(`ready listing refreshes only for candidates: ${nonempty}`, async () => {
+      const backing = new MemoryBuildStore()
+      let afterListing = false
+      let decisionReads = 0
+      const store = new Proxy(backing, {
+        get(target, key) {
+          if (key === 'getReducerValue')
+            return async (...args: Parameters<MemoryBuildStore['getReducerValue']>) => {
+              if (afterListing && args[1].reducer === 'repositoryReadFacts') decisionReads++
+              return target.getReducerValue(...args)
+            }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const h = harness({
+        store,
+        tickets: nonempty ? [readyTicket('T-1')] : [],
+        wrapTickets: (source) => {
+          const list = source.listReady.bind(source)
+          source.listReady = async (criteria) => {
+            const result = await list(criteria)
+            afterListing = true
+            return result
+          }
+          return source
+        },
+      })
+      await backing.ensureRepo(REPO)
+      // Measure just the decision read, before scan completion/local writes.
+      const append = backing.appendRepo.bind(backing)
+      backing.appendRepo = async (...args) => {
+        afterListing = false
+        return append(...args)
+      }
+      await h.dispatcher.tick()
+      expect(decisionReads).toBe(nonempty ? 1 : 0)
+      expect(h.tickets.claims).toHaveLength(nonempty ? 1 : 0)
+    })
+  }
+
+  test('a failed post-listing read prevents admission', async () => {
+    let fail = false
+    class OutageStore extends MemoryBuildStore {
+      override async getRepo(repo: string) {
+        if (fail) throw new Error('decision read failed')
+        return super.getRepo(repo)
+      }
+    }
+    const h = harness({
+      store: new OutageStore(),
+      tickets: [readyTicket('T-1')],
+      wrapTickets: (source) => {
+        const list = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          const result = await list(criteria)
+          fail = true
+          return result
+        }
+        return source
+      },
+    })
+    await expect(h.dispatcher.tick()).rejects.toThrow('decision read failed')
+    expect(h.tickets.claims).toEqual([])
+  })
+})
 describe('stable merged-build evidence and native maintenance', () => {
   test.each([
     ['Subject\n\nAutobuild-Build: auth-limit\n', true],

@@ -4725,7 +4725,7 @@ function deferred(): {
 
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2_000,
+  timeoutMs = 6_000,
 ): Promise<void> {
   const end = Date.now() + timeoutMs
   while (!(await predicate())) {
@@ -9556,10 +9556,10 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
         input,
       })
       // A live dashboard frame proves renderOnce ran at least once; the sleep
-      // then lets several more 20 ms ticks pass, each with its own frame.
+      // then allows idle discovery (up to five seconds) and live refreshes.
       await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
       const framesAfterFirst = term.frames.length
-      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 5_000)
+      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 10_000)
 
       // Every repository read the frames issued was bounded: no from-zero
       // full-journal read at all. The helper's probe + subset pair is what
@@ -11240,6 +11240,281 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
         payload: { outcome: 'normal' },
       })
       expect(fx.err).toEqual(lost === 'failed' ? ['tick failed: injected ticket scan failure'] : [])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+test('focus-paused frontend leaves the supervised kernel ticking and running a ready ticket', async () => {
+  const { DispatchFrontend } = await import('./dispatch-frontend')
+  const fx = await makeFixture(readyTicket('T-focus-kernel'), happyHandlers())
+  const stop = new AbortController()
+  let focus: ((focused: boolean) => void) | undefined
+  let reads = 0
+  const presentationStore = new Proxy(fx.store, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        if (/^(get|list|read)/u.test(String(key))) reads++
+        return Reflect.apply(value, target, args)
+      }
+    },
+  })
+  const term = fakeTerminal()
+  const frontend = new DispatchFrontend({
+    repo: fx.origin,
+    checkout: fx.checkout,
+    storeRef: 'memory',
+    store: presentationStore,
+    env: {},
+    once: false,
+    terminal: term,
+    input: {
+      start(_handler, hooks) {
+        focus = hooks!.onFocus
+        focus!(false)
+        reads = 0 // The bounded startup seed precedes input/focus ownership.
+        return () => {}
+      },
+    },
+    launchChild: ({ run }) => {
+      const completed = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        kernelRunId: run,
+        wire: fx.wire,
+        signal: stop.signal,
+        intervalMs: 20,
+      }).then(() => ({ outcome: 'normal' as const, exitCode: 0 }))
+      return {
+        completed,
+        async stop() {
+          stop.abort()
+          await completed
+        },
+      }
+    },
+  })
+  let running: Promise<void> | undefined
+  try {
+    running = frontend.run()
+    await waitFor(async () => {
+      const builds = await fx.store.listBuilds()
+      if (builds.length === 0) return false
+      return (await fx.store.getEvents(builds[0]!.slug)).some(
+        (event) => event.type === 'session.started',
+      )
+    })
+    const journal = await fx.store.getRepoEvents(fx.origin)
+    expect(journal.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+    expect(fx.tickets.claims.length).toBeGreaterThan(0)
+    expect(reads).toBe(0)
+    const slug = (await fx.store.listBuilds())[0]!.slug
+    focus!(true)
+    await waitFor(() => term.all().includes(slug))
+    expect(reads).toBeGreaterThan(0)
+  } finally {
+    stop.abort()
+    await running
+    await fx.cleanup()
+  }
+}, 30_000)
+for (const intake of [true, false]) {
+  for (const hosted of [true, false]) {
+    test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted})`, async () => {
+      const clock = manualClock()
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      const stop = new AbortController()
+      const calls: string[] = []
+      let measuring = false
+      let ticks = 0
+      const store = new Proxy(fx.store, {
+        get(target, key) {
+          const value = Reflect.get(target, key)
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            if (measuring) calls.push(String(key))
+            return value.apply(target, args)
+          }
+        },
+      })
+      try {
+        await abDispatch({
+          targetRepo: fx.checkout,
+          kernelRunId: 'idle-count',
+          env: {},
+          exec: spawnExec,
+          wire: () => {
+            const wiring = fx.wire()
+            if (hosted) {
+              wiring.workspaces = Object.assign(wiring.workspaces, {
+                harvestExecution: {
+                  start: async () => {
+                    throw new Error('quiet tick provisioned harvest')
+                  },
+                } as unknown as HarvestExecution,
+              })
+            }
+            return { ...wiring, store }
+          },
+          intake,
+          signal: stop.signal,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          sleep: async () => {
+            // Include the asynchronous launch gate and any work it initiates.
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            if (++ticks === 1) {
+              measuring = true
+              return
+            }
+            measuring = false
+            expect(calls).toEqual([
+              'beginRepoTick',
+              'getRepo',
+              'getReducerValue',
+              'listBuilds',
+              'getRepoBuildDigests',
+              'finishRepoTick',
+            ])
+            stop.abort()
+          },
+        })
+        expect(ticks).toBe(2)
+        expect(fx.err).toEqual([])
+        expect(fx.agents.sessions.size).toBe(0)
+      } finally {
+        stop.abort()
+        await fx.cleanup()
+      }
+    })
+  }
+}
+
+for (const renewal of ['success', 'error', 'lost'] as const) {
+  test(`lease currency uses safe heartbeat deadlines (${renewal})`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const interval = globalThis.setInterval
+    let beat: (() => void) | undefined
+    globalThis.setInterval = ((callback: () => void, delay: number, ...args: unknown[]) => {
+      if (delay === 20_000) beat = callback
+      return interval(callback, delay, ...args)
+    }) as typeof setInterval
+    const claim = fx.store.claimRepoLease.bind(fx.store)
+    const heartbeat = fx.store.heartbeatRepo.bind(fx.store)
+    let claims = 0
+    let ticks = 0
+    fx.store.claimRepoLease = async (...args) => {
+      claims++
+      return claim(...args)
+    }
+    fx.store.heartbeatRepo = async (...args) => {
+      if (renewal === 'error') throw new Error('unreachable')
+      if (renewal === 'lost') return false
+      return heartbeat(...args)
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          ticks++
+          if (ticks === 1) {
+            expect(claims).toBe(1)
+            clock.advance(50_000)
+            beat!()
+            await Promise.resolve()
+            await Promise.resolve()
+            if (renewal === 'lost') return
+            clock.advance(11_000)
+          } else if (ticks === 2) {
+            expect(claims).toBe(renewal === 'success' ? 1 : 2)
+            // Expire even the successfully renewed grant; reclaim next tick.
+            clock.advance(61_000)
+          } else {
+            expect(claims).toBe(renewal === 'success' ? 2 : 3)
+            stop.abort()
+          }
+        },
+      })
+      expect(ticks).toBe(renewal === 'lost' ? 1 : 3)
+      expect(fx.err).toEqual(
+        renewal === 'lost' ? ['dispatcher superseded by another invocation — detaching'] : [],
+      )
+    } finally {
+      globalThis.setInterval = interval
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+for (const failingRead of ['listBuilds', 'getReducerValue'] as const) {
+  test(`harvest launch gate contains a transient ${failingRead} failure and retries next tick`, async () => {
+    const fx = await makeFixture(readyTicket('gate-read-failure'), happyHandlers())
+    const stop = new AbortController()
+    let failGateRead = false
+    let failures = 0
+    let ticks = 0
+    const create = fx.store.createBuild.bind(fx.store)
+    fx.store.createBuild = async (...args) => {
+      const result = await create(...args)
+      // Creating a build dirties the view's records/digests after the tick's
+      // initial refresh, so the launch gate must read the backing store.
+      failGateRead = true
+      return result
+    }
+    const store = new Proxy(fx.store, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          const digestRead =
+            key === 'getReducerValue' &&
+            (args[1] as { reducer?: string } | undefined)?.reducer === 'buildDigest'
+          if (failGateRead && (failingRead === 'listBuilds' ? key === 'listBuilds' : digestRead)) {
+            failGateRead = false
+            failures++
+            throw new Error('transient gate read outage')
+          }
+          return value.apply(target, args)
+        }
+      },
+    })
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: () => ({ ...fx.wire(), store }),
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          // Let the entire fire-and-forget chain settle; an unhandled
+          // rejection here fails the test even if the tick itself returned.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          ticks++
+          expect(failures).toBe(1)
+          if (ticks === 2) stop.abort()
+        },
+      })
+      expect(ticks).toBe(2)
+      expect(fx.err).toContain('harvest launch failed: transient gate read outage')
+      expect(fx.err.filter((line) => line.includes('transient gate read outage'))).toHaveLength(1)
     } finally {
       stop.abort()
       await fx.cleanup()

@@ -1,3 +1,5 @@
+import { DashboardRefresh, interactionRead, presentationReader } from './dashboard/refresh'
+import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
 import type { BuildState } from '../kernel/reducer'
 import {
   readBuildFacts,
@@ -137,6 +139,7 @@ import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-ru
 import {
   sampleUnclaimedObservationCount,
   evaluateHarvestPressureFromStore,
+  evaluateHarvestPressureFromDigests,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
 import type { HarvestExecution } from '../ports/workspace/harvest-execution'
@@ -220,15 +223,6 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
   }
   return defined
 }
-
-/** Dashboard store-read cadence. `listBuilds` remains the discovery read;
- * the process-local display cache then polls dashboard-visible streams with
- * `getEvents(lastSeq)`, retaining abort cleanup until final completion and reusing unchanged
- * reductions/timing projections. Repository controls and Harvest are still
- * read fresh through the bounded journal read (AUT-489 subset; AUT-545). The
- * identical-frame check in `live.ts` makes an unchanged paint cost zero
- * terminal writes. */
-const DASHBOARD_POLL_MS = 500
 
 /** Dashboard repaint (not re-read) cadence in watch mode. A running step's
  * elapsed must advance ~1×/s even if the store poll is raised for a slow remote
@@ -674,15 +668,9 @@ class DispatchLoop {
   private readonly region: LiveRegion | undefined
   /** One display-only incremental build cache for this dispatch process. */
   private readonly dashboardBuilds: DashboardBuildPollCache
-  /** Guard against overlapping timer polls, exactly as pollingSubscribe does. */
-  private rendering = false
-  /** The full, warning-handled timer poll. Teardown joins this exact promise
-   * before selecting the final frame. */
-  private renderInFlight: Promise<void> | undefined
-  /** Cleared at the rendering stop boundary so an already-queued timer callback
-   * cannot open a new store read after teardown begins. */
-  private acceptingRenderPolls = false
-  private timer: ReturnType<typeof setInterval> | undefined
+  private refresh: DashboardRefresh | undefined
+  private suspension: ReturnType<typeof installPresentationSuspension> | undefined
+  private readonly presentationStore: BuildStore
   /** Watch-mode paint timer (AC 8): repaints the CACHED model against a fresh
    * clock so running elapsed ticks between store reads. Absent in `--once`. */
   private tickTimer: ReturnType<typeof setInterval> | undefined
@@ -732,6 +720,7 @@ class DispatchLoop {
    * id while it holds the repo lease, else undefined. A losing invocation
    * records `dispatcher.tick-yielded` and performs no claims, launches, or
    * publications. */
+  private repoLeaseValidUntil = 0
   private repoLeaseHolder: string | undefined
   private repoLeaseHeartbeat: ReturnType<typeof setInterval> | undefined
   /** Set when the store reports this supervisor's repo lease was taken over:
@@ -785,7 +774,15 @@ class DispatchLoop {
       this.dashboard && opts.terminal !== undefined
         ? new LiveRegion(opts.terminal, this.keyboard)
         : undefined
-    this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, this.repoIdentity, config)
+    this.presentationStore = presentationReader(
+      wiring.store,
+      () => this.opts.once === true || (this.refresh?.admitted ?? true),
+    )
+    this.dashboardBuilds = new DashboardBuildPollCache(
+      this.presentationStore,
+      this.repoIdentity,
+      config,
+    )
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -1122,7 +1119,7 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
-      // Every tick first tries the repository supervisor lease. Without it,
+      // Every tick verifies local lease currency, reclaiming when necessary. Without it,
       // this invocation records the yield and performs no claims, launches,
       // or publications — including no tick-completed status publication.
       if (!(await this.ensureRepoLease(this.repoLeaseHolder ?? this.runId))) {
@@ -1161,7 +1158,7 @@ class DispatchLoop {
       const readyObservation =
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
           ? undefined
-          : await this.dispatcher.observeReady()
+          : await this.dispatcher.observeReady({ viewRefreshed: true })
       const report = await this.dispatcher.tick({
         resumeCurrent,
         viewRefreshed: true,
@@ -1321,6 +1318,7 @@ class DispatchLoop {
    * last read failed). The apply goes through the serialize queue under the
    * feed's identity+cursor fence, mirroring the transcript read's pattern. */
   private pollSessionFeed(): void {
+    if (this.refresh !== undefined && !this.refresh.admitted) return
     const view = this.view
     if (view?.kind !== 'session') return
     if (view.status !== 'open' && view.error === undefined) {
@@ -1844,7 +1842,7 @@ class DispatchLoop {
         follow: true,
         scroll: 0,
       }
-      this.sessionFeed = new SessionStreamFeed(this.wiring.store, captured.slug)
+      this.sessionFeed = new SessionStreamFeed(this.presentationStore, captured.slug)
       this.syncModelControls()
       this.paint()
       // Kick the first read immediately rather than waiting one interval.
@@ -1996,12 +1994,14 @@ class DispatchLoop {
   }
 
   private queueAction(action: DashboardAction): void {
-    void this.serialize(() => this.handleAction(action)).catch((error: unknown) => {
-      const name = typeof action === 'string' ? action : action.kind
-      this.warn(
-        `dashboard ${name} action failed: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    })
+    void this.serialize(() => interactionRead(() => this.handleAction(action))).catch(
+      (error: unknown) => {
+        const name = typeof action === 'string' ? action : action.kind
+        this.warn(
+          `dashboard ${name} action failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      },
+    )
   }
 
   /** Modal edits are synchronous and never enter the dispatcher operation
@@ -2048,7 +2048,7 @@ class DispatchLoop {
         return
       case 'enter':
         this.resumeSubmitting = true
-        void this.serialize(() => this.submitResume(prompt))
+        void this.serialize(() => interactionRead(() => this.submitResume(prompt)))
           .catch((error: unknown) => {
             this.warn(
               `dashboard resume action failed: ${
@@ -2068,6 +2068,7 @@ class DispatchLoop {
   }
 
   private onInput(input: TerminalInputEvent): void {
+    this.refresh?.interaction()
     if (!this.acceptingKeys) return
     if (input.type === 'interrupt') {
       this.acceptingKeys = false
@@ -2197,6 +2198,11 @@ class DispatchLoop {
       onListening: () => this.keyboard?.query(),
       onKeyboardFlags: (flags) => this.keyboard?.reported(flags),
       onDeviceAttributes: () => this.keyboard?.deviceAttributes(),
+      onFocus: (focused) => {
+        if (this.opts.once !== true) this.refresh?.focus(focused)
+      },
+      onInteraction: () => this.refresh?.interaction(),
+      onSuspend: () => this.suspension?.suspend(),
     })
   }
 
@@ -2222,18 +2228,46 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
+    let tracked: Promise<void>
+    tracked = this.launchHarvestIfNeeded()
+      .catch((error: unknown) => {
+        // The gate may read the backing store after tick work dirties the view.
+        // Contain that failure too, without relying on another store write.
+        if (!this.stopped) {
+          this.warn(
+            `harvest launch failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      })
+      .finally(() => {
+        this.inFlight.delete(tracked)
+        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
+      })
+    this.harvestInFlight = tracked
+    this.inFlight.add(tracked)
+  }
+
+  private async launchHarvestIfNeeded(): Promise<void> {
+    const state = this.repoView.repositoryFacts().harvest
+    const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
+    if (control.kind === 'park') return
+    if (control.kind === 'proceed' && actionableHarvestRun(state) === undefined) {
+      const pressure = evaluateHarvestPressureFromDigests({
+        digests: await this.repoView.getRepoBuildDigests(this.repoIdentity),
+        harvestEvents: state,
+        policy: this.currentConfig().config.policy,
+      })
+      if (pressure.trigger === undefined) return
+    }
     const hosted = this.wiring.workspaces.harvestExecution
     if (hosted !== undefined) {
       const execution = `${this.host}-harvest-${this.wiring.ids('inst')}`
       this.hostedHarvestExecutions.add(execution)
-      let tracked: Promise<void>
-      tracked = this.launchHostedHarvest(hosted, execution).finally(() => {
+      try {
+        await this.launchHostedHarvest(hosted, execution)
+      } finally {
         this.hostedHarvestExecutions.delete(execution)
-        this.inFlight.delete(tracked)
-        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
-      })
-      this.harvestInFlight = tracked
-      this.inFlight.add(tracked)
+      }
       return
     }
 
@@ -2259,8 +2293,7 @@ class DispatchLoop {
       },
     }
 
-    let tracked: Promise<void>
-    tracked = (async () => {
+    await (async () => {
       const ticketUrl =
         harvestDeps.config.tickets.source === 'hosted'
           ? (harvestDeps.config.tickets.url ?? (/^https?:/i.test(storeRef) ? storeRef : undefined))
@@ -2451,12 +2484,6 @@ class DispatchLoop {
           )
         }
       })
-      .finally(() => {
-        this.inFlight.delete(tracked)
-        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
-      })
-    this.harvestInFlight = tracked
-    this.inFlight.add(tracked)
   }
 
   /** Hosted harvest lifecycle: threshold gate → provision + launch in the
@@ -3469,6 +3496,12 @@ class DispatchLoop {
    * repaint cached timing against a moving clock without re-reading.
    */
   private async renderOnce(): Promise<void> {
+    if (this.opts.once !== true && this.refresh !== undefined) return this.refresh.request(true)
+    return this.readFrame()
+  }
+
+  private async readFrame(): Promise<void> {
+    if (this.opts.once !== true && this.refresh !== undefined && !this.refresh.admitted) return
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined) return
     const configSnapshot = this.currentConfig()
@@ -3483,12 +3516,18 @@ class DispatchLoop {
     // no anchor dependence (anchor analysis recorded; the frontend seed needed one
     // only because reduceDispatchStatus folds here too — it does not here).
     // Missing journal record stays a read-only empty journal (AUT-524).
-    const repositoryEvents = (await readRepositoryFacts(this.wiring.store, this.repoIdentity)).value
+    const repositoryEvents = (await readRepositoryFacts(this.presentationStore, this.repoIdentity))
+      .value
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
     // one that committed later.
-    if (!this.dashboardBuilds.isCurrent(buildSnapshot)) return
+    if (
+      !this.dashboardBuilds.isCurrent(buildSnapshot) ||
+      (this.opts.once !== true && this.refresh !== undefined && !this.refresh.admitted)
+    )
+      return
+    if (this.opts.once !== true) this.refresh?.activity(buildSnapshot.states.size > 0)
 
     // Polling continues while the operator types. Keep the prompt bound to the
     // captured build/escalations, shrink it around externally answered ids, and
@@ -3589,6 +3628,7 @@ class DispatchLoop {
    * displayed second is unchanged to zero writes. No store I/O.
    */
   private paint(): void {
+    if (this.refresh !== undefined && !this.refresh.painting) return
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined || this.model === undefined) return
     const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
@@ -3643,63 +3683,47 @@ class DispatchLoop {
   }
 
   private startRendering(): void {
-    if (!this.dashboard || this.timer !== undefined) return
-    this.acceptingRenderPolls = true
-    const tick = (): void => {
-      if (!this.acceptingRenderPolls || this.rendering) return // fenced, no overlap
-      this.rendering = true
-      let handled!: Promise<void>
-      handled = this.renderOnce()
-        .catch((error: unknown) => {
-          // A transient store error must never kill dispatch — the dashboard
-          // is a view, and a view that throws is a bug in the view.
+    if (!this.dashboard || this.refresh !== undefined) return
+    this.refresh = new DashboardRefresh(async () => {
+      try {
+        await this.readFrame()
+      } catch (error) {
+        if (this.refresh?.isFocused)
           this.warn(
             `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
           )
-        })
-        .finally(() => {
-          // Identity matters if lifecycle code ever stops and restarts polling:
-          // an older completion must not clear a replacement poll's guard.
-          if (this.renderInFlight !== handled) return
-          this.renderInFlight = undefined
-          this.rendering = false
-        })
-      this.renderInFlight = handled
-    }
-    this.timer = setInterval(tick, DASHBOARD_POLL_MS)
-    // Never hold the process open for a redraw.
-    this.timer.unref?.()
-    // Watch mode only: a second, cheap timer repaints the cached model so a
-    // running step's elapsed advances ~1×/s decoupled from the store poll
-    // (AC 8). `--once` renders a single snapshot per state, so it gets no ticker.
+        throw error
+      }
+    })
     if (this.opts.once !== true) {
+      if (this.opts.input !== undefined) this.opts.terminal?.modes.enter(FOCUS_REPORTING_MODE)
+      if (this.opts.terminal !== undefined && this.opts.input !== undefined) {
+        this.suspension = installPresentationSuspension(
+          this.opts.terminal.modes,
+          () => {
+            this.refresh?.suspend()
+            this.stopInput()
+          },
+          () => {
+            this.startInput()
+            this.region?.invalidate()
+            this.refresh?.resume()
+          },
+        )
+      }
       this.tickTimer = setInterval(() => this.paint(), DASHBOARD_TICK_MS)
       this.tickTimer.unref?.()
     }
-    tick()
+    void this.refresh.request()
   }
 
   private async stopRendering(): Promise<void> {
-    // Clear both timer sources before yielding. The boolean also fences a timer
-    // callback that was already queued when clearInterval ran.
-    if (this.timer !== undefined) clearInterval(this.timer)
-    this.timer = undefined
+    this.refresh?.stop()
+    this.suspension?.close()
+    this.opts.terminal?.modes.leave(FOCUS_REPORTING_MODE)
     if (this.tickTimer !== undefined) clearInterval(this.tickTimer)
     this.tickTimer = undefined
-    this.acceptingRenderPolls = false
-
-    // The poll owns model/controller mutation as well as terminal painting, so
-    // join it rather than merely suppressing a late LiveRegion.update(). Its
-    // normal rejection is warning-handled above; the catch keeps teardown safe
-    // even if reporting that warning itself throws.
-    const inFlight = this.renderInFlight
-    if (inFlight !== undefined) {
-      try {
-        await inFlight
-      } catch {
-        // Dashboard rendering remains best-effort during teardown.
-      }
-    }
+    await this.refresh?.join()
   }
 
   /** Stop polling, paint the truth one last time, release the region. Every
@@ -3717,6 +3741,7 @@ class DispatchLoop {
     // considered released.
     try {
       try {
+        this.opts.terminal?.modes.leave(FOCUS_REPORTING_MODE)
         this.stopInput()
       } catch (error) {
         // Cursor restoration must not be skipped just because stdin restoration
@@ -3733,7 +3758,8 @@ class DispatchLoop {
       await this.stopRendering()
       await this.operationTail
       try {
-        await this.renderOnce()
+        if (this.opts.once === true) await this.readFrame()
+        else await this.refresh?.finalRefresh()
       } catch {
         // Best-effort: a failed final frame must not mask the run's outcome.
       }
@@ -3746,11 +3772,14 @@ class DispatchLoop {
 
   // ── Repository supervisor lease (§12 serialization) ────────────────────────
 
-  /** Claim (or renew) the repository lease for this invocation and start the
+  /** Claim an unknown or expired repository lease and start the
    * heartbeat timer. False means another supervisor holds it: the caller
    * yields — no claims, launches, or publications. */
   private async ensureRepoLease(holder: string): Promise<boolean> {
     if (this.superseded) return false
+    if (this.repoLeaseHolder === holder && this.wiring.clock().getTime() < this.repoLeaseValidUntil)
+      return true
+    const requestedAt = this.wiring.clock().getTime()
     const claimed = await this.wiring.store
       .claimRepoLease(this.repoIdentity, holder, REPO_LEASE_TTL_MS)
       .catch(() => false)
@@ -3773,6 +3802,7 @@ class DispatchLoop {
       }
       return false
     }
+    this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
     if (this.repoLeaseHolder === undefined) {
       this.repoLeaseHolder = holder
       this.startRepoLeaseHeartbeat(holder)
@@ -3783,9 +3813,13 @@ class DispatchLoop {
   private startRepoLeaseHeartbeat(holder: string): void {
     if (this.repoLeaseHeartbeat !== undefined) return
     this.repoLeaseHeartbeat = setInterval(() => {
+      const requestedAt = this.wiring.clock().getTime()
       this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
-          if (alive) return
+          if (alive) {
+            this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
+            return
+          }
           // A peer holds the repository now. Exit watch mode cleanly after
           // the same teardown every stop takes (detach remote / reap local,
           // signal continuations, release the lease).
@@ -3833,6 +3867,7 @@ class DispatchLoop {
     this.stopRepoLeaseHeartbeat()
     const holder = this.repoLeaseHolder
     this.repoLeaseHolder = undefined
+    this.repoLeaseValidUntil = 0
     if (holder === undefined) return
     try {
       await this.wiring.store.releaseRepoLease(this.repoIdentity, holder)
