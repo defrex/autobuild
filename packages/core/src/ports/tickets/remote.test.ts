@@ -24,6 +24,7 @@ import {
 } from '../../store/remote/version'
 import {
   claimWireSchema,
+  hostedTicketRequestSchemas,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
   dependencyStatesWireSchema,
@@ -390,4 +391,18 @@ test('hosted metadata survives reads and forwards updates including clears', asy
   await source.mutateIfRevision('ENG-2', '1', { kind: 'update', patch: { kind: 'work' } })
   expect(calls[1]!.body.input).toEqual({ id: 'ENG-2', patch: { target: null } })
   expect(calls[0]!.headers['x-autobuild-ticket-tree']).toBe('1')
+})
+
+test('hosted create permits an explicit root target and rejects blank targets', () => {
+  const request = {
+    context: { teamKey: 'ENG' },
+    input: { draft: { title: 'Root', body: 'Body', target: null } },
+  }
+  expect(hostedTicketRequestSchemas.create.safeParse(request).success).toBe(true)
+  expect(
+    hostedTicketRequestSchemas.create.safeParse({
+      ...request,
+      input: { draft: { ...request.input.draft, target: ' ' } },
+    }).success,
+  ).toBe(false)
 })

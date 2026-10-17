@@ -68,6 +68,7 @@ const draftSchema = z.strictObject({
   target: z
     .string()
     .refine((v) => v.trim().length > 0)
+    .nullable()
     .optional(),
   title: z.string(),
   body: z.string(),
