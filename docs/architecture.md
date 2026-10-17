@@ -230,6 +230,11 @@ the requested historical run. A never-started fresh invocation does not request
 historical correlation. Stopped dispatcher history is not copied into every
 current read.
 
+Hosted project build listings use the optional backing-store
+`listBuildsForRepo` capability with the authenticated repository. Postgres filters
+build rows in SQL before hosted ticket readable-id projection. Admin listings
+remain global; adapters without the capability retain application filtering.
+
 **Operator and CLI reads.** Build listings and details, repository and Harvest
 status, dispatcher decisions, operator API queries, MCP delegation and web
 dashboard refreshes use the same typed persisted read helpers. Shared projection

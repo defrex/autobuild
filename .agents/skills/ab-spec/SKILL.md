@@ -92,7 +92,8 @@ setting is absent.
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
-readiness gates are satisfied.
+readiness gates are satisfied, and that you will operate it from there (see
+[After filing: operate what you queued](#after-filing-operate-what-you-queued)).
 
 If grooming established prerequisites, follow the complete
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
@@ -187,6 +188,36 @@ If this session cannot export the design (no tool for it, an auth wall, or
 files over the store's size limit), keep the external link in Evidence and say
 plainly, in the spec and to the human, that builds cannot read it, so the
 planner does not treat it as a contract.
+
+## After filing: operate what you queued
+
+Once work you specified sits in the ready state, its builds start without
+anyone watching them. By default, the agent that wrote the spec becomes their
+operator. You hold the context an escalation asks about — the intent, the
+alternatives the human rejected, what was ruled out of scope — and a build
+blocked on a question you could answer should not wait for a human.
+
+So when this conversation leaves work in the ready state, say in the
+completion response that you will shepherd it, then load the `ab-operate`
+skill and follow it: arm the standing watch, reconcile status, resolve
+attention, and report each outcome until every build you queued has merged or
+otherwise ended. Shepherd what this conversation queued unless the human
+widens the scope.
+
+This is the default, not a requirement:
+
+- If the human says they will operate the work themselves, or hands it to
+  another agent, file the tickets and stop. A standing preference to the same
+  effect in the repository's agent instructions wins too.
+- If the work is not in the ready state, for example left in triage for later
+  grooming, there is nothing to shepherd yet. Offer to operate once it is
+  ready; do not start a watch.
+- If this session cannot keep a long-running watch (no background or monitor
+  facility, or no operator surface), say so and leave operation to the human.
+
+Operating follows the `ab-operate` skill's rules, including its boundaries:
+never start, stop, or restart a dispatcher. If no dispatcher holds the
+repository, report that rather than waiting on builds that cannot start.
 
 ## Rules
 

@@ -3,6 +3,10 @@
     "linear": {
       "type": "http",
       "url": "https://mcp.linear.app/mcp"
+    },
+    "Neon": {
+      "type": "http",
+      "url": "https://mcp.neon.tech/mcp?projectId=bold-poetry-57887856&category=branches%2Cendpoints%2Csnapshots%2Cschema%2Cquerying%2Cneon_auth%2Cdata_api%2Cobservability%2Cdocs%2Crealtime"
     }
   }
 }

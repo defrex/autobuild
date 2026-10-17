@@ -392,6 +392,33 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('optional repo listing preserves records and order without creating journals', async () => {
+        const clock = manualClock()
+        await withStore(factory, { clock }, async (store) => {
+          if (!store.listBuildsForRepo) return
+          const repo = "acme/quote'repo"
+          await store.createBuild(sampleBuildInput('scoped-old', { repo }))
+          clock.advance(1000)
+          await store.createBuild(sampleBuildInput('scoped-z', { repo }))
+          await store.createBuild(sampleBuildInput('foreign', { repo: 'other' }))
+          await store.createBuild(sampleBuildInput('scoped-a', { repo }))
+          const before = await store.listBuilds()
+          expect(await store.listBuildsForRepo(repo)).toEqual(
+            ['scoped-old', 'scoped-a', 'scoped-z'].map(
+              (slug) => before.find((b) => b.slug === slug)!,
+            ),
+          )
+          expect(await store.listBuildsForRepo('unknown')).toEqual([])
+          await store.ensureRepo('empty-journal')
+          const journal = await store.getRepo('empty-journal')
+          expect(await store.listBuildsForRepo('empty-journal')).toEqual([])
+          expect(await store.getRepo('empty-journal')).toEqual(journal)
+          expect(await store.getRepo(repo)).toBeNull()
+          expect(await store.getRepo('unknown')).toBeNull()
+          expect(await store.listBuilds()).toEqual(before)
+        })
+      })
+
       test('listBuilds lists all builds', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('list-a'))

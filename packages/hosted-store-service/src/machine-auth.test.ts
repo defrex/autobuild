@@ -10,9 +10,10 @@ import {
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { createStoreServer } from './remote-store-server'
-import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { MemoryBuildStore, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
 import { createTicketServer } from './ticket-server'
 import { createMachineAuth } from './machine-auth'
+import { createDelegationHandler } from './delegated-authority'
 
 const A = 'https://github.com/acme/a'
 const B = 'https://github.com/acme/b'
@@ -344,4 +345,118 @@ test('ticket project admission preserves shared backend and rejects repo injecti
   await projects.remove(A, 'owner')
   expect((await server.fetch(request('/tickets/list-ready', a.token, {}))).status).toBe(403)
   expect(calls).toBe(2)
+})
+
+test('project listing uses the bound optional capability and retains ownership filtering', async () => {
+  const projects = testProjects([A, B])
+  const { store: credentials, auth } = testCredentials(projects)
+  const owner = await credentials.issue(A, 'owner')
+  const other = await credentials.issue(B, 'owner')
+  const dispatcher = await credentials.issue(A, 'owner', { purpose: 'dispatcher' })
+  const backing = new MemoryBuildStore()
+  const foreign = await backing.createBuild({ slug: 'foreign', repo: B })
+  const global = backing.listBuilds.bind(backing)
+  let globalCalls = 0
+  const scopedCalls: string[] = []
+  const store = Object.assign(backing, {
+    async listBuildsForRepo(this: MemoryBuildStore, repo: string) {
+      expect(this).toBe(backing)
+      scopedCalls.push(repo)
+      return (await global()).filter((r) => r.repo === repo)
+    },
+  })
+  backing.listBuilds = async () => {
+    globalCalls++
+    return global()
+  }
+  const server = createStoreServer({ store, auth })
+  for (const token of [owner.token, dispatcher.token]) {
+    expect(await (await server.fetch(request('/builds', token))).json()).toEqual([])
+  }
+  const own = await backing.createBuild({ slug: 'own', repo: A })
+  expect(await (await server.fetch(request('/builds', owner.token))).json()).toEqual([own])
+  expect(await (await server.fetch(request('/builds', other.token))).json()).toEqual([foreign])
+  expect(scopedCalls).toEqual([A, A, A, B])
+  expect(globalCalls).toBe(0)
+  store.listBuildsForRepo = async () => [foreign, own]
+  expect(await (await server.fetch(request('/builds', owner.token))).json()).toEqual([own])
+  const admin = mintToken('secret', {
+    version: 1,
+    ownerAdmin: { user: 'owner' },
+    exp: Date.now() + 60000,
+  })
+  expect(await (await server.fetch(request('/builds', admin))).json()).toEqual(await global())
+  expect(globalCalls).toBe(1)
+  const local = createStoreServer({ store })
+  expect(
+    await (
+      await local.fetch(
+        new Request('http://store/builds', {
+          headers: {
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          },
+        }),
+      )
+    ).json(),
+  ).toEqual(await global())
+  expect(globalCalls).toBe(2)
+})
+
+test('project listing fallback filters global records and scoped failures retain server errors', async () => {
+  const projects = testProjects([A, B])
+  const { store: credentials, auth } = testCredentials(projects)
+  const owner = await credentials.issue(A, 'owner')
+  const backing = new MemoryBuildStore()
+  await backing.createBuild({ slug: 'fallback-foreign', repo: B })
+  const own = await backing.createBuild({ slug: 'fallback-own', repo: A })
+  const server = createStoreServer({ store: backing, auth, onInternalError: () => {} })
+  expect(await (await server.fetch(request('/builds', owner.token))).json()).toEqual([own])
+  const failing = Object.assign(backing, {
+    async listBuildsForRepo() {
+      throw new Error('database unavailable')
+    },
+  })
+  const failedServer = createStoreServer({ store: failing, auth, onInternalError: () => {} })
+  expect((await failedServer.fetch(request('/builds', owner.token))).status).toBe(500)
+})
+
+test('delegated listing retains project scope while internal operator grants remain denied', async () => {
+  const projects = testProjects([A, B])
+  const { store: credentials } = testCredentials(projects)
+  const owner = await credentials.issue(A, 'owner')
+  const backing = new MemoryBuildStore()
+  const own = await backing.createBuild({ slug: 'delegation-own', repo: A })
+  await backing.append(own.slug, sampleEventWrite())
+  await backing.createBuild({ slug: 'delegation-foreign', repo: B })
+  const calls: string[] = []
+  const global = backing.listBuilds.bind(backing)
+  const store = Object.assign(backing, {
+    async listBuildsForRepo(repo: string) {
+      calls.push(repo)
+      return (await global()).filter((record) => record.repo === repo)
+    },
+  })
+  const auth = createMachineAuth({ secret: 'secret', projects, credentials, store })
+  const delegate = createDelegationHandler({ secret: 'secret', auth, store })
+  const response = await delegate(
+    request('/credentials/delegate', owner.token, {
+      kind: 'build-runner',
+      id: own.slug,
+    }),
+  )
+  expect(response.status).toBe(200)
+  const token = (await response.json()).token
+  const server = createStoreServer({ store, auth })
+  expect(await (await server.fetch(request('/builds', token))).json()).toEqual([
+    await backing.getBuild(own.slug),
+  ])
+  expect(calls).toEqual([A])
+  const internal = mintToken('secret', {
+    version: 1,
+    internalOperator: { repo: A, user: 'owner' },
+    exp: Date.now() + 60000,
+  })
+  expect((await server.fetch(request('/builds', internal))).status).toBe(403)
+  expect(calls).toEqual([A])
 })
