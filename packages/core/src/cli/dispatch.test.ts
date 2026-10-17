@@ -7777,11 +7777,11 @@ describe('abDispatch interactive keyboard controls', () => {
       storeRead: number
     }> = []
     let storeReads = 0
-    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
-    fx.store.listBuilds = async () => {
-      const builds = await originalListBuilds()
+    const originalPosition = fx.store.getRepoChangePosition.bind(fx.store)
+    fx.store.getRepoChangePosition = async (repo) => {
+      const position = await originalPosition(repo)
       storeReads += 1
-      return builds
+      return position
     }
     const renderer: DashboardRenderer = (model, opts) => {
       captures.push({

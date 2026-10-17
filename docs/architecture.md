@@ -746,8 +746,22 @@ inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its
 one-hour `diverged` predicate is presentation-only: reducer status, engine
 routing, and lease health remain independent. `packages/core/src/cli/dashboard/model.ts` is
 the event-derived build-row projection; `poll.ts` reprojects rows for event or
-effective-config changes and reuses them across heartbeat/lease-only renewals
-while retaining the cached log and reduction.
+effective-config changes and bounded enrichment refreshes while retaining the
+cached log and reduction. `repository-poll.ts` serializes the complete presentation
+snapshot in both terminal paths. It samples `getRepoChangePosition` before reads,
+acknowledges it only after complete admitted reads, and reuses unchanged snapshots
+for up to ten seconds. Scoped discovery uses `listBuildsForRepo`; unchanged focused
+frames make one counter request. Session feeds remain independent.
+
+The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
+increment `repo_change_positions` transactionally through triggers on build,
+build-event, repository-event insertion and null-safe repository lease holder
+changes. Reads return decimal text (unknown repos: `"0"`) without journal creation.
+The hosted counter route returns only that position; scoped build discovery has
+its own repository-authorized route before the journal-existence gate. PostgreSQL
+counter DDL is additive, outside the guarded core schema/checksum, and must be
+explicitly migrated before the service rollout. Existing writers use the same
+triggers; rerunning migration preserves positions without replaying old events.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
