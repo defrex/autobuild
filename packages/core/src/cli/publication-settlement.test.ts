@@ -720,3 +720,188 @@ describe('settlePendingPublication: the publication.lost backstop (AUT-328)', ()
     ).toHaveLength(1)
   })
 })
+
+async function seedRestackPublication(withLostPublications = false) {
+  const h = await seed()
+  if (withLostPublications) {
+    for (const [index, sha] of ['e'.repeat(40), 'f'.repeat(40)].entries()) {
+      const request = await h.store.append(SLUG, {
+        actor: agentActor('implement', `lost-${index}`),
+        type: 'publication.requested',
+        payload: {
+          operation: 'implement',
+          branch: BRANCH,
+          sha,
+          base: BASE,
+          round: 1,
+          artifact: { kind: 'implement-notes', rev: 0 },
+        },
+      })
+      if (index === 0)
+        await h.store.append(SLUG, {
+          actor: DISPATCHER,
+          type: 'publication.lost',
+          payload: {
+            request: request.seq,
+            operation: 'implement',
+            branch: BRANCH,
+            sha,
+            reason: 'workspace released before publication',
+          },
+        })
+    }
+    await h.store.append(SLUG, { actor: KERNEL, type: 'workspace.released', payload: {} })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-2',
+        branch: BRANCH,
+        base: { source: 'remote', sha: BASE },
+      },
+    })
+  }
+  const transaction = {
+    id: 'rewrite-1',
+    attempt: 1,
+    branch: BRANCH,
+    oldHead: 'c'.repeat(40),
+    oldBase: BASE,
+    targetBase: BASE,
+    changeSha: 'd'.repeat(40),
+    workspaceHead: 'c'.repeat(40),
+    localBranchHead: 'c'.repeat(40),
+  }
+  const artifact = { kind: 'reconcile-notes', rev: 0 }
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.started',
+    payload: { attempt: 1, baseSha: BASE },
+  })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'reconcile.prepared', payload: transaction })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.replayed',
+    payload: { id: transaction.id, conflicted: true },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.publish-intended',
+    payload: { ...transaction, headSha: SHA, conflicted: true, artifact },
+  })
+  const request = await h.store.append(SLUG, {
+    actor: agentActor('reconcile', 's1'),
+    type: 'publication.requested',
+    payload: {
+      operation: 'reconcile',
+      sha: SHA,
+      branch: BRANCH,
+      artifact,
+      rewrite: { ...transaction, conflicted: true },
+    },
+  })
+  return { ...h, transaction, request }
+}
+
+test('trusted restack publication carries archives and an explicit lease, then settles once', async () => {
+  const h = await seedRestackPublication()
+  const calls: unknown[] = []
+  h.deps.publication!.rewrite = async (input) => {
+    calls.push(input)
+    return { kind: 'published' }
+  }
+  await settlePendingPublication(h.deps, SLUG)
+  await settlePendingPublication(h.deps, SLUG)
+  expect(calls).toHaveLength(1)
+  expect(calls[0]).toMatchObject({
+    ref: 'sandbox-1',
+    sha: SHA,
+    branch: BRANCH,
+    expected: h.transaction.oldHead,
+    archives: expect.arrayContaining([
+      {
+        ref: `refs/autobuild/archive/${SLUG}/${h.transaction.oldHead}`,
+        sha: h.transaction.oldHead,
+      },
+      { ref: `refs/autobuild/archive/${SLUG}/${SHA}`, sha: SHA },
+    ]),
+  })
+  expect(h.published).toEqual([])
+  const events = await h.store.getEvents(SLUG)
+  expect(events.filter((e) => e.type === 'reconcile.rewritten')).toHaveLength(1)
+  expect(events.find((e) => e.type === 'reconcile.completed')?.payload).toEqual({
+    headSha: SHA,
+    rewriteId: h.transaction.id,
+    artifact: { kind: 'reconcile-notes', rev: 0 },
+  })
+})
+
+test('remote lease mismatch durably returns to replay without completion or plain push', async () => {
+  const h = await seedRestackPublication()
+  h.deps.publication!.rewrite = async () => ({ kind: 'lease-mismatch', actual: 'e'.repeat(40) })
+  await settlePendingPublication(h.deps, SLUG)
+  const events = await h.store.getEvents(SLUG)
+  expect(events.some((e) => e.type === 'reconcile.completed')).toBe(false)
+  expect(events.find((e) => e.type === 'reconcile.contended')?.payload).toEqual({
+    id: h.transaction.id,
+    request: h.request.seq,
+    actual: 'e'.repeat(40),
+  })
+  expect(events.find((e) => e.type === 'phase.failed')?.payload).toMatchObject({
+    phase: 'reconcile',
+    round: 1,
+    willRetry: true,
+  })
+  expect(h.published).toEqual([])
+})
+
+test('a provider without trusted rewrite capability refuses without using plain publication', async () => {
+  const h = await seedRestackPublication()
+  await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(
+    'lacks trusted reconcile rewrite/archive publication',
+  )
+  expect(h.published).toEqual([])
+})
+
+test('lost and abandoned publication objects do not block trusted reconcile archives', async () => {
+  const h = await seedRestackPublication(true)
+  let archived: string[] = []
+  h.deps.publication!.rewrite = async (input) => {
+    archived = input.archives.map((entry) => entry.sha)
+    expect(archived).not.toContain('e'.repeat(40))
+    expect(archived).not.toContain('f'.repeat(40))
+    return { kind: 'published' }
+  }
+  await settlePendingPublication(h.deps, SLUG)
+  expect(archived).toContain(SHA)
+  expect(archived).toContain(h.transaction.oldHead)
+  expect(
+    (await h.store.getEvents(SLUG)).some((event) => event.type === 'reconcile.completed'),
+  ).toBe(true)
+})
+
+test('trusted publication records an overtaken successful rewrite without completing its request', async () => {
+  const h = await seedRestackPublication()
+  const observed = 'e'.repeat(40)
+  h.deps.publication!.rewrite = async () => ({
+    kind: 'lease-mismatch',
+    actual: observed,
+    rewritten: true,
+  })
+  await settlePendingPublication(h.deps, SLUG)
+  await settlePendingPublication(h.deps, SLUG)
+  const events = await h.store.getEvents(SLUG)
+  const receipts = events.filter((event) => event.type === 'reconcile.rewritten')
+  expect(receipts).toHaveLength(1)
+  expect(receipts[0]!.payload).toMatchObject({
+    oldHead: h.transaction.oldHead,
+    headSha: SHA,
+    observedHead: observed,
+  })
+  expect(events.some((event) => event.type === 'reconcile.completed')).toBe(false)
+  expect(events.filter((event) => event.type === 'reconcile.contended')).toHaveLength(1)
+  const { readBuildSelector } = await import('../store/reduced-reads')
+  expect(await readBuildSelector(h.store, SLUG, 'publishedBranchHead')).toBe(observed)
+  expect(await readBuildSelector(h.store, SLUG, 'verifyDiffBase')).toBe(BASE)
+})

@@ -399,6 +399,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   nextHarnessWorkspace += 1
   const workspaces = new FakeWorkspaceProvider({
     mode: 'logical',
+    base: { source: 'remote', sha: '0'.repeat(40) },
     root: join(tmpdir(), `ab-build-runner-${process.pid}-${nextHarnessWorkspace}`),
   })
   const handle = await workspaces.provision({
@@ -463,9 +464,22 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   let finalizeStatusIndex = 0
   let finalizeHeadIndex = 0
   let finalizeAncestorIndex = 0
+  let replayPrepared = false
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
+    if (cmd[0] === 'git' && cmd[1] === 'commit-tree') {
+      replayPrepared = true
+      return { stdout: 'c'.repeat(40), stderr: '', exitCode: 0 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'show' && cmd.includes('--format=%P')) {
+      const refresh = currentRefresh()
+      return { stdout: 'sha' in refresh ? refresh.sha : '', stderr: '', exitCode: 0 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'show' && cmd.includes('--format=%B'))
+      return { stdout: `Change\n\nAutobuild-Build: ${SLUG}\n`, stderr: '', exitCode: 0 }
+    if (cmd.includes('CHERRY_PICK_HEAD')) return { stdout: '', stderr: '', exitCode: 1 }
+
     // Finalize preflight diff capture: exact bare commands only, dispatched
     // BEFORE the generic `git diff` branch below so they never consume
     // verifyDiffs entries.
@@ -523,6 +537,8 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
         ? { stdout: status, stderr: '', exitCode: 0 }
         : { stdout: '', stderr: status.error, exitCode: 128 }
     }
+    if (replayPrepared && cmd[0] === 'git' && cmd[1] === 'rev-parse' && cmd[2] === 'HEAD')
+      return { stdout: 'b'.repeat(40), stderr: '', exitCode: 0 }
     if (cmd[0] === 'git' && cmd[1] === 'rev-parse' && cmd[2] === 'HEAD') {
       const head = finalizeHeads[Math.min(finalizeHeadIndex, finalizeHeads.length - 1)] ?? {
         error: 'no finalize head result configured',
@@ -578,6 +594,8 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   }
 
   const forge = options.forge ?? new FakeForge()
+  forge.remoteBranches.set(BRANCH, 'd'.repeat(40))
+  await store.putArtifact(SLUG, { kind: 'pr-description', content: 'Build change' })
   const selectedConfig = options.configToml !== undefined ? parseConfig(options.configToml) : config
   selectedConfig.roles.default ??= { runtime: 'scripted' }
   const br = new BuildRunner({
@@ -1323,7 +1341,7 @@ describe('step', () => {
 
     const events = await h.store.getEvents(SLUG)
     expect(events.slice(-4).map((e) => e.type)).toEqual([
-      'reconcile.started',
+      'reconcile.replayed',
       'session.started',
       'reconcile.completed',
       'session.ended',
@@ -1333,7 +1351,15 @@ describe('step', () => {
       attempt: 1,
       baseSha: CURRENT_BASE,
     })
-    expect(h.execCalls.slice(-2)).toEqual([
+    expect(
+      h.execCalls
+        .filter(
+          (call) =>
+            call.cmd[1] === 'fetch' ||
+            call.cmd.includes(`refs/autobuild/reconcile/${SLUG}/base^{commit}`),
+        )
+        .slice(-2),
+    ).toEqual([
       {
         cmd: [
           'git',
@@ -4637,7 +4663,7 @@ paths = ["src/cli/dashboard/**"]
     })
     expect(h.execCalls).toEqual([
       {
-        cmd: ['git', 'diff', '--no-renames', '--name-only', '-z', 'fake-base-sha', 'HEAD', '--'],
+        cmd: ['git', 'diff', '--no-renames', '--name-only', '-z', '0'.repeat(40), 'HEAD', '--'],
         cwd: h.workspacePath,
       },
       { cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath },
@@ -4866,7 +4892,7 @@ paths = ["web/**"]
 
   test('the diff base advances only after a completed reconcile', async () => {
     const h = await makeHarness()
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('fake-base-sha')
+    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('0'.repeat(40))
 
     await h.store.append(SLUG, {
       actor: KERNEL,

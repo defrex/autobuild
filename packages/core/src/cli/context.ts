@@ -96,6 +96,10 @@ export interface ContextManifest {
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
   conflict?: { baseSha: string }
+  replay?: import('../events/payloads').EventPayload<'reconcile.prepared'> & {
+    conflicted?: boolean
+    needsCompletion: boolean
+  }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
   /** The feedback this phase occurrence was started with (§15.3, §10). */
@@ -387,6 +391,13 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     // attempt is authoritative.
     const baseSha = events.reconcileBases[String(round)]
     if (baseSha !== undefined) manifest.conflict = { baseSha }
+    if (events.reconcileTransaction?.attempt === round) {
+      manifest.replay = {
+        ...events.reconcileTransaction,
+        conflicted: events.reconcileReplay?.conflicted,
+        needsCompletion: events.reconcileReplay?.conflicted ?? true,
+      }
+    }
     if (manifest.conflict === undefined) {
       throw new Error(
         `reconcile@${round} context requires a matching reconcile.started event ` +

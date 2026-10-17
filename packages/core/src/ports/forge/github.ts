@@ -1,3 +1,4 @@
+import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
@@ -535,6 +536,9 @@ export const MERGEABILITY_RETRY_DELAYS_MS = [1000, 2000, 4000, 5000, 6000, 6000,
 const PR_STATE_CACHE_CAP = 512
 
 export class GitHubForge implements Forge {
+  get rewrite() {
+    return gitRewrite(this.exec, false)
+  }
   readonly name = 'github'
   readonly prAttachments: PrAttachmentHosting
 
@@ -704,7 +708,7 @@ export class GitHubForge implements Forge {
 
   // ── Forge operations ───────────────────────────────────────────────────────
 
-  /** [D1]: rebase is banned and branches are never rewritten — never force.
+  /** Ordinary phase publication extends history; reconcile uses the separate guarded rewrite capability.
    * Only ever called from worktree-side terminals and contract fixtures. */
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
     const result = await this.exec(['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`], {
