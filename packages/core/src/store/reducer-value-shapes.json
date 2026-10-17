@@ -10113,6 +10113,10 @@
         "sha": {
           "type": "3",
           "optional": false
+        },
+        "buildTrailerPresent": {
+          "type": "562",
+          "optional": true
         }
       }
     },

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#634](https://github.com/defrex/autobuild/pull/634) — Reduce idle dispatcher ticks to six store requests
+- [#632](https://github.com/defrex/autobuild/pull/632) — Preserve stable build identity across squash landings
 - [#631](https://github.com/defrex/autobuild/pull/631) — Reduce hosted authentication and repository read overhead
 - [#630](https://github.com/defrex/autobuild/pull/630) — Scope hosted project build listings in Postgres
 ## v0.14.0 — 2026-10-17

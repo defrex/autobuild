@@ -555,6 +555,35 @@ dispatcher — requires an exported token before any side effect and never consu
 a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
 injects that same token.
 
+**Stable build identity.** The forge landing seam accepts optional build identity at operation time. Both
+built-in adapters preserve their squash message and normalize a final
+`Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub
+adapter reads the viewer's squash headline/body and head in one GraphQL query;
+it never reconstructs server defaults from repository settings. The janitor
+maintains native request message freshness after acknowledgement. A matching
+request costs one GraphQL freshness query and no extra consent or pipeline read;
+full gate inspection and refreshed durable consent/engine eligibility precede
+any repair. Body comparison tolerates provider trimming of trailing whitespace
+while preserving the complete headline, body content, and squash method.
+
+Optional `Forge.readCommitMessage` and `Forge.containsBuild` capabilities expose
+actual landed messages and exact trailer presence in reachable branch history.
+The janitor records optional `pr.merged.buildTrailerPresent` for normal and abort
+cleanup observations. Unsupported or failed inspection leaves evidence unknown;
+a read failure also records an observation without preventing completion. Old
+logs need no migration and keep the same status and presentation.
+
+GitHub merge queues ignore squash-message overrides. The message query also
+reads `repository.mergeQueue(branch:)`, covering classic protection and rulesets.
+Its branch hint is checked against the PR's actual base, with a bounded re-query
+after a retarget rather than assuming the repository default is the base.
+Kernel auto-merge therefore
+returns an actionable `unproven-gate-state` deferral for queue-protected bases;
+it never bypasses the queue. Human queue landings still settle normally with
+inspected trailer evidence when available. Expected-head guards and recurring
+polls bound native message freshness, but cannot prevent a push and automatic
+landing from both completing between polls.
+
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
 `production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct

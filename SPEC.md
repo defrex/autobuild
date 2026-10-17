@@ -2040,7 +2040,13 @@ rejection is `EventValidationError`.
 4. **[D3] Code travels through the Forge, never the store.**
    `implement.completed` pushes the branch; events carry commit SHAs only.
    This is what makes cross-sandbox resume work (§15.6-C) and keeps the
-   store lean.
+   store lean. SHAs are momentary evidence, not change identity: a forge
+   or future history rewrite can mint a new object id for the same change.
+   The immutable build slug in the landed commit's terminal Git trailer
+   `Autobuild-Build: <slug>` identifies the build's change across such rewrites
+   (RFC 0001 §5). Branch presence is determined by exact parsed trailer values
+   in reachable history, not recorded SHA ancestry. This does not introduce
+   restacking, rewrite events, or archive refs.
 5. **Append-only; corrections are new events.**
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
@@ -2346,6 +2352,25 @@ ticket*, never a reopened build.
   practice). Structurally: rebase rewrites the branch and severs the SHAs
   recorded in `implement.completed` events [D3]. Squash-at-merge is safe on
   both counts.
+
+**Stable landed identity.** A kernel landing remains one squash commit and
+preserves the forge's existing message except for normalizing terminal build
+identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
+Implementation commits and deposited PR descriptions are unchanged. The janitor
+records `pr.merged { sha, buildTrailerPresent? }` from the actual landed message,
+including human landings. True and false are successful observations; historical
+logs, unsupported inspection, and transient read failures leave evidence absent.
+A failed inspection records an actionable observation and never blocks merge
+completion. This evidence does not change reduction or display semantics.
+
+GitHub uses its authoritative viewer squash headline and body with an expected
+head guard. Native auto-merge messages are checked against fresh server defaults
+on eligible polls even after consent acknowledgement, and repaired through
+consent-guarded disable/enable. Repeated polling covers later head or metadata
+changes; it cannot make a future push atomic with an already armed native merge.
+Merge queues ignore message overrides, so identity-aware kernel landing defers
+with `unproven-gate-state` rather than bypassing the queue. Human merges remain
+observable regardless of trailer evidence.
 
 **Merge gates are never bypassed.** The operator's auto-merge command is
 durable consent to merge, not a bypass. Whenever the base branch has any real

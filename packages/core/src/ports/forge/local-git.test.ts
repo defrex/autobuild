@@ -396,3 +396,103 @@ test('marked summaries replace one private-ref entry across adapters and recreat
   await new LocalGitForge().commentOnPr(f.workspace, pr.number, `${marker}\nlatest`)
   expect((await read()).comments).toEqual(['unrelated', `${marker}\nlatest`])
 })
+
+test('stable landing identity survives rewritten ancestry and finds non-first-parent history', async () => {
+  const f = await fixture()
+  const original = await git(f.root, 'rev-parse', 'main')
+  const body = '# Stable landing\n\nDescription\n\nCo-authored-by: A <a@example.test>\n'
+  const pr = await f.forge.openPr({
+    workspacePath: f.workspace,
+    head: f.head,
+    base: 'main',
+    title: 'Stable landing',
+    body: 'Description',
+    mergeMessage: body,
+  })
+  await f.forge.squashMerge(f.workspace, pr.number, pr.headSha, { buildSlug: 'stable-build' })
+  const landed = await git(f.root, 'rev-parse', 'main')
+  expect(await git(f.root, 'rev-list', '--count', `${original}..main`)).toBe('1')
+  expect(await git(f.root, 'show', '-s', '--format=%P', landed)).toBe(original)
+  const message = await f.forge.readCommitMessage(f.root, landed)
+  expect(message.trimEnd()).toBe(`${body.trimEnd()}\nAutobuild-Build: stable-build`)
+  expect(await git(f.root, 'rev-parse', `${landed}^{tree}`)).toBe(
+    await git(f.root, 'rev-parse', `${pr.headSha}^{tree}`),
+  )
+  await f.forge.squashMerge(f.workspace, pr.number, pr.headSha, { buildSlug: 'stable-build' })
+  expect(await git(f.root, 'rev-parse', 'main')).toBe(landed)
+  // A forge-side rewrite preserves the message but changes the parent and SHA.
+  const tree = await git(f.root, 'rev-parse', `${landed}^{tree}`)
+  const parent = await git(f.root, 'commit-tree', tree, '-p', original, '-m', 'Different parent')
+  const path = join(f.root, 'landing-message')
+  await writeFile(path, message)
+  const rewritten = await git(f.root, 'commit-tree', tree, '-p', parent, '-F', path)
+  await git(f.root, 'update-ref', 'refs/heads/rewritten', rewritten)
+  expect(rewritten).not.toBe(landed)
+  expect(
+    (await bunExec(['git', 'merge-base', '--is-ancestor', landed, rewritten], { cwd: f.root }))
+      .exitCode,
+  ).toBe(1)
+  expect(await f.forge.containsBuild(f.root, 'rewritten', 'stable-build')).toBe(true)
+  expect(await f.forge.containsBuild(f.root, 'rewritten', 'stable')).toBe(false)
+  expect(await f.forge.containsBuild(f.root, 'rewritten', 'absent')).toBe(false)
+  const merge = await git(
+    f.root,
+    'commit-tree',
+    tree,
+    '-p',
+    original,
+    '-p',
+    rewritten,
+    '-m',
+    'Merge side history',
+  )
+  await git(f.root, 'update-ref', 'refs/heads/side-history', merge)
+  expect(await f.forge.containsBuild(f.root, 'side-history', 'stable-build')).toBe(true)
+  await expect(f.forge.containsBuild(f.root, 'missing', 'stable-build')).rejects.toThrow()
+  await expect(f.forge.containsBuild(f.root, '--all', 'stable-build')).rejects.toThrow()
+})
+
+test('pre-upgrade pending candidate is rebuilt before landing, but landed history is never rewritten', async () => {
+  const f = await fixture()
+  const pr = await f.forge.openPr({
+    workspacePath: f.workspace,
+    head: f.head,
+    base: 'main',
+    title: 'Upgrade',
+    body: 'Original',
+  })
+  // Stop just before CAS, leaving a durable legacy pending candidate.
+  const paused = new LocalGitForge({
+    exec: async (cmd, opts) => {
+      if (cmd[1] === 'update-ref' && cmd[2] === 'refs/heads/main') throw new Error('before CAS')
+      return bunExec(cmd, opts)
+    },
+  })
+  await expect(paused.squashMerge(f.workspace, pr.number, pr.headSha)).rejects.toThrow('before CAS')
+  const fresh = new LocalGitForge()
+  await fresh.squashMerge(f.workspace, pr.number, pr.headSha, { buildSlug: 'upgrade' })
+  expect(await fresh.containsBuild(f.root, 'main', 'upgrade')).toBe(true)
+  const landed = await git(f.root, 'rev-parse', 'main')
+  await fresh.squashMerge(f.workspace, pr.number, pr.headSha, { buildSlug: 'different' })
+  expect(await git(f.root, 'rev-parse', 'main')).toBe(landed)
+})
+
+test('containsBuild reads reachable messages with one history process regardless of commit count', async () => {
+  const f = await fixture()
+  const tree = await git(f.root, 'rev-parse', 'main^{tree}')
+  let tip = await git(f.root, 'rev-parse', 'main')
+  for (let index = 0; index < 25; index++) {
+    tip = await git(f.root, 'commit-tree', tree, '-p', tip, '-m', `History ${index}`)
+  }
+  await git(f.root, 'update-ref', 'refs/heads/history-scan', tip)
+  const calls: string[][] = []
+  const forge = new LocalGitForge({
+    exec: async (cmd, opts) => {
+      calls.push(cmd)
+      return bunExec(cmd, opts)
+    },
+  })
+  expect(await forge.containsBuild(f.root, 'history-scan', 'absent')).toBe(false)
+  expect(calls.map((cmd) => cmd[1])).toEqual(['check-ref-format', 'rev-parse', 'log'])
+  expect(calls[2]).toEqual(['git', 'log', '--format=%B%x00', tip, '--'])
+})

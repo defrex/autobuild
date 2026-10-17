@@ -1435,3 +1435,383 @@ describe('GitHub marked summary upsert', () => {
     expect(methods).toEqual(['GET', 'POST', 'GET'])
   })
 })
+
+describe('GitHub stable build identity', () => {
+  const headline = 'Server title (#42) — unchanged'
+  const body = '* unusual bullet\n\nCo-authored-by: A <a@example.test>\n'
+  const canonical = `${body}Autobuild-Build: stable-build\n`
+  const native = { commitHeadline: headline, commitBody: canonical, mergeMethod: 'SQUASH' }
+  const message = (
+    overrides: Record<string, unknown> = {},
+    queue: { id: string } | null = null,
+  ) => ({
+    json: {
+      data: {
+        repository: {
+          defaultBranchRef: { name: 'main' },
+          mergeQueue: queue,
+          pullRequest: {
+            baseRefName: 'main',
+            id: 'PR_42',
+            headRefOid: 'head-42',
+            state: 'OPEN',
+            viewerMergeHeadlineText: headline,
+            viewerMergeBodyText: body,
+            autoMergeRequest: null,
+            ...overrides,
+          },
+        },
+      },
+    },
+  })
+  const inspect = (enabled = true) => ({
+    json: {
+      node_id: 'PR_42',
+      auto_merge: enabled ? {} : null,
+      mergeable_state: 'clean',
+      head: { ref: 'feature', sha: 'head-42' },
+      base: { ref: 'main' },
+    },
+  })
+  const gates = [
+    { json: { protected: false } },
+    { json: [{ type: 'required_signatures' }] },
+    { json: { allow_auto_merge: true } },
+  ]
+  const applied = (name: string) => ({
+    json: { data: { [name]: { pullRequest: { id: 'PR_42' } } } },
+  })
+  const mutations = (calls: ApiCall[]) =>
+    calls.filter((c) => String((c.opts?.body as { query?: string })?.query).includes('mutation'))
+
+  test.each([body, ''])(
+    'direct squash preserves server headline/body with body %j',
+    async (serverBody) => {
+      const { forge, calls } = makeForge([message({ viewerMergeBodyText: serverBody }), {}])
+      await forge.squashMerge('/missing-checkout', 42, 'head-42', { buildSlug: 'stable-build' })
+      expect(calls[0]?.path).toBe('graphql')
+      expect((calls[0]!.opts!.body as { query: string }).query).toContain(
+        'viewerMergeHeadlineText(mergeType: SQUASH)',
+      )
+      expect(calls[1]?.opts?.body).toEqual({
+        merge_method: 'squash',
+        sha: 'head-42',
+        commit_title: headline,
+        commit_message: serverBody === '' ? 'Autobuild-Build: stable-build\n' : canonical,
+      })
+    },
+  )
+  test('direct head mismatch or invalid defaults never attempts a merge', async () => {
+    for (const response of [
+      message({ headRefOid: 'new-head' }),
+      message({ viewerMergeBodyText: null }),
+    ]) {
+      const { forge, calls } = makeForge([response])
+      await expect(
+        forge.squashMerge('/absent', 42, 'head-42', { buildSlug: 'stable-build' }),
+      ).rejects.toThrow()
+      expect(calls).toHaveLength(1)
+    }
+  })
+  test('native enable uses guarded typed message overrides and independently confirms them', async () => {
+    const { forge, calls } = makeForge([
+      message(),
+      inspect(false),
+      ...gates,
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: native }),
+    ])
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    const mutation = mutations(calls)[0]?.opts?.body as { query: string; variables: unknown }
+    expect(mutation.query).toContain('$expectedHeadOid: GitObjectID!')
+    expect(mutation.query).toContain('$mergeMethod: PullRequestMergeMethod!')
+    expect(mutation.variables).toEqual({
+      pullRequestId: 'PR_42',
+      mergeMethod: 'SQUASH',
+      expectedHeadOid: 'head-42',
+      commitHeadline: headline,
+      commitBody: canonical,
+    })
+  })
+  test('new adapter repairs stale defaults despite a correct trailer; unchanged defaults make no mutation', async () => {
+    for (const oldRequest of [
+      { ...native, commitHeadline: 'Old title' },
+      { ...native, commitBody: 'Old body\n\nAutobuild-Build: stable-build\n' },
+      { ...native, mergeMethod: 'MERGE' },
+      null,
+    ]) {
+      const repair = oldRequest === null ? [] : [applied('disablePullRequestAutoMerge'), message()]
+      const { forge, calls } = makeForge([
+        message({ autoMergeRequest: oldRequest }),
+        inspect(),
+        ...gates,
+        ...repair,
+        applied('enablePullRequestAutoMerge'),
+        message({ autoMergeRequest: native }),
+      ])
+      expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+        kind: 'applied',
+      })
+      expect(mutations(calls)).toHaveLength(oldRequest === null ? 1 : 2)
+    }
+    const { forge, calls } = makeForge([message({ autoMergeRequest: native })])
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    expect(mutations(calls)).toEqual([])
+  })
+  test.each([
+    { commitHeadline: null, commitBody: null },
+    { commitHeadline: null, commitBody: canonical },
+    { commitHeadline: headline, commitBody: null },
+  ])('legacy nullable native overrides are repaired once (%j)', async (overrides) => {
+    const { forge, calls } = makeForge([
+      message({ autoMergeRequest: { ...native, ...overrides } }),
+      inspect(),
+      ...gates,
+      applied('disablePullRequestAutoMerge'),
+      message(),
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: native }),
+      message({ autoMergeRequest: native }),
+    ])
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    const changes = mutations(calls)
+    expect(
+      changes.map((call) =>
+        (call.opts!.body as { query: string }).query.includes('disablePullRequestAutoMerge')
+          ? 'disable'
+          : 'enable',
+      ),
+    ).toEqual(['disable', 'enable'])
+    expect((changes[1]!.opts!.body as { variables: unknown }).variables).toEqual({
+      pullRequestId: 'PR_42',
+      mergeMethod: 'SQUASH',
+      expectedHeadOid: 'head-42',
+      commitHeadline: headline,
+      commitBody: canonical,
+    })
+    const before = calls.length
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    expect(calls).toHaveLength(before + 1)
+    expect(mutations(calls)).toHaveLength(2)
+  })
+
+  test('nullable overrides after enable remain unconfirmed rather than being acknowledged', async () => {
+    const { forge } = makeForge([
+      message(),
+      inspect(false),
+      ...gates,
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: { ...native, commitHeadline: null, commitBody: null } }),
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('not confirmed') },
+    })
+  })
+
+  test('cancellation during repair prevents re-enable', async () => {
+    let guards = 0
+    const { forge, calls } = makeForge([
+      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
+      inspect(),
+      ...gates,
+      applied('disablePullRequestAutoMerge'),
+      message(),
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, {
+        buildSlug: 'stable-build',
+        canApply: async () => ++guards === 1,
+      }),
+    ).toEqual({ kind: 'deferred' })
+    expect(mutations(calls)).toHaveLength(1)
+    expect(JSON.stringify(mutations(calls))).toContain('disablePullRequestAutoMerge')
+  })
+  test.each(['new-head', 'head-42'])(
+    'head race or merged PR after disable never re-enables (%s)',
+    async (head) => {
+      const { forge, calls } = makeForge([
+        message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
+        inspect(),
+        ...gates,
+        applied('disablePullRequestAutoMerge'),
+        message({ headRefOid: head, state: head === 'head-42' ? 'MERGED' : 'OPEN' }),
+      ])
+      expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+        kind: 'deferred',
+      })
+      expect(mutations(calls)).toHaveLength(1)
+    },
+  )
+  test('head movement during resolution and failed repair cannot acknowledge', async () => {
+    const changed = makeForge([message({ headRefOid: 'new-head' }), inspect(), ...gates])
+    expect(
+      await changed.forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toEqual({ kind: 'deferred' })
+    expect(mutations(changed.calls)).toEqual([])
+    const failed = makeForge([
+      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
+      inspect(),
+      ...gates,
+      { status: 403, json: { message: 'repair denied' } },
+    ])
+    expect(
+      await failed.forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toMatchObject({ kind: 'deferred', reason: { code: 'unproven-gate-state' } })
+  })
+  test('merge queues defer identity-aware landing without bypass or mutation', async () => {
+    const { forge, calls } = makeForge([
+      message(),
+      inspect(),
+      { json: { protected: false } },
+      { json: [{ type: 'merge_queue', parameters: {} }] },
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('merge queues') },
+    })
+    expect(mutations(calls)).toEqual([])
+  })
+  test('provider trimming a final newline confirms enable and stays a single-query no-op on later polls', async () => {
+    const trimmed = { ...native, commitBody: canonical.trimEnd() }
+    const { forge, calls } = makeForge([
+      message(),
+      inspect(false),
+      ...gates,
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: trimmed }),
+      message({ autoMergeRequest: trimmed }),
+    ])
+    const canApply = async () => true
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build', canApply }),
+    ).toEqual({ kind: 'applied' })
+    const before = calls.length
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, {
+        buildSlug: 'stable-build',
+        canApply: async () => {
+          throw new Error('quiet poll refreshed consent')
+        },
+      }),
+    ).toEqual({ kind: 'applied' })
+    expect(calls.slice(before).map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST graphql',
+    ])
+    expect(mutations(calls)).toHaveLength(1)
+  })
+
+  test('classic protection queues defer native and direct landings, even with an existing matching request', async () => {
+    for (const request of [null, native]) {
+      const { forge, calls } = makeForge([
+        message({ autoMergeRequest: request }, { id: 'classic-queue' }),
+      ])
+      expect(
+        await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+      ).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state', detail: expect.stringContaining('merge queues') },
+      })
+      expect(calls).toHaveLength(1)
+      expect((calls[0]!.opts!.body as { query: string }).query).toContain(
+        'mergeQueue(branch: $branch)',
+      )
+      expect(mutations(calls)).toHaveLength(0)
+    }
+    const { forge, calls } = makeForge([message({}, { id: 'classic-queue' })])
+    await expect(
+      forge.squashMerge('/absent', 42, 'head-42', { buildSlug: 'stable-build' }),
+    ).rejects.toThrow('merge queues')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('queue inspection follows the actual PR base rather than a default or stale hint', async () => {
+    const { forge, calls } = makeForge([
+      message({ baseRefName: 'release', autoMergeRequest: native }),
+      message({ baseRefName: 'release', autoMergeRequest: native }, { id: 'release-queue' }),
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, {
+        buildSlug: 'stable-build',
+        baseBranch: 'main',
+      }),
+    ).toMatchObject({ kind: 'deferred' })
+    expect((calls[1]!.opts!.body as { variables: { branch: string } }).variables.branch).toBe(
+      'release',
+    )
+    expect(mutations(calls)).toHaveLength(0)
+  })
+
+  test('a verified nondefault branch hint keeps unchanged maintenance to one query', async () => {
+    const { forge, calls } = makeForge([
+      message({ baseRefName: 'release', autoMergeRequest: native }),
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, {
+        buildSlug: 'stable-build',
+        baseBranch: 'release',
+      }),
+    ).toEqual({ kind: 'applied' })
+    expect(calls).toHaveLength(1)
+    expect((calls[0]!.opts!.body as { variables: { branch: string } }).variables.branch).toBe(
+      'release',
+    )
+  })
+
+  test('retargeting during repair never enables with obsolete gate inspection', async () => {
+    const { forge, calls } = makeForge([
+      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
+      inspect(),
+      ...gates,
+      applied('disablePullRequestAutoMerge'),
+      message({ baseRefName: 'release' }),
+      message({ baseRefName: 'release' }),
+    ])
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'deferred',
+    })
+    expect(mutations(calls)).toHaveLength(1)
+  })
+
+  test('unknown queue evidence fails closed', async () => {
+    const response = message({ autoMergeRequest: native })
+    const unknown = {
+      ...response,
+      json: { data: { repository: { ...response.json.data.repository, mergeQueue: undefined } } },
+    }
+    const { forge, calls } = makeForge([unknown])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toMatchObject({ kind: 'deferred', reason: { code: 'unproven-gate-state' } })
+    expect(calls).toHaveLength(1)
+  })
+
+  test('commit evidence and paginated reachable history are checkout-less and uncached', async () => {
+    const prose = { commit: { message: 'Mention Autobuild-Build: stable-build' } }
+    const { forge, calls } = makeForge([
+      { json: { commit: { message: canonical } } },
+      { json: Array.from({ length: 100 }, () => prose) },
+      { json: [{ commit: { message: canonical } }] },
+      { json: [{ commit: { message: 'Autobuild-Build: stable-build-long' } }] },
+      { status: 404, json: { message: 'missing branch' } },
+    ])
+    expect(await forge.readCommitMessage('/absent', 'rewritten')).toBe(canonical)
+    expect(await forge.containsBuild('/absent', 'feature', 'stable-build')).toBe(true)
+    expect(calls[2]?.opts?.query).toEqual({ sha: 'feature', per_page: '100', page: '2' })
+    expect(await forge.containsBuild('/absent', 'feature', 'stable-build')).toBe(false)
+    await expect(forge.containsBuild('/absent', 'missing', 'stable-build')).rejects.toThrow()
+    await expect(forge.containsBuild('/absent', '--all', 'stable-build')).rejects.toThrow()
+  })
+})
