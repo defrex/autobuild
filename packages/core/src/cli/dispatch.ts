@@ -3519,11 +3519,12 @@ class DispatchLoop {
       valid: (frame) => this.dashboardBuilds.isCurrent(frame.buildSnapshot),
       admitted: () =>
         this.opts.once === true || this.refresh === undefined || this.refresh.admitted,
-      read: async () => {
+      nextPollMs: this.refresh?.intervalMs ?? 0,
+      read: async ({ fullEnrichment }) => {
         const buildSnapshot = await this.dashboardBuilds.refresh(
           configSnapshot.config,
           configSnapshot.revision,
-          this.opts.once !== true,
+          fullEnrichment,
         )
         const repositoryEvents = (
           await readRepositoryFacts(this.presentationStore, this.repoIdentity)

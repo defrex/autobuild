@@ -1506,6 +1506,7 @@ const SESSION_VIEW_PARTS = [
 ]
 
 interface SessionViewHarness {
+  frontend: DispatchFrontend
   store: MemoryBuildStore
   slug: string
   streamId: string
@@ -1522,6 +1523,7 @@ interface SessionViewHarness {
 
 async function seedSessionViewHarness(
   overrides: {
+    clock?: () => Date
     /** Wrap the store (for a slow or pruned readStream). */
     refreshScheduler?: import('./dashboard/refresh').RefreshScheduler
     wrapStore?: (store: MemoryBuildStore) => BuildStore
@@ -1587,6 +1589,7 @@ async function seedSessionViewHarness(
     repo,
     storeRef: 'memory',
     store: overrides.wrapStore ? overrides.wrapStore(store) : store,
+    ...(overrides.clock !== undefined ? { clock: overrides.clock } : {}),
     ...(overrides.refreshScheduler !== undefined
       ? { refreshScheduler: overrides.refreshScheduler }
       : {}),
@@ -1622,6 +1625,7 @@ async function seedSessionViewHarness(
   })
   const running = frontend.run()
   return {
+    frontend,
     store,
     slug,
     streamId: stream.id,
@@ -3087,4 +3091,156 @@ test('gated and always-read frontend frames agree after repository and build mut
     }
   }
   expect(await exercise(false)).toEqual(await exercise(true))
+})
+
+test('position changes enrich only affected rows while safety reads still refresh standalone metadata', async () => {
+  const { manualClock } = await import('../testing/fixed')
+  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+  const clock = manualClock()
+  const artifacts: string[] = []
+  const streams: string[] = []
+  const h = await seedSessionViewHarness({
+    clock,
+    refreshScheduler: new FakeRefreshScheduler(),
+    wrapStore: (store) =>
+      new Proxy(store, {
+        get(target, key) {
+          if (key === 'getArtifact')
+            return (slug: string, kind: string) => {
+              artifacts.push(slug)
+              return target.getArtifact(slug, kind)
+            }
+          if (key === 'listStreams')
+            return (scope: Parameters<BuildStore['listStreams']>[0]) => {
+              if (scope.kind === 'build') streams.push(scope.build)
+              return target.listStreams(scope)
+            }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }),
+  })
+  const control = h.frontend as unknown as {
+    refresh: { join(): Promise<void> }
+    renderOnce(): Promise<void>
+    model: DashboardModel
+  }
+  const poll = async () => {
+    await control.refresh.join()
+    await control.renderOnce()
+  }
+  try {
+    await waitFor(() => h.output().includes('watched'), 'metadata hydration')
+    const repo = '/session-view-repo'
+    const ticket = { source: 'fake', id: 'OTHER' }
+    await h.store.createBuild({
+      slug: 'other',
+      repo,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo, ticket, baseBranch: 'main' },
+      },
+    })
+    await poll()
+    artifacts.length = streams.length = 0
+    clock.advance(1000)
+    await h.store.append(h.slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner', host: 'host' },
+    })
+    await poll()
+    expect(artifacts).toEqual([h.slug])
+    expect(streams).toEqual([h.slug])
+    const position = await h.store.getRepoChangePosition(repo)
+    await h.store.putArtifact('other', {
+      kind: 'build-runner-effective-config',
+      content: '{}',
+      metadata: { revision: 17 },
+    })
+    expect(await h.store.getRepoChangePosition(repo)).toBe(position)
+    artifacts.length = streams.length = 0
+    clock.advance(8000)
+    await poll()
+    expect(artifacts).toEqual([])
+    clock.advance(1000)
+    await poll()
+    expect(artifacts.sort()).toEqual(['other', h.slug].sort())
+    expect(streams.sort()).toEqual(['other', h.slug].sort())
+    expect(control.model.builds.find((build) => build.slug === 'other')?.effectiveConfigRev).toBe(
+      17,
+    )
+  } finally {
+    await h.finish()
+  }
+})
+
+test('a frame superseded by confirmAbort is discarded without a durable render warning', async () => {
+  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+  const entered = deferred<void>()
+  const release = deferred<void>()
+  let gate = false
+  const h = await seedSessionViewHarness({
+    refreshScheduler: new FakeRefreshScheduler(),
+    wrapStore: (store) =>
+      new Proxy(store, {
+        get(target, key) {
+          if (key === 'getRepo')
+            return async (repo: string) => {
+              if (gate) {
+                gate = false
+                entered.resolve()
+                await release.promise
+              }
+              return target.getRepo(repo)
+            }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }),
+  })
+  const control = h.frontend as unknown as {
+    refresh: { join(): Promise<void> }
+    renderOnce(): Promise<void>
+    confirmAbort(slug: string): Promise<void>
+  }
+  let action: Promise<void> | undefined
+  try {
+    await waitFor(() => h.output().includes('watched'), 'race hydration')
+    await control.refresh.join()
+    await h.store.appendRepo('/session-view-repo', {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+    gate = true
+    const pending = control.renderOnce()
+    await entered.promise
+    action = control.confirmAbort(h.slug)
+    await waitFor(
+      async () =>
+        (await h.store.getEvents(h.slug)).some((event) => event.type === 'build.abort-requested'),
+      'abort refresh superseding frame',
+    )
+    release.resolve()
+    await pending
+    await action
+    const events = await h.store.getRepoEvents('/session-view-repo')
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'dispatcher.operator-reported' &&
+          event.payload.message.includes('dashboard render failed'),
+      ),
+    ).toEqual([])
+    expect(h.output()).not.toContain('superseded dashboard snapshot')
+    // The superseded position was not acknowledged: a following frame succeeds.
+    await control.renderOnce()
+  } finally {
+    release.resolve()
+    await action
+    await h.finish()
+  }
 })

@@ -312,7 +312,8 @@ export class DispatchFrontend {
       enabled: !this.opts.once,
       valid: (frame) => this.cache?.isCurrent(frame.snapshot) ?? false,
       admitted: () => this.refresh === undefined || this.refresh.admitted,
-      read: async () => {
+      nextPollMs: this.refresh?.intervalMs ?? 0,
+      read: async ({ fullEnrichment }) => {
         const repositoryEvents = await this.events()
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
@@ -336,11 +337,11 @@ export class DispatchFrontend {
           return undefined
         }
         this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
-        const snapshot = await this.cache.refresh(config, this.configRevision, !this.opts.once)
+        const snapshot = await this.cache.refresh(config, this.configRevision, fullEnrichment)
         if (!this.opts.once)
           await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
         await this.repositoryFeed.save()
-        if (!this.cache.isCurrent(snapshot)) throw new Error('superseded dashboard snapshot')
+        if (!this.cache.isCurrent(snapshot)) return undefined
         return { repositoryEvents, status, config, observationCount, snapshot }
       },
     })
