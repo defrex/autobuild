@@ -1562,6 +1562,63 @@ describe('GitHub stable build identity', () => {
     })
     expect(mutations(calls)).toEqual([])
   })
+  test.each([
+    { commitHeadline: null, commitBody: null },
+    { commitHeadline: null, commitBody: canonical },
+    { commitHeadline: headline, commitBody: null },
+  ])('legacy nullable native overrides are repaired once (%j)', async (overrides) => {
+    const { forge, calls } = makeForge([
+      message({ autoMergeRequest: { ...native, ...overrides } }),
+      inspect(),
+      ...gates,
+      applied('disablePullRequestAutoMerge'),
+      message(),
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: native }),
+      message({ autoMergeRequest: native }),
+    ])
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    const changes = mutations(calls)
+    expect(
+      changes.map((call) =>
+        (call.opts!.body as { query: string }).query.includes('disablePullRequestAutoMerge')
+          ? 'disable'
+          : 'enable',
+      ),
+    ).toEqual(['disable', 'enable'])
+    expect((changes[1]!.opts!.body as { variables: unknown }).variables).toEqual({
+      pullRequestId: 'PR_42',
+      mergeMethod: 'SQUASH',
+      expectedHeadOid: 'head-42',
+      commitHeadline: headline,
+      commitBody: canonical,
+    })
+    const before = calls.length
+    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
+      kind: 'applied',
+    })
+    expect(calls).toHaveLength(before + 1)
+    expect(mutations(calls)).toHaveLength(2)
+  })
+
+  test('nullable overrides after enable remain unconfirmed rather than being acknowledged', async () => {
+    const { forge } = makeForge([
+      message(),
+      inspect(false),
+      ...gates,
+      applied('enablePullRequestAutoMerge'),
+      message({ autoMergeRequest: { ...native, commitHeadline: null, commitBody: null } }),
+    ])
+    expect(
+      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
+    ).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('not confirmed') },
+    })
+  })
+
   test('cancellation during repair prevents re-enable', async () => {
     let guards = 0
     const { forge, calls } = makeForge([

@@ -357,7 +357,12 @@ const squashMessageData = z.object({
       viewerMergeHeadlineText: z.string(),
       viewerMergeBodyText: z.string(),
       autoMergeRequest: z
-        .object({ commitHeadline: z.string(), commitBody: z.string(), mergeMethod: z.string() })
+        .object({
+          // Legacy native requests leave overrides unset; GitHub returns null.
+          commitHeadline: z.string().nullable(),
+          commitBody: z.string().nullable(),
+          mergeMethod: z.string(),
+        })
         .nullable(),
     }),
   }),
@@ -1216,6 +1221,7 @@ export class GitHubForge implements Forge {
     return (
       view.autoMergeRequest !== null &&
       view.autoMergeRequest.mergeMethod === 'SQUASH' &&
+      view.autoMergeRequest.commitBody !== null &&
       view.autoMergeRequest.commitHeadline === view.viewerMergeHeadlineText &&
       view.autoMergeRequest.commitBody.trimEnd() ===
         withBuildTrailer(view.viewerMergeBodyText, buildSlug).trimEnd()
