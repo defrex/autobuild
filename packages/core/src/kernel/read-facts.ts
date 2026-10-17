@@ -386,6 +386,9 @@ import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openHarvestExecutionsReducer } from '../processes/harvest-execution-state'
 import { dispatchStatusReducer } from './dispatch-status'
 
+/** Shared current reads retain a fixed recent window. Historical holder
+ * correlations outside it use the explicitly parameterized cache. */
+export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
   openHarvest: ReturnType<typeof openHarvestExecutionsReducer.initial>
   attention: ReturnType<typeof repositoryAttentionReducer.initial>
@@ -420,13 +423,15 @@ export interface RepositoryReadAcc {
   status: ReturnType<ReturnType<typeof dispatchStatusReducer>['initial']>
   run?: string
   scan?: Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }>['payload']
+  recentRuns: [string, DispatcherRunFacts][]
   latestRun?: string
   latestStoppedRun?: string
   publications: Extract<RepositoryEvent, { type: 'orchestrator.sandbox.published' }>[]
 }
 export const repositoryReadFactsReducer = defineReducer({
   version:
-    2 +
+    1 +
+    dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     repositoryAttentionReducer.version +
     dispatchSettingsReducer.version +
@@ -437,6 +442,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxStatesReducer.version +
     dispatchStatusReducer('version').version,
   initial: (): RepositoryReadAcc => ({
+    recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
     attention: repositoryAttentionReducer.initial(),
     dismissedThrough: 0,
@@ -522,6 +528,25 @@ export const repositoryReadFactsReducer = defineReducer({
       if (event.type === 'dispatcher.ticket-scan-completed') acc.scan = event.payload
       if (event.type === 'dispatcher.run-started') acc.latestRun = event.payload.run
       if (event.type === 'dispatcher.run-stopped') acc.latestStoppedRun = event.payload.run
+      if (
+        event.type.startsWith('dispatcher.') &&
+        'run' in event.payload &&
+        typeof event.payload.run === 'string'
+      ) {
+        const run = event.payload.run
+        let entry = acc.recentRuns.find(([id]) => id === run)
+        if (!entry) {
+          entry = [run, {}]
+          acc.recentRuns.push(entry)
+        }
+        foldDispatcherRunFact(entry[1], event)
+        while (acc.recentRuns.length > RECENT_DISPATCH_RUN_LIMIT) {
+          const index = acc.recentRuns.findIndex(
+            ([id]) => id !== acc.latestRun && id !== acc.latestStoppedRun,
+          )
+          acc.recentRuns.splice(index, 1)
+        }
+      }
       if (event.type === 'orchestrator.sandbox.published') {
         acc.publications = acc.publications.filter(
           (prior) =>
@@ -552,6 +577,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxes: sandboxStatesReducer.finish(acc.sandboxes),
     status: acc.run ? dispatchStatusReducer(acc.run).finish(acc.status) : undefined,
     scan: acc.scan,
+    recentRuns: structuredClone(acc.recentRuns),
     latestRun: acc.latestRun,
     latestStoppedRun: acc.latestStoppedRun,
     publications: structuredClone(acc.publications),
@@ -576,29 +602,36 @@ export interface DispatcherRunFacts {
   stop?: RepositoryEvent
   tick?: RepositoryEvent
   completed?: RepositoryEvent
+  boundary?: 'dispatcher.tick-started' | 'dispatcher.tick-completed' | 'dispatcher.tick-failed'
   stopRequest?: Extract<RepositoryEvent, { type: 'dispatcher.stop-requested' }>
 }
 export function dispatcherRunFactsReducer(run: string) {
   return defineReducer<DispatcherRunFacts, RepositoryEvent, DispatcherRunFacts>({
-    version: 1,
+    version: 2,
     initial: () => ({}),
     fold(acc, events) {
       for (const event of events) {
         if (!('run' in event.payload) || event.payload.run !== run) continue
-        if (event.type === 'dispatcher.run-started') {
-          acc.start ??= event
-          acc.latestStart = event
-        } else if (event.type === 'dispatcher.run-stopped') acc.stop = event
-        else if (event.type === 'dispatcher.stop-requested') acc.stopRequest ??= event
-        else if (
-          event.type === 'dispatcher.tick-completed' ||
-          event.type === 'dispatcher.tick-failed'
-        ) {
-          acc.tick = event
-          if (event.type === 'dispatcher.tick-completed') acc.completed = event
-        }
+        foldDispatcherRunFact(acc, event)
       }
     },
     finish: (acc) => structuredClone(acc),
   })
+}
+
+function foldDispatcherRunFact(acc: DispatcherRunFacts, event: RepositoryEvent): void {
+  if (event.type === 'dispatcher.run-started') {
+    acc.start ??= event
+    acc.latestStart = event
+  } else if (event.type === 'dispatcher.run-stopped') acc.stop = event
+  else if (event.type === 'dispatcher.stop-requested') acc.stopRequest ??= event
+  else if (
+    event.type === 'dispatcher.tick-started' ||
+    event.type === 'dispatcher.tick-completed' ||
+    event.type === 'dispatcher.tick-failed'
+  ) {
+    acc.boundary = event.type
+    if (event.type !== 'dispatcher.tick-started') acc.tick = event
+    if (event.type === 'dispatcher.tick-completed') acc.completed = event
+  }
 }

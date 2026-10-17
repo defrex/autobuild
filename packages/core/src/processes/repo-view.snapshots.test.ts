@@ -3,7 +3,11 @@ import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { SqliteBuildStore } from '../store/local/store'
 import { MemoryBlobStore } from '../store/memory'
-import { reducedReadBudget } from '../testing/reduced-read-budget'
+import {
+  reducedReadBudget,
+  countHistoricalRows,
+  type ReducedReadCosts,
+} from '../testing/reduced-read-budget'
 import { readBuildFacts } from '../store/reduced-reads'
 import { KERNEL, humanActor } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
@@ -12,7 +16,7 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
   const database = new Database(':memory:')
   const blobs = new MemoryBlobStore()
   const store = new SqliteBuildStore({ database, blobs })
-  const costs = { events: 0, metadata: 0, bytes: 0 }
+  const costs: ReducedReadCosts = { events: 0, metadata: 0, bytes: 0, historicalEvents: 0 }
   const wrapped = new WeakSet<object>()
   for (const name of ['query', 'prepare'] as const) {
     const original = database[name].bind(database)
@@ -31,6 +35,11 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
               const events =
                 /\bFROM\s+["`]?(?:repo_)?events\b/i.test(sql) && !/\b(?:max|count)\s*\(/i.test(sql)
               costs[events ? 'events' : 'metadata'] += rows
+              if (events)
+                costs.historicalEvents += countHistoricalRows(
+                  costs,
+                  key === 'get' ? [result] : result,
+                )
               costs.bytes += Buffer.byteLength(JSON.stringify(result) ?? '')
             }
             return result

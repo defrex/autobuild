@@ -165,13 +165,11 @@ export async function readTerminalGuard(
   return result.value as { diagnostic?: string }
 }
 
-export async function readOpenTick(store: Reader, repo: string, run: string) {
-  const result = await store.getReducerValue(
-    { kind: 'repo', repo },
-    { reducer: 'openTick', args: { run } },
+export async function readOpenTick(store: Reader, repo: string, run: string, historical = true) {
+  return (
+    (await readDispatcherRunFacts(store, repo, run, historical)).value.boundary ===
+    'dispatcher.tick-started'
   )
-  if (typeof result.value !== 'boolean') throw new Error('invalid openTick value')
-  return result.value
 }
 export async function readPinnedAssets(store: Reader, slug: string) {
   return readValue<ReturnType<typeof import('./ticket-assets').pinnedAssetsReducer.finish>>(
@@ -207,7 +205,27 @@ export function readBuildDigests(store: Pick<BuildStore, 'getRepoBuildDigests'>,
   return store.getRepoBuildDigests(repo)
 }
 
-export async function readDispatcherRunFacts(store: Reader, repo: string, run: string) {
+/** Current/recent runs use the shared cache. Set historical=false only when
+ * checking this process's fresh invocation, whose missing start means no prior
+ * lifecycle facts; arbitrary older holder IDs must retain historical recovery. */
+export async function readDispatcherRunFacts(
+  store: Reader,
+  repo: string,
+  run: string,
+  historical = true,
+) {
+  const repository = await readValue<RepositoryReadFacts>(
+    store,
+    { kind: 'repo', repo },
+    'repositoryReadFacts',
+  )
+  const recent = repository.value.recentRuns.find(([id]) => id === run)
+  if ((recent && recent[1].start !== undefined) || !historical)
+    return {
+      cursor: repository.cursor,
+      value: recent?.[1] ?? ({} as import('../kernel/read-facts').DispatcherRunFacts),
+    }
+
   const result = await store.getReducerValue(
     { kind: 'repo', repo },
     { reducer: 'dispatcherRunFacts', args: { run } },

@@ -133,7 +133,7 @@ test('missing starts permit only one full lookup per holder', async () => {
   await f.store.claimRepoLease(f.repo, 'missing', 60000)
   for (let i = 0; i < 3; i++)
     expect(await f.resolver.refresh('self', 'missing', f.now())).toBe('missing')
-  expect(f.reads()).toEqual({ fullReads: 0, boundedReads: 1 })
+  expect(f.reads()).toEqual({ fullReads: 0, boundedReads: 2 })
 })
 
 test('frontend warm history never correlates; cold history remembers a holder once', async () => {

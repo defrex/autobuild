@@ -168,7 +168,8 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   // chooses/awaits process termination, avoiding check-then-append races.
   const completed = child.exited.then(async (exitCode): Promise<DispatchChildResult> => {
     const processSignal = child.signalCode === null ? requestedSignal : String(child.signalCode)
-    const recorded = (await readDispatcherRunFacts(deps.store, deps.repo, deps.run)).value.stop
+    const recorded = (await readDispatcherRunFacts(deps.store, deps.repo, deps.run, false)).value
+      .stop
     if (recorded?.type === 'dispatcher.run-stopped') {
       const signal = processSignal ?? recorded.payload.signal
       return {
@@ -248,7 +249,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
           open =
             record?.tick?.run === deps.run
               ? record.tick.open !== undefined
-              : await readOpenTick(deps.store, deps.repo, deps.run)
+              : await readOpenTick(deps.store, deps.repo, deps.run, false)
         } catch {
           // Unreadable telemetry cannot authorize an unsafe kill.
         }

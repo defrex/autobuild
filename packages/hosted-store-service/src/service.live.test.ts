@@ -1,3 +1,4 @@
+import { countHistoricalRows, type ReducedReadCosts } from '@defrex/autobuild/testing'
 import { resolveReducerValue } from '@defrex/autobuild/store-adapter'
 import {
   PostgresProjectRegistry,
@@ -817,7 +818,7 @@ if (testUrl)
 
 /** Count returned SQL rows, including auth/config paths and cache failures. */
 function countStoreRows(store: BuildStore) {
-  const costs = { events: 0, metadata: 0, bytes: 0 }
+  const costs: ReducedReadCosts = { events: 0, metadata: 0, bytes: 0, historicalEvents: 0 }
   const run = Reflect.get(store, 'run').bind(store)
   Reflect.set(store, 'run', (body: (q: unknown) => Promise<unknown>) =>
     run((q: unknown) =>
@@ -830,6 +831,7 @@ function countStoreRows(store: BuildStore) {
                 Promise.resolve(Reflect.apply(method, target, args)).then((rows) => {
                   const events = /SELECT \* FROM (?:repo_)?events\b/i.test(String(args[0]))
                   costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+                  if (events) costs.historicalEvents += countHistoricalRows(costs, rows)
                   costs.bytes += Buffer.byteLength(JSON.stringify(rows) ?? '')
                   return rows
                 })
@@ -840,6 +842,7 @@ function countStoreRows(store: BuildStore) {
             const events = /SELECT \* FROM (?:repo_)?events\b/i.test(args[0].join(' '))
             return Promise.resolve(result).then((rows) => {
               costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+              if (events) costs.historicalEvents += countHistoricalRows(costs, rows)
               costs.bytes += Buffer.byteLength(JSON.stringify(rows) ?? '')
               return rows
             })

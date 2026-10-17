@@ -1,3 +1,9 @@
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { abDispatch } from '../cli/dispatch'
+import { randomUuids } from '../ids'
+import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { Dispatcher } from '../processes/dispatcher'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -21,6 +27,7 @@ import {
   readRepositoryAttention,
   readBuildDigests,
   readDispatcherRunFacts,
+  readOpenTick,
 } from '../store/reduced-reads'
 import { RepoViewStore } from '../processes/repo-view'
 import { abWatch, decodeCursor } from '../cli/watch'
@@ -31,6 +38,8 @@ export interface ReducedReadCosts {
   events: number
   metadata: number
   bytes: number
+  historicalEvents: number
+  history?: { repo: string; through: number }
 }
 const repo = '/reduced-read-budget'
 const slug = 'reduced-budget'
@@ -133,12 +142,6 @@ export async function reducedReadBudget(opts: {
     )
     if (repositoryBytes !== undefined) expect(factsBytes).toBeLessThan(repositoryBytes + 512)
     repositoryBytes = factsBytes
-    await readDispatcherRunFacts(store, repo, 'budget-run')
-    await readDispatcherRunFacts(
-      store,
-      repo,
-      `old-${length}-${String(length - 1).padStart(4, '0')}`,
-    )
     // Warm persisted values independently of any consumer instance.
     await readBuildStreamSeed(store, slug)
     await readBuildFacts(store, slug)
@@ -153,6 +156,7 @@ export async function reducedReadBudget(opts: {
         return typeof value === 'function' ? value.bind(target) : value
       },
     })
+    await coldDispatchOnceBudget(store, cold, length, costs)
     reset()
     const view = new RepoViewStore(cold, { repo })
     await view.refresh()
@@ -336,4 +340,123 @@ export async function reducedReadBudget(opts: {
     expect(costs.events).toBeLessThanOrEqual(2)
     expect(costs.metadata).toBeLessThan(50)
   }
+}
+
+/** Exercise the real outer DispatchLoop with a new invocation identity. Only
+ * shared values are warmed: no parameterized run value may hide a cold replay. */
+async function coldDispatchOnceBudget(
+  store: BuildStore,
+  cold: BuildStore,
+  length: number,
+  costs: ReducedReadCosts,
+) {
+  const onceRepo = 'https://github.com/budget/cold-once'
+  await store.ensureRepo(onceRepo)
+  for (let i = 0; i < length; i++)
+    await store.appendRepo(onceRepo, {
+      actor: humanActor('human'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+  const boundary = (await readRepositoryFacts(store, onceRepo)).cursor
+  const directory = await mkdtemp(join(tmpdir(), 'ab-cold-once-'))
+  try {
+    await writeFile(
+      join(directory, 'autobuild.toml'),
+      `[roles.default]
+runtime = "claude"
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+`,
+    )
+    const checked = new Proxy(cold, {
+      get(target, key) {
+        if (key === 'getReducerValue')
+          return (...args: Parameters<BuildStore['getReducerValue']>) => {
+            expect(['dispatcherRunFacts', 'openTick']).not.toContain(args[1].reducer)
+            return target.getReducerValue(...args)
+          }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    costs.events = 0
+    costs.metadata = 0
+    costs.bytes = 0
+    costs.historicalEvents = 0
+    costs.history = { repo: onceRepo, through: boundary }
+    const run = `never-read-once-${length}`
+    await abDispatch({
+      targetRepo: directory,
+      repo: onceRepo,
+      env: {},
+      exec: async (args) =>
+        args[1] === 'remote'
+          ? { stdout: `${onceRepo}.git\n`, stderr: '', exitCode: 0 }
+          : {
+              stdout: `${directory}/.git\n${directory}/.git\n${directory}\n`,
+              stderr: '',
+              exitCode: 0,
+            },
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      plain: true,
+      kernelRunId: run,
+      storeRef: '/budget',
+      wire: () => ({
+        store: checked,
+        storeRef: '/budget',
+        tickets: new FakeTicketSource([]),
+        forge: new FakeForge(),
+        workspaces: new FakeWorkspaceProvider({ root: '/once-workspaces', mode: 'logical' }),
+        buildExecution: {
+          start: () => {
+            throw new Error('no builds in once budget')
+          },
+        },
+        runtimes: {
+          claude: {
+            runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+            servesModels: [],
+          },
+        },
+        ids: sequentialIds(),
+        uuids: randomUuids(),
+        clock: () => new Date(1000),
+      }),
+    })
+    const finished = (await readRepositoryFacts(checked, onceRepo)).value.recentRuns.find(
+      ([id]) => id === run,
+    )?.[1]
+    expect(finished?.completed?.type).toBe('dispatcher.tick-completed')
+    expect(finished?.stop?.type).toBe('dispatcher.run-stopped')
+    // The same fresh invocation may fail before writing its start fact.
+    expect(
+      (await readDispatcherRunFacts(checked, onceRepo, `never-started-${length}`, false)).value,
+    ).toEqual({})
+    expect(await readOpenTick(checked, onceRepo, `never-started-${length}`, false)).toBe(false)
+    expect(costs.historicalEvents).toBe(0)
+    expect(costs.events).toBeLessThanOrEqual(32)
+    expect(costs.metadata).toBeLessThan(300)
+    expect(costs.bytes).toBeLessThan(1_000_000)
+  } finally {
+    delete costs.history
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+/** SQL result instrumentation handles both raw object rows and Drizzle values. */
+export function countHistoricalRows(costs: ReducedReadCosts, rows: unknown): number {
+  if (!costs.history || !Array.isArray(rows)) return 0
+  return rows.filter((row) => {
+    const repo = Array.isArray(row) ? row[0] : row?.repo
+    const seq = Number(Array.isArray(row) ? row[1] : row?.seq)
+    return repo === costs.history!.repo && seq <= costs.history!.through
+  }).length
 }

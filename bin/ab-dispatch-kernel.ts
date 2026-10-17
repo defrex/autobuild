@@ -62,7 +62,8 @@ try {
     const opened = openStoreForRepoState(state, { env: process.env })
     try {
       await opened.store.ensureRepo(state.repo)
-      const facts = (await readDispatcherRunFacts(opened.store, state.repo, options.run)).value
+      const facts = (await readDispatcherRunFacts(opened.store, state.repo, options.run, false))
+        .value
       if (!facts.stop) {
         await opened.store.appendRepo(state.repo, {
           actor: DISPATCHER,

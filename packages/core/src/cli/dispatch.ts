@@ -2850,12 +2850,12 @@ class DispatchLoop {
       await this.appendStatus(completed)
     } else {
       const startedAt = this.tickStartedAt!
-      const publish = shouldPublishTickFromFacts(
-        merged,
-        this.repoView.repositoryFacts(),
-        (await readDispatcherRunFacts(this.repoView, this.repoIdentity, this.runId)).value,
-        startedAt,
-      )
+      const facts = this.repoView.repositoryFacts()
+      const recent = facts.recentRuns.find(([run]) => run === this.runId)?.[1]
+      const runFacts = recent?.start
+        ? recent
+        : (await readDispatcherRunFacts(this.repoView, this.repoIdentity, this.runId)).value
+      const publish = shouldPublishTickFromFacts(merged, facts, runFacts, startedAt)
       const events: RepositoryEventWrite[] = publish
         ? [
             {

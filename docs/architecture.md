@@ -222,9 +222,13 @@ selectors reconstruct from a JSON ledger. Repository facts retain configuration,
 control, Harvest, and dispatcher run correlations. Lease metadata and clocks stay
 outside event reducers: liveness combines durable run facts with the current
 repository record and observation time, including an older lease holder hidden
-by a newer run. The shared repository value keeps only latest run identifiers;
-parameterized `dispatcherRunFacts` values retain bounded evidence for the requested
-run, so stopped dispatcher history is not copied into every current read.
+by a newer run. The shared repository value keeps a bounded recent-run window, including the
+latest started and stopped runs. Fresh invocations use those shared facts for
+first-tick publication, liveness and supervision without creating a cold
+parameterized cache. Older holder correlations can use `dispatcherRunFacts` for
+the requested historical run. A never-started fresh invocation does not request
+historical correlation. Stopped dispatcher history is not copied into every
+current read.
 
 **Operator and CLI reads.** Build listings and details, repository and Harvest
 status, dispatcher decisions, operator API queries, MCP delegation and web

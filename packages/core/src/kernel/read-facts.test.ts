@@ -108,13 +108,22 @@ test('repository run correlation stays bounded as stopped run history grows', as
       type: 'dispatcher.run-stopped',
       payload: { run, outcome: 'normal' },
     })
-    if (i === 0) baseline = JSON.stringify((await readRepositoryFacts(store, 'repo')).value).length
+    if (i === 255)
+      baseline = JSON.stringify((await readRepositoryFacts(store, 'repo')).value).length
   }
   const facts = (await readRepositoryFacts(store, 'repo')).value
-  expect(JSON.stringify(facts).length).toBeLessThanOrEqual(baseline + 32)
+  expect(JSON.stringify(facts).length).toBeLessThanOrEqual(baseline + 512)
+  expect(facts.recentRuns).toHaveLength(16)
   const owner = (await readDispatcherRunFacts(store, 'repo', 'owner')).value
   expect(owner.start?.type).toBe('dispatcher.run-started')
   expect(JSON.stringify(owner).length).toBeLessThan(1500)
+  // A late stop for an evicted owner must not replace its historical identity
+  // with an incomplete recent entry.
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'owner', outcome: 'normal' },
+  })
   const now = new Date()
   expect((await readDispatcherLiveness(store, 'repo', now)).dispatcher).toEqual(
     projectDispatcherLiveness(await store.getRepo('repo'), await store.getRepoEvents('repo'), now),
