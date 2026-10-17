@@ -13,8 +13,11 @@ export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
 }
 
 export const dispatchFrontendReducer = defineReducer({
-  version: 1,
-  initial: (): { retained: RepositoryEvent[] } => ({ retained: [] }),
+  version: 2,
+  initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean } => ({
+    retained: [],
+    incompleteIdentities: true,
+  }),
   fold(acc, events: readonly RepositoryEvent[]) {
     const facts = new Map(acc.retained.map((event) => [event.seq, event]))
     for (const event of events) {
@@ -86,6 +89,7 @@ export class DispatchRepositoryFeed {
     const next = this.tail.then(async () => {
       let cursor = this.cursor
       let retained = this.retained
+      let incompleteIdentities = this.incompleteIdentities
       let delta: RepositoryEvent[]
       if (!this.ready) {
         if ((await this.store.getRepo(this.repo)) === null) {
@@ -103,8 +107,12 @@ export class DispatchRepositoryFeed {
         let restored = false
         if (snapshot && snapshot.cursor <= high) {
           try {
-            const state = snapshot.state as { retained: RepositoryEvent[] }
-            if (!Array.isArray(state.retained)) throw new Error('invalid projection')
+            const state = snapshot.state as {
+              retained: RepositoryEvent[]
+              incompleteIdentities: boolean
+            }
+            if (!Array.isArray(state.retained) || typeof state.incompleteIdentities !== 'boolean')
+              throw new Error('invalid projection')
             this.validate(state.retained, 0, false)
             if (
               state.retained.some(
@@ -114,6 +122,7 @@ export class DispatchRepositoryFeed {
               )
             )
               throw new Error('invalid retained fact')
+            incompleteIdentities = state.incompleteIdentities
             retained = state.retained
             cursor = snapshot.cursor
             restored = true
@@ -124,6 +133,7 @@ export class DispatchRepositoryFeed {
         if (!restored) {
           const seed = await this.store.getRepoStateEvents(this.repo)
           this.validate(seed, 0, false)
+          incompleteIdentities = true
           retained = dispatchFrontendReducer.reduce(seed)
           cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
         }
@@ -138,16 +148,17 @@ export class DispatchRepositoryFeed {
             (a, b) => a.seq - b.seq,
           )
         }
-        this.incompleteIdentities = !restored
       } else {
         delta = await this.store.getRepoEvents(this.repo, cursor)
         this.validate(delta, cursor, true)
         // A standby correlation may have supplied an older identity while the
         // delta read was pending. Keep those memoized facts in this commit.
         retained = this.retained
+        incompleteIdentities = this.incompleteIdentities
       }
-      retained = dispatchFrontendReducer.advance({ retained }, delta).retained
+      retained = dispatchFrontendReducer.advance({ retained, incompleteIdentities }, delta).retained
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
+      this.incompleteIdentities = incompleteIdentities
       this.retained = retained
       this.ready = true
       this.recovery = false
@@ -158,27 +169,28 @@ export class DispatchRepositoryFeed {
     return next.then(() => result)
   }
 
-  remember(events: readonly RepositoryEvent[]): void {
+  remember(events: readonly RepositoryEvent[], complete = false): void {
     this.retained = dispatchFrontendReducer.advance(
-      { retained: this.retained },
+      { retained: this.retained, incompleteIdentities: this.incompleteIdentities },
       events.filter((e) => e.seq <= this.cursor),
     ).retained
+    if (complete) this.incompleteIdentities = false
   }
 
   async save(force = false): Promise<void> {
     if (!this.ready || (!force && this.clock().getTime() - this.savedAt < 5000)) return
-    if (
-      await persistReducerSnapshot(
-        this.store,
-        { kind: 'repo', repo: this.repo },
-        'dispatchFrontend',
-        {
-          version: dispatchFrontendReducer.version,
-          cursor: this.cursor,
-          state: { retained: this.retained },
-        },
-      )
+    // A rejected equal-cursor put and an unavailable store still cost a
+    // request. Bound attempts, not just successful writes, on quiet polls.
+    this.savedAt = this.clock().getTime()
+    await persistReducerSnapshot(
+      this.store,
+      { kind: 'repo', repo: this.repo },
+      'dispatchFrontend',
+      {
+        version: dispatchFrontendReducer.version,
+        cursor: this.cursor,
+        state: { retained: this.retained, incompleteIdentities: this.incompleteIdentities },
+      },
     )
-      this.savedAt = this.clock().getTime()
   }
 }

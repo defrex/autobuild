@@ -147,7 +147,7 @@ export class DispatchFrontend {
     this.repositoryFeed = new DispatchRepositoryFeed(opts.store, opts.repo, this.clock)
     this.standbyResolver = new StandbyIdentityResolver(opts.store, opts.repo, {
       allowLookup: () => this.repositoryFeed.incompleteIdentities,
-      remember: (events) => this.repositoryFeed.remember(events),
+      remember: (events, complete) => this.repositoryFeed.remember(events, complete),
     })
     this.keyboard = createKeyboardProtocol(
       (chunk) => opts.terminal.write(chunk),

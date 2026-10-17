@@ -592,6 +592,7 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$: object",
   ],
   "dispatchFrontend": [
+    "$.incompleteIdentities: boolean",
     "$.retained: array",
     "$.retained[].actor.kind: string",
     "$.retained[].actor.user: string",

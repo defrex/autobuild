@@ -34,7 +34,21 @@ const tickCounters = {
 export async function dispatchReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
   const repo = '/dashboard-read-budget'
   await backing.ensureRepo(repo)
-  const metrics = { rows: 0, events: 0, state: 0, snapshots: 0, digests: 0, records: 0, high: 0 }
+  const metrics = {
+    rows: 0,
+    events: 0,
+    state: 0,
+    snapshots: 0,
+    digests: 0,
+    records: 0,
+    high: 0,
+    puts: 0,
+  }
+  const putSnapshot = backing.putReducerSnapshot.bind(backing)
+  backing.putReducerSnapshot = async (...args) => {
+    metrics.puts++
+    return putSnapshot(...args)
+  }
   const getEvents = backing.getRepoEvents.bind(backing)
   const getState = backing.getRepoStateEvents.bind(backing)
   const getSnapshot = backing.getReducerSnapshot.bind(backing)
@@ -132,7 +146,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
   const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
   await refresh()
   const initialSize = JSON.stringify(
-    (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.state,
+    (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.state,
   ).length
   let recordReads: number | undefined
   try {
@@ -155,6 +169,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       const before = { ...metrics }
       now += 6000
       await refresh()
+      expect(metrics.puts - before.puts).toBe(1)
       expect(metrics.rows - before.rows).toBe(128)
       expect(metrics.events - before.events).toBe(1)
       expect(metrics.state - before.state).toBe(0)
@@ -164,7 +179,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       recordReads ??= metrics.records - before.records
       expect(metrics.records - before.records).toBe(recordReads)
       const size = JSON.stringify(
-        (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.state,
+        (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.state,
       ).length
       // First advancement adds the child's identity; ticks add nothing.
       expect(size).toBeLessThan(initialSize + 1000)
@@ -172,6 +187,15 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       await refresh()
       expect(metrics.rows).toBe(rows)
     }
+    // Advance the clock across rejected equal-cursor saves. A standby can
+    // remain quiet indefinitely; each 500 ms frame must not upload its cache.
+    const beforeQuiet = { ...metrics }
+    for (let poll = 0; poll < 40; poll++) {
+      now += 500
+      await refresh()
+    }
+    expect(metrics.puts - beforeQuiet.puts).toBe(4)
+    expect(metrics.rows).toBe(beforeQuiet.rows)
   } finally {
     finish({ outcome: 'normal', exitCode: 0 })
     await running

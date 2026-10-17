@@ -57,7 +57,7 @@ test('persisted projection advances past discarded events and restarts with only
   })
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
-  const snapshot = await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1)
+  const snapshot = await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2)
   expect(snapshot?.cursor).toBe(3)
   expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
   await setting(store, true)
@@ -79,9 +79,9 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
     await start(store, 'old')
     if (bad !== 'missing')
       await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
-        version: bad === 'version' ? 2 : 1,
+        version: bad === 'version' ? 1 : 2,
         cursor: bad === 'ahead' ? 999 : 1,
-        state: bad === 'malformed' ? { retained: [{}] } : { retained: [] },
+        state: { retained: bad === 'malformed' ? [{}] : [], incompleteIdentities: true },
       })
     if (bad === 'unreadable')
       store.getReducerSnapshot = async () => {
@@ -264,9 +264,9 @@ test('foreign repository cache facts are rejected and missing repositories are n
   await store.ensureRepo(repo)
   const fact = await setting(store)
   await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 1,
+    version: 2,
     cursor: 1,
-    state: { retained: [{ ...fact, repo: '/other' }] },
+    state: { retained: [{ ...fact, repo: '/other' }], incompleteIdentities: true },
   })
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
@@ -286,7 +286,7 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
   await current.save(true)
   await stale.save(true)
   expect(
-    (await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.cursor,
+    (await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.cursor,
   ).toBe(2)
 })
 
@@ -312,8 +312,122 @@ test('a standby identity remembered during a pending refresh survives its commit
   }
   const pending = feed.refresh()
   await entered
-  feed.remember([owner])
+  feed.remember([owner], true)
   release()
   await pending
   expect(feed.identities.map((e) => e.seq)).toEqual([1, 2])
+  expect(feed.incompleteIdentities).toBe(false)
+})
+
+for (const outcome of ['equal-cursor', 'unavailable']) {
+  test(`quiet refreshes throttle ${outcome} snapshot attempts and force a final save`, async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await setting(store)
+    let now = 0
+    let puts = 0
+    let writes = 0
+    const put = store.putReducerSnapshot.bind(store)
+    store.putReducerSnapshot = async (...args) => {
+      puts++
+      if (outcome === 'unavailable') throw new Error('offline')
+      const written = await put(...args)
+      if (written) writes++
+      return written
+    }
+    const feed = new DispatchRepositoryFeed(store, repo, () => new Date(now))
+    await feed.warm()
+    for (let poll = 0; poll < 40; poll++) {
+      now += 500
+      await feed.refresh()
+    }
+    expect(puts).toBe(5)
+    expect(writes).toBe(outcome === 'equal-cursor' ? 1 : 0)
+    await feed.save(true)
+    expect(puts).toBe(6)
+  })
+}
+
+test('a restarted partial identity cache correlates an older takeover holder and persists complete history', async () => {
+  const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(repo)
+  await start(store, 'older-owner')
+  await start(store, 'self')
+  await store.claimRepoLease(repo, 'self', 60000)
+  const initial = new DispatchRepositoryFeed(store, repo, clock)
+  await initial.warm()
+  expect(initial.identities.map((e) => e.seq)).toEqual([2])
+  expect(initial.incompleteIdentities).toBe(true)
+
+  const restarted = new DispatchRepositoryFeed(store, repo, clock)
+  const state = store.getRepoStateEvents.bind(store)
+  let bounded = 0
+  let full = 0
+  const events = store.getRepoEvents.bind(store)
+  store.getRepoStateEvents = async (repo) => {
+    bounded++
+    return state(repo)
+  }
+  store.getRepoEvents = async (repo, since = 0) => {
+    if (since === 0) full++
+    return events(repo, since)
+  }
+  await restarted.warm()
+  expect([bounded, full]).toEqual([0, 0])
+  expect(restarted.incompleteIdentities).toBe(true)
+  const resolver = new StandbyIdentityResolver(store, repo, {
+    allowLookup: () => restarted.incompleteIdentities,
+    remember: (events, complete) => restarted.remember(events, complete),
+  })
+  resolver.ingest(restarted.identities)
+  expect(await resolver.refresh('self', undefined, clock())).toBeUndefined()
+  await store.releaseRepoLease(repo, 'self')
+  await store.claimRepoLease(repo, 'older-owner', 60000)
+  expect(await resolver.refresh('self', undefined, clock())).toContain('older-owner; pid 1;')
+  expect([bounded, full]).toEqual([1, 1])
+  expect(restarted.incompleteIdentities).toBe(false)
+  await resolver.refresh('self', undefined, clock())
+  expect([bounded, full]).toEqual([1, 1])
+
+  // Snapshot puts are monotone: a later journal delta publishes the newly
+  // correlated identities and completeness mark at its advanced cursor.
+  await setting(store)
+  await restarted.refresh()
+  await restarted.save(true)
+  const complete = new DispatchRepositoryFeed(store, repo, clock)
+  await complete.warm()
+  expect(complete.incompleteIdentities).toBe(false)
+  const warm = new StandbyIdentityResolver(store, repo, {
+    allowLookup: () => complete.incompleteIdentities,
+    remember: (events, all) => complete.remember(events, all),
+  })
+  warm.ingest(complete.identities)
+  expect(await warm.refresh('self', undefined, clock())).toContain('older-owner; pid 1;')
+  expect([bounded, full]).toEqual([1, 1])
+})
+
+test('bounded identity correlation keeps the persisted history incomplete', async () => {
+  const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(repo)
+  await start(store, 'older')
+  await start(store, 'self')
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  // A new holder is visible to the bounded lookup before the next feed delta.
+  await start(store, 'new-holder')
+  await store.claimRepoLease(repo, 'new-holder', 60000)
+  const resolver = new StandbyIdentityResolver(store, repo, {
+    allowLookup: () => feed.incompleteIdentities,
+    remember: (events, complete) => feed.remember(events, complete),
+  })
+  resolver.ingest(feed.identities)
+  expect(await resolver.refresh('self', undefined, clock())).toContain('new-holder; pid 1;')
+  expect(feed.incompleteIdentities).toBe(true)
+  await feed.refresh()
+  await feed.save(true)
+  const restarted = new DispatchRepositoryFeed(store, repo, clock)
+  await restarted.warm()
+  expect(restarted.incompleteIdentities).toBe(true)
 })
