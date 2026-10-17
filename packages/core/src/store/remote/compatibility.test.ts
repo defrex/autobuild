@@ -119,3 +119,14 @@ test('a protocol-4 service on 0.14 retains the published 0.13 protocol-3 clients
   }
   expect(clientIdentityError('0.14.0', '4', '0.14.0', '4')).toBeUndefined()
 })
+
+test('the 0.14 historical line retains protocol 4 when a newer service changes protocol', () => {
+  expect(RELEASE_LINE_PROTOCOLS['0.14']).toBe('4')
+  for (const client of ['0.14.0', '0.14.999']) {
+    expect(clientIdentityError(client, '4', '0.15.0', '5')).toBeUndefined()
+    for (const protocol of ['3', '5'])
+      expect(clientIdentityError(client, protocol, '0.15.0', '5')).toContain(
+        'unsupported protocol identity',
+      )
+  }
+})
