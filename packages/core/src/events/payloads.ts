@@ -34,6 +34,23 @@ import {
   type VerifyOutcome,
 } from '../ontology'
 
+const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+export const reconcileTransactionSchema = z.strictObject({
+  id: z.string().min(1),
+  attempt: z.number().int().positive(),
+  branch: z.string().min(1),
+  oldHead: gitOid,
+  oldBase: gitOid,
+  targetBase: gitOid,
+  changeSha: gitOid,
+  workspaceHead: gitOid,
+  localBranchHead: gitOid,
+})
+const archiveEntry = z.strictObject({
+  ref: z.string().startsWith('refs/autobuild/archive/'),
+  sha: gitOid,
+})
+
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
 /** Fan-out provenance shared by the auto-merge command facts: the repository
@@ -377,6 +394,7 @@ export const eventPayloadSchemas = {
     }),
     z.strictObject({
       operation: z.literal('reconcile'),
+      rewrite: reconcileTransactionSchema.extend({ conflicted: z.boolean() }).optional(),
       branch: z.string().min(1),
       sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
       artifact: artifactRefSchema,
@@ -620,10 +638,27 @@ export const eventPayloadSchemas = {
     baseSha: z.string().min(1),
   }),
   'reconcile.started': z.strictObject({ attempt, baseSha: z.string().min(1) }),
-  'reconcile.completed': z.strictObject({
-    mergeCommit: z.string().min(1),
+  'reconcile.prepared': reconcileTransactionSchema,
+  'reconcile.contended': z.strictObject({
+    id: z.string().min(1),
+    request: z.number().int().positive(),
+    actual: gitOid.nullable(),
+  }),
+  'reconcile.replayed': z.strictObject({ id: z.string().min(1), conflicted: z.boolean() }),
+  'reconcile.publish-intended': reconcileTransactionSchema.extend({
+    headSha: gitOid,
+    conflicted: z.boolean(),
     artifact: artifactRefSchema,
   }),
+  'reconcile.rewritten': reconcileTransactionSchema.extend({
+    headSha: gitOid,
+    conflicted: z.boolean(),
+    archives: z.array(archiveEntry),
+  }),
+  'reconcile.completed': z.union([
+    z.strictObject({ mergeCommit: z.string().min(1), artifact: artifactRefSchema }),
+    z.strictObject({ headSha: gitOid, rewriteId: z.string().min(1), artifact: artifactRefSchema }),
+  ]),
 
   // ── Cross-cutting ──────────────────────────────────────────────────────────
   'observation.recorded': z.strictObject({

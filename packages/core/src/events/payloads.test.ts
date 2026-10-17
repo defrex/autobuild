@@ -1150,3 +1150,66 @@ test('merged evidence is additive: historical unknown, inspected true and inspec
   }
   expect(schema.safeParse({ sha: 'landed', buildTrailerPresent: null }).success).toBe(false)
 })
+
+describe('reconcile rewrite protocol', () => {
+  const sha = 'a'.repeat(40)
+  const transaction = {
+    id: 'rewrite-1',
+    attempt: 1,
+    branch: 'ab/example',
+    oldHead: sha,
+    oldBase: sha,
+    targetBase: sha,
+    changeSha: sha,
+    workspaceHead: sha,
+    localBranchHead: sha,
+  }
+  test('additive facts validate exact object ids and kernel authority', () => {
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'reconcile.prepared', payload: transaction })
+        .payload,
+    ).toEqual(transaction)
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('reconcile', 's1'),
+        type: 'reconcile.prepared',
+        payload: transaction,
+      }),
+    ).toThrow()
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'reconcile.prepared',
+        payload: { ...transaction, oldHead: 'HEAD' },
+      }),
+    ).toThrow()
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'reconcile.rewritten',
+        payload: {
+          ...transaction,
+          headSha: sha,
+          conflicted: true,
+          archives: [{ ref: `refs/autobuild/archive/example/${sha}`, sha }],
+        },
+      }).type,
+    ).toBe('reconcile.rewritten')
+  })
+  test('historical and restacked completions remain distinct valid shapes', () => {
+    const artifact = { kind: 'reconcile-notes', rev: 0 }
+    for (const payload of [
+      { mergeCommit: 'historical', artifact },
+      { headSha: sha, rewriteId: 'rewrite-1', artifact },
+    ])
+      expect(eventPayloadSchemas['reconcile.completed'].parse(payload)).toEqual(payload)
+    expect(() =>
+      eventPayloadSchemas['reconcile.completed'].parse({
+        mergeCommit: 'historical',
+        headSha: sha,
+        rewriteId: 'rewrite-1',
+        artifact,
+      }),
+    ).toThrow()
+  })
+})

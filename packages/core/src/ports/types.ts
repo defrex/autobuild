@@ -261,6 +261,15 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
 }
 
 export interface WorkspacePublication {
+  /** Trusted after-teardown path; never route a restack through plain publish. */
+  rewrite?(input: {
+    ref: string
+    sha: string
+    branch: string
+    expected: string
+    localExpected?: string
+    archives: { ref: string; sha: string }[]
+  }): Promise<RewriteResult>
   /** Observe whether the exact requested commit already reached the durable
    * remote branch after an interrupted acknowledgement. `ref` optionally
    * names the workspace whose git database the probe runs against — used by
@@ -335,7 +344,7 @@ export interface WorkspaceProvider {
 //
 // D7: agents never touch the remote — push, PR creation, and forge API calls
 // are plumbing triggered by terminal commands. D1: PR→main is squash merge,
-// main→feature is a merge commit, rebase is banned.
+// reconcile replays one change onto its frozen base with archived evidence and exact head guards.
 
 export interface PrRef {
   number: number
@@ -432,7 +441,28 @@ export interface BuildLandingOptions {
   canApply?: () => Promise<boolean>
 }
 
+/** Reconcile-only branch replacement. All object ids are exact, never ref expressions. */
+export type RewriteResult =
+  | { kind: 'published' }
+  | { kind: 'lease-mismatch'; actual: string | null }
+export interface ForgeRewrite {
+  snapshot(input: {
+    workspacePath: string
+    branch: string
+    destinationRef: string
+  }): Promise<string>
+  archive(input: { workspacePath: string; ref: string; sha: string }): Promise<void>
+  replace(input: {
+    workspacePath: string
+    branch: string
+    expected: string
+    localExpected?: string
+    sha: string
+  }): Promise<RewriteResult>
+}
+
 export interface Forge {
+  readonly rewrite?: ForgeRewrite
   readonly name: string
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting

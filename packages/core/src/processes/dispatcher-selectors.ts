@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 /**
  * Pure event-log projections the dispatcher and janitor read, extracted from
  * `dispatcher.ts` so each is an incremental reducer (see
@@ -91,7 +92,7 @@ export const provisionMarkerReducer = defineReducer<
   finish: (acc) => (acc.marker === null ? undefined : { ...acc.marker }),
 })
 
-export const RECOVERY_CHECKPOINT_REDUCER_VERSION = 1
+export const RECOVERY_CHECKPOINT_REDUCER_VERSION = 2
 
 /** The commit a recovered workspace is re-cut from: the latest settled
  * publication head, else the first provisioned base. */
@@ -109,7 +110,7 @@ export const recoveryCheckpointReducer = defineReducer<
       } else if (event.type === 'implement.completed') {
         acc.settled = event.payload.commits.head
       } else if (event.type === 'reconcile.completed') {
-        acc.settled = event.payload.mergeCommit
+        acc.settled = reconcileHead(event.payload)
       } else if (
         event.type === 'finalize.step-completed' &&
         event.payload.ok &&

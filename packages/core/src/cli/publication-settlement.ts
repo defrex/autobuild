@@ -39,6 +39,89 @@ export async function settlePendingPublication(
   const request = events.publication.latestUncompletedRequest()
   if (request === undefined) return
 
+  if (request.payload.operation === 'reconcile' && request.payload.rewrite !== undefined) {
+    const record = await deps.store.getBuild(slug)
+    const clock = deps.clock ?? systemClock
+    if (
+      events.open !== null &&
+      record?.lease !== undefined &&
+      new Date(record.lease.expiresAt).getTime() > clock().getTime()
+    )
+      return
+    if (publication.rewrite === undefined)
+      throw new Error(
+        'workspace provider lacks trusted reconcile rewrite/archive publication; upgrade the provider before retrying',
+      )
+    const ref = events.workspace?.ref
+    if (ref === undefined) throw new Error('reconcile publication requires its retained workspace')
+    const transaction = request.payload.rewrite
+    const intended = events.reconcileHistory.findLast(
+      (event) => event.type === 'reconcile.publish-intended' && event.payload.id === transaction.id,
+    )
+    if (
+      intended?.type !== 'reconcile.publish-intended' ||
+      intended.payload.headSha !== request.payload.sha ||
+      intended.payload.oldHead !== transaction.oldHead ||
+      intended.payload.targetBase !== transaction.targetBase
+    )
+      throw new Error('reconcile request does not match its durable resolved intent')
+    if (events.reconcileBases[String(transaction.attempt)] !== transaction.targetBase)
+      throw new Error('reconcile publication target differs from the recorded start')
+    const tips = new Set([...events.gitTips, request.payload.sha])
+    const archives = [...tips].map((sha) => ({ ref: `refs/autobuild/archive/${slug}/${sha}`, sha }))
+    const result = await publication.rewrite({
+      ref,
+      sha: request.payload.sha,
+      branch: request.payload.branch,
+      expected: transaction.oldHead,
+      localExpected: transaction.localBranchHead,
+      archives,
+    })
+    if (result.kind === 'lease-mismatch') {
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'reconcile.contended',
+        payload: { id: transaction.id, request: request.seq, actual: result.actual },
+      })
+      const failures = (await readBuildFacts(deps.store, slug)).value.reconcileHistory.filter(
+        (e) =>
+          e.type === 'phase.failed' &&
+          e.payload.phase === 'reconcile' &&
+          e.payload.round === transaction.attempt,
+      ).length
+      await deps.store.append(slug, {
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: {
+          phase: 'reconcile',
+          round: transaction.attempt,
+          attempt: failures + 1,
+          willRetry: true,
+          error: `reconcile publication lost its expected-head lease to ${result.actual ?? '(deleted)'}; replay again onto frozen base ${transaction.targetBase}`,
+        },
+      })
+      return
+    }
+    const history = (await readBuildFacts(deps.store, slug)).value.reconcileHistory
+    if (!history.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === transaction.id))
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'reconcile.rewritten',
+        payload: { ...transaction, headSha: request.payload.sha, archives },
+      })
+    if (!(await readBuildFacts(deps.store, slug)).value.publication.requestCompleted(request))
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'reconcile.completed',
+        payload: {
+          headSha: request.payload.sha,
+          rewriteId: transaction.id,
+          artifact: request.payload.artifact,
+        },
+      })
+    return
+  }
+
   const abandoned = events.publication.requestSettled(request)
   // Consulted for every uncompleted request, not only abandoned ones: a guest
   // that pushed its branch before dying is owed its completion fact, not a

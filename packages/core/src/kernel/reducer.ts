@@ -350,7 +350,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 1
+export const BUILD_REDUCER_VERSION = 2
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -748,6 +748,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         })
         break
       case 'reconcile.completed': {
+        if ('headSha' in event.payload && pr !== undefined)
+          pr = { ...pr, headSha: event.payload.headSha }
         // The terminal payload has no attempt, so preserve it from the
         // matching in-flight occurrence before complete() clears that context.
         // An unmatched completion remains a bare context rather than borrowing

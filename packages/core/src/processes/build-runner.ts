@@ -1,3 +1,5 @@
+import { prepareRestack, requireRewrite } from '../kernel/reconcile-restack'
+import { reconcileHead } from '../kernel/reconcile-head'
 import { readBuildFacts, readBuildSelector, readPhaseFailures } from '../store/reduced-reads'
 import { delegateCredential } from '../store/remote/credentials'
 import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
@@ -434,7 +436,7 @@ export const setupStreakReducer = defineReducer<
   finish: (acc) => acc.failures.filter((seq) => seq > acc.boundary).length,
 })
 
-export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 1
+export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 2
 
 /** Latest event-checkpointed branch head that kernel plumbing published;
  * undefined while the build has none. */
@@ -450,7 +452,7 @@ export const publishedBranchHeadReducer = defineReducer<
       if (event.type === 'implement.completed') {
         acc.head = event.payload.commits.head
       } else if (event.type === 'reconcile.completed') {
-        acc.head = event.payload.mergeCommit
+        acc.head = reconcileHead(event.payload)
       } else if (
         event.type === 'finalize.step-completed' &&
         event.payload.ok &&
@@ -1044,7 +1046,12 @@ export class BuildRunner {
     let reconcileBaseSha: string | undefined
     if (phase === 'reconcile') {
       try {
-        reconcileBaseSha = await this.refreshReconcileBase()
+        requireRewrite(this.deps.forge)
+        const facts = (await readBuildFacts(store, slug)).value
+        reconcileBaseSha =
+          facts.reconcileTransaction?.attempt === round
+            ? facts.reconcileTransaction.targetBase
+            : await this.refreshReconcileBase()
       } catch (error) {
         await this.failPhase(
           phase,
@@ -1056,7 +1063,36 @@ export class BuildRunner {
       }
     }
 
-    await store.append(slug, this.startedWrite(decision, reconcileBaseSha))
+    if (
+      phase !== 'reconcile' ||
+      (await readBuildFacts(store, slug)).value.reconcileTransaction?.attempt !== round
+    )
+      await store.append(slug, this.startedWrite(decision, reconcileBaseSha))
+    if (phase === 'reconcile') {
+      try {
+        const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
+        if (oldBase === undefined || reconcileBaseSha === undefined)
+          throw new Error('missing reconcile contribution base')
+        await prepareRestack(
+          { ...this.deps },
+          {
+            attempt: round,
+            branch: this.deps.branch,
+            oldBase,
+            targetBase: reconcileBaseSha,
+            id: this.deps.ids('rewrite').replaceAll('_', '-'),
+          },
+        )
+      } catch (error) {
+        await this.failPhase(
+          phase,
+          round,
+          failures.count,
+          `failed to prepare reconcile replay: ${errorMessage(error)}`,
+        )
+        return
+      }
+    }
 
     const spec = PHASE_SPECS[phase]
     await this.executeSession({

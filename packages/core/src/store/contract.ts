@@ -1,4 +1,4 @@
-import { readBuildFacts } from './reduced-reads'
+import { readBuildFacts, readBuildSelector } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
@@ -1082,6 +1082,84 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('named reducer value reads', () => {
+      test('rewrite facts round-trip and advance persisted heads only after correlated completion', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'restack-values'
+          const old = 'a'.repeat(40)
+          const base = 'b'.repeat(40)
+          const head = 'c'.repeat(40)
+          const transaction = {
+            id: 'rewrite-1',
+            attempt: 1,
+            branch: `ab/${slug}`,
+            oldHead: old,
+            oldBase: old,
+            targetBase: base,
+            changeSha: 'd'.repeat(40),
+            workspaceHead: old,
+            localBranchHead: old,
+          }
+          const artifact = { kind: 'reconcile-notes', rev: 0 }
+          await store.createBuild(sampleBuildInput(slug))
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'workspace.provisioned',
+            payload: {
+              provider: 'git-worktree',
+              ref: '/worktree',
+              branch: transaction.branch,
+              base: { source: 'remote', sha: old },
+            },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'reconcile.started',
+            payload: { attempt: 1, baseSha: base },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'reconcile.prepared',
+            payload: transaction,
+          })
+          expect((await readBuildFacts(store, slug)).value.reconcileTransaction).toEqual(
+            transaction,
+          )
+          expect(await readBuildSelector(store, slug, 'verifyDiffBase')).toBe(old)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'reconcile.replayed',
+            payload: { id: transaction.id, conflicted: true },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'reconcile.publish-intended',
+            payload: { ...transaction, headSha: head, conflicted: true, artifact },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'reconcile.rewritten',
+            payload: {
+              ...transaction,
+              headSha: head,
+              conflicted: true,
+              archives: [{ ref: `refs/autobuild/archive/${slug}/${old}`, sha: old }],
+            },
+          })
+          expect(await readBuildSelector(store, slug, 'publishedBranchHead')).toBeUndefined()
+          await store.append(slug, {
+            actor: agentActor('reconcile', 'resolver'),
+            type: 'reconcile.completed',
+            payload: { headSha: head, rewriteId: transaction.id, artifact },
+          })
+          expect(await readBuildSelector(store, slug, 'publishedBranchHead')).toBe(head)
+          expect(await readBuildSelector(store, slug, 'verifyDiffBase')).toBe(base)
+          const facts = (await readBuildFacts(store, slug)).value
+          expect(facts.gitTips).toContain(old)
+          expect(facts.gitTips).toContain(head)
+          expect(facts.reconcileReplay).toEqual({ id: transaction.id, conflicted: true })
+        })
+      })
+
       test('all admitted reducers match replay on both scopes and isolate parameter variants', async () => {
         await withStore(factory, undefined, async (store) => {
           const slug = 'values'

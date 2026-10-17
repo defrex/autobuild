@@ -112,7 +112,7 @@ export function autoMergeDeferralRef(prNumber: number, commandSeq: number): stri
  * `pr.closed` fact in the log ends it — and until later evidence proves the
  * PR head changed, superseding the recorded condition until the gate
  * re-examines consent and records a fresh observation. Head-changing evidence
- * is a `reconcile.completed` (the resolution is a merge commit on the branch)
+ * is a `reconcile.completed` (a replayed change, or a historical merge resolution)
  * or a `finalize.completed` whose head differs from the head the observation
  * was recorded under. The dedupe and the projection share this predicate, so
  * a stale observation stops suppressing and re-recording after reconcile

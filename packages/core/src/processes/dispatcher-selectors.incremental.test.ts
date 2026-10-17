@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import {
@@ -63,7 +64,7 @@ describe('dispatcher selector reducers', () => {
         } else if (event.type === 'implement.completed') {
           settled = event.payload.commits.head
         } else if (event.type === 'reconcile.completed') {
-          settled = event.payload.mergeCommit
+          settled = reconcileHead(event.payload)
         } else if (
           event.type === 'finalize.step-completed' &&
           event.payload.ok &&

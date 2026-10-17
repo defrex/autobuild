@@ -1,3 +1,4 @@
+import { referencedGitTips } from './reconcile-head'
 import { encodeLog } from './log-index-value'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { infrastructureFailureResetReducer } from '../processes/infrastructure-failure-budget'
@@ -118,6 +119,13 @@ export interface BuildReadAcc {
   planFeedback: Record<string, import('../ontology').Feedback | null>
   feedback: Record<string, import('../ontology').Feedback | null>
   reconcileBases: Record<string, string>
+  reconcileHistory: Extract<
+    AbEvent,
+    { type: `reconcile.${string}` | 'workspace.provisioned' | 'phase.failed' }
+  >[]
+  gitTips: string[]
+  reconcileTransaction?: import('../events/payloads').EventPayload<'reconcile.prepared'>
+  reconcileReplay?: import('../events/payloads').EventPayload<'reconcile.replayed'>
   firstWorkspace?: Extract<AbEvent, { type: 'workspace.provisioned' }>
   latestAbort?: Extract<AbEvent, { type: 'build.abort-requested' }>
   latestDiscard?: Extract<AbEvent, { type: 'build.discard-requested' }>
@@ -149,7 +157,7 @@ export interface BuildReadAcc {
   observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
 }
 export const buildReadFactsReducer = defineReducer({
-  version: 1 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 2 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     summaryRequests: summaryRequestsReducer.initial(),
     summaryBoundary: summaryBoundaryReducer.initial(),
@@ -180,6 +188,8 @@ export const buildReadFactsReducer = defineReducer({
     feedback: {},
     planFeedback: {},
     reconcileBases: {},
+    reconcileHistory: [],
+    gitTips: [],
     maxPlanRevision: -1,
     seenTypes: [],
     localWorkspace: false,
@@ -264,6 +274,25 @@ export const buildReadFactsReducer = defineReducer({
       if (event.type === 'verify.started')
         acc.feedback[JSON.stringify([`verify:${event.payload.step}`, event.payload.attempt])] =
           event.payload.feedback ?? null
+      for (const tip of referencedGitTips([event]))
+        if (!acc.gitTips.includes(tip)) acc.gitTips.push(tip)
+      if (
+        event.type === 'reconcile.started' ||
+        event.type === 'reconcile.completed' ||
+        event.type === 'reconcile.prepared' ||
+        event.type === 'reconcile.replayed' ||
+        event.type === 'reconcile.contended' ||
+        event.type === 'reconcile.publish-intended' ||
+        event.type === 'reconcile.rewritten' ||
+        event.type === 'workspace.provisioned' ||
+        event.type === 'phase.failed'
+      )
+        acc.reconcileHistory.push(event)
+      if (event.type === 'reconcile.prepared') {
+        acc.reconcileTransaction = event.payload
+        delete acc.reconcileReplay
+      }
+      if (event.type === 'reconcile.replayed') acc.reconcileReplay = event.payload
       if (event.type === 'reconcile.started')
         acc.reconcileBases[String(event.payload.attempt)] = event.payload.baseSha
       if (event.type === 'workspace.provisioned') acc.firstWorkspace ??= event
@@ -351,6 +380,10 @@ export const buildReadFactsReducer = defineReducer({
     findings: structuredClone(acc.findings),
     feedback: structuredClone(acc.feedback),
     reconcileBases: { ...acc.reconcileBases },
+    reconcileHistory: structuredClone(acc.reconcileHistory),
+    gitTips: [...acc.gitTips],
+    reconcileTransaction: acc.reconcileTransaction,
+    reconcileReplay: acc.reconcileReplay,
     firstWorkspace: acc.firstWorkspace,
     latestAbort: acc.latestAbort,
     latestDiscard: acc.latestDiscard,
