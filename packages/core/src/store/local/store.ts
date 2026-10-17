@@ -1,3 +1,4 @@
+import { readPersistedBuildDigests } from '../reduced-reads'
 import { assertPublicSnapshotReducer } from '../snapshots'
 import {
   readReducerValue,
@@ -52,7 +53,6 @@ import { createBuildScopedStore } from '../build-scope'
 import type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 import { validateCreatedEvent } from '../new-build'
 import { createSessionScopedStore } from '../session-handle'
-import { DIGEST_EVENT_TYPES, type DigestEventRow, reduceBuildDigest } from '../digest'
 import {
   REPOSITORY_STATE_EVENT_TYPES,
   REPOSITORY_LATEST_EVENT_TYPES,
@@ -512,56 +512,16 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-    // From the builds side (AUT-487): the type filter lives in the ON clause
-    // so a build whose log holds none of the digest-relevant event
-    // types still yields its row — a join that starts from `events` would
-    // silently drop such builds and break the operation's completeness
-    // contract. Only the digest-relevant types are fetched, then one shared
-    // derivation
-    // per build, so the answer cannot drift from `reduceBuild`.
-    const rows = this.sqlite
-      .query(
-        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type,
-                CASE WHEN e.type = 'pr-attachment.reclaimed'
-                  THEN json_extract(e.payload, '$.hostedSeq') END AS hostedSeq,
-                CASE WHEN e.type IN ('execution.started', 'execution.ended')
-                  THEN json_extract(e.payload, '$.instance') END AS instance
-         FROM builds b
-         LEFT JOIN events e
-           ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map(() => '?').join(', ')})
-         WHERE b.repo = ?
-         ORDER BY b.slug, e.seq`,
-      )
-      .all(...DIGEST_EVENT_TYPES, repo) as {
-      slug: string
-      seq: number | null
-      ts: string | null
-      type: string | null
-      hostedSeq: number | null
-      instance: string | null
-    }[]
-    const eventsByBuild = new Map<string, DigestEventRow[]>()
-    for (const row of rows) {
-      if (row.seq === null || row.ts === null || row.type === null) continue
-      const events = eventsByBuild.get(row.slug) ?? []
-      events.push({
-        type: row.type as AbEvent['type'],
-        seq: row.seq,
-        ts: row.ts,
-        ...(row.hostedSeq !== null ? { hostedSeq: row.hostedSeq } : {}),
-        ...(row.instance !== null ? { instance: row.instance } : {}),
-      })
-      eventsByBuild.set(row.slug, events)
-    }
-    const digests = new Map<string, BuildDigest>()
-    for (const row of rows) {
-      if (digests.has(row.slug)) continue
-      digests.set(row.slug, {
-        slug: row.slug,
-        ...reduceBuildDigest(eventsByBuild.get(row.slug) ?? []),
-      })
-    }
-    return digests
+    return readPersistedBuildDigests(
+      this,
+      repo,
+      this.db
+        .select()
+        .from(builds)
+        .where(eq(builds.repo, repo))
+        .all()
+        .map((row) => this.toRecord(row)),
+    )
   }
 
   /** Current build-stream tail inside an open transaction. */

@@ -1,3 +1,4 @@
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { issueTicketGrant } from '../ports/tickets/grants'
 import { delegateCredential } from '../store/remote/credentials'
@@ -22,7 +23,6 @@ import {
   decideHarvestControl,
   openHarvestRun,
   proposalArtifactForRound,
-  reduceHarvest,
   type HarvestRunState,
 } from '../kernel/harvest'
 import type { ArtifactRef, Feedback, Verdict } from '../ontology'
@@ -239,28 +239,23 @@ export class HarvestRunner {
       // Bounded read (AUT-489): reduceHarvest and the verdict/failure filters
       // below consume durable types only, so the subset is replay-equivalent.
       if (this.deps.preparedRun) {
-        const events = await store.getRepoStateEvents(repo)
-        const authorization = events.find(
-          (event) =>
-            event.type === 'harvest.execution.authorized' &&
-            event.payload.execution === instance &&
-            event.payload.run === this.deps.preparedRun!.run,
-        )
+        const events = (await readRepositoryFacts(store, repo)).value
+        const authorization = events.harvestAuthorizations[JSON.stringify(instance)]
         if (authorization?.type !== 'harvest.execution.authorized')
           throw new Error('prepared harvest execution unavailable')
-        run = reduceHarvest(events).runs.find((run) => run.run === this.deps.preparedRun!.run)
+        run = events.harvest.runs.find((run) => run.run === this.deps.preparedRun!.run)
         initial = authorization.payload.launch
       } else {
-        let events = await store.getRepoStateEvents(repo)
-        let state = reduceHarvest(events)
+        let events = (await readRepositoryFacts(store, repo)).value
+        let state = events.harvest
         run = actionableHarvestRun(state)
 
         // Settle durable operator control before scanning or resuming work. The
         // selected run comes from the full journal, so a shadowed failure or
         // exhaustion barrier is recovered/reported before any later open run.
         await this.controlBoundary(run?.run)
-        events = await store.getRepoStateEvents(repo)
-        state = reduceHarvest(events)
+        events = (await readRepositoryFacts(store, repo)).value
+        state = events.harvest
         run = openHarvestRun(state)
 
         if (!run) {
@@ -274,7 +269,7 @@ export class HarvestRunner {
           // Bounded read (AUT-489): the gate's journal input is consumed only
           // through reduceHarvest, so the subset is replay-equivalent here too.
           const [gateEvents, digests] = await Promise.all([
-            store.getRepoStateEvents(repo),
+            readRepositoryFacts(store, repo).then((result) => result.value.harvest),
             store.getRepoBuildDigests(repo),
           ])
           const pressure = evaluateHarvestPressureFromDigests({
@@ -338,8 +333,8 @@ export class HarvestRunner {
             }),
           )
           // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-          events = await store.getRepoStateEvents(repo)
-          run = reduceHarvest(events).runs.find((candidate) => candidate.run === runId)
+          events = (await readRepositoryFacts(store, repo)).value
+          run = events.harvest.runs.find((candidate) => candidate.run === runId)
           if (!run) throw new Error(`harvest.started did not reduce run "${runId}"`)
           // A request racing the claim parks this exact run; its snapshot stays
           // open and is resumed rather than scanned again.
@@ -503,14 +498,8 @@ export class HarvestRunner {
           )
           // Bounded read (AUT-489): only harvest.review.verdict facts are
           // filtered here, and those are durable.
-          const event = (await this.deps.store.getRepoStateEvents(this.deps.repo)).find(
-            (
-              candidate,
-            ): candidate is Extract<RepositoryEvent, { type: 'harvest.review.verdict' }> =>
-              candidate.type === 'harvest.review.verdict' &&
-              candidate.payload.run === run.run &&
-              candidate.payload.round === round,
-          )
+          const event = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value
+            .harvestVerdicts[JSON.stringify([run.run, round])]?.first
           if (!event) throw new Error('review reducer/event mismatch')
           await this.controlBoundary(run.run)
           return verdictFromEvent(event)
@@ -572,15 +561,8 @@ export class HarvestRunner {
     })
     // Bounded read (AUT-489): only harvest.review.verdict facts are filtered
     // here, and those are durable.
-    const events = await this.deps.store.getRepoStateEvents(this.deps.repo)
-    const verdict = [...events]
-      .reverse()
-      .find(
-        (event): event is Extract<RepositoryEvent, { type: 'harvest.review.verdict' }> =>
-          event.type === 'harvest.review.verdict' &&
-          event.payload.run === run.run &&
-          event.payload.round === round,
-      )
+    const events = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value
+    const verdict = events.harvestVerdicts[JSON.stringify([run.run, round])]?.latest
     if (!verdict) throw new Error(`review@${round} terminal is missing`)
     await this.completeStep(
       run.run,
@@ -624,22 +606,16 @@ export class HarvestRunner {
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
     // consume durable types only.
-    const events = await store.getRepoStateEvents(repo)
-    const matchingFailures = events.filter(
-      (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
-        event.type === 'harvest.failed' &&
-        event.payload.run === spec.run &&
-        event.payload.step === spec.step &&
-        event.payload.round === spec.round,
-    )
-    const failures = matchingFailures.length
-    const latestFailure = matchingFailures.at(-1)
-    const current = reduceHarvest(events).runs.find((candidate) => candidate.run === spec.run)
+    const events = (await readRepositoryFacts(store, repo)).value
+    const failureFacts = events.harvestFailures[JSON.stringify([spec.run, spec.step, spec.round])]
+    const failures = failureFacts?.count ?? 0
+    const latestFailure = failureFacts?.latest
+    const current = events.harvest.runs.find((candidate) => candidate.run === spec.run)
     const resumedAfterTerminalFailure =
       latestFailure?.payload.willRetry === false &&
       current?.status === 'running' &&
       current.failure === undefined &&
-      events.some((event) => event.type === 'harvest.resumed' && event.seq > latestFailure.seq)
+      events.latestHarvestResumedSeq > latestFailure.seq
     if (failures >= this.maxSessionAttempts && !resumedAfterTerminalFailure) {
       throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
     }
@@ -884,17 +860,11 @@ export class HarvestRunner {
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
     // consume durable types only.
-    const events = await store.getRepoStateEvents(repo)
-    const matchingFailures = events.filter(
-      (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
-        event.type === 'harvest.failed' &&
-        event.payload.run === spec.run &&
-        event.payload.step === spec.step &&
-        event.payload.round === spec.round,
-    )
-    const failures = matchingFailures.length
-    const latestFailure = matchingFailures.at(-1)
-    const current = reduceHarvest(events).runs.find((candidate) => candidate.run === spec.run)
+    const events = (await readRepositoryFacts(store, repo)).value
+    const failureFacts = events.harvestFailures[JSON.stringify([spec.run, spec.step, spec.round])]
+    const failures = failureFacts?.count ?? 0
+    const latestFailure = failureFacts?.latest
+    const current = events.harvest.runs.find((candidate) => candidate.run === spec.run)
     // A stopping failure may already have consumed the ordinary retry budget.
     // harvest.resumed deliberately clears that reduced stop and grants one real
     // re-entry without deleting history or resetting attempt numbers. The next
@@ -903,7 +873,7 @@ export class HarvestRunner {
       latestFailure?.payload.willRetry === false &&
       current?.status === 'running' &&
       current.failure === undefined &&
-      events.some((event) => event.type === 'harvest.resumed' && event.seq > latestFailure.seq)
+      events.latestHarvestResumedSeq > latestFailure.seq
     if (failures >= this.maxSessionAttempts && !resumedAfterTerminalFailure) {
       throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
     }
@@ -1366,8 +1336,8 @@ export class HarvestRunner {
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
     // consume durable types only.
-    const events = await this.deps.store.getRepoStateEvents(this.deps.repo)
-    const state = reduceHarvest(events)
+    const events = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value
+    const state = events.harvest
     const current = state.runs.find((candidate) => candidate.run === run)
     if (current?.status !== 'running') return
     const open = [...current.steps]
@@ -1375,13 +1345,7 @@ export class HarvestRunner {
       .find((occurrence) => occurrence.completedSeq === undefined)
     const step = open?.step ?? 'file'
     const round = open?.round
-    const prior = events.filter(
-      (event) =>
-        event.type === 'harvest.failed' &&
-        event.payload.run === run &&
-        event.payload.step === step &&
-        event.payload.round === round,
-    ).length
+    const prior = events.harvestFailures[JSON.stringify([run, step, round])]?.count ?? 0
     const attempt = prior + 1
     const willRetry = attempt < this.maxSessionAttempts
     const message = errorMessage(error)
@@ -1421,7 +1385,7 @@ export class HarvestRunner {
     if (this.deps.preparedRun) return
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
+    const state = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value.harvest
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (decision.kind !== 'exhaust-recovery' || decision.run !== run) return
     await this.finalizeRecoveryExhaustion(decision.run, decision.attempts, decision.limit)
@@ -1447,7 +1411,7 @@ export class HarvestRunner {
 
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
+    const state = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value.harvest
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (
       decision.kind !== 'exhaust-recovery' ||
@@ -1484,7 +1448,7 @@ export class HarvestRunner {
     while (true) {
       await this.ensureLease()
       // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-      const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
+      const state = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value.harvest
       const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
       if (this.deps.preparedRun) throw new HarvestParkedSignal(run)
@@ -1529,7 +1493,7 @@ export class HarvestRunner {
 
   private async refreshRun(run: string): Promise<HarvestRunState> {
     // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
+    const state = (await readRepositoryFacts(this.deps.store, this.deps.repo)).value.harvest
     const found = state.runs.find((candidate) => candidate.run === run)
     if (!found) throw new Error(`unknown harvest run "${run}"`)
     return found

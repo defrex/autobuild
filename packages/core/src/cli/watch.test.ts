@@ -970,12 +970,19 @@ describe('watch discovery bounds terminal-build reads with the AUT-487 digest (A
     let digests = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
-        if (prop === 'getEvents') {
-          return async (slug: string, sinceSeq?: number) => {
-            if (sinceSeq === undefined) {
+        if (prop === 'getReducerValue') {
+          return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+            if (args[0].kind === 'build' && args[1].reducer === 'buildStreamSeed') {
+              const slug = args[0].slug
               eventsBySlug.set(slug, (eventsBySlug.get(slug) ?? 0) + 1)
             }
-            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+            return target.getReducerValue(...args)
+          }
+        }
+        if (prop === 'getEvents') {
+          return async (slug: string, sinceSeq?: number) => {
+            expect(sinceSeq).toBeDefined()
+            return target.getEvents(slug, sinceSeq)
           }
         }
         if (prop === 'getRepoBuildDigests') {
@@ -1102,7 +1109,7 @@ describe('watch discovery bounds terminal-build reads with the AUT-487 digest (A
     expect(h2.out.slice(0, -1)).toEqual([])
   })
 
-  test('a named slug still tracks through trackBuild (full read, deliberate)', async () => {
+  test('a named slug still tracks through trackBuild (persisted seed)', async () => {
     // Named slugs bypass the discovery filter by design; the digest does not
     // retire a NAMED build's full log (registration + --since replay need it).
     const store = makeStore()
@@ -1722,7 +1729,7 @@ function repoReadProbe(backing: MemoryBuildStore) {
   return { store, calls }
 }
 
-test('attention bootstrap reads full history once, then incremental journal reads', async () => {
+test('attention bootstrap uses persisted state, then incremental journal reads', async () => {
   const backing = makeStore()
   const journalEnd = await seedNoopInvocations(backing, 20)
   expect(journalEnd).toBe(60)
@@ -1736,8 +1743,8 @@ test('attention bootstrap reads full history once, then incremental journal read
   // Exactly one bounded baseline read; the end-recovery read is skipped
   // because the subset contains a `dispatcher.run-started`, and every
   // subsequent journal read is a delta poll at or past the journal end.
-  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
-  expect(probe.calls.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(1)
+  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: journalEnd })
+  expect(probe.calls.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(0)
   const journalReads = probe.calls.filter((call) => call.method === 'getRepoEvents')
   expect(journalReads.length).toBeGreaterThan(0)
   expect(journalReads.slice(1).every((call) => (call.sinceSeq ?? 0) >= journalEnd)).toBe(true)
@@ -1796,8 +1803,8 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   // The recovery read fired: bounded read first, then the delta read from the
   // subset's (empty) end — the true journal end here — and every later read
   // polls from the recovered cursor.
-  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
-  expect(probe.calls[1]).toEqual({ method: 'getRepoStateEvents' })
+  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 1 })
+  expect(probe.calls.some((call) => call.method === 'getRepoStateEvents')).toBe(false)
   expect(
     probe.calls.slice(3).every((call) => call.method !== 'getRepoEvents' || call.sinceSeq === 1),
   ).toBe(true)
@@ -1819,8 +1826,8 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   const h2 = harness(filteredBacking, { openStore: () => filtered.store })
   await abWatch({ ...h2.base, repository: true, events: ['dispatcher.*'], timeout: '1' })
   expect(h2.out.slice(0, -1)).toEqual([])
-  expect(filtered.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
-  expect(filtered.calls[1]).toEqual({ method: 'getRepoStateEvents' })
+  expect(filtered.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 1 })
+  expect(filtered.calls.some((call) => call.method === 'getRepoStateEvents')).toBe(false)
 })
 
 for (const json of [true, false]) {
@@ -2329,3 +2336,50 @@ for (const recovers of [true, false]) {
     }
   })
 }
+
+test('fresh watch baselines every historically eligible PR even when armed before registration', async () => {
+  for (const named of [true, false]) {
+    const store = makeStore()
+    await seedRunningBuild(store, 'baseline')
+    for (const pr of [9, 7]) {
+      await store.append('baseline', {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: pr, url: `https://example.test/${pr}`, headSha: 'abc' } },
+      })
+    }
+    await store.append('baseline', {
+      actor: humanActor('human'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    let tick = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++tick === 1)
+          await store.append('baseline', {
+            actor: humanActor('human'),
+            type: 'build.auto-merge-cancelled',
+            payload: {},
+          })
+        if (tick === 2)
+          await store.append('baseline', {
+            actor: KERNEL,
+            type: 'finalize.completed',
+            payload: { pr: { number: 11, url: 'https://example.test/11', headSha: 'abc' } },
+          })
+      },
+    })
+    await abWatch({ ...h.base, ...(named ? { slugs: ['baseline'] } : {}), timeout: '3' })
+    const observations = h.out.slice(0, -1).map((line) => JSON.parse(line))
+    expect(observations).toHaveLength(1)
+    expect(observations[0].observation.pr.number).toBe(11)
+    const cursor = decodeCursor(JSON.parse(h.out.at(-1)!).cursor, {
+      store: `${REPO}/.autobuild`,
+      repo: REPO,
+    })
+    expect(cursor.deliveredAttention).toEqual(
+      [9, 7, 11].map((pr) => JSON.stringify(['baseline', pr])),
+    )
+  }
+})

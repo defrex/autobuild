@@ -1,3 +1,4 @@
+import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The `ab context` materializer (SPEC §8.3): a phase-scoped hydration of the
  * gitignored `.ab/` scratch dir. Everything derives from
@@ -16,14 +17,13 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
 import type { VerifyStepConfig } from '../config/schema'
-import type { AbEvent } from '../events/catalog'
 import {
   allowedTerminals,
   phaseSpecFor,
   type PhaseSpec,
   type TerminalCommand,
 } from '../kernel/phases'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { BuildState } from '../kernel/reducer'
 import {
   isVerifyPhase,
   verifyReportKind,
@@ -113,69 +113,12 @@ function requiredKinds(spec: PhaseSpec, phase: Phase): string[] {
 
 /** All finding objects ever deposited, by id — verdict payloads carry them in
  * full (§15.3), so feedback-by-id resolves without touching artifacts. */
-function findingsById(events: AbEvent[]): Map<string, Finding> {
-  const byId = new Map<string, Finding>()
-  for (const event of events) {
-    if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict') {
-      for (const finding of event.payload.findings) byId.set(finding.id, finding)
-    }
-  }
-  return byId
+function findingsById(events: CurrentBuildFacts): Map<string, Finding> {
+  return new Map(Object.values(events.findings).map((finding) => [finding.id, finding]))
 }
-
-/**
- * The feedback carried by this occurrence's `*.started` event (§15.3).
- * `implement.started`, `plan.started`, and agent `verify.started` may carry
- * feedback — the carrier that gets answered guidance to a fresh session after
- * a parked build re-attaches (§15.6-B). A `plan.started` without one (logs
- * predating the field) falls
- * back to deriving round-N feedback from the round-(N-1)
- * `plan-review.verdict` — the plan loop's verdicts ARE its findings channel
- * (§8.3: "prior plan rev + findings").
- */
-function currentFeedback(events: AbEvent[], phase: Phase, round: number): Feedback | null {
-  if (isVerifyPhase(phase)) {
-    const step = verifyStep(phase)
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i]!
-      if (
-        event.type === 'verify.started' &&
-        event.payload.step === step &&
-        event.payload.attempt === round
-      ) {
-        return event.payload.feedback ?? null
-      }
-    }
-    return null
-  }
-  if (phase === 'implement') {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i]!
-      if (event.type === 'implement.started' && event.payload.round === round) {
-        return event.payload.feedback ?? null
-      }
-    }
-    return null
-  }
-  if (phase === 'plan') {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i]!
-      if (event.type === 'plan.started' && event.payload.round === round) {
-        if (event.payload.feedback !== undefined) return event.payload.feedback
-        break // legacy start without the field — derive from the prior verdict
-      }
-    }
-    if (round <= 1) return null
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i]!
-      if (event.type === 'plan-review.verdict' && event.payload.round === round - 1) {
-        return event.payload.verdict === 'revise'
-          ? { findings: event.payload.findings.map((finding) => finding.id) }
-          : null
-      }
-    }
-  }
-  return null
+function currentFeedback(events: CurrentBuildFacts, phase: Phase, round: number): Feedback | null {
+  const explicit = events.feedback[JSON.stringify([phase, round])]
+  return explicit ?? (phase === 'plan' ? (events.planFeedback[String(round)] ?? null) : null)
 }
 
 /** Empty and recreate `.ab/`; callers restore any tracked legacy entries. */
@@ -184,7 +127,7 @@ async function wipeAbDir(abDir: string): Promise<void> {
   await mkdir(abDir, { recursive: true })
 }
 
-function dismissedIds(state: BuildState, events: AbEvent[]): string[] {
+function dismissedIds(state: BuildState, events: CurrentBuildFacts): string[] {
   const known = findingsById(events)
   const ids = new Set<string>()
   for (const escalation of state.answeredEscalations) {
@@ -205,8 +148,8 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   const { build, phase, round } = env
   const spec = phaseSpecFor(phase)
   const inputs = spec.inputs
-  const events = await store.getEvents(build)
-  const state = reduceBuild(events)
+  const events = (await readBuildFacts(store, build)).value
+  const state = events.state
 
   // Preserve legacy tracked scratch exactly while replacing disposable files.
   // Some adapter contract fixtures intentionally use a non-Git workspace;
@@ -271,7 +214,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   if (inputs.ticket === true) {
-    const created = events.find((event) => event.type === 'build.created')
+    const created = events.created
     if (created !== undefined && created.type === 'build.created') {
       const original = created.payload.ticket
       const current =
@@ -442,13 +385,8 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     // records the execution input in reconcile.started. A crashed same-attempt
     // rerun can therefore have multiple starts; the newest matching AB_PHASE
     // attempt is authoritative.
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i]!
-      if (event.type === 'reconcile.started' && event.payload.attempt === round) {
-        manifest.conflict = { baseSha: event.payload.baseSha }
-        break
-      }
-    }
+    const baseSha = events.reconcileBases[String(round)]
+    if (baseSha !== undefined) manifest.conflict = { baseSha }
     if (manifest.conflict === undefined) {
       throw new Error(
         `reconcile@${round} context requires a matching reconcile.started event ` +
@@ -488,10 +426,10 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // Legacy tracked scratch is repository debt, not content Autobuild rewrites.
   // Record it once per build from the provisioned base so harvest can groom it.
   if (gitWorkspace && deps.ids !== undefined) {
-    const provisioned = events.find((event) => event.type === 'workspace.provisioned')
+    const provisioned = events.firstWorkspace
     const marker = 'phase-scratch:tracked-at-provisioned-base'
-    const alreadyRecorded = events.some(
-      (event) => event.type === 'observation.recorded' && event.payload.refs?.includes(marker),
+    const alreadyRecorded = events.observations.some((observation) =>
+      observation.refs?.includes(marker),
     )
     if (
       provisioned !== undefined &&

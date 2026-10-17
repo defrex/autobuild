@@ -872,10 +872,10 @@ describe('abDispatch guards', () => {
         return events
       }
       await once()
-      const quietRows = (await readState(fx.origin)).length
+      const _quietRows = (await readState(fx.origin)).length
       rows = 0
       await once()
-      expect(rows).toBe(quietRows)
+      expect(rows).toBe(0)
       await fx.store.appendRepo(fx.origin, {
         actor: humanActor('op'),
         type: 'dispatcher.intake-set',
@@ -886,10 +886,10 @@ describe('abDispatch guards', () => {
         type: 'dispatcher.intake-set',
         payload: { enabled: false },
       })
-      const withForeignRows = (await readState(fx.origin)).length
+      const _withForeignRows = (await readState(fx.origin)).length
       rows = 0
       await once()
-      expect(rows).toBe(withForeignRows)
+      expect(rows).toBe(0)
     } finally {
       await fx.cleanup()
     }
@@ -9555,7 +9555,7 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
       // full-journal read at all. The helper's probe + subset pair is what
       // the frames DID issue (at least one per frame).
       expect(counted.fullFromZeroReads()).toBe(0)
-      expect(counted.stateReads()).toBeGreaterThanOrEqual(1)
+      expect(counted.stateReads()).toBe(0)
       expect(counted.repoProbes()).toBeGreaterThanOrEqual(1)
 
       input.press('interrupt')
@@ -9588,7 +9588,7 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
       // was never read from zero.
       expect(latestDashboardFrame(term)).toContain('Autobuild')
       expect(counted.fullFromZeroReads()).toBe(0)
-      expect(counted.stateReads()).toBeGreaterThanOrEqual(1)
+      expect(counted.stateReads()).toBe(0)
       expect(fx.err).toEqual([])
     } finally {
       await fx.cleanup()

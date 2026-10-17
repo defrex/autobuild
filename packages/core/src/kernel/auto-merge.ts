@@ -1,3 +1,4 @@
+import { readDeferralLedger } from '../store/reduced-reads'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import { autoMergeDeferralClasses, type AutoMergeDeferralReason } from '../ports/types'
@@ -322,10 +323,10 @@ export async function recordAutoMergeDeferralObservation(
 ): Promise<EventEnvelope<'observation.recorded'> | null> {
   if (autoMergeDeferralClasses[reason.code] === 'pipeline-resolved') return null
   while (true) {
-    const events = await store.getEvents(slug)
-    if (hasAutoMergeDeferralObservation(events, prNumber, commandSeq)) return null
+    const current = await readDeferralLedger(store, slug)
+    if (deferralObservationFrom(current.value, prNumber, commandSeq)) return null
 
-    const expectedSeq = events.at(-1)?.seq ?? 0
+    const expectedSeq = current.cursor
     const appended = await store.appendIfCurrent(
       slug,
       expectedSeq,
@@ -333,4 +334,19 @@ export async function recordAutoMergeDeferralObservation(
     )
     if (appended !== null) return appended
   }
+}
+
+/** Clock-independent merge attention shared by persisted seeds and CLI output. */
+export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedger) {
+  if (
+    !state.finalizeCompletedSeq ||
+    !state.pr ||
+    state.prState !== 'open' ||
+    state.status === 'done' ||
+    state.status === 'aborted'
+  )
+    return null
+  const deferral = currentAutoMergeDeferralFrom(ledger, state)
+  if (state.autoMerge.requested && deferral === undefined) return null
+  return { pr: state.pr, reason: deferral ?? 'Auto-merge is not armed' }
 }

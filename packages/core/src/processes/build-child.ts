@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 import { hostname } from 'node:os'
 import { createForge } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -13,7 +14,6 @@ import {
   buildOwnedSectionsDiffer,
   diagnosticArtifact,
   parseEffectiveBuildConfig,
-  selectOpenWorkspace,
   type BuildRunnerDiagnosticOutcome,
 } from './build-execution-state'
 import type { BuildExecutionStart } from '../ports/workspace/build-execution'
@@ -40,7 +40,7 @@ export async function runBuildChild(
   try {
     const record = await store.getBuild(input.slug)
     if (record === null) throw new Error(`unknown build ${JSON.stringify(input.slug)}`)
-    const workspace = selectOpenWorkspace(await store.getEvents(input.slug))
+    const workspace = (await readBuildFacts(store, input.slug)).value.workspace
     if (workspace === null) {
       throw new Error(`build ${JSON.stringify(input.slug)} has no open durable workspace`)
     }
@@ -55,20 +55,20 @@ export async function runBuildChild(
       throw new Error(`build ${JSON.stringify(input.slug)} has no effective config artifact`)
     }
     let currentConfig = parseEffectiveBuildConfig(configArtifact)
-    const plugins = await loadPlugins(currentConfig.plugins, workspace.path, {
+    const plugins = await loadPlugins(currentConfig.plugins, workspace.path ?? workspace.ref, {
       packageRoot: record.repo,
       ...(opts.guest === true ? { guest: true } : {}),
     })
     const { runtimes: builtins } = createProductionRuntimes()
     const runtimes = await materializePluginRuntimes(builtins, plugins, {
-      repoRoot: workspace.path,
+      repoRoot: workspace.path ?? workspace.ref,
       env,
     })
     const forge = await createForge({
       name: currentConfig.forge,
       registry: plugins,
       env,
-      repoRoot: workspace.path,
+      repoRoot: workspace.path ?? workspace.ref,
     })
     const getConfig = async () => {
       const latest = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
@@ -94,7 +94,7 @@ export async function runBuildChild(
       config: currentConfig,
       getConfig,
       runtimes,
-      workspacePath: workspace.path,
+      workspacePath: workspace.path ?? workspace.ref,
       branch: workspace.branch,
       slug: input.slug,
       exec: spawnExec,

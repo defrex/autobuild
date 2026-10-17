@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { readDispatcherRunFacts } from '../packages/core/src/store/reduced-reads'
 /** Private, shipped child for the interactive `ab dispatch` kernel. It owns no
  * terminal handles; the public command launches it with immutable options. */
 import { abDispatch } from '../packages/core/src/cli/dispatch'
@@ -61,12 +62,9 @@ try {
     const opened = openStoreForRepoState(state, { env: process.env })
     try {
       await opened.store.ensureRepo(state.repo)
-      const events = await opened.store.getRepoEvents(state.repo)
-      if (
-        !events.some(
-          (event) => event.type === 'dispatcher.run-stopped' && event.payload.run === options.run,
-        )
-      ) {
+      const facts = (await readDispatcherRunFacts(opened.store, state.repo, options.run, false))
+        .value
+      if (!facts.stop) {
         await opened.store.appendRepo(state.repo, {
           actor: DISPATCHER,
           type: 'dispatcher.run-stopped',

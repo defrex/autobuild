@@ -1,0 +1,645 @@
+{
+  "packages/core/src/store/build-scope.ts::createBuildScopedStore/getEvents::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/digest.ts::reduceBuildDigest::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer over caller-supplied events; adapters persist current values."
+  },
+  "packages/core/src/store/memory.ts::MemoryBuildStore/subscribe::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/memory.ts::MemoryBuildStore/getRepoStateEvents::projectRepositoryStateEvents": {
+    "kind": "reduction",
+    "reason": "Legacy adapter projection implementation; migrated surface discovery uses persisted digest values instead."
+  },
+  "packages/core/src/store/phase-session.ts::scopeLocalStoreToPhaseSession/getEvents::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/phase-session.ts::scopeLocalStoreToPhaseSession/getRepoEvents::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/phase-session.ts::scopeLocalStoreToPhaseSession/getRepoStateEvents::getRepoStateEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/repo-state-events.ts::projectRepositoryStateEvents::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer over caller-supplied events; adapters persist current values."
+  },
+  "packages/core/src/store/session-reducer.ts::reduceSession::reduce": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/core/src/store/subscribe.ts::pollingSubscribe/tick::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/subscribe.ts::pollingSubscribe::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/ticket-assets.ts::findPinnedRevision::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer over caller-supplied events; adapters persist current values."
+  },
+  "packages/core/src/store/reduced-reads.ts::readBuildFacts::finish": {
+    "kind": "reduction",
+    "reason": "Explicit reconstruction of selector closures from a validated JSON ledger, or empty-repository defaults; no event replay."
+  },
+  "packages/core/src/store/reduced-reads.ts::readRepositoryFacts::finish": {
+    "kind": "reduction",
+    "reason": "Explicit reconstruction of selector closures from a validated JSON ledger, or empty-repository defaults; no event replay."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/subscribe::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/store/local/store.ts::SqliteBuildStore/subscribe::getEvents": {
+    "kind": "raw",
+    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
+  },
+  "packages/core/src/processes/build-execution-state.ts::selectOpenWorkspace::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/build-runner.ts::selectPublishedBranchHead::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/build-runner.ts::selectVerifyDiffBase::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/build-runner.ts::BuildRunner/executeSessionChain::getEvents": {
+    "kind": "raw",
+    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
+    "cursor": true
+  },
+  "packages/core/src/processes/build-runner.ts::BuildRunner/executeSingleSession::getEvents": {
+    "kind": "raw",
+    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
+    "cursor": true
+  },
+  "packages/core/src/processes/dispatch-failure-budget.ts::dispatchFailureBudget::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/dispatcher-selectors.ts::openBuildWorkspace::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/execution-settlement.ts::openExecution::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/execution-settlement.ts::lastExecutionOutcome::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/execution-settlement.ts::settleExecution::openExecution": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/harvest-execution-state.ts::openHarvestExecutions::reduce": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/harvest-execution-state.ts::classifyHarvestOutcome::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/harvest-runner.ts::HarvestRunner/executeSessionChain::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
+    "cursor": true
+  },
+  "packages/core/src/processes/harvest-runner.ts::HarvestRunner/executeSingleSession::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
+    "cursor": true
+  },
+  "packages/core/src/processes/harvest.ts::evaluateHarvestPressureFromDigests::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/harvest.ts::collectUnclaimedObservations::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/harvest.ts::unclaimedObservationCount::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/harvest.ts::readRepoEventsIfRecorded::getRepoStateEvents": {
+    "kind": "raw",
+    "reason": "Legacy raw-event output helper retained for compatibility; no current reducer consumer calls it."
+  },
+  "packages/core/src/processes/infrastructure-failure-budget.ts::infrastructureFailureResetSeq::reduce": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/infrastructure-failure-budget.ts::recordInfrastructureFailure::infrastructureFailureResetSeq": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::getEvents": {
+    "kind": "raw",
+    "reason": "Actual events delivered to session wake cursors, not current build reduction.",
+    "cursor": true
+  },
+  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Actual events delivered to session wake cursors, not current build reduction.",
+    "cursor": true
+  },
+  "packages/core/src/processes/publication-loss.ts::settlePublicationBeforeRelease::getEvents": {
+    "kind": "raw",
+    "reason": "Legacy API returns the actual refreshed event output; all release decisions use the persisted guard."
+  },
+  "packages/core/src/processes/publication-state.ts::publicationRequestCompleted::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/publication-state.ts::publicationRequestSettled::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/publication-state.ts::latestUncompletedPublicationRequest::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/publication-state.ts::publicationLostRecorded::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/publication-state.ts::abandonedPublicationPending::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/publication-state.ts::publicationPending::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/repo-view.ts::RepoViewStore::finish": {
+    "kind": "reduction",
+    "reason": "Empty repository default only; current repository values always come from the persisted operation."
+  },
+  "packages/core/src/processes/repo-view.ts::RepoViewStore/getEvents::getEvents": {
+    "kind": "raw",
+    "reason": "Raw forwarding for explicit event consumers; current state methods use persisted values."
+  },
+  "packages/core/src/processes/repo-view.ts::RepoViewStore/getRepoEvents::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Raw forwarding for explicit event consumers; current state methods use persisted values."
+  },
+  "packages/core/src/processes/repo-view.ts::RepoViewStore/getRepoStateEvents::getRepoStateEvents": {
+    "kind": "raw",
+    "reason": "Raw forwarding for explicit event consumers; current state methods use persisted values."
+  },
+  "packages/core/src/processes/sandbox-state.ts::sandboxStates::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/processes/tick-state.ts::hasOpenTick::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/orchestrator/turn-runner.ts::reduceSessionState::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/core/src/orchestrator/turn-runner.ts::createOrchestratorTurnRunner/runLoop::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/core/src/operator/query.ts::latestDispatchConfigStatus::reduceDispatchStatus": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/operator/registry.ts::<module>::getEvents": {
+    "kind": "raw",
+    "reason": "Operator cursor event listing returns the actual durable event envelopes.",
+    "cursor": true
+  },
+  "packages/core/src/kernel/auto-merge-default.ts::latestAutoMergeDefault::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/auto-merge.ts::currentDeferralObservation::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/auto-merge.ts::hasAutoMergeDeferralObservation::currentDeferralObservation": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/auto-merge.ts::currentAutoMergeDeferral::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/dispatch-settings.ts::reduceDispatchSettings::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/dispatch-status.ts::dispatchStatusReducer::reduceDispatchStatus": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/engine.ts::decideNext::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/engine.ts::decideNext::indexLog": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/harvest.ts::reduceHarvest::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/harvest.ts::harvestCreationsDuringReadyScan::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/incremental-contract.ts::checkIncremental::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/incremental-contract.ts::checkIncremental::advance": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/incremental-contract.ts::checkIncremental::finish": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/incremental-fixtures.ts::checkAgainstReference::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/log-index.ts::indexLog::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/pr-attachments.ts::frozenPrImageHost::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/pr-attachments.ts::currentPrAttachments::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/pr-attachments.ts::pendingPrAttachmentReclaims::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/pr-summary.ts::summaryBoundary::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/pr-summary.ts::pendingSummaryRequests::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/ticket-source-health.ts::reduceTicketSourceHealth::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/kernel/read-facts.ts::buildStreamSeedReducer/fold::advance": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::buildStreamSeedReducer/fold::finish": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::buildReadFactsReducer/fold::advance": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::buildReadFactsReducer/fold::finish": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::buildReadFactsReducer::finish": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::repositoryReadFactsReducer/fold::advance": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::repositoryReadFactsReducer::finish": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::optionalValue::finish": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/kernel/read-facts.ts::optionalValue::reduce": {
+    "kind": "reduction",
+    "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
+  },
+  "packages/core/src/config/pipeline-source.ts::recordedBaseSha::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
+  },
+  "packages/core/src/cli/attention.ts::mergeDecision::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/attention.ts::mergeDecision::reduce": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend::reduceDispatchStatus": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/events::reduceDispatchStatus": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/run::reduceDispatchStatus": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::getRepoStateEvents": {
+    "kind": "raw",
+    "reason": "Explicitly excluded interactive frontend repository feed; retains its prerequisite read design."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::reduce": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Explicitly excluded interactive frontend repository feed; retains its prerequisite read design."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::advance": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/remember::advance": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/harvest.ts::projectHarvestStatus::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
+  },
+  "packages/core/src/cli/harvest.ts::abHarvestStatus::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Explicit requested event-history output; current status is read separately from persisted facts."
+  },
+  "packages/core/src/cli/pr-summary-publication.ts::boundedSummary::currentPrAttachments": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/pr-summary.ts::renderPrAttachmentSection::currentPrAttachments": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/pr-summary.ts::renderPrAttachmentSection::frozenPrImageHost": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/pr-summary.ts::renderPrAttachmentSection::hostedPrAttachments": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::reduceTicketSourceHealth": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::reduceDispatchSettings": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::sandboxStates": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/status.ts::summarize::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/status.ts::detail::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/status.ts::detail::openExecution": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/status.ts::abBuildStatus::getEvents": {
+    "kind": "raw",
+    "reason": "Explicit requested event-history output; current status is read separately from persisted facts."
+  },
+  "packages/core/src/cli/wait.ts::attentionFrom::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/wait.ts::attentionFrom::reduce": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/wait.ts::abWait/eventConditions::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/registerStream::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/checkRegistrationState::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/trackBuild::getEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/wait.ts::abWait/trackBuild::advance": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/trackBuild::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/discoverBuilds::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/pollBuild::getEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/wait.ts::abWait/pollBuild::advance": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/pollBuild::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/wait.ts::abWait/pickTerminalRecord::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/processBuildEvent::advance": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/processBuildEvent::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/trackBuild::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/trackBuild::getEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/watch.ts::abWatch/discoverBuilds::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/trackRepository::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/watch.ts::abWatch/pollBuild::getEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/watch.ts::abWatch/pollBuild::finish": {
+    "kind": "reduction",
+    "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/pollRepository::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/historical-build-state.ts::historicalBuildState::getEvents": {
+    "kind": "raw",
+    "reason": "Explicit --since resume only: requested cursor is older than the persisted seed; guard returns the seed otherwise."
+  },
+  "packages/core/src/cli/historical-build-state.ts::historicalBuildState::reduce": {
+    "kind": "reduction",
+    "reason": "Explicit old --since reconstruction guarded by requested < persisted cursor; ordinary registration reuses the seed."
+  },
+  "packages/core/src/cli/historical-build-state.ts::historicalRepositoryAttention::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Explicit --since resume only: requested cursor is older than the persisted seed; guard returns the seed otherwise."
+  },
+  "packages/core/src/cli/historical-build-state.ts::historicalRepositoryAttention::reduce": {
+    "kind": "reduction",
+    "reason": "Explicit old --since reconstruction guarded by requested < persisted cursor; ordinary registration reuses the seed."
+  },
+  "packages/core/src/cli/dashboard/model.ts::projectBuild::reduce": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/dashboard/model.ts::projectBuild::indexLog": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/dashboard/model.ts::projectBuildFromFacts::projectSessions": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/core/src/cli/dashboard/model.ts::projectRepositoryHarvest::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/dashboard/model.ts::buildDashboardFromProjected::reduceDispatchSettings": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
+  },
+  "packages/core/src/cli/dashboard/poll.ts::DashboardBuildPollCache/refreshNow::getEvents": {
+    "kind": "raw",
+    "reason": "Explicitly excluded interactive dashboard build feed; cursor deltas advance the established persisted accumulator cache.",
+    "cursor": true
+  },
+  "packages/core/src/cli/dashboard/poll.ts::DashboardBuildPollCache/refreshNow::advance": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dashboard/poll.ts::DashboardBuildPollCache/refreshNow::finish": {
+    "kind": "reduction",
+    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/hosted-store-service/src/delegated-authority.ts::evaluateDelegationLifecycle::reduceBuild": {
+    "kind": "reduction",
+    "reason": "Prerequisite delegated request-policy reference projection; request/auth plumbing is explicitly outside this migration."
+  },
+  "packages/hosted-store-service/src/delegated-authority.ts::evaluateDelegationLifecycle::reduceHarvest": {
+    "kind": "reduction",
+    "reason": "Prerequisite delegated request-policy reference projection; request/auth plumbing is explicitly outside this migration."
+  },
+  "packages/hosted-store-service/src/operator-server.ts::createOperatorServer/startTurnForMessage::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-server.ts::createOperatorServer/resumeAnsweredApproval::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-sessions.ts::appendAs::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-sessions.ts::getOperatorSession::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-sessions.ts::answerOperatorApproval::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-sessions.ts::archiveOperatorSession::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/operator-sessions.ts::readOperatorTurnStream::reduceSession": {
+    "kind": "reduction",
+    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
+  },
+  "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/repoRoute::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
+  },
+  "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/repoRoute::getRepoStateEvents": {
+    "kind": "raw",
+    "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
+  },
+  "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/buildRoute::getEvents": {
+    "kind": "raw",
+    "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
+  },
+  "packages/postgres-store/src/store.ts::PostgresBuildStore/subscribe::getEvents": {
+    "kind": "raw",
+    "cursor": true,
+    "reason": "Subscription delivers actual durable event envelopes after the subscriber cursor."
+  }
+}

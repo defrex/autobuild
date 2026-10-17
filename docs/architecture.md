@@ -145,9 +145,9 @@ by a later advance. Each reducer publishes a `version`; bump it whenever the
 accumulator shape or the fold semantics change, because a cached accumulator is
 only valid for the version that wrote it. `kernel/reducer-registry.ts` lists
 every reducer with its version, and its snapshot test fails when an accumulator
-shape changes without a bump. Most callers still read whole logs (the terminal
-dashboard poll advances a carried build accumulator by per-build deltas; the
-dispatcher view below restores from stored accumulators).
+shape changes without a bump. Current-state consumers use the typed persisted
+read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
+reference projections for tests and explicit historical output.
 
 **Reducer snapshots.** The `BuildStore` port can keep, per scope (one build log
 or the repository journal) and registered reducer, that reducer's accumulator as
@@ -202,80 +202,57 @@ operations (including policy publication) and semantic build/harvest lifecycle
 facts for delegated authentication and issuance. Lifecycle snapshots keep session,
 execution and terminal evidence, including historical endings, without dispatcher
 tick tails. Anchor membership follows the contiguous log prefix. The legacy
-state-events route remains a deprecated compatibility exception to flat event-row
-reads. Existing work bundles and generic snapshot routes remain separate and
-compatible; the repository view's journal tail remains in memory only.
+state-events route remains a deprecated compatibility endpoint. Public generic
+snapshot routes remain compatible, but current consumer reads do not restore the
+former dispatcher work bundles.
 
-**Dispatcher repository view.** A dispatcher process builds its view of the
-repository once and refreshes it by deltas
-(`packages/core/src/processes/repo-view.ts`). `RepoViewStore` decorates the
-`BuildStore` port: the first `refresh()` reads the journal's high-water mark
-(`getRepoHighWater`), the bounded journal subset, the build listing and digests,
-and the full log of every build that still has work (the same predicate the tick
-loops use); every later `refresh()` reads only events newer than its cursors —
-one journal delta, one delta per held build, plus the listing and digest reads
-that discover new builds. Every tick stage reads and writes through the view, so
-an event a stage appends is folded in at once and later stages in the same tick
-see it with no re-read; a foreign append interleaved with ours leaves a seq gap
-that marks the log dirty, a lost compare-and-set does the same, and any delta
-that is not contiguous from its cursor discards the log and re-reads it in full,
-so no event is skipped. Every state transition of one source (a build, the
-journal) runs on that source's single promise chain — snapshot and delta reads,
-window opening and widening, the fold after an own append, a lost
-compare-and-set's invalidation — and readers queue on it too, so overlapping
-readers join the repair in flight instead of observing half-applied state.
-Decisions that deliberately re-read at the last moment
-(`refreshBuild`) take an explicit delta. Cursor-bearing readers such as the
-orchestrator wake pass get per-source windows that hold only events above the
-lowest session cursor. A `--once` invocation builds the view cold and reads each
-log once; a long-running dispatcher pays that replay at its first tick and not
-again.
+**Dispatcher repository view.** `RepoViewStore`
+(`packages/core/src/processes/repo-view.ts`) coordinates repository metadata and
+source promise chains. Its build and journal facts come from persisted reduced
+values. Reads after an append or lost conditional append consult that boundary
+again, so no process-local memo suppresses a required delta. The adapter owns
+cache persistence and recovery; the view neither writes work bundles nor hydrates
+whole logs for decisions. Discovery uses persisted build digests, including for
+settled builds. Raw methods forward actual cursor event output.
 
-On cold start, the view loads the journal through the bounded state-events
-query: durable types, latest-only facts, and the tail from the latest
-`dispatcher.run-started`. The journal tail is held only in memory; legacy
-`journalView` snapshots are neither loaded nor written. Each work build restores
-from one
-`work` snapshot row — the `build`, `logIndex`, `openExecution`,
-`openBuildWorkspace`, `publicationState`, `lastExecutionOutcome`, `buildDigest`,
-`dashboardFacts` and `currentDeferralObservation` accumulators at a single
-cursor. One row is one atomic write on every adapter, so a reader in another
-process sees the old bundle or the new, never a mix; the bundle version is
-derived from the component reducer versions, so a stale bundle misses and the
-build is replayed once. The view
-reads only the events newer than that cursor and holds, for a snapshot-backed
-build, just that delta plus the reduced state of everything before it, so a tick
-with no new build events reads zero build event rows (apart from the discovery
-listing and digests) and one with M new build events reads exactly M. A cold
-journal load still reads the bounded state-events subset; a resident view
-reads only its journal delta. Tick stages that run for every
-build each tick take `buildFacts(slug)` (state, log index, open execution, open
-workspace, publication view) instead of the event array, and read raw history
-only on the branches that act on it. `persistSnapshots()` writes the advanced
-state back at the end of each tick and on shutdown — best effort, throttled in a
-resident dispatcher, always run by a cold single-tick process — and never writes
-a cursor that was not read from the log.
+JSON-safe companion projections preserve collection and optional-value contracts.
+The build facts projection returns one prefix for engine routing; its log-index
+rounds and finalize steps reconstruct Maps and Sets explicitly, while publication
+selectors reconstruct from a JSON ledger. Repository facts retain configuration,
+control, Harvest, and dispatcher run correlations. Lease metadata and clocks stay
+outside event reducers: liveness combines durable run facts with the current
+repository record and observation time, including an older lease holder hidden
+by a newer run. The shared repository value keeps a bounded recent-run window, including the
+latest started and stopped runs. Fresh invocations use those shared facts for
+first-tick publication, liveness and supervision without creating a cold
+parameterized cache. Older holder correlations can use `dispatcherRunFacts` for
+the requested historical run. A never-started fresh invocation does not request
+historical correlation. Stopped dispatcher history is not copied into every
+current read.
 
-**Operator reads.** The web dashboard, the repository and Harvest status
-routes, the operator build listings, and the `ab watch`/`ab wait` discovery
-passes derive from that same view instead of replaying the log
-(`packages/core/src/operator/read-view.ts`). A dashboard row renders from the
-`BuildState` plus the `dashboardFacts` reducer
-(`packages/core/src/cli/dashboard/facts.ts`: queued-row dispatch text, session
-brackets, phase intervals, pause time, and the per-round loop-output seqs) and
-the auto-merge deferral ledger; `projectBuild(…, events)` is the same projection
-over the whole-array reduction, so the snapshot and replay paths cannot differ.
-Within one serving process, passes are single-flight per repository: requests
-arriving while a pass runs join the one trailing pass, which restores from the
-snapshot the previous pass persisted. A poll at idle therefore reads no event
-rows beyond snapshot lookups and build discovery, and a poll after M new events
-reads those M rows once, however many tabs or watchers the process serves.
-Serving processes do not coordinate: with P of them, each may read the same M
-rows once, so duplicate reads are bounded by P and never by history, tabs, or
-watchers. A settled build listed under `--all` is restored from the snapshot the
-dispatcher left at settlement, or read once and then persisted. The first
-operator poll after upgrading replays each work build once, because the stored
-bundle layout changed.
+**Operator and CLI reads.** Build listings and details, repository and Harvest
+status, dispatcher decisions, operator API queries, MCP delegation and web
+dashboard refreshes use the same typed persisted read helpers. Shared projection
+functions render those facts; whole-array overloads remain reference oracles.
+Operator passes are single-flight per repository, with requests arriving during a
+pass queued for one trailing pass. Fresh readers use persisted cache rows too;
+steady-state event-row cost depends on newly appended events at fixed build/run
+cardinality, not on log length. Reduced collections may legitimately grow in JSON
+size. Cache loss or corruption can replay history once to recover the same answer.
+
+Watch and wait register from a compound persisted `buildStreamSeed` at cursor C.
+Its build accumulator, deferral ledger and insertion-ordered historical PR
+eligibility describe that same prefix. Ordinary polling, including the first
+batch on an old build, reads only events after the cursor and advances that seed
+event by event, preserving state at event N in each emitted record. Watch uses
+historical eligibility for baseline suppression; wait retains its separate
+current-attention registration policy. Only an explicit `--since` older than C
+reconstructs a historical prefix once in `cli/historical-build-state.ts`.
+Actual event listings, transcripts and cursor streams remain raw reads. The
+interactive terminal frontend retains its independently established incremental
+feed. `tools/persisted-reduced-reads.test.ts` scans production TypeScript calls
+and maintains precise, reason-bearing exceptions for these boundaries and pure
+reference projections; stale exceptions fail the check.
 
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through

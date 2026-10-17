@@ -17,6 +17,10 @@ export function validateAccumulator(name: string, value: unknown): boolean {
   const root = (shapes.roots as Record<string, { acc: string }>)[name]
   return root !== undefined && matches(root.acc, value)
 }
+export function validateReducerValue(name: string, value: unknown): boolean {
+  const root = (shapes.roots as Record<string, { value: string }>)[name]
+  return root !== undefined && matches(root.value, value)
+}
 function json(value: unknown): boolean {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
   if (typeof value === 'number') return Number.isFinite(value)

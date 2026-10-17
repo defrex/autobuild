@@ -1,3 +1,4 @@
+import type { CurrentBuildFacts } from '../store/reduced-reads'
 import { summaryMarker } from '../ports/forge/summary-marker'
 import type { AbEvent } from '../events/catalog'
 import {
@@ -33,12 +34,21 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
 }
 
-export function renderPrAttachmentSection(env: CliEnv, events: readonly AbEvent[]): string[] {
-  const designations = currentPrAttachments(events)
+export function renderPrAttachmentSection(
+  env: CliEnv,
+  events: readonly AbEvent[] | CurrentBuildFacts,
+): string[] {
+  const designations = Array.isArray(events)
+    ? currentPrAttachments(events)
+    : (events as CurrentBuildFacts).designations
   if (designations.length === 0) return []
 
-  const target = frozenPrImageHost(events)
-  const hosted = hostedPrAttachments(events, designations)
+  const target = Array.isArray(events)
+    ? frozenPrImageHost(events)
+    : (events as CurrentBuildFacts).imageHost
+  const hosted = Array.isArray(events)
+    ? hostedPrAttachments(events, designations)
+    : new Map((events as CurrentBuildFacts).hostedImages)
   const lines = [
     '',
     '### PR attachments',
@@ -81,19 +91,39 @@ export function renderPrAttachmentSection(env: CliEnv, events: readonly AbEvent[
 }
 
 /** The complete PR summary projection, rendered only from durable facts. */
-export function renderPrSummary(env: CliEnv, events: readonly AbEvent[]): string {
+export function renderPrSummary(
+  env: CliEnv,
+  events: readonly AbEvent[] | CurrentBuildFacts,
+): string {
   const verdicts: string[] = []
   const verifies: string[] = []
-  for (const event of events) {
-    if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict') {
-      const phase = event.type === 'plan-review.verdict' ? 'plan-review' : 'code-review'
-      const count = event.payload.findings.length
+  const history = Array.isArray(events)
+    ? events.flatMap((event): CurrentBuildFacts['summaryHistory'] =>
+        event.type === 'plan-review.verdict' || event.type === 'code-review.verdict'
+          ? [
+              {
+                kind: 'review',
+                phase: event.type === 'plan-review.verdict' ? 'plan-review' : 'code-review',
+                round: event.payload.round,
+                verdict: event.payload.verdict,
+                count: event.payload.findings.length,
+              },
+            ]
+          : event.type === 'verify.completed'
+            ? [{ kind: 'verify', result: event.payload }]
+            : [],
+      )
+    : (events as CurrentBuildFacts).summaryHistory
+  for (const entry of history) {
+    if (entry.kind === 'review') {
+      const phase = entry.phase
+      const count = entry.count
       const detail =
-        event.payload.verdict === 'revise' ? ` (${count} finding${count === 1 ? '' : 's'})` : ''
-      verdicts.push(`- ${phase} r${event.payload.round}: ${event.payload.verdict}${detail}`)
+        entry.verdict === 'revise' ? ` (${count} finding${count === 1 ? '' : 's'})` : ''
+      verdicts.push(`- ${phase} r${entry.round}: ${entry.verdict}${detail}`)
     }
-    if (event.type === 'verify.completed') {
-      const result = normalizeVerifyCompletion(event.payload)
+    if (entry.kind === 'verify' && entry.result) {
+      const result = normalizeVerifyCompletion(entry.result)
       const detail =
         result.outcome === 'skipped'
           ? ` — ${html(result.reason ?? '')}`

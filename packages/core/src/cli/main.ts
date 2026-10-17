@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import type { PinnedAsset } from '../events/payloads'
 import { abConnect, abDisconnect } from './connect'
@@ -21,7 +22,6 @@ import { textContent } from '../store/types'
 import type { Forge } from '../ports/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
-import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
 import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
 import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
@@ -1372,8 +1372,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         // external side effect is best-effort after the atomic designation.
         if (attach) {
           try {
-            const events = await session.store.getEvents(session.env.build)
-            const pr = reduceBuild(events).pr
+            const events = (await readBuildFacts(session.store, session.env.build)).value
+            const pr = events.state.pr
             if (pr !== undefined) {
               try {
                 await preparePrAttachments(session, events, pr.url)

@@ -1,7 +1,6 @@
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { humanActor, type Via } from '../events/envelope'
 import type { RepositoryEventEnvelope } from '../events/repository'
-import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import { reduceHarvest } from '../kernel/harvest'
 import type { BuildStore } from '../store/types'
 import { projectHarvest, type HarvestRunAction } from '../cli/dashboard/model'
 
@@ -65,7 +64,7 @@ export async function toggleRepositorySetting(opts: {
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   // Bounded read (AUT-489): the settings reducer consumes durable types only.
-  const settings = reduceDispatchSettings(await opts.store.getRepoStateEvents(opts.repo))
+  const settings = (await readRepositoryFacts(opts.store, opts.repo)).value.settings
   const enabled = opts.setting === 'intake' ? !settings.intake : !settings.defaultAutoMerge
   return setRepositorySetting({ ...opts, enabled })
 }
@@ -78,7 +77,7 @@ export async function toggleHarvestGate(opts: {
 }): Promise<{ command: 'pause' | 'resume'; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   // Bounded read (AUT-489): the harvest reducer consumes durable types only.
-  const state = reduceHarvest(await opts.store.getRepoStateEvents(opts.repo))
+  const state = (await readRepositoryFacts(opts.store, opts.repo)).value.harvest
   const pending = state.pendingCommands.at(-1)
   const requestedPaused = pending === undefined ? state.paused : pending.command === 'pause'
   const command = requestedPaused ? 'resume' : 'pause'
@@ -101,8 +100,8 @@ export async function controlHarvestRun(opts: {
   await opts.store.ensureRepo(opts.repo)
   // Bounded read (AUT-489): the harvest reducer and the dashboard harvest
   // projection consume durable types only.
-  const events = await opts.store.getRepoStateEvents(opts.repo)
-  const state = reduceHarvest(events)
+  const events = (await readRepositoryFacts(opts.store, opts.repo)).value
+  const state = events.harvest
   const projected = projectHarvest(events)
   if (projected === undefined || projected.run !== opts.run) {
     throw new OperatorControlError(

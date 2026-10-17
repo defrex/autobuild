@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 /**
  * Repository-wide quiescence: one keypress that parks every running build and
  * stops intake, and one that reverses it.
@@ -59,7 +60,7 @@
  * what the operator sees, and a unit test pins that agreement.
  */
 import { humanActor, type Actor, type Via } from '../events/envelope'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { BuildState } from '../kernel/reducer'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord, BuildStore } from '../store/types'
 import { BuildControlError, buildControlUser } from './build-control'
@@ -132,7 +133,7 @@ async function requestOne(
   direction: BulkDirection,
 ): Promise<boolean> {
   while (true) {
-    const state = reduceBuild(await store.getEvents(slug))
+    const state = (await readBuildFacts(store, slug)).value.state
     if (!eligible(state, direction)) return false
     // The two branches are written out rather than selecting the event type
     // into a variable so `appendIfCurrent`'s `T extends EventType` infers a

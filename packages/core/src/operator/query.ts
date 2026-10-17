@@ -1,3 +1,9 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import {
+  readBuildFacts,
+  readRepositoryFacts,
+  type RepositoryReadFacts,
+} from '../store/reduced-reads'
 import { readDispatcherLiveness } from '../cli/dispatcher-liveness'
 import { composeBuildConfig } from '../config/live'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
@@ -9,26 +15,25 @@ import {
 } from '../processes/build-execution-state'
 import type { Artifact } from '../store/types'
 import {
-  detail,
+  detailFromFacts,
   statusFilter,
   summarizeFrom,
   type BuildDetail,
   type BuildSummary,
 } from '../cli/status'
-import { projectRepositoryStatus, type RepositoryStatus } from '../cli/repository-status'
+import { repositoryStatusFromFacts, type RepositoryStatus } from '../cli/repository-status'
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
 import {
   buildDashboardFromProjected,
   effectiveStatus,
-  projectBuild,
   projectBuildFromFacts,
   type DashboardBuild,
   type DashboardModel,
 } from '../cli/dashboard/model'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { BuildState } from '../kernel/reducer'
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
+import { unclaimedObservationCount } from '../processes/harvest'
 import type { RepoViewStore } from '../processes/repo-view'
 import { withOperatorView } from './read-view'
 import type { RepositoryEvent } from '../events/repository'
@@ -74,7 +79,7 @@ async function listFromView(
   // finished builds accumulate. The `--all` scope includes terminal statuses,
   // so it takes no digest read and skips nothing; its terminal builds are
   // restored from the reducer snapshots the dispatcher leaves at settlement.
-  const digests = opts.scope === 'all' ? undefined : await view.getRepoBuildDigests(opts.repo)
+  const digests = opts.scope === 'all' ? undefined : await readBuildDigests(view, opts.repo)
   const output: BuildSummary[] = []
   for (const record of records) {
     if (record.repo !== opts.repo) continue
@@ -114,14 +119,19 @@ export async function effectiveConfig(
   repo: string,
   /** The bounded journal, when the caller already holds it (a repository
    * view); otherwise it is read from the store. */
-  journal?: RepositoryEvent[],
+  journal?: RepositoryReadFacts,
 ): Promise<{
   config: Config
-  repositoryEvents: RepositoryEvent[]
+  repositoryEvents: RepositoryReadFacts
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
-  const repositoryEvents = journal ?? (await readRepoEventsIfRecorded(store, repo))
-  const status = selectEffectiveConfig(repositoryEvents, repo)
+  const repositoryEvents = journal ?? (await readRepositoryFacts(store, repo)).value
+  const status = repositoryEvents.status
+  if (status?.effectiveConfig === undefined)
+    throw new OperatorQueryError(
+      'effective-config-unavailable',
+      `effective config unavailable for repository "${repo}"${repositoryEvents.config.run === undefined ? ': no dispatcher run is recorded' : ''}`,
+    )
   const ref = status.effectiveConfig!
   const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
   if (artifact === null) {
@@ -258,19 +268,19 @@ export async function getOperatorBuild(opts: {
   now: Date
 }): Promise<OperatorBuildView> {
   const record = await requireBuild(opts.store, opts.repo, opts.slug)
-  const events = await opts.store.getEvents(opts.slug)
-  const state = reduceBuild(events)
+  const facts = (await readBuildFacts(opts.store, opts.slug)).value
+  const state = facts.state
   const { config } = await effectiveConfig(opts.store, opts.repo)
   let dashboardRow: DashboardBuild | null = null
   if (!projectsNoDashboardRow(state)) {
     const pinned = await readPinnedConfig(opts.store, opts.slug, config)
-    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    const row = projectBuildFromFacts(record, state, facts, config, undefined, pinned.config)
     // Implied by the gate; kept as an explicit check (not an assertion) so the
     // code never lies if `effectiveStatus` and `projectBuild` ever drift.
     if (row !== null) dashboardRow = decorateWithPinnedMeta(row, pinned)
   }
   return {
-    detail: detail(record, events, opts.now),
+    detail: detailFromFacts(record, facts, opts.now),
     dashboardRow,
   }
 }
@@ -281,8 +291,12 @@ export async function getRepositoryStatus(
   now = new Date(),
 ): Promise<RepositoryStatus> {
   return withOperatorView(store, repo, 'journal', async (view) => {
-    const { dispatcher } = await readDispatcherLiveness(store, repo, now, view.recordedJournal())
-    return projectRepositoryStatus(repo, view.recordedJournal(), dispatcher)
+    const { dispatcher } = await readDispatcherLiveness(store, repo, now)
+    return repositoryStatusFromFacts(
+      repo,
+      (await readRepositoryFacts(view, repo)).value,
+      dispatcher,
+    )
   })
 }
 
@@ -291,7 +305,7 @@ export async function getHarvestStatus(
   repo: string,
 ): Promise<HarvestStatusView> {
   return withOperatorView(store, repo, 'journal', async (view) =>
-    projectHarvestStatus(repo, view.recordedJournal()),
+    projectHarvestStatus(repo, view.repositoryFacts()),
   )
 }
 
@@ -321,7 +335,7 @@ async function dashboardFromView(
   const { config, repositoryEvents, status } = await effectiveConfig(
     view,
     opts.repo,
-    view.recordedJournal(),
+    view.repositoryFacts(),
   )
   const records = await view.listBuilds()
   // One digest read covers every build of the repository (AUT-487): the
@@ -330,7 +344,7 @@ async function dashboardFromView(
   // builds accumulate. Row-rendering builds derive from the repository view's
   // reducer snapshots plus a delta read (AUT-650); every snapshot is a cache
   // the event log regenerates, so the response equals a full replay's.
-  const digests = await view.getRepoBuildDigests(opts.repo)
+  const digests = await readBuildDigests(view, opts.repo)
   const projected: DashboardBuild[] = []
   let activeCount = 0
   for (const record of records) {
@@ -372,7 +386,10 @@ async function dashboardFromView(
   // `effectiveConfig` already returned — no per-build history reads (AUT-487).
   // The pure core writes nothing — a snapshot performs no store writes and
   // never creates or locks the repository record.
-  const observationCount = unclaimedObservationCount({ digests, harvestEvents: repositoryEvents })
+  const observationCount = unclaimedObservationCount({
+    digests,
+    harvestEvents: repositoryEvents.harvest,
+  })
   const warningLines = [
     ...status.roleWarnings,
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),

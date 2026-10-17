@@ -1,11 +1,10 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
-import {
-  reduceTicketSourceHealth,
-  type TicketSourceDegradation,
-} from '../kernel/ticket-source-health'
+import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
  * The dispatcher process (SPEC §3.3, §12): watches the TicketSource for
  * Ready tickets, claims, provisions a workspace, and launches build-runners
@@ -60,21 +59,18 @@ import {
 } from '../kernel/auto-merge'
 import {
   autoMergeDefaultTarget,
-  latestAutoMergeDefault,
+  pickAutoMergeDefault,
   type AutoMergeDefaultFact,
 } from '../kernel/auto-merge-default'
-import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { decideNextFromFacts } from '../kernel/engine'
 import { composeBuildConfig } from '../config/live'
 import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
-  harvestCreationsDuringReadyScan,
-  reduceHarvest,
+  harvestCreationsFromStates,
 } from '../kernel/harvest'
-import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { BuildState } from '../kernel/reducer'
 import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
 import type { ArtifactRef, TicketRef } from '../ontology'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
@@ -94,19 +90,9 @@ import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { settleOpenExecution } from './execution-settlement'
-import { openHarvestExecutions } from './harvest-execution-state'
 import { isWorkDigest, RepoViewStore } from './repo-view'
-import {
-  baseBranchReducer,
-  openBuildWorkspace,
-  provisionMarkerReducer,
-  recoveryCheckpointReducer,
-  type OpenBuildWorkspace,
-  type ProvisionMarker,
-} from './dispatcher-selectors'
-import type { RepositoryEvent } from '../events/repository'
-import { sandboxStates } from './sandbox-state'
-import { settlePublicationBeforeRelease } from './publication-loss'
+import type { OpenBuildWorkspace, ProvisionMarker } from './dispatcher-selectors'
+import { settlePublicationFactsBeforeRelease } from './publication-loss'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
 
@@ -611,14 +597,14 @@ export interface DispatcherDeps {
 /** Latest `workspace.provisioned` not followed by a `workspace.released` —
  * the reducer deliberately ignores workspace events (liveness is the
  * dispatcher's concern), so the janitor scans the raw log. */
-function openWorkspace(events: AbEvent[]): OpenBuildWorkspace | null {
-  return openBuildWorkspace(events)
+function openWorkspace(events: CurrentBuildFacts): OpenBuildWorkspace | null {
+  return events.workspace
 }
 
 /** The build's base branch, from its own `build.created` fact (§15.3);
  * falls back to the repo config for logs missing one. */
-function baseBranchOf(events: AbEvent[], config: Config): string {
-  return baseBranchReducer.reduce(events) ?? config.baseBranch
+function baseBranchOf(events: CurrentBuildFacts, config: Config): string {
+  return events.baseBranch ?? config.baseBranch
 }
 
 function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
@@ -759,14 +745,7 @@ export class Dispatcher {
   }
 
   async tick(opts: TickOpts = {}): Promise<TickReport> {
-    try {
-      return await this.runTick(opts)
-    } finally {
-      // Leave this tick's reduced state behind for the next process (a cache;
-      // a failure to write it is never a tick failure). Throttled in a
-      // resident dispatcher, always run by a cold single-tick process.
-      await this.store.persistSnapshots()
-    }
+    return this.runTick(opts)
   }
 
   private async runTick(opts: TickOpts): Promise<TickReport> {
@@ -791,9 +770,9 @@ export class Dispatcher {
     // likewise samples before calling `tick`); the auto-merge default fact is
     // the durable driver of this tick's fan-out below. Neither control
     // pretends to a serialization the store does not offer.
-    const repoEvents = this.store.recordedJournal()
-    const paused = reduceDispatchSettings(repoEvents).paused
-    const autoMergeDefault = latestAutoMergeDefault(repoEvents)
+    const repoFacts = this.store.repositoryFacts()
+    const paused = repoFacts.settings.paused
+    const autoMergeDefault = pickAutoMergeDefault(repoFacts.autoMerge)
     // The claim-time seed cites the newest fact whose enabled state matches
     // the launch sample, not blindly the newest fact: the CLI samples
     // `defaultAutoMerge` from its own earlier read, so an interleaved toggle
@@ -802,7 +781,7 @@ export class Dispatcher {
     // so the fan-out reconciles the build on the next tick instead of the
     // stale sample out-voting the durable default forever (f_b851c0e8).
     const autoMergeSeedFact =
-      opts.defaultAutoMerge === true ? latestAutoMergeDefault(repoEvents, true) : undefined
+      opts.defaultAutoMerge === true ? pickAutoMergeDefault(repoFacts.autoMerge, true) : undefined
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
     // provider liveness and settle their completion, lease, and publication.
     // Runs before the janitor so its executionLeaseLive checks see freshly
@@ -916,7 +895,7 @@ export class Dispatcher {
     const store = this.store
     const { repo } = this.deps
     const records = (await store.listBuilds()).filter((record) => record.repo === repo)
-    const digests = await store.getRepoBuildDigests(repo)
+    const digests = await readBuildDigests(store, repo)
     return records.map((record) => {
       const digest = digests.get(record.slug)
       if (digest === undefined) {
@@ -952,7 +931,7 @@ export class Dispatcher {
     successfulOperation?: 'ready-scan' | 'dependency-check',
   ): Promise<void> {
     await this.store.refreshJournal()
-    const current = reduceTicketSourceHealth(this.store.recordedJournal())
+    const current = this.store.repositoryFacts().health
     if (next !== undefined && current?.cause === next.cause && current.source === next.source) {
       if (
         next.cause === 'rate-limited' &&
@@ -1082,12 +1061,7 @@ export class Dispatcher {
   }
 
   private latestScan() {
-    return this.store
-      .recordedJournal()
-      .findLast(
-        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }> =>
-          event.type === 'dispatcher.ticket-scan-completed',
-      )?.payload
+    return this.store.repositoryFacts().scan
   }
 
   private restoreScan(report: TickReport): void {
@@ -1219,7 +1193,7 @@ export class Dispatcher {
       return
     }
     // Bounded subset (AUT-489): the harvest reducer consumes durable types only.
-    const state = reduceHarvest(this.store.recordedJournal())
+    const state = this.store.repositoryFacts().harvest
     if (decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !== 'park') {
       start()
     }
@@ -1305,13 +1279,13 @@ export class Dispatcher {
    * repository lease. */
   private async settleHarvestExecutions(opts: TickOpts = {}): Promise<void> {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
-    let events: RepositoryEvent[]
+    let facts: ReturnType<RepoViewStore['repositoryFacts']>
     try {
       // The earlier stages awaited providers; take the journal delta so a
       // foreign append (operator activity, harvest facts) made meanwhile is
       // seen before any destructive decision below.
       await this.store.refreshJournal()
-      events = this.store.recordedJournal()
+      facts = this.store.repositoryFacts()
     } catch {
       // The read itself failed (a transient store error — a missing record
       // answers `[]` inside the helper, so it never reaches this arm):
@@ -1319,7 +1293,7 @@ export class Dispatcher {
       // tick proceeds, and the next tick retries what remains.
       return
     }
-    for (const execution of openHarvestExecutions(events)) {
+    for (const execution of facts.openHarvest) {
       if (active.has(execution.execution)) continue
       // Budget gate: once spent, stop settling further harvest executions;
       // the next tick retries what remains.
@@ -1408,13 +1382,13 @@ export class Dispatcher {
     const capability = this.deps.workspaces.orchestratorSandbox
     if (capability === undefined) return
     const providerName = this.deps.workspaces.name
-    let events: RepositoryEvent[]
+    let facts: ReturnType<RepoViewStore['repositoryFacts']>
     try {
       // The earlier stages awaited providers; take the journal delta so a
       // foreign append (operator activity, harvest facts) made meanwhile is
       // seen before any destructive decision below.
       await this.store.refreshJournal()
-      events = this.store.recordedJournal()
+      facts = this.store.repositoryFacts()
     } catch {
       // The read itself failed (a transient store error — a missing record
       // answers `[]` inside the helper, so it never reaches this arm):
@@ -1423,7 +1397,7 @@ export class Dispatcher {
       return
     }
     const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
-    for (const environment of sandboxStates(events)) {
+    for (const environment of facts.sandboxes) {
       if (environment.state !== 'live') continue
       // Budget gate: once spent, stop settling further environments; the
       // next tick retries what remains.
@@ -1505,8 +1479,8 @@ export class Dispatcher {
 
   /** The latest `workspace.provision-started` not yet followed by a
    * provisioned/released fact — an open provisioning marker. */
-  private openProvisionMarker(events: AbEvent[]): ProvisionMarker | undefined {
-    return provisionMarkerReducer.reduce(events)
+  private openProvisionMarker(events: CurrentBuildFacts): ProvisionMarker | undefined {
+    return events.provisionMarker
   }
 
   /** Liveness of the lease behind an open provision marker: `live` means a
@@ -1527,7 +1501,7 @@ export class Dispatcher {
    * report progress without awaiting any of it. */
   private async ensureProvisionContinuation(
     record: BuildRecord,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     tail: 'dispatch' | 'launch',
     seed?: {
       ticket: Ticket
@@ -1543,12 +1517,7 @@ export class Dispatcher {
     const marker = this.openProvisionMarker(events)
     if (marker !== undefined) {
       const liveness = await this.provisionMarkerLiveness(slug)
-      const failedAttempt = events.some(
-        (event) =>
-          event.type === 'dispatch.failed' &&
-          event.payload.stage === 'workspace' &&
-          event.seq > marker.seq,
-      )
+      const failedAttempt = events.latestWorkspaceFailureSeq > marker.seq
       if (liveness === 'live') return 'foreign-live'
       if (
         liveness === 'absent' &&
@@ -1563,7 +1532,7 @@ export class Dispatcher {
       // Expired lease, failed attempt, or an old lease-less marker: adopt.
     }
     const branch = record.branch ?? `ab/${slug}`
-    const generation = events.filter((event) => event.type === 'workspace.provisioned').length
+    const generation = events.workspaceGenerations
     await this.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.provision-started',
@@ -1643,10 +1612,8 @@ export class Dispatcher {
         // so the next supervisor adopts the marker immediately.
         return
       }
-      const events = await store.getEvents(slug)
-      const priorGenerations = events.filter(
-        (event) => event.type === 'workspace.provisioned',
-      ).length
+      const events = (await readBuildFacts(store, slug)).value
+      const priorGenerations = events.workspaceGenerations
       const handle = await workspaces.provision({
         // Local providers provision FROM the physical checkout; remote
         // providers ignore the value (their host seams are injected).
@@ -1689,7 +1656,7 @@ export class Dispatcher {
       boundary = 'read'
       const record = await store.getBuild(slug)
       if (record === null) return
-      const queued = reduceBuild(await store.getEvents(slug)).status === 'queued'
+      const queued = (await readBuildFacts(store, slug)).value.state.status === 'queued'
       boundary = input.tail === 'dispatch' || queued ? 'dispatch' : 'launch'
       if (boundary === 'dispatch') await this.completeDispatchBoundaries(record, input.seed)
       else await this.deps.launchRunner(slug)
@@ -1699,10 +1666,10 @@ export class Dispatcher {
       // tick; it is not another provider workspace failure. Replacement
       // runner launch errors retain the existing infrastructure-budget path.
       if (boundary === 'read' || boundary === 'dispatch') return
-      const events = await store.getEvents(slug)
+      const events = (await readBuildFacts(store, slug)).value
       if (workspaces.recovery !== undefined) {
         const open = openWorkspace(events)
-        const latestRef = [...events].reverse().find((event) => event.type === 'workspace.released')
+        const latestRef = events.latestRelease
         await this.recordInfrastructureFailure(slug, events, {
           provider: workspaces.name,
           workspaceRef:
@@ -1715,7 +1682,7 @@ export class Dispatcher {
           cleanupPending: true,
         })
       }
-      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const attempt = events.dispatchFailureCount + 1
       const message = (error instanceof Error ? error.message : String(error)).trim()
       await store.append(slug, {
         actor: DISPATCHER,
@@ -1764,9 +1731,9 @@ export class Dispatcher {
     for (const entry of entries) entry.controller.abort()
     for (const entry of entries) {
       try {
-        const events = await this.store.getEvents(entry.slug)
+        const events = (await readBuildFacts(this.store, entry.slug)).value
         if (this.openProvisionMarker(events) !== undefined) {
-          const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+          const attempt = events.dispatchFailureCount + 1
           await this.store.append(entry.slug, {
             actor: DISPATCHER,
             type: 'dispatch.failed',
@@ -1816,9 +1783,9 @@ export class Dispatcher {
         const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Raw history, read at most once and only by a branch that acts on it:
         // the facts above answer every quiet-path question without it.
-        let loaded: AbEvent[] | undefined
-        const history = async (): Promise<AbEvent[]> => {
-          loaded ??= await this.store.getEvents(record.slug)
+        let loaded: CurrentBuildFacts | undefined
+        const history = async (): Promise<CurrentBuildFacts> => {
+          loaded ??= (await readBuildFacts(this.store, record.slug)).value
           return loaded
         }
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
@@ -1881,7 +1848,7 @@ export class Dispatcher {
     }
   }
 
-  private forgeWorkspacePath(events: AbEvent[]): string {
+  private forgeWorkspacePath(events: CurrentBuildFacts): string {
     return this.forgeWorkspacePathOf(openWorkspace(events))
   }
 
@@ -1905,7 +1872,7 @@ export class Dispatcher {
    * repeating on later ticks. `build.completed` is deliberately last. */
   private async cleanupAborted(
     record: BuildRecord,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     report: TickReport,
   ): Promise<void> {
     const store = this.store
@@ -1919,13 +1886,11 @@ export class Dispatcher {
     // in the main checkout, and origin mode has no checkout at all: the
     // local-branch git step is skipped, and the saga's later steps tolerate
     // its absence.
-    const hadLocalWorkspace = events.some(
-      (event) => event.type === 'workspace.provisioned' && !isRemoteWorkspace(event.payload),
-    )
-    const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
+    const hadLocalWorkspace = events.localWorkspace
+    const has = (type: AbEvent['type']): boolean => events.seenTypes.includes(type)
     const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
-      const event = await store.append(record.slug, write)
-      events.push(event as AbEvent)
+      const _event = await store.append(record.slug, write)
+      Object.assign(events, (await readBuildFacts(store, record.slug)).value)
     }
     const fail = (operation: string, identity: string, error: unknown): never => {
       const detail = error instanceof Error ? error.message : String(error)
@@ -1942,7 +1907,7 @@ export class Dispatcher {
       }
     }
 
-    const reduced = reduceBuild(events)
+    const reduced = events.state
     if (reduced.pr !== undefined && !has('pr.closed') && !has('pr.merged')) {
       const closePr = forge.closePr
       if (closePr === undefined) {
@@ -1972,7 +1937,8 @@ export class Dispatcher {
 
     try {
       const released = await this.releaseWorkspace(record.slug, events, 'abort')
-      if (released !== undefined) events.push(released)
+      if (released !== undefined)
+        Object.assign(events, (await readBuildFacts(store, record.slug)).value)
     } catch (error) {
       fail('workspace release', `build ${record.slug}`, error)
     }
@@ -2069,7 +2035,7 @@ export class Dispatcher {
    * every partial cleanup is retried after a crash. */
   private async cleanupDiscarded(
     record: BuildRecord,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     report: TickReport,
   ): Promise<void> {
     const store = this.store
@@ -2099,7 +2065,7 @@ export class Dispatcher {
     record: BuildRecord,
     // `workspace` is the open workspace fact; `history` loads the raw log, which
     // only the branches that act on a PR transition need.
-    source: { history: () => Promise<AbEvent[]>; workspace: OpenBuildWorkspace | null },
+    source: { history: () => Promise<CurrentBuildFacts>; workspace: OpenBuildWorkspace | null },
     state: BuildState,
     report: TickReport,
     launched: Set<string>,
@@ -2139,12 +2105,12 @@ export class Dispatcher {
       if (state.prState === 'conflicted') return
       const events = await source.history()
       const baseSha = await this.baseSha(baseBranchOf(events, this.deps.config))
-      const conflicted = await store.append(record.slug, {
+      const _conflicted = await store.append(record.slug, {
         actor: DISPATCHER,
         type: 'pr.conflicted',
         payload: { baseSha },
       } satisfies EventWrite<'pr.conflicted'>)
-      events.push(conflicted)
+      Object.assign(events, (await readBuildFacts(this.store, record.slug)).value)
       if (openWorkspace(events) === null && this.deps.workspaces.recovery !== undefined) {
         // The reconcile workspace is provisioned by the tracked background
         // continuation, whose tail re-attaches the build-runner; this tick
@@ -2270,12 +2236,9 @@ export class Dispatcher {
    * is deliberately post-terminal and best-effort: a provider, timeout, or
    * store failure cannot roll back build.completed/ticket/workspace work.
    * Pending handles remain derivable and are retried on every later tick. */
-  private async reclaimPrAttachments(slug: string, events: AbEvent[]): Promise<void> {
-    for (const hosted of pendingPrAttachmentReclaims(events)) {
-      const priorAttempts = events.filter(
-        (event) =>
-          event.type === 'pr-attachment.reclaim-failed' && event.payload.hostedSeq === hosted.seq,
-      ).length
+  private async reclaimPrAttachments(slug: string, events: CurrentBuildFacts): Promise<void> {
+    for (const hosted of events.pendingAttachments) {
+      const priorAttempts = events.reclaimCounts[String(hosted.seq)] ?? 0
       try {
         const capability = this.deps.forge.prAttachments
         if (capability === undefined) {
@@ -2315,13 +2278,13 @@ export class Dispatcher {
     }
   }
 
-  private recoveryCheckpoint(events: AbEvent[]): string | undefined {
-    return recoveryCheckpointReducer.reduce(events)
+  private recoveryCheckpoint(events: CurrentBuildFacts): string | undefined {
+    return events.recoveryCheckpoint
   }
 
   private async recordInfrastructureFailure(
     slug: string,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     input: {
       provider: string
       workspaceRef: string
@@ -2330,8 +2293,8 @@ export class Dispatcher {
       cleanupPending: boolean
     },
   ): Promise<void> {
-    const execution = [...events].reverse().find((event) => event.type === 'execution.started')
-    const appended = await appendInfrastructureFailure(
+    const execution = events.state.executions.at(-1)
+    const _appended = await appendInfrastructureFailure(
       { store: this.store, ids: this.deps.ids },
       {
         slug,
@@ -2339,22 +2302,19 @@ export class Dispatcher {
         maxAttempts: this.deps.config.policy.maxInfrastructureAttempts,
         provider: input.provider,
         workspaceRef: input.workspaceRef,
-        instance:
-          execution?.type === 'execution.started'
-            ? execution.payload.instance
-            : 'dispatcher-recovery',
-        ...(execution?.type === 'execution.started' && execution.payload.environmentId !== undefined
-          ? { environmentId: execution.payload.environmentId }
+        instance: execution !== undefined ? execution.instance : 'dispatcher-recovery',
+        ...(execution !== undefined && execution.environmentId !== undefined
+          ? { environmentId: execution.environmentId }
           : {}),
-        ...(execution?.type === 'execution.started' && execution.payload.sessionId !== undefined
-          ? { sessionId: execution.payload.sessionId }
+        ...(execution !== undefined && execution.sessionId !== undefined
+          ? { sessionId: execution.sessionId }
           : {}),
         operation: input.operation,
         error: input.error,
         cleanupPending: input.cleanupPending,
       },
     )
-    events.push(...appended)
+    Object.assign(events, (await readBuildFacts(this.store, slug)).value)
   }
 
   /** The provider that owns a recorded workspace: the one named on its
@@ -2370,7 +2330,7 @@ export class Dispatcher {
    * only after exact-name cleanup is durably acknowledged. */
   private async reapStaleWorkspace(
     slug: string,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     reason: 'pause' | 'blocked' | 'replacement',
   ): Promise<boolean> {
     const open = openWorkspace(events)
@@ -2381,18 +2341,13 @@ export class Dispatcher {
     // publication's fate BEFORE the destructive reap. The guard's append
     // failure propagates — a stale workspace with an unrecorded pending
     // request is never reaped (the next tick retries).
-    events = await settlePublicationBeforeRelease(
+    events = await settlePublicationFactsBeforeRelease(
       { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
       reason,
     )
-    const attempt =
-      events.filter(
-        (event) =>
-          event.type === 'infrastructure.cleanup-attempted' &&
-          event.payload.workspaceRef === open.ref,
-      ).length + 1
+    const attempt = (events.cleanupCounts[JSON.stringify(open.ref)] ?? 0) + 1
     try {
       const outcome = await recovery.reap({
         provider: open.provider,
@@ -2401,7 +2356,7 @@ export class Dispatcher {
         ...(open.localPath !== undefined ? { localPath: open.localPath } : {}),
         branch: open.branch,
       })
-      const cleaned = await this.store.append(slug, {
+      const _cleaned = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'infrastructure.cleanup-attempted',
         payload: {
@@ -2413,17 +2368,17 @@ export class Dispatcher {
           snapshots: outcome.snapshots,
         },
       })
-      events.push(cleaned)
-      const released = await this.store.append(slug, {
+      Object.assign(events, (await readBuildFacts(this.store, slug)).value)
+      const _released = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'workspace.released',
         payload: { ref: open.ref, reason },
       })
-      events.push(released)
+      Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const failed = await this.store.append(slug, {
+      const _failed = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'infrastructure.cleanup-attempted',
         payload: {
@@ -2435,7 +2390,7 @@ export class Dispatcher {
           error: message || 'cleanup failed without an error message',
         },
       })
-      events.push(failed)
+      Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       await this.recordInfrastructureFailure(slug, events, {
         provider: open.provider,
         workspaceRef: open.ref,
@@ -2451,7 +2406,7 @@ export class Dispatcher {
    * append `workspace.released`. Log-deduped, so re-runs are no-ops. */
   private async releaseWorkspace(
     slug: string,
-    events: AbEvent[],
+    events: CurrentBuildFacts,
     reason: 'completion' | 'abort' | 'pause' | 'blocked' | 'replacement' | 'discard' = 'completion',
   ): Promise<AbEvent | undefined> {
     const open = openWorkspace(events)
@@ -2470,7 +2425,7 @@ export class Dispatcher {
     // pending publication BEFORE any provider cleanup call, while the
     // workspace still exists. The guard's append failure propagates — the
     // release never proceeds past an unrecorded pending request.
-    events = await settlePublicationBeforeRelease(
+    events = await settlePublicationFactsBeforeRelease(
       { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
@@ -2478,15 +2433,10 @@ export class Dispatcher {
     )
     const recovery = owner.recovery
     if (recovery !== undefined) {
-      const attempt =
-        events.filter(
-          (event) =>
-            event.type === 'infrastructure.cleanup-attempted' &&
-            event.payload.workspaceRef === open.ref,
-        ).length + 1
+      const attempt = (events.cleanupCounts[JSON.stringify(open.ref)] ?? 0) + 1
       try {
         const outcome = await recovery.reap(handle)
-        const cleaned = await this.store.append(slug, {
+        const _cleaned = await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'infrastructure.cleanup-attempted',
           payload: {
@@ -2498,10 +2448,10 @@ export class Dispatcher {
             snapshots: outcome.snapshots,
           },
         })
-        events.push(cleaned)
+        Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const failed = await this.store.append(slug, {
+        const _failed = await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'infrastructure.cleanup-attempted',
           payload: {
@@ -2513,7 +2463,7 @@ export class Dispatcher {
             error: message || 'cleanup failed without an error message',
           },
         })
-        events.push(failed)
+        Object.assign(events, (await readBuildFacts(this.store, slug)).value)
         await this.recordInfrastructureFailure(slug, events, {
           provider: open.provider,
           workspaceRef: open.ref,
@@ -2639,9 +2589,9 @@ export class Dispatcher {
     if (!(await this.dispatchBudget(record.slug))) return 'parked'
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
     try {
-      let events = await store.getEvents(record.slug)
-      if (!events.some((event) => event.type === 'build.created')) {
-        if (events.length !== 0 || record.ticket === undefined) {
+      let events = (await readBuildFacts(store, record.slug)).value
+      if (events.created === undefined) {
+        if (events.state.lastSeq !== 0 || record.ticket === undefined) {
           throw new Error(
             'build record lacks the immutable ticket facts needed to reconstruct build.created',
           )
@@ -2664,22 +2614,19 @@ export class Dispatcher {
           type: 'build.created',
           payload: this.buildCreatedPayload(record.ticket, record.repo, { ...seed, assets }),
         })
-        events = await store.getEvents(record.slug)
-        if (!events.some((event) => event.type === 'build.created')) {
+        events = (await readBuildFacts(store, record.slug)).value
+        if (events.created === undefined) {
           throw new Error('build.created reconstruction lost its conditional append race')
         }
       }
 
-      const created = events.find((event) => event.type === 'build.created')
+      const created = events.created
       const autoMergeUser = seed?.autoMergeUser ?? created?.payload.autoMergeRequestedBy
       // The claim's sampled default fact, for the request's fan-out provenance:
       // the seed's own value first (this dispatch created the build), else the
       // durable `build.created` fact a recovery pass resumes from.
       const autoMergeDefaultSeq = seed?.autoMergeDefaultSeq ?? created?.payload.autoMergeDefaultSeq
-      if (
-        autoMergeUser !== undefined &&
-        !events.some((event) => event.type === 'build.auto-merge-requested')
-      ) {
+      if (autoMergeUser !== undefined && !events.autoMergeEverRequested) {
         await store.append(record.slug, {
           actor: humanActor(autoMergeUser),
           type: 'build.auto-merge-requested',
@@ -2687,7 +2634,7 @@ export class Dispatcher {
             ...(autoMergeDefaultSeq !== undefined ? { defaultSeq: autoMergeDefaultSeq } : {}),
           },
         })
-        events = await store.getEvents(record.slug)
+        events = (await readBuildFacts(store, record.slug)).value
       }
 
       stage = 'workspace'
@@ -2702,9 +2649,7 @@ export class Dispatcher {
           launched.add(record.slug)
           return 'deferred'
         }
-        const priorGenerations = events.filter(
-          (event) => event.type === 'workspace.provisioned',
-        ).length
+        const priorGenerations = events.workspaceGenerations
         const handle = await this.deps.workspaces.provision({
           // Local providers provision FROM the physical checkout; remote
           // providers ignore the value (their host seams are injected).
@@ -2731,10 +2676,10 @@ export class Dispatcher {
             base: handle.base,
           },
         } satisfies EventWrite<'workspace.provisioned'>)
-        events = await store.getEvents(record.slug)
+        events = (await readBuildFacts(store, record.slug)).value
       }
     } catch (error) {
-      const events = await store.getEvents(record.slug)
+      const events = (await readBuildFacts(store, record.slug)).value
       if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
         const open = openWorkspace(events)
         await this.recordInfrastructureFailure(record.slug, events, {
@@ -2745,7 +2690,7 @@ export class Dispatcher {
           cleanupPending: true,
         })
       }
-      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const attempt = events.dispatchFailureCount + 1
       const message = (error instanceof Error ? error.message : String(error)).trim()
       await store.append(record.slug, {
         actor: DISPATCHER,
@@ -2785,12 +2730,10 @@ export class Dispatcher {
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'spec'
     let authored = false
     try {
-      const events = await store.getEvents(record.slug)
-      const state = reduceBuild(events)
+      const events = (await readBuildFacts(store, record.slug)).value
+      const state = events.state
       if (state.status !== 'queued' || state.discardRequest !== undefined) return 'parked'
-      if (
-        !events.some((event) => event.type === 'spec.imported' || event.type === 'spec.authored')
-      ) {
+      if (!events.specRecorded) {
         let ticket: Ticket
         if (seed?.ticket !== undefined) {
           ticket = seed.ticket
@@ -2848,10 +2791,7 @@ export class Dispatcher {
       }
 
       stage = 'comment'
-      if (
-        record.ticket !== undefined &&
-        !events.some((event) => event.type === 'dispatch.comment-posted')
-      ) {
+      if (record.ticket !== undefined && !events.commentPosted) {
         await this.deps.tickets.comment(record.ticket.id, `build ${record.slug} dispatched`)
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -2865,7 +2805,7 @@ export class Dispatcher {
       // provider awaits. Re-read immediately before launch so a request made
       // during those boundaries parks cleanly for the next janitor pass.
       await store.refreshBuild(record.slug)
-      const launchState = reduceBuild(await store.getEvents(record.slug))
+      const launchState = (await readBuildFacts(store, record.slug)).value.state
       if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) {
         return 'parked'
       }
@@ -2874,8 +2814,8 @@ export class Dispatcher {
       if (authored && report !== undefined) report.authored += 1
       return 'completed'
     } catch (error) {
-      const events = await store.getEvents(record.slug)
-      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const events = (await readBuildFacts(store, record.slug)).value
+      const attempt = events.dispatchFailureCount + 1
       const message = (error instanceof Error ? error.message : String(error)).trim()
       await store.append(record.slug, {
         actor: DISPATCHER,
@@ -3050,9 +2990,9 @@ export class Dispatcher {
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
       // Raw history, read at most once and only by a branch that acts on it.
-      let loaded: AbEvent[] | undefined
-      const history = async (): Promise<AbEvent[]> => {
-        loaded ??= await this.store.getEvents(record.slug)
+      let loaded: CurrentBuildFacts | undefined
+      const history = async (): Promise<CurrentBuildFacts> => {
+        loaded ??= (await readBuildFacts(this.store, record.slug)).value
         return loaded
       }
       // Liveness gate (durable supervision): a recorded execution the provider
@@ -3136,7 +3076,7 @@ export class Dispatcher {
       if (
         facts.workspace === null &&
         this.deps.workspaces.recovery !== undefined &&
-        (await history()).some((event) => event.type === 'workspace.provisioned')
+        (await history()).workspaceGenerations > 0
       ) {
         const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
         if (kicked === 'kicked') {
@@ -3190,16 +3130,16 @@ export class Dispatcher {
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
     await this.store.refreshJournal()
-    const journalBeforeReady = this.store.recordedJournal()
+    const journalBeforeReady = this.store.repositoryFacts().harvest
     const listing = await this.listReady()
     const activeTicketIds = await this.activeTicketIdentities(activeRefs, listing.tickets)
     await this.store.refreshJournal()
-    const journalAfterReady = this.store.recordedJournal()
-    if (reduceTicketSourceHealth(journalAfterReady)?.cause === 'ready-scan-failed') {
+    const journalAfterReady = this.store.repositoryFacts()
+    if (journalAfterReady.health?.cause === 'ready-scan-failed') {
       await this.sourceCondition(undefined, 'ready-scan')
     }
     const creationHolds = new Map(
-      harvestCreationsDuringReadyScan(journalBeforeReady, journalAfterReady).map((creation) => [
+      harvestCreationsFromStates(journalBeforeReady, journalAfterReady.harvest).map((creation) => [
         creation.creationKey.toLowerCase(),
         creation,
       ]),

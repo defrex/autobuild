@@ -1,3 +1,4 @@
+import { readPersistedBuildDigests } from './reduced-reads'
 import { assertPublicSnapshotReducer } from './snapshots'
 import {
   readReducerValue,
@@ -43,7 +44,6 @@ import {
 } from './snapshots'
 import { validateCreatedEvent } from './new-build'
 import { createSessionScopedStore } from './session-handle'
-import { reduceBuildDigest } from './digest'
 import { projectRepositoryStateEvents } from './repo-state-events'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
@@ -326,34 +326,7 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-    // Insertion order is creation order (the listSessions tiebreak note); the
-    // digest map is returned in slug order so every adapter answers the same
-    // shape for the same store contents.
-    const slugs = [...this.builds.entries()]
-      .filter(([, state]) => state.record.repo === repo)
-      .map(([slug]) => slug)
-      .sort()
-    const digests = new Map<string, BuildDigest>()
-    for (const slug of slugs) {
-      const state = this.builds.get(slug)!
-      digests.set(slug, {
-        slug,
-        ...reduceBuildDigest(
-          state.events.map((event) => ({
-            type: event.type,
-            seq: event.seq,
-            ts: event.ts,
-            ...(event.type === 'pr-attachment.reclaimed'
-              ? { hostedSeq: event.payload.hostedSeq }
-              : {}),
-            ...(event.type === 'execution.started' || event.type === 'execution.ended'
-              ? { instance: event.payload.instance }
-              : {}),
-          })),
-        ),
-      })
-    }
-    return digests
+    return readPersistedBuildDigests(this, repo)
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {

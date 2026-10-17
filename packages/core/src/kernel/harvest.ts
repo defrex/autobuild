@@ -741,32 +741,34 @@ export function harvestCreationsDuringReadyScan(
   beforeEvents: readonly RepositoryEvent[],
   afterEvents: readonly RepositoryEvent[],
 ): InFlightHarvestCreation[] {
-  const before = reduceHarvest(beforeEvents)
-  // Validate the complete second snapshot before using its event suffix.
-  reduceHarvest(afterEvents)
+  return harvestCreationsFromStates(reduceHarvest(beforeEvents), reduceHarvest(afterEvents))
+}
+
+export function harvestCreationsFromStates(
+  before: HarvestState,
+  after: HarvestState,
+): InFlightHarvestCreation[] {
   const creations = new Map<string, InFlightHarvestCreation>()
-  const keyOf = (run: string, proposalKey: string): string => `${run}\0${proposalKey}`
-  const known = new Set<string>()
-  for (const run of before.runs) {
-    for (const reservation of run.reservations) {
-      known.add(keyOf(run.run, reservation.proposalKey))
-    }
-  }
-  for (const creation of inFlightHarvestCreations(before)) {
+  const keyOf = (run: string, proposalKey: string) => `${run}\0${proposalKey}`
+  const known = new Set(
+    before.runs.flatMap((run) =>
+      run.reservations.map((entry) => keyOf(run.run, entry.proposalKey)),
+    ),
+  )
+  for (const creation of inFlightHarvestCreations(before))
     creations.set(keyOf(creation.run, creation.proposalKey), creation)
-  }
-  for (const event of afterEvents) {
-    if (event.seq <= before.lastSeq || event.type !== 'harvest.proposal.id-reserved') continue
-    const key = keyOf(event.payload.run, event.payload.proposalKey)
-    if (known.has(key)) continue
-    known.add(key)
-    creations.set(key, {
-      run: event.payload.run,
-      proposalKey: event.payload.proposalKey,
-      creationKey: event.payload.id,
-      reservationSeq: event.seq,
-    })
-  }
+  for (const run of after.runs)
+    for (const reservation of run.reservations) {
+      const key = keyOf(run.run, reservation.proposalKey)
+      if (known.has(key) || reservation.seq <= before.lastSeq) continue
+      known.add(key)
+      creations.set(key, {
+        run: run.run,
+        proposalKey: reservation.proposalKey,
+        creationKey: reservation.id,
+        reservationSeq: reservation.seq,
+      })
+    }
   return [...creations.values()]
 }
 

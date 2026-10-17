@@ -1,7 +1,7 @@
+import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
 import type { TicketRef } from '../ontology'
 import type { Config } from '../config/schema'
-import { reduceBuild } from '../kernel/reducer'
 import {
   TicketOperationError,
   changeBlockers,
@@ -141,7 +141,7 @@ async function matchingBuild(
   const projected = await Promise.all(
     matches.map(async (record) => ({
       record,
-      state: reduceBuild(await store.getEvents(record.slug)),
+      state: (await readBuildFacts(store, record.slug)).value.state,
     })),
   )
   projected.sort((a, b) => {

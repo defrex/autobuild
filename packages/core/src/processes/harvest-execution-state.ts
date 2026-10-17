@@ -1,3 +1,4 @@
+import type { RepositoryReadFacts } from '../store/reduced-reads'
 /**
  * Durable harvest execution state: the repository-journal projection that
  * hosted-harvest supervision (AUT-305) reads instead of process memory. The
@@ -88,22 +89,27 @@ export interface HarvestExecutionClassificationInput {
  * `held`; anything else is `idle`. The result feeds the same counters a
  * locally run harvest reports. */
 export function classifyHarvestOutcome(
-  events: readonly RepositoryEvent[],
+  events: readonly RepositoryEvent[] | RepositoryReadFacts,
   input: HarvestExecutionClassificationInput,
 ): HarvestRunnerResult {
-  const state = reduceHarvest(events)
-  const started = events.find(
+  const facts = !Array.isArray(events) ? (events as RepositoryReadFacts) : undefined
+  const raw = Array.isArray(events) ? events : []
+  const state = facts?.harvest ?? reduceHarvest(raw)
+  const started = raw.find(
     (event) =>
       event.type === 'harvest.execution.started' && event.seq === input.executionStartedSeq,
   )
+  const execution =
+    facts?.harvestExecutionStarts[String(input.executionStartedSeq)] ??
+    (started?.type === 'harvest.execution.started' ? started.payload.execution : undefined)
   const authorization =
-    started?.type === 'harvest.execution.started'
-      ? events.find(
+    execution === undefined
+      ? undefined
+      : (facts?.harvestAuthorizations[JSON.stringify(execution)] ??
+        raw.find(
           (event) =>
-            event.type === 'harvest.execution.authorized' &&
-            event.payload.execution === started.payload.execution,
-        )
-      : undefined
+            event.type === 'harvest.execution.authorized' && event.payload.execution === execution,
+        ))
   const selected =
     authorization?.type === 'harvest.execution.authorized' ? authorization.payload : undefined
   const latestRun = selected

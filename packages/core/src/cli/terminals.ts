@@ -1,3 +1,4 @@
+import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
  * (SPEC §8.4 D5, §8.5 D6, §8.6 D7).
@@ -18,7 +19,7 @@
 import { join } from 'node:path'
 import { z } from 'zod'
 import { loadConfig } from '../config/load'
-import type { AbEvent, EventEnvelope } from '../events/catalog'
+import type { EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
@@ -29,7 +30,6 @@ import {
 } from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
-import { reduceBuild } from '../kernel/reducer'
 import {
   findingDraftSchema,
   isVerifyPhase,
@@ -75,114 +75,9 @@ export interface TerminalDeps {
  * round, so a still-in-flight CLI process from the failed session must not
  * land a terminal the runner will misattribute to the retry).
  */
-function assertNoPriorTerminal(events: AbEvent[], env: CliEnv): void {
-  const spec = phaseSpecFor(env.phase)
-  // §6.3 restart boundary: verify attempts and finalize completion RESET
-  // across a spec.revised (decideNext ignores pre-restart results and
-  // re-runs the pipeline from plan), so a pre-restart verify.completed or
-  // finalize.completed must not shadow the rebuilt pipeline's terminal.
-  // Loop-phase rounds continue monotonically across restarts (engine
-  // LoopIndex.maxRoundEver) and never collide, so they match over the full
-  // log; the reconcile epilogue is restart-orthogonal (§15.7).
-  let restartSeq = 0
-  for (const event of events) {
-    if (event.type === 'spec.revised') restartSeq = event.seq
-  }
-  // reconcile.completed carries no attempt (§15.3); pair it with the latest
-  // reconcile.started seen before it.
-  let reconcileAttempt = 0
-  let sessionStartedSeq: number | undefined
-  for (const event of events) {
-    if (event.type === 'reconcile.started') reconcileAttempt = event.payload.attempt
-    if (event.type === 'session.started' && event.payload.session === env.session) {
-      sessionStartedSeq = event.seq
-    }
-    if (event.type === 'session.ended' && event.payload.session === env.session) {
-      throw new Error(
-        `terminal rejected (D5): session "${env.session}" already ended ` +
-          `(session.ended at seq ${event.seq}) — a session that ended without ` +
-          'a terminal was failed and retried; only the live retry may complete ' +
-          'this phase round (§8.4).',
-      )
-    }
-    if (
-      sessionStartedSeq !== undefined &&
-      event.type === 'phase.failed' &&
-      event.payload.phase === env.phase &&
-      event.payload.round === env.round &&
-      event.seq > sessionStartedSeq
-    ) {
-      throw new Error(
-        `terminal rejected (D5): ${env.phase}@${env.round} already failed after ` +
-          `this session started (phase.failed at seq ${event.seq}) — the retry ` +
-          'session owns this round now (§8.4).',
-      )
-    }
-    if (
-      event.type === 'escalation.raised' &&
-      event.actor.kind === 'agent' &&
-      event.actor.session === env.session
-    ) {
-      throw new Error(
-        `second terminal call rejected (D5): this session already escalated — ` +
-          `escalation.raised "${event.payload.id}" at seq ${event.seq}. ` +
-          'Every phase ends with exactly one terminal command (§8.4).',
-      )
-    }
-    if (
-      event.type === 'publication.requested' &&
-      event.actor.kind === 'agent' &&
-      event.actor.session === env.session &&
-      ((env.phase === 'implement' &&
-        event.payload.operation === 'implement' &&
-        event.payload.round === env.round) ||
-        (env.phase === 'reconcile' && event.payload.operation === 'reconcile') ||
-        (env.phase === 'finalize' && event.payload.operation === 'finalize'))
-    ) {
-      throw new Error(
-        `second terminal call rejected (D5): ${event.type} for ` +
-          `${env.phase}@${env.round} already recorded at seq ${event.seq}. ` +
-          'Remote publication is pending; do not run ab done again (§8.4).',
-      )
-    }
-    if (event.type !== spec.terminalEvent) continue
-    if (
-      (event.type === 'verify.completed' || event.type === 'finalize.completed') &&
-      event.seq <= restartSeq
-    ) {
-      continue
-    }
-    if (!terminalMatchesRound(event, env, reconcileAttempt)) continue
-    throw new Error(
-      `second terminal call rejected (D5): ${event.type} for ` +
-        `${env.phase}@${env.round} already recorded at seq ${event.seq}. ` +
-        'Every phase ends with exactly one terminal command (§8.4).',
-    )
-  }
-}
-
-function terminalMatchesRound(event: AbEvent, env: CliEnv, reconcileAttempt: number): boolean {
-  switch (event.type) {
-    case 'plan.completed':
-    case 'plan-review.verdict':
-    case 'implement.completed':
-    case 'code-review.verdict':
-      return event.payload.round === env.round
-    case 'verify.completed':
-      return (
-        isVerifyPhase(env.phase) &&
-        event.payload.step === verifyStep(env.phase) &&
-        event.payload.attempt === env.round
-      )
-    case 'finalize.completed':
-      // finalize runs once per build (§5) — any prior completion counts.
-      return true
-    case 'reconcile.completed':
-      // No started event before it → conservative match (total over any log).
-      return reconcileAttempt === env.round || reconcileAttempt === 0
-    default:
-      return false
-  }
+async function assertNoPriorTerminal(store: BuildStore, env: CliEnv): Promise<void> {
+  const result = await readTerminalGuard(store, env.build, env.phase, env.round, env.session)
+  if (result.diagnostic) throw new Error(result.diagnostic)
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -240,28 +135,21 @@ async function assertCleanWorktree(deps: TerminalDeps): Promise<void> {
   }
 }
 
-function baseBranchOf(events: AbEvent[]): string {
-  for (const event of events) {
-    if (event.type === 'build.created') return event.payload.baseBranch
-  }
+function baseBranchOf(events: CurrentBuildFacts): string {
+  if (events.created) return events.created.payload.baseBranch
   throw new Error('this build has no build.created event — cannot resolve its baseBranch (§15.3)')
 }
 
-function requireImplementationProvisioning(events: AbEvent[]): void {
-  if (events.some((event) => event.type === 'workspace.provisioned')) return
+function requireImplementationProvisioning(events: CurrentBuildFacts): void {
+  if (events.workspaceGenerations > 0) return
   throw new Error(
     "implement's 'ab done' requires workspace.provisioned provenance — " +
       'this build has no workspace.provisioned event (§7.4, §15.3)',
   )
 }
 
-function remotePublication(events: readonly AbEvent[]): boolean {
-  let remote = false
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') remote = isRemoteWorkspace(event.payload)
-    else if (event.type === 'workspace.released') remote = false
-  }
-  return remote
+function remotePublication(events: CurrentBuildFacts): boolean {
+  return events.workspace !== null && isRemoteWorkspace(events.workspace)
 }
 
 async function buildBranch(deps: TerminalDeps): Promise<string> {
@@ -281,7 +169,7 @@ async function buildBranch(deps: TerminalDeps): Promise<string> {
  */
 async function implementationReviewBoundary(
   deps: TerminalDeps,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
 ): Promise<{ branch: string; base: string; head: string }> {
   const diagnostic = 'cannot establish implementation review boundary'
   try {
@@ -384,7 +272,7 @@ export interface FinalizePrInput {
  * requested head before entering this idempotent PR-side sequence. */
 export async function completeFinalizePr(
   deps: TerminalDeps,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
   input: FinalizePrInput,
 ): Promise<EventEnvelope> {
   const { env, store } = deps
@@ -404,8 +292,8 @@ export async function completeFinalizePr(
 
   await preparePrAttachments(deps, events, pr.url)
 
-  const latest = await store.getEvents(env.build)
-  const autoMerge = pendingAutoMerge(reduceBuild(latest))
+  const latest = (await readBuildFacts(store, env.build)).value
+  const autoMerge = pendingAutoMerge(latest.state)
   const autoMergeResult =
     autoMerge === undefined
       ? undefined
@@ -452,8 +340,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         `${spec.kind} phase; use 'ab verdict' (§8.2)`,
     )
   }
-  const events = await store.getEvents(env.build)
-  assertNoPriorTerminal(events, env)
+  const events = (await readBuildFacts(store, env.build)).value
+  await assertNoPriorTerminal(store, env)
   const actor = agentActor(env.phase, env.session)
 
   switch (spec.name) {
@@ -466,12 +354,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       // still the already-reviewed plan, re-entering review as if revised.
       const revs = await store.listArtifacts(env.build, 'plan')
       const latest = revs[revs.length - 1]
-      let lastCited = -1
-      for (const event of events) {
-        if (event.type === 'plan.completed') {
-          lastCited = Math.max(lastCited, event.payload.artifact.rev)
-        }
-      }
+      const lastCited = events.maxPlanRevision
       if (latest === undefined || latest.revision <= lastCited) {
         throw new Error(
           `plan@${env.round} 'ab done' requires this round's plan deposit: found ` +
@@ -704,8 +587,8 @@ export async function verdict(deps: TerminalDeps, opts: VerdictOpts): Promise<Ev
         `accept pass|fail|skip. ${env.phase} accepts: ${vocabulary.join('|')}`,
     )
   }
-  const events = await store.getEvents(env.build)
-  assertNoPriorTerminal(events, env)
+  const events = (await readBuildFacts(store, env.build)).value
+  await assertNoPriorTerminal(store, env)
   const actor = agentActor(env.phase, env.session)
 
   if (spec.kind === 'agent-verify') {
@@ -717,7 +600,7 @@ export async function verdict(deps: TerminalDeps, opts: VerdictOpts): Promise<Ev
 async function reviewVerdict(
   deps: TerminalDeps,
   opts: VerdictOpts,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
   actor: ReturnType<typeof agentActor>,
 ): Promise<EventEnvelope[]> {
   const { env, store } = deps
@@ -816,7 +699,7 @@ export function renderFindingsIssues(issues: readonly z.core.$ZodIssue[]): strin
 async function parseFindings(
   deps: TerminalDeps,
   path: string,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
 ): Promise<Finding[]> {
   const raw = await readTextFile(path, '--findings')
   let json: unknown
@@ -841,7 +724,7 @@ async function parseFindings(
   // `persists` may only reference ids from prior rounds of THIS loop (§15.4;
   // ids are deposit-stamped, so a reviewer can only ever see rounds it was
   // shown — §8.3).
-  const state = reduceBuild(events)
+  const state = events.state
   const loop =
     deps.env.phase === 'plan-review'
       ? state.reviewFindings.planReview
@@ -969,8 +852,8 @@ export async function escalate(
   if (opts.question.trim() === '') {
     throw new Error("'ab escalate' requires a question — it is what the human answers (§11)")
   }
-  const events = await store.getEvents(env.build)
-  assertNoPriorTerminal(events, env)
+  const _events = (await readBuildFacts(store, env.build)).value
+  await assertNoPriorTerminal(store, env)
   return store.append(env.build, {
     actor: agentActor(env.phase, env.session),
     type: 'escalation.raised',

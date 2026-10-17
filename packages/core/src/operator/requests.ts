@@ -1,16 +1,4 @@
-/**
- * The route-level glue the operator HTTP server applies around the shared
- * services, re-derived for the agent tool registry (operator/registry.ts).
- *
- * This module is registry-owned on purpose: the operator API routes were
- * declared out of scope for the registry ticket, so the parity between a
- * tool and its route is *proven* by the contract suite
- * (packages/hosted-store-service/src/registry.contract.test.ts) rather than
- * obtained by extraction. Every refusal text here is load-bearing — it must
- * stay byte-identical to the hosted package's `operator-server.ts` so the
- * suite's full-body comparisons hold.
- */
-import { reduceBuild } from '../kernel/reducer'
+import { readBuildFacts } from '../store/reduced-reads'
 import { effectiveStatus } from '../cli/dashboard/model'
 import { BuildControlError, type BuildControlAction } from '../cli/build-control'
 import type { BuildStore } from '../store/types'
@@ -80,7 +68,7 @@ export async function controlPrechecks(
 ): Promise<void> {
   await requireRouteBuild(store, repo, slug)
   if (action === 'pause' || action === 'cancel-pause') {
-    const state = reduceBuild(await store.getEvents(slug))
+    const state = (await readBuildFacts(store, slug)).value.state
     const display = effectiveStatus(state)
     if (action === 'pause' && display === 'pausing') {
       throw new BuildControlError(

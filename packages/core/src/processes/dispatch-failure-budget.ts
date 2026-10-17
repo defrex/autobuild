@@ -1,3 +1,4 @@
+import { readDispatchBudget } from '../store/reduced-reads'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER } from '../events/envelope'
 import type { IdSource } from '../ids'
@@ -54,19 +55,19 @@ export function dispatchFailureBudget(
 
 /** Repair the failure/raise crash gap before allowing another provider call. */
 export async function ensureDispatchBudget(
-  store: Pick<BuildStore, 'getEvents' | 'appendIfCurrent'>,
+  store: Pick<BuildStore, 'getReducerValue' | 'appendIfCurrent'>,
   ids: IdSource,
   slug: string,
   maxAttempts: number,
   infrastructureOwnsWorkspace: boolean,
 ): Promise<boolean> {
   for (;;) {
-    const events = await store.getEvents(slug)
-    const budget = dispatchFailureBudget(events, infrastructureOwnsWorkspace)
+    const current = await readDispatchBudget(store, slug, infrastructureOwnsWorkspace)
+    const budget = current.value
     if (budget.parked) return false
     if (budget.count < maxAttempts || budget.latest === undefined) return true
     const failure = budget.latest.payload
-    const raised = await store.appendIfCurrent(slug, events.at(-1)?.seq ?? 0, {
+    const raised = await store.appendIfCurrent(slug, current.cursor, {
       actor: DISPATCHER,
       type: 'escalation.raised',
       payload: {

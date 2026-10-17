@@ -1,4 +1,11 @@
-import { shouldPublishTick } from '../processes/tick-publication'
+import type { BuildState } from '../kernel/reducer'
+import {
+  readBuildFacts,
+  readRepositoryFacts,
+  readBuildSelector,
+  readDispatcherRunFacts,
+} from '../store/reduced-reads'
+import { shouldPublishTickFromFacts } from '../processes/tick-publication'
 import { issueTicketGrant, ticketGrantRequest } from '../ports/tickets/grants'
 import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
@@ -55,17 +62,14 @@ import { loadPlugins, pluginResolutionKind } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
-import type { AbEvent } from '../events/catalog'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
-import { reduceDispatchSettings } from '../kernel/dispatch-settings'
+import type { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   actionableHarvestRun,
   decideHarvestControl,
-  reduceHarvest,
 } from '../kernel/harvest'
-import { reduceBuild } from '../kernel/reducer'
 import { dashboardBuildControl } from './dashboard/actions'
 import {
   buildDashboardFromProjected,
@@ -128,12 +132,10 @@ import {
   parseBuildConfigMetadata,
   parseDiagnostic,
   parseEffectiveBuildConfig,
-  selectOpenWorkspace,
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
   sampleUnclaimedObservationCount,
-  readRepoEventsIfRecorded,
   evaluateHarvestPressureFromStore,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
@@ -858,7 +860,7 @@ class DispatchLoop {
   private async resolveBuildPipeline(slug: string): Promise<{
     source: Awaited<ReturnType<typeof resolvePipelineSource>>
     failures: PipelineSourceFailure[]
-    events: AbEvent[]
+    observations: BuildState['observations']
   }> {
     const failures: PipelineSourceFailure[] = []
     try {
@@ -866,12 +868,12 @@ class DispatchLoop {
       // the record's `branch` (when present) is the same fact. Using the event
       // keeps this read to the events the caller already needs and avoids an
       // extra build-record lookup on the hot launch path.
-      const events = await this.repoView.getEvents(slug)
-      const workspace = selectOpenWorkspace(events)
+      const facts = (await readBuildFacts(this.repoView, slug)).value
+      const workspace = facts.workspace
       const source = await resolvePipelineSource({
         slug,
         record: { ...(workspace !== null ? { branch: workspace.branch } : {}) },
-        events,
+        recordedBase: await readBuildSelector(this.repoView, slug, 'recordedBaseSha'),
         mode: this.opts.repository !== undefined ? 'origin' : 'checkout',
         forge: this.wiring.forge,
         checkout: this.opts.targetRepo,
@@ -879,13 +881,13 @@ class DispatchLoop {
         ...(workspace !== null ? { workspacePath: workspace.path } : {}),
         onFailure: (failure) => failures.push(failure),
       })
-      return { source, failures, events }
+      return { source, failures, observations: facts.observations }
     } catch (error) {
       failures.push({
         kind: 'store',
         detail: `build-event read failed: ${error instanceof Error ? error.message : String(error)}`,
       })
-      return { source: undefined, failures, events: [] }
+      return { source: undefined, failures, observations: [] }
     }
   }
 
@@ -909,7 +911,7 @@ class DispatchLoop {
    * naming the failed attempts; the documented fallbacks (an unpublished
    * branch, an unreadable legacy base) stay quiet. */
   private async publishBuildConfig(slug: string, snapshot = this.currentConfig()): Promise<void> {
-    const { source, failures, events } = await this.resolveBuildPipeline(slug)
+    const { source, failures, observations } = await this.resolveBuildPipeline(slug)
     if (source !== undefined) {
       await this.depositBuildConfig(
         slug,
@@ -939,7 +941,7 @@ class DispatchLoop {
       // option left that keeps the launch alive.
       await this.depositBuildConfig(slug, snapshot, snapshot.config)
     }
-    await this.filePipelineFallbackObservation(slug, reused, failures, events)
+    await this.filePipelineFallbackObservation(slug, reused, failures, observations)
   }
 
   /** File a build-scoped observation when a deposit hit an actionable
@@ -952,7 +954,7 @@ class DispatchLoop {
     slug: string,
     reused: PipelineSourceMeta | undefined,
     failures: PipelineSourceFailure[],
-    events: readonly AbEvent[],
+    observations: BuildState['observations'],
   ): Promise<void> {
     const actionable = failures.filter(isActionablePipelineFailure)
     if (actionable.length === 0) return
@@ -969,11 +971,7 @@ class DispatchLoop {
       }`
     // Deduplicated against the build's log: a parked build re-attaches every
     // sweep, and an outage must not harvest one identical diagnostic per tick.
-    if (
-      events.some(
-        (event) => event.type === 'observation.recorded' && event.payload.summary === summary,
-      )
-    ) {
+    if (observations.some((observation) => observation.summary === summary)) {
       return
     }
     try {
@@ -1114,7 +1112,7 @@ class DispatchLoop {
     // The view's bounded subset (AUT-489): the settings reducer consumes
     // durable types only. `refresh()` ran first in the tick, so this is the
     // delta-current journal, never a store read.
-    return reduceDispatchSettings(this.repoView.recordedJournal())
+    return this.repoView.repositoryFacts().settings
   }
 
   private tickStartedAt: string | undefined
@@ -1622,8 +1620,8 @@ class DispatchLoop {
     const { store } = this.wiring
     const repo = this.repoIdentity
     await store.ensureRepo(repo)
-    const events = await store.getRepoEvents(repo)
-    const state = reduceHarvest(events)
+    const events = (await readRepositoryFacts(store, repo)).value
+    const state = events.harvest
     const projected = projectHarvest(events)
     if (expectedRun === undefined || projected === undefined || projected.run !== expectedRun) {
       this.say('harvest run action ignored: selected run is no longer active')
@@ -2514,8 +2512,8 @@ class DispatchLoop {
       // reduces durable types only. Take the journal delta first — guests and
       // other dispatchers write harvest facts between ticks.
       await this.repoView.refreshJournal()
-      const events = this.repoView.recordedJournal()
-      const state = reduceHarvest(events)
+      const events = this.repoView.repositoryFacts().harvest
+      const state = events
       const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
       const resumePending =
         actionableHarvestRun(state) !== undefined ||
@@ -2704,7 +2702,7 @@ class DispatchLoop {
     // Bounded subset (AUT-489): classifyHarvestOutcome reduces harvest facts
     // only. A guest wrote the facts through its own handle, so read the delta.
     await this.repoView.refreshJournal()
-    const events = this.repoView.recordedJournal()
+    const events = this.repoView.repositoryFacts()
     const record = await store.getRepo(repo)
     return classifyHarvestOutcome(events, {
       executionStartedSeq: startedSeq,
@@ -2852,12 +2850,12 @@ class DispatchLoop {
       await this.appendStatus(completed)
     } else {
       const startedAt = this.tickStartedAt!
-      const publish = shouldPublishTick(
-        merged,
-        this.repoView.recordedJournal(),
-        this.runId,
-        startedAt,
-      )
+      const facts = this.repoView.repositoryFacts()
+      const recent = facts.recentRuns.find(([run]) => run === this.runId)?.[1]
+      const runFacts = recent?.start
+        ? recent
+        : (await readDispatcherRunFacts(this.repoView, this.repoIdentity, this.runId)).value
+      const publish = shouldPublishTickFromFacts(merged, facts, runFacts, startedAt)
       const events: RepositoryEventWrite[] = publish
         ? [
             {
@@ -3015,7 +3013,7 @@ class DispatchLoop {
       { store: this.repoView, ids: this.wiring.ids },
       {
         slug: input.slug,
-        events: await this.repoView.getEvents(input.slug),
+        events: (await readBuildFacts(this.repoView, input.slug)).value,
         maxAttempts: this.currentConfig().config.policy.maxInfrastructureAttempts,
         provider: input.identity?.provider ?? this.wiring.workspaces.name,
         workspaceRef: input.workspaceRef,
@@ -3057,18 +3055,9 @@ class DispatchLoop {
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
-      const launchEvents = await this.repoView.getEvents(slug)
-      let workspaceRef: string | undefined
-      let workspaceProvider: string | undefined
-      for (const event of launchEvents) {
-        if (event.type === 'workspace.provisioned') {
-          workspaceRef = event.payload.ref
-          workspaceProvider = event.payload.provider
-        } else if (event.type === 'workspace.released') {
-          workspaceRef = undefined
-          workspaceProvider = undefined
-        }
-      }
+      const workspace = (await readBuildFacts(this.repoView, slug)).value.workspace
+      const workspaceRef = workspace?.ref
+      const workspaceProvider = workspace?.provider
       if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
       // Execute through the runtime that owns the workspace: a build
       // provisioned before a provider switch still runs where it lives.
@@ -3151,7 +3140,7 @@ class DispatchLoop {
               }
 
               await this.repoView.refreshBuild(slug)
-              const state = reduceBuild(await this.repoView.getEvents(slug))
+              const state = (await readBuildFacts(this.repoView, slug)).value.state
               if (diagnostic === null && exit.exitCode === 0) {
                 await this.appendStatus({
                   actor: DISPATCHER,
@@ -3218,12 +3207,7 @@ class DispatchLoop {
       if (leaseClaimed) {
         // The runner appended through its own handle: take the delta.
         await this.repoView.refreshBuild(slug)
-        const events = await this.repoView.getEvents(slug)
-        let workspaceRef = ''
-        for (const event of events) {
-          if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
-          else if (event.type === 'workspace.released') workspaceRef = ''
-        }
+        const workspaceRef = (await readBuildFacts(this.repoView, slug)).value.workspace?.ref ?? ''
         if (workspaceRef !== '') {
           await this.recordInfrastructureFailure({
             slug,
@@ -3499,7 +3483,7 @@ class DispatchLoop {
     // no anchor dependence (anchor analysis recorded; the frontend seed needed one
     // only because reduceDispatchStatus folds here too — it does not here).
     // Missing journal record stays a read-only empty journal (AUT-524).
-    const repositoryEvents = await readRepoEventsIfRecorded(this.wiring.store, this.repoIdentity)
+    const repositoryEvents = (await readRepositoryFacts(this.wiring.store, this.repoIdentity)).value
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
@@ -4400,11 +4384,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
   try {
     await loop.run()
-    const stopRequest = (
+    const stopRequest =
       resolvedOpts.kernelRunId && resolvedOpts.signal?.aborted
-        ? await wiring.store.getRepoEvents(state.repo)
-        : []
-    ).find((event) => event.type === 'dispatcher.stop-requested' && event.payload.run === runId)
+        ? (await readDispatcherRunFacts(wiring.store, state.repo, runId)).value.stopRequest
+        : undefined
     const stoppedSignal =
       stopRequest?.type === 'dispatcher.stop-requested'
         ? stopRequest.payload.signal
@@ -4442,7 +4425,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     // Every append this invocation made, `run-stopped` included, is in the
     // view; leave the reduced state behind so the next cold process reads
     // only what is newer than it.
-    await view.persistSnapshots({ force: true })
+
     if (resolvedOpts.wire === undefined) await wiring.store.close()
   }
 }

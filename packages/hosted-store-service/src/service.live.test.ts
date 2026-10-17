@@ -1,3 +1,5 @@
+import { countHistoricalRows, type ReducedReadCosts } from '@defrex/autobuild/testing'
+import { resolveReducerValue } from '@defrex/autobuild/store-adapter'
 import {
   PostgresProjectRegistry,
   openPostgresProjectRegistryFromEnv,
@@ -246,6 +248,22 @@ steps = []
         }) as unknown as BuildStore
         const withoutSnapshots = new Proxy(backing as unknown as Record<string, unknown>, {
           get(target, prop) {
+            if (prop === 'getReducerValue')
+              return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+                const [scope, request] = args
+                const selected = resolveReducerValue(scope, request)
+                const events =
+                  scope.kind === 'build'
+                    ? await backing.getEvents(scope.slug)
+                    : await backing.getRepoEvents(scope.repo)
+                return {
+                  cursor: events.at(-1)?.seq ?? 0,
+                  version: selected.reducer.version,
+                  value: selected.entry.value(
+                    selected.reducer.reduce(selected.entry.adapt(events)),
+                  ),
+                }
+              }
             if (prop === 'getReducerSnapshot') return async () => null
             if (prop === 'putReducerSnapshot') return async () => false
             const value = Reflect.get(target, prop, target)
@@ -263,7 +281,7 @@ steps = []
         // bounded journal. The response stays unchanged.
         rows = 0
         const second = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(1)
+        expect(rows).toBe(0)
         expect(second).toEqual(first)
         // New build events add only their own rows to the journal load. The answer equals
         // the one a replay with every snapshot deleted gives.
@@ -274,7 +292,7 @@ steps = []
         })
         rows = 0
         const third = await getOperatorDashboard({ store: counted, repo, clock })
-        expect(rows).toBe(2)
+        expect(rows).toBe(0)
         expect(third).toEqual(await getOperatorDashboard({ store: withoutSnapshots, repo, clock }))
       } finally {
         await backing.close()
@@ -800,7 +818,7 @@ if (testUrl)
 
 /** Count returned SQL rows, including auth/config paths and cache failures. */
 function countStoreRows(store: BuildStore) {
-  const costs = { events: 0, metadata: 0 }
+  const costs: ReducedReadCosts = { events: 0, metadata: 0, bytes: 0, historicalEvents: 0 }
   const run = Reflect.get(store, 'run').bind(store)
   Reflect.set(store, 'run', (body: (q: unknown) => Promise<unknown>) =>
     run((q: unknown) =>
@@ -813,6 +831,8 @@ function countStoreRows(store: BuildStore) {
                 Promise.resolve(Reflect.apply(method, target, args)).then((rows) => {
                   const events = /SELECT \* FROM (?:repo_)?events\b/i.test(String(args[0]))
                   costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+                  if (events) costs.historicalEvents += countHistoricalRows(costs, rows)
+                  costs.bytes += Buffer.byteLength(JSON.stringify(rows) ?? '')
                   return rows
                 })
             return typeof method === 'function' ? method.bind(target) : method
@@ -822,6 +842,8 @@ function countStoreRows(store: BuildStore) {
             const events = /SELECT \* FROM (?:repo_)?events\b/i.test(args[0].join(' '))
             return Promise.resolve(result).then((rows) => {
               costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+              if (events) costs.historicalEvents += countHistoricalRows(costs, rows)
+              costs.bytes += Buffer.byteLength(JSON.stringify(rows) ?? '')
               return rows
             })
           },
@@ -1057,3 +1079,39 @@ if (testUrl)
       await database.cleanup()
     }
   }, 30_000)
+
+if (testUrl)
+  test('persisted consumer reads have flat SQL row cost through the real hosted stack', async () => {
+    const { reducedReadBudget } = await import('@defrex/autobuild/testing')
+    const database = await isolatedDatabase()
+    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    const costs = countStoreRows(backing)
+    const secret = crypto.randomUUID()
+    const service = createHostedStoreService({
+      env: {
+        AB_STORE_SECRET: secret,
+        AB_POSTGRES_URL: database.url,
+        AB_BLOB_BACKEND: 's3',
+        AB_S3_BUCKET: 'injected',
+        AB_S3_REGION: 'us-east-1',
+        AB_S3_ACCESS_KEY_ID: 'injected',
+        AB_S3_SECRET_ACCESS_KEY: 'injected',
+      },
+      openStore: async () => backing,
+    })
+    const token = mintToken(secret, {
+      version: 1,
+      ownerAdmin: { user: 'owner:budget' },
+      exp: Date.now() + 3600_000,
+    })
+    const url = 'http://hosted-budget.test'
+    const fetchFn: typeof fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      service.fetch(new Request(input, init))) as typeof fetch
+    const fresh = async () => new RemoteBuildStore({ url, token, fetchFn })
+    try {
+      await reducedReadBudget({ store: await fresh(), costs, fresh })
+    } finally {
+      await backing.close()
+      await database.cleanup()
+    }
+  })

@@ -1,3 +1,6 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import { readBuildFacts } from '../store/reduced-reads'
+import type { BuildFacts } from '../processes/repo-view'
 /**
  * `ab builds` and `ab build status <slug>` — the read-only query surface on
  * build state (SPEC §8.2, §15.5). Their invocation forms require no session,
@@ -44,9 +47,9 @@ import {
 } from '../processes/build-execution-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
-import { currentAutoMergeDeferral } from '../kernel/auto-merge'
+import { currentAutoMergeDeferralFrom } from '../kernel/auto-merge'
 import { autoMergeDisplay, type AutoMergeDisplay } from './dashboard/model'
-import { decideNext } from '../kernel/engine'
+import { decideNextFromFacts } from '../kernel/engine'
 import {
   reduceBuild,
   type BuildState,
@@ -271,7 +274,31 @@ export function detail(
   decision?: BuildDecisionProjection,
   streams?: readonly StreamRecord[],
 ): BuildDetail {
-  const state = reduceBuild(events)
+  return detailFromFacts(
+    record,
+    {
+      state: reduceBuild(events),
+      observations: events
+        .filter((event) => event.type === 'observation.recorded')
+        .map((event) => event.payload),
+      open: openExecution(events),
+    },
+    now,
+    eventCount === undefined ? undefined : events.slice(-eventCount),
+    decision,
+    streams,
+  )
+}
+
+export function detailFromFacts(
+  record: BuildRecord,
+  facts: Pick<BuildFacts, 'state' | 'open'> & { observations: BuildState['observations'] },
+  now: Date,
+  events?: AbEvent[],
+  decision?: BuildDecisionProjection,
+  streams?: readonly StreamRecord[],
+): BuildDetail {
+  const state = facts.state
   const streamStatus = new Map<string, { stream?: string; status: 'open' | 'closed' }>()
   if (streams !== undefined) {
     for (const record of streams) {
@@ -316,15 +343,13 @@ export function detail(
     }),
     // Observations are historical facts rather than a derived current-state
     // opinion. Preserve event order and exact optional evidence fields.
-    observations: events
-      .filter((event) => event.type === 'observation.recorded')
-      .map((event) => ({
-        id: event.payload.id,
-        kind: event.payload.kind,
-        summary: event.payload.summary,
-        ...(event.payload.files !== undefined ? { files: event.payload.files } : {}),
-        ...(event.payload.refs !== undefined ? { refs: event.payload.refs } : {}),
-      })),
+    observations: facts.observations.map((observation) => ({
+      id: observation.id,
+      kind: observation.kind,
+      summary: observation.summary,
+      ...(observation.files !== undefined ? { files: observation.files } : {}),
+      ...(observation.refs !== undefined ? { refs: observation.refs } : {}),
+    })),
     ...(state.setupFailure !== undefined
       ? {
           setupFailure: {
@@ -338,7 +363,7 @@ export function detail(
     ...(state.executions.at(-1) !== undefined ? { execution: state.executions.at(-1)! } : {}),
     // Durable supervision: a recorded execution with no following end is the
     // source of truth for whether a guest may still be running.
-    executionOpen: openExecution(events) !== null,
+    executionOpen: facts.open !== null,
     ...(state.infrastructureFailure !== undefined
       ? { infrastructureFailure: state.infrastructureFailure }
       : {}),
@@ -364,7 +389,7 @@ export function detail(
       : {}),
     // getEvents returns seq-ordered events, so the newest n slice out already
     // chronological — which is what the AC asks for.
-    ...(eventCount !== undefined ? { events: events.slice(-eventCount) } : {}),
+    ...(events !== undefined ? { events } : {}),
     ...(state.outcome !== undefined ? { outcome: state.outcome } : {}),
   }
 }
@@ -742,7 +767,7 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
     // round trip and the listing's store cost stays flat as finished builds
     // accumulate. The `--all` scope includes terminal statuses, so it takes no
     // digest read and skips nothing — byte-for-byte the old loop.
-    const digests = opts.all === true ? undefined : await store.getRepoBuildDigests(identity)
+    const digests = opts.all === true ? undefined : await readBuildDigests(store, identity)
     const summaries: BuildSummary[] = []
     for (const record of records) {
       if (digests !== undefined && record.repo === identity) {
@@ -766,7 +791,11 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
       // entry under `identity` — `getRepoBuildDigests` groups by `record.repo`
       // exactly — so it keeps its per-build history read (correct, just not
       // accelerated).
-      const summary = summarize(record, await store.getEvents(record.slug), now)
+      const summary = summarizeFrom(
+        record,
+        (await readBuildFacts(store, record.slug)).value.state,
+        now,
+      )
       if (wanted.has(summary.status)) summaries.push(summary)
     }
     summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -797,7 +826,7 @@ export interface AbBuildStatusOpts extends StatusOpts {
   events?: number
 }
 
-function openWorkspacePath(events: AbEvent[]): string | undefined {
+function _openWorkspacePath(events: AbEvent[]): string | undefined {
   let path: string | undefined
   for (const event of events) {
     if (event.type === 'workspace.provisioned') {
@@ -812,15 +841,11 @@ function openWorkspacePath(events: AbEvent[]): string | undefined {
 /** The kernel tail both config sources share, so the deposited artifact and
  * the workspace file cannot drift in what they compute — the sources differ
  * only in where the config comes from, never in what is decided with it. */
-function decideFromConfig(
-  events: AbEvent[],
-  state: BuildState,
-  config: Config,
-): BuildDecisionProjection {
-  const decision = decideNext(events, config)
+function decideFromConfig(facts: BuildFacts, config: Config): BuildDecisionProjection {
+  const decision = decideNextFromFacts(facts.state, facts.log, config)
   if (decision.kind !== 'wait') return { kind: 'runner-work' }
   if (decision.reason !== 'awaiting-pr') return { kind: 'parked', reason: decision.reason }
-  const reason = currentAutoMergeDeferral(events, state)
+  const reason = currentAutoMergeDeferralFrom(facts.deferral, facts.state)
   return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
 }
 
@@ -840,10 +865,10 @@ function decideFromConfig(
  * the read-only command fail. */
 async function projectBuildDecision(
   slug: string,
-  events: AbEvent[],
+  facts: BuildFacts,
   store: Pick<BuildStore, 'getArtifact'>,
 ): Promise<BuildDecisionProjection | undefined> {
-  const state = reduceBuild(events)
+  const state = facts.state
   const active =
     state.status === 'running' || state.status === 'paused' || state.status === 'blocked'
   if (!active) return undefined
@@ -858,7 +883,7 @@ async function projectBuildDecision(
   const artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
   if (artifact !== null) {
     try {
-      return decideFromConfig(events, state, parseEffectiveBuildConfig(artifact))
+      return decideFromConfig(facts, parseEffectiveBuildConfig(artifact))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return {
@@ -870,7 +895,7 @@ async function projectBuildDecision(
 
   // Source 2 — the local workspace, exactly as before, only when no artifact
   // is deposited.
-  const workspace = openWorkspacePath(events)
+  const workspace = facts.workspace?.path ?? facts.workspace?.ref
   if (workspace === undefined) {
     return {
       kind: 'unavailable',
@@ -879,7 +904,7 @@ async function projectBuildDecision(
   }
 
   try {
-    return decideFromConfig(events, state, await loadConfig(join(workspace, 'autobuild.toml')))
+    return decideFromConfig(facts, await loadConfig(join(workspace, 'autobuild.toml')))
   } catch {
     // The raw error deliberately stays here: ENOENT/ENOTDIR messages embed the
     // recorded workspace path, which for a remote build is a guest location.
@@ -944,8 +969,13 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
   await withAmbientReadStore(opts, async (context) => {
     const record = await requireReadableBuild(opts, context)
-    const events = await context.store.getEvents(opts.slug)
-    const decision = await projectBuildDecision(opts.slug, events, context.store)
+    const current = await readBuildFacts(context.store, opts.slug)
+    const facts = current.value
+    const events =
+      opts.events === undefined
+        ? undefined
+        : await context.store.getEvents(opts.slug, Math.max(0, current.cursor - opts.events))
+    const decision = await projectBuildDecision(opts.slug, facts, context.store)
     // Stream enrichment is presentation (SPEC §9): an unavailable read
     // degrades to payload-carried ids without a status, never a failure.
     let streams: StreamRecord[] | undefined
@@ -957,7 +987,7 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     } catch {
       streams = undefined
     }
-    const projected = detail(record, events, now, opts.events, decision, streams)
+    const projected = detailFromFacts(record, facts, now, events, decision, streams)
     // Operator visibility (SPEC §16.1): which autobuild.toml the build's
     // pinned pipeline came from, alongside the effective-config revision.
     const configArtifact = await context.store.getArtifact(

@@ -159,7 +159,7 @@ test('fresh views concurrently repair the crash gap once, restart and answers re
   expect(raises[0]?.payload).toMatchObject({ policyCause: 'execution-no-progress', phase: 'setup' })
   expect(raises[0]?.payload.question).toContain('3 consecutive executions')
   expect(raises[0]?.payload.question).toContain('plan')
-  await store.persistSnapshots({ force: true })
+
   const cold = new RepoViewStore(backing, { repo: 'repo' })
   expect(await ensureExecutionProgress(cold, ids, 'empty', config)).toBe(false)
   await backing.append('empty', {

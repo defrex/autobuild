@@ -1,3 +1,4 @@
+import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 import {
   formatDispatcherIdentity,
   projectDispatcherLiveness,
@@ -99,6 +100,37 @@ export function projectRepositoryStatus(
   }
 }
 
+export function repositoryStatusFromFacts(
+  repo: string,
+  facts: RepositoryReadFacts,
+  dispatcher: DispatcherLiveness,
+): RepositoryStatus {
+  return {
+    repo,
+    dispatcher,
+    ...facts.settings,
+    ...(facts.health === undefined ? {} : { ticketSourceDegradation: facts.health }),
+    sandboxes: facts.sandboxes
+      .filter((state) => state.state !== 'released')
+      .map((state) => ({
+        operator: state.operator,
+        environmentId: state.environmentId,
+        provider: state.provider,
+        state: state.state === 'stopped' ? ('stopped' as const) : ('live' as const),
+        lastEvidenceAt: state.lastEvidenceTs,
+      })),
+    publications: [...facts.publications].reverse().map((event) => ({
+      operator: event.payload.operator,
+      branch: event.payload.branch,
+      sha: event.payload.sha,
+      prNumber: event.payload.pr.number,
+      prUrl: event.payload.pr.url,
+      ...(event.payload.session !== undefined ? { session: event.payload.session } : {}),
+      at: event.ts,
+    })),
+  }
+}
+
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
@@ -147,8 +179,12 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
   await withSessionlessStore(opts, async ({ store, repo }) => {
     // A fresh store has no repository row. Do not call ensureRepo: this query's
     // empty-stream defaults must remain a genuinely read-only operation.
-    const { events, dispatcher } = await readDispatcherLiveness(store, repo, opts.now?.())
-    const status = projectRepositoryStatus(repo, events, dispatcher)
+    const { dispatcher } = await readDispatcherLiveness(store, repo, opts.now?.())
+    const status = repositoryStatusFromFacts(
+      repo,
+      (await readRepositoryFacts(store, repo)).value,
+      dispatcher,
+    )
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))
       return

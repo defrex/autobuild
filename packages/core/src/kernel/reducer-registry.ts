@@ -1,3 +1,12 @@
+import { terminalGuardReducer } from './terminal-guard'
+import { repositoryAttentionReducer } from './repository-attention'
+import {
+  dispatcherRunFactsReducer,
+  buildStreamSeedReducer,
+  buildReadFactsReducer,
+  repositoryReadFactsReducer,
+  optionalValue,
+} from './read-facts'
 import { validateAccumulator, encodeReducerValue } from '../store/reducer-value-validation'
 import {
   effectiveConfigReducer,
@@ -72,6 +81,19 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
+  baseBranchValue: { reducer: optionalValue(baseBranchReducer), covers: [] },
+  publishedBranchHeadValue: { reducer: optionalValue(publishedBranchHeadReducer), covers: [] },
+  verifyDiffBaseValue: { reducer: optionalValue(verifyDiffBaseReducer), covers: [] },
+  recordedBaseShaValue: { reducer: optionalValue(recordedBaseShaReducer), covers: [] },
+  terminalGuard: {
+    reducer: terminalGuardReducer({ phase: 'plan', round: 1, session: 'session' }),
+    covers: [],
+  },
+  dispatcherRunFacts: { reducer: dispatcherRunFactsReducer('run-a'), covers: [] },
+  repositoryAttention: { reducer: repositoryAttentionReducer, covers: [] },
+  repositoryReadFacts: { reducer: repositoryReadFactsReducer, covers: [] },
+  buildStreamSeed: { reducer: buildStreamSeedReducer, covers: [] },
+  buildReadFacts: { reducer: buildReadFactsReducer, covers: [] },
   effectiveConfig: { reducer: effectiveConfigReducer, covers: [] },
   buildDelegation: { reducer: buildDelegationReducer, covers: [] },
   harvestDelegation: { reducer: harvestDelegationReducer, covers: [] },
@@ -137,9 +159,9 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   phaseFailures: { reducer: phaseFailuresReducer('plan', 1), covers: ['phaseFailures'] },
   openBuildWorkspace: {
     reducer: openBuildWorkspaceReducer,
-    covers: ['openBuildWorkspace', 'openWorkspace', 'forgeWorkspacePath'],
+    covers: ['openBuildWorkspace'],
   },
-  baseBranch: { reducer: baseBranchReducer, covers: ['baseBranchOf'] },
+  baseBranch: { reducer: baseBranchReducer, covers: [] },
   provisionMarker: { reducer: provisionMarkerReducer, covers: ['openProvisionMarker'] },
   recoveryCheckpoint: { reducer: recoveryCheckpointReducer, covers: ['recoveryCheckpoint'] },
   currentDeferralObservation: {
@@ -182,6 +204,9 @@ const valueExclusions: Record<string, string> = {
   ),
 }
 const repositoryValues = new Set([
+  'repositoryReadFacts',
+  'dispatcherRunFacts',
+  'repositoryAttention',
   'effectiveConfig',
   'harvestDelegation',
   'harvest',
@@ -194,9 +219,19 @@ const repositoryValues = new Set([
 ])
 const noArgs = z.object({}).strict()
 const parameterized: Record<string, Pick<ValueCatalogEntry, 'args' | 'create'>> = {
+  terminalGuard: {
+    args: z
+      .object({ phase: phaseSchema, round: z.number().int(), session: z.string().min(1) })
+      .strict(),
+    create: (args) => terminalGuardReducer(args),
+  },
   dispatchStatus: {
     args: z.object({ run: z.string().min(1) }).strict(),
     create: ({ run }) => dispatchStatusReducer(run),
+  },
+  dispatcherRunFacts: {
+    args: z.object({ run: z.string().min(1) }).strict(),
+    create: ({ run }) => dispatcherRunFactsReducer(run),
   },
   openTick: {
     args: z.object({ run: z.string().min(1) }).strict(),

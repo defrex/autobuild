@@ -1,11 +1,8 @@
-import type { AbEvent, EventEnvelope } from '../events/catalog'
+import type { CurrentBuildFacts } from '../store/reduced-reads'
+import type { EventEnvelope } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
-import {
-  currentPrAttachments,
-  frozenPrImageHost,
-  hostedPrAttachments,
-} from '../kernel/pr-attachments'
+import type { currentPrAttachments } from '../kernel/pr-attachments'
 import { hostedPrAttachmentAssetSchema, type HostedPrAttachmentAsset } from '../ontology'
 import type { Forge } from '../ports/types'
 import type { BuildStore } from '../store/types'
@@ -25,7 +22,7 @@ function errorMessage(error: unknown): string {
 
 async function recordHostingFailure(
   deps: PrAttachmentDeps,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
   designation: ReturnType<typeof currentPrAttachments>[number],
   error: unknown,
   extraRefs: string[] = [],
@@ -44,7 +41,7 @@ async function recordHostingFailure(
         refs: [`${artifact.kind}@${artifact.rev}`, ...extraRefs],
       },
     })
-    events.push(observed)
+    events.observations.push(observed.payload)
   } catch {
     // Hosting is a best-effort review affordance. A secondary failure to
     // record its follow-up must not hide the complete text projection or turn
@@ -61,14 +58,14 @@ async function recordHostingFailure(
  */
 export async function preparePrAttachments(
   deps: PrAttachmentDeps,
-  events: AbEvent[],
+  events: CurrentBuildFacts,
   prUrl: string,
 ): Promise<void> {
-  const target = frozenPrImageHost(events)
+  const target = events.imageHost
   if (target === undefined) return
 
-  const designations = currentPrAttachments(events)
-  const hosted = hostedPrAttachments(events, designations)
+  const designations = events.designations
+  const hosted = new Map(events.hostedImages)
   for (const designation of designations) {
     if (!designation.payload.mediaType.startsWith('image/')) continue
     if (hosted.has(designation.seq)) continue
@@ -132,7 +129,7 @@ export async function preparePrAttachments(
       )
       throw error
     }
-    events.push(event)
+    events.hostedImages.push([designation.seq, event])
     hosted.set(designation.seq, event)
   }
 }

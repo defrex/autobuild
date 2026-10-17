@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 /**
  * Durable operator controls for one build.
  *
@@ -9,12 +10,7 @@
 import type { AbEvent } from '../events/catalog'
 import type { PinnedAsset } from '../events/payloads'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
-import {
-  reduceBuild,
-  discardInFlight,
-  type BuildState,
-  type OpenEscalation,
-} from '../kernel/reducer'
+import { discardInFlight, type BuildState, type OpenEscalation } from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
@@ -276,7 +272,7 @@ async function appendConsentCommand(
   via?: Via,
 ): Promise<BuildControlResult> {
   while (true) {
-    const state = reduceBuild(await store.getEvents(slug))
+    const state = (await readBuildFacts(store, slug)).value.state
     activeState(slug, state)
     const command =
       action === 'toggle-auto-merge'
@@ -484,8 +480,8 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     )
   }
 
-  const events = await opts.store.getEvents(opts.slug)
-  const state = reduceBuild(events)
+  const events = (await readBuildFacts(opts.store, opts.slug)).value
+  const state = events.state
   const user = opts.user?.trim() || buildControlUser(opts.env ?? {})
 
   if (opts.action.kind === 'discard') {
@@ -495,7 +491,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         `build "${opts.slug}" cannot be discarded (status: ${state.status}); discard requires queued`,
       )
     }
-    const existing = events.findLast((event) => event.type === 'build.discard-requested')
+    const existing = events.latestDiscard
     if (existing !== undefined) {
       return { kind: 'command', slug: opts.slug, command: 'discard', event: existing }
     }
@@ -504,7 +500,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
 
   if (opts.action.kind === 'abort') {
     if (state.status !== 'queued') activeState(opts.slug, state)
-    const existing = events.findLast((event) => event.type === 'build.abort-requested')
+    const existing = events.latestAbort
     if (existing !== undefined) {
       return { kind: 'command', slug: opts.slug, command: 'abort', event: existing }
     }
@@ -658,7 +654,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
 
         // Re-read at the last durable moment. The PR janitor and abort
         // acknowledgement may still write while a blocked build is parked.
-        const freshState = reduceBuild(await opts.store.getEvents(opts.slug))
+        const freshState = (await readBuildFacts(opts.store, opts.slug)).value.state
         assertStillActive(opts.slug, freshState)
         const decision = decideRevise(opts.slug, freshState, captured)
         if (decision.kind === 'refuse') throwRefusal(decision)
@@ -701,7 +697,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
             payload: {},
           })
         }
-        const after = reduceBuild(await opts.store.getEvents(opts.slug))
+        const after = (await readBuildFacts(opts.store, opts.slug)).value.state
         const signal = terminalSignal(after)
         return {
           kind: 'answered',
@@ -729,7 +725,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         const initial = dismissPartition(state, captured)
         if (initial.eligible.length === 0) throw noCitedFindings(opts.slug, initialOpen)
 
-        const freshState = reduceBuild(await opts.store.getEvents(opts.slug))
+        const freshState = (await readBuildFacts(opts.store, opts.slug)).value.state
         assertStillActive(opts.slug, freshState)
         if (hasPendingAbort(freshState)) throw abortPending(opts.slug)
         const freshOpen = selectedOpen(freshState, captured)
@@ -757,7 +753,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
             payload: {},
           })
         }
-        const after = reduceBuild(await opts.store.getEvents(opts.slug))
+        const after = (await readBuildFacts(opts.store, opts.slug)).value.state
         const signal = terminalSignal(after)
         return {
           kind: 'answered',

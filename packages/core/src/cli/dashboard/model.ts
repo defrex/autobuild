@@ -1,3 +1,4 @@
+import type { RepositoryReadFacts } from '../../store/reduced-reads'
 /**
  * The dashboard's pure projection: `BuildState` → what the operator sees.
  *
@@ -920,7 +921,7 @@ function escalationAttentionDismissed(events: RepositoryEvent[], terminalSeq: nu
 }
 
 function selectDashboardHarvestRun(
-  events: RepositoryEvent[],
+  events: RepositoryEvent[] | RepositoryReadFacts,
   state: HarvestState,
 ): HarvestRunState | undefined {
   const attention = state.runs.find((run) => {
@@ -928,7 +929,12 @@ function selectDashboardHarvestRun(
       return run.recoveryExhaustion?.attentionAcknowledgedSeq === undefined
     }
     if (run.status !== 'escalated') return false
-    return run.terminalSeq === undefined || !escalationAttentionDismissed(events, run.terminalSeq)
+    return (
+      run.terminalSeq === undefined ||
+      !(Array.isArray(events)
+        ? escalationAttentionDismissed(events, run.terminalSeq)
+        : events.dismissedThrough > run.terminalSeq)
+    )
   })
   return attention ?? openHarvestRun(state)
 }
@@ -937,7 +943,7 @@ function selectDashboardHarvestRun(
  * exhausted, or escalated attention outranks merely open work; completed and
  * acknowledged terminal history never hides an older actionable run. */
 function projectHarvestRun(
-  events: RepositoryEvent[],
+  events: RepositoryEvent[] | RepositoryReadFacts,
   state: HarvestState,
 ): DashboardHarvest | undefined {
   const run = selectDashboardHarvestRun(events, state)
@@ -968,25 +974,27 @@ function projectHarvestRun(
   const approved = run.reviews.some((review) => review.verdict === 'approve')
   const synthOutput = run.proposals.length > 0
   const reviewOutput = run.reviews.length > 0
-  const failedEvent =
-    run.status === 'failed'
-      ? [...events]
-          .reverse()
-          .find(
-            (event) =>
-              event.type === 'harvest.failed' &&
-              event.payload.run === run.run &&
-              event.payload.willRetry === false,
-          )
-      : undefined
+  const failureStoppedAt =
+    run.status !== 'failed'
+      ? undefined
+      : Array.isArray(events)
+        ? [...events]
+            .reverse()
+            .find(
+              (event) =>
+                event.type === 'harvest.failed' &&
+                event.payload.run === run.run &&
+                !event.payload.willRetry,
+            )?.ts
+        : events.failedAt[JSON.stringify(run.run)]
   // Both durable stop states freeze any open occurrence. A failure normally
   // closes its step immediately afterward, but projecting the boundary itself
   // must never make an errored row look like work is still accumulating time.
   const frozenAt =
     state.pausedAt !== undefined
       ? Date.parse(state.pausedAt)
-      : failedEvent !== undefined
-        ? Date.parse(failedEvent.ts)
+      : failureStoppedAt !== undefined
+        ? Date.parse(failureStoppedAt)
         : undefined
   const steps: PipelineStep[] = [
     step('scan', hasOutcome('scan', 'completed'), current('scan'), {
@@ -1073,8 +1081,10 @@ interface RepositoryHarvestProjection {
 /** The repository-journal half of a legacy dashboard frame (AUT-545): the
  * harvest projection and the pause flag exactly as `buildDashboardFromProjected`
  * derives them, exposed for tests that pin the bounded read's equivalence. */
-export function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryHarvestProjection {
-  const state = reduceHarvest(events)
+export function projectRepositoryHarvest(
+  events: RepositoryEvent[] | RepositoryReadFacts,
+): RepositoryHarvestProjection {
+  const state = Array.isArray(events) ? reduceHarvest(events) : events.harvest
   const harvest = projectHarvestRun(events, state)
   return {
     harvestPaused: state.paused,
@@ -1082,7 +1092,9 @@ export function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryH
   }
 }
 
-export function projectHarvest(events: RepositoryEvent[]): DashboardHarvest | undefined {
+export function projectHarvest(
+  events: RepositoryEvent[] | RepositoryReadFacts,
+): DashboardHarvest | undefined {
   return projectRepositoryHarvest(events).harvest
 }
 
@@ -1112,11 +1124,13 @@ export interface DashboardHeader extends DashboardFrameHeader {
 export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
-  repositoryEvents: RepositoryEvent[] = [],
+  repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
 ): DashboardModel {
   const builds = [...projectedBuilds].sort((a, b) => a.slug.localeCompare(b.slug))
   const harvestProjection = projectRepositoryHarvest(repositoryEvents)
-  const settings = reduceDispatchSettings(repositoryEvents)
+  const settings = Array.isArray(repositoryEvents)
+    ? reduceDispatchSettings(repositoryEvents)
+    : repositoryEvents.settings
   return {
     repo: header.repo,
     queued: header.queued,
@@ -1143,7 +1157,7 @@ export function buildDashboard(
   entries: { record: BuildRecord; state: BuildState; events: AbEvent[] }[],
   config: Config,
   header: DashboardFrameHeader,
-  repositoryEvents: RepositoryEvent[] = [],
+  repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
 ): DashboardModel {
   const builds = entries
     .map(({ record, state, events }) => projectBuild(record, state, config, events))

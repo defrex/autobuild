@@ -23,7 +23,12 @@ const build: SnapshotScope = { kind: 'build', slug: 'b' }
 const repo: SnapshotScope = { kind: 'repo', repo: 'r' }
 export const valueArguments: Record<string, NonNullable<ReducerValueRequest['args']>[]> = {
   dispatchStatus: [{ run: 'run-a' }, { run: 'run-b' }],
+  dispatcherRunFacts: [{ run: 'run-a' }, { run: 'run-b' }],
   openTick: [{ run: 'run-a' }, { run: 'run-b' }],
+  terminalGuard: [
+    { phase: 'plan', round: 1, session: 'session-a' },
+    { phase: 'implement', round: 2, session: 'session-b' },
+  ],
   phaseFailures: [
     { phase: 'plan', round: 1 },
     { phase: 'verify:unit', round: 2 },

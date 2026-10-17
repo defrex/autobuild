@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 import { exportTickets, importTickets } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
 import { editTicket, type TicketEditorRunner } from './ticket-editor'
@@ -29,7 +30,6 @@ import type {
   TicketStateInfo,
   TicketUpdate,
 } from '../ports/types'
-import { reduceBuild } from '../kernel/reducer'
 import type { BuildStore } from '../store/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { TicketAssetSummary } from '../store/ticket-assets'
@@ -478,7 +478,7 @@ async function activeBuildsFor(store: BuildStore, repo: string, id: string): Pro
     const active: string[] = []
     for (const record of await store.listBuilds()) {
       if (record.repo !== repo || record.ticket?.id !== id) continue
-      const { status } = reduceBuild(await store.getEvents(record.slug))
+      const { status } = (await readBuildFacts(store, record.slug)).value.state
       if (status !== 'done' && status !== 'aborted') active.push(record.slug)
     }
     return active

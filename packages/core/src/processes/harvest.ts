@@ -1,3 +1,5 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import { readRepositoryFacts, readBuildFacts } from '../store/reduced-reads'
 /** Deterministic halves of observation harvest: scan, dedup, validation, and
  * proposal rendering. Agent judgment is deliberately absent from this file. */
 import type { AbEvent } from '../events/catalog'
@@ -135,10 +137,12 @@ export function evaluateHarvestPressure(
  * so latest-wins carries exactly the drift fact the scan collects. */
 export function evaluateHarvestPressureFromDigests(input: {
   digests: Map<string, BuildDigest>
-  harvestEvents: RepositoryEvent[]
+  harvestEvents: RepositoryEvent[] | HarvestState
   policy: { harvestThreshold: number; harvestMaxDrift: number }
 }): HarvestPressure {
-  const claimed = claimedOccurrenceKeys(reduceHarvest(input.harvestEvents))
+  const claimed = claimedOccurrenceKeys(
+    Array.isArray(input.harvestEvents) ? reduceHarvest(input.harvestEvents) : input.harvestEvents,
+  )
   const unclaimed: HarvestPressureFacts['unclaimed'] = []
   const merges: HarvestPressureFacts['merges'] = []
   for (const digest of input.digests.values()) {
@@ -160,11 +164,11 @@ export function evaluateHarvestPressureFromDigests(input: {
 export async function evaluateHarvestPressureFromStore(input: {
   store: BuildStore
   repo: string
-  harvestEvents: RepositoryEvent[]
+  harvestEvents: RepositoryEvent[] | HarvestState
   policy: { harvestThreshold: number; harvestMaxDrift: number }
 }): Promise<HarvestPressure> {
   await input.store.ensureRepo(input.repo)
-  const digests = await input.store.getRepoBuildDigests(input.repo)
+  const digests = await readBuildDigests(input.store, input.repo)
   return evaluateHarvestPressureFromDigests({
     digests,
     harvestEvents: input.harvestEvents,
@@ -182,9 +186,11 @@ export function collectUnclaimedObservations(input: {
   repo: string
   records: BuildRecord[]
   eventsByBuild: Map<string, AbEvent[]>
-  harvestEvents: RepositoryEvent[]
+  harvestEvents: RepositoryEvent[] | HarvestState
 }): HarvestScanResult {
-  const state = reduceHarvest(input.harvestEvents)
+  const state = Array.isArray(input.harvestEvents)
+    ? reduceHarvest(input.harvestEvents)
+    : input.harvestEvents
   const claimed = claimedOccurrenceKeys(state)
   const observations: HarvestObservation[] = []
   const merges: HarvestMerge[] = []
@@ -235,9 +241,11 @@ export function collectUnclaimedObservations(input: {
  * are not assumed globally unique. */
 export function unclaimedObservationCount(input: {
   digests: Map<string, BuildDigest>
-  harvestEvents: RepositoryEvent[]
+  harvestEvents: RepositoryEvent[] | HarvestState
 }): number {
-  const claimed = claimedOccurrenceKeys(reduceHarvest(input.harvestEvents))
+  const claimed = claimedOccurrenceKeys(
+    Array.isArray(input.harvestEvents) ? reduceHarvest(input.harvestEvents) : input.harvestEvents,
+  )
   let count = 0
   for (const digest of input.digests.values()) {
     for (const observation of digest.observations) {
@@ -279,7 +287,7 @@ export async function sampleUnclaimedObservationCount(
 ): Promise<number> {
   const [digests, harvestEvents] = await Promise.all([
     store.getRepoBuildDigests(repo),
-    readRepoEventsIfRecorded(store, repo),
+    readRepositoryFacts(store, repo).then((result) => result.value.harvest),
   ])
   return unclaimedObservationCount({ digests, harvestEvents })
 }
@@ -292,16 +300,31 @@ export async function scanUnclaimedObservations(
   repo: string,
 ): Promise<HarvestScanResult> {
   await store.ensureRepo(repo)
-  // Bounded read (AUT-489): only harvest facts are consumed here; the
-  // per-build history reads stay as AUT-487 left them.
-  const harvestEvents = await store.getRepoStateEvents(repo)
+  const state = (await readRepositoryFacts(store, repo)).value.harvest
+  const claimed = claimedOccurrenceKeys(state)
   const records = await store.listBuilds()
-  const eventsByBuild = new Map<string, AbEvent[]>()
+  const observations: HarvestObservation[] = []
+  const merges: HarvestMerge[] = []
   for (const record of records) {
     if (record.repo !== repo) continue
-    eventsByBuild.set(record.slug, await store.getEvents(record.slug))
+    const facts = (await readBuildFacts(store, record.slug)).value
+    for (const ts of facts.mergeTimes) merges.push({ build: record.slug, ts })
+    for (const observation of facts.observationFacts) {
+      const occurrence = { build: record.slug, seq: observation.seq }
+      if (claimed.has(occurrenceKey(occurrence))) continue
+      observations.push({
+        occurrence,
+        ...observation.payload,
+        ts: observation.ts,
+        ...(record.ticket ? { ticket: structuredClone(record.ticket) } : {}),
+      })
+    }
   }
-  return collectUnclaimedObservations({ repo, records, eventsByBuild, harvestEvents })
+  observations.sort(
+    (a, b) =>
+      a.occurrence.build.localeCompare(b.occurrence.build) || a.occurrence.seq - b.occurrence.seq,
+  )
+  return { state, observations, merges }
 }
 
 /** Distinct previously filed/joined proposal tickets, reconciled through the

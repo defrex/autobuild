@@ -221,14 +221,14 @@ describe('dispatch child supervision', () => {
     let delayed = false
     const store = new Proxy(backing, {
       get(target, property) {
-        if (property === 'getRepoEvents') {
-          return async (...args: Parameters<BuildStore['getRepoEvents']>) => {
+        if (property === 'getReducerValue') {
+          return async (...args: Parameters<BuildStore['getReducerValue']>) => {
             if (!delayed) {
               delayed = true
               readEntered()
               await release
             }
-            return target.getRepoEvents(...args)
+            return target.getReducerValue(...args)
           }
         }
         const value = Reflect.get(target, property, target) as unknown

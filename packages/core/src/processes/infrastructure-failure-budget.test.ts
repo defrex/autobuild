@@ -24,7 +24,8 @@ function event(seq: number, type: string, payload: unknown): AbEvent {
 class EscalationOnNextReadStore extends MemoryBuildStore {
   injectEscalation = false
 
-  override async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
+  override async getReducerValue(...args: Parameters<MemoryBuildStore['getReducerValue']>) {
+    const slug = args[0].kind === 'build' ? args[0].slug : ''
     if (this.injectEscalation) {
       this.injectEscalation = false
       await super.append(slug, {
@@ -39,7 +40,7 @@ class EscalationOnNextReadStore extends MemoryBuildStore {
         },
       })
     }
-    return super.getEvents(slug, sinceSeq)
+    return super.getReducerValue(...args)
   }
 }
 

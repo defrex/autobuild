@@ -1131,12 +1131,19 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     let digests = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
-        if (prop === 'getEvents') {
-          return async (slug: string, sinceSeq?: number) => {
-            if (sinceSeq === undefined) {
+        if (prop === 'getReducerValue') {
+          return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+            if (args[0].kind === 'build' && args[1].reducer === 'buildStreamSeed') {
+              const slug = args[0].slug
               eventsBySlug.set(slug, (eventsBySlug.get(slug) ?? 0) + 1)
             }
-            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+            return target.getReducerValue(...args)
+          }
+        }
+        if (prop === 'getEvents') {
+          return async (slug: string, sinceSeq?: number) => {
+            expect(sinceSeq).toBeDefined()
+            return target.getEvents(slug, sinceSeq)
           }
         }
         if (prop === 'getRepoBuildDigests') {
@@ -1195,7 +1202,7 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     // tick — never one full-log read per candidate build.
     expect(digestReads()).toBeGreaterThanOrEqual(1)
     const reads = eventsBySlug()
-    // Every terminal slug skipped the full-log read entirely, on every pass.
+    // Every terminal slug skipped the persisted seed read entirely, on every pass.
     for (let i = 0; i < 20; i += 1) expect(reads.get(`t${i}`) ?? 0).toBe(0)
     // The running build was read once (registration in the initial scan).
     expect(reads.get('live')).toBe(1)
@@ -1318,7 +1325,7 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     expect(Object.keys(JSON.parse(h2.out[0]!) as object)).toEqual(['cursor'])
   })
 
-  test('a named terminal build still tracks through trackBuild (full read, deliberate)', async () => {
+  test('a named terminal build still tracks through trackBuild (persisted seed)', async () => {
     // Named slugs bypass the discovery filter by design: trackBuild must read
     // the full log for the registration state check and --since replay. The
     // digest does not retire a NAMED build.
@@ -1648,18 +1655,16 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
     // reaches it, the step throws — after b2 was registered in the same pass.
     const breaking = new Proxy(store, {
       get(target, prop) {
-        if (prop === 'getEvents') {
-          return async (
-            slug: string,
-            sinceSeq?: number,
-            opts?: { waitSeconds?: number; signal?: AbortSignal },
-          ) => {
-            if (slug === 'b3' && opts?.waitSeconds === undefined) {
+        if (prop === 'getReducerValue')
+          return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+            if (
+              args[0].kind === 'build' &&
+              args[0].slug === 'b3' &&
+              args[1].reducer === 'buildStreamSeed'
+            )
               throw new Error('b3 read failed')
-            }
-            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+            return target.getReducerValue(...args)
           }
-        }
         const value = Reflect.get(target, prop, target) as unknown
         return typeof value === 'function' ? (value as () => unknown).bind(target) : value
       },

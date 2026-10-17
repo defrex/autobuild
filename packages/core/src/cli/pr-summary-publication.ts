@@ -1,11 +1,9 @@
-import { summaryBoundary, pendingSummaryRequests } from '../kernel/pr-summary'
+import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 export { summaryBoundary, pendingSummaryRequests } from '../kernel/pr-summary'
 import type { AbEvent } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
-import { reduceBuild } from '../kernel/reducer'
 import { currentPrAttachments } from '../kernel/pr-attachments'
-import { openExecution } from '../processes/execution-settlement'
 import type { Forge } from '../ports/types'
 import { githubRateLimitUntil } from '../ports/forge/github-transport'
 import { summaryMarker } from '../ports/forge/summary-marker'
@@ -27,7 +25,7 @@ interface SummaryDeps {
  * is deliberately not designated, avoiding recursive growth. */
 export async function boundedSummary(
   deps: SummaryDeps,
-  events: readonly AbEvent[],
+  events: readonly AbEvent[] | CurrentBuildFacts,
 ): Promise<string> {
   const env = {
     build: deps.slug,
@@ -48,7 +46,7 @@ export async function boundedSummary(
     summaryMarker(deps.slug),
     `## Autobuild: ${html(deps.slug)}`,
     '',
-    `The full summary exceeds the comment limit. It includes ${currentPrAttachments(events).length} PR attachments.`,
+    `The full summary exceeds the comment limit. It includes ${(Array.isArray(events) ? currentPrAttachments(events) : (events as CurrentBuildFacts).designations).length} PR attachments.`,
     `Store: <code>${html(deps.storeRef)}</code>`,
     '',
     'Download the complete summary, including all pinned artifact commands and hosted links:',
@@ -65,26 +63,16 @@ export async function publishSummary(
   boundary: { occurrence: number; boundary: number },
 ): Promise<'attempted' | 'skipped' | 'deferred'> {
   try {
-    const events = await deps.store.getEvents(deps.slug)
-    const pr = reduceBuild(events).pr
+    const events = (await readBuildFacts(deps.store, deps.slug)).value
+    const pr = events.state.pr
     if (pr === undefined) return 'skipped'
+    if (events.summaryAttempts.includes(boundary.occurrence)) return 'attempted'
     if (
-      events.some(
-        (event) =>
-          event.type === 'pr-summary.attempted' && event.payload.occurrence === boundary.occurrence,
-      )
-    )
-      return 'attempted'
-    if (
-      events.some(
-        (event) =>
-          event.type === 'pr-summary.result' &&
-          event.payload.eligibleAfter !== undefined &&
-          Date.parse(event.payload.eligibleAfter) > deps.clock().getTime(),
-      )
+      events.summaryEligibleAfter !== undefined &&
+      Date.parse(events.summaryEligibleAfter) > deps.clock().getTime()
     )
       return 'deferred'
-    const claim = await deps.store.appendIfCurrent(deps.slug, events.at(-1)?.seq ?? 0, {
+    const claim = await deps.store.appendIfCurrent(deps.slug, events.state.lastSeq, {
       actor: KERNEL,
       type: 'pr-summary.attempted',
       payload: { ...boundary, pr: pr.number },
@@ -93,7 +81,7 @@ export async function publishSummary(
     let outcome: 'success' | 'failure' | 'rate-limited' = 'success'
     let eligibleAfter: string | undefined
     try {
-      const body = await boundedSummary(deps, await deps.store.getEvents(deps.slug))
+      const body = await boundedSummary(deps, (await readBuildFacts(deps.store, deps.slug)).value)
       await deps.forge.commentOnPr(deps.workspacePath, pr.number, body)
     } catch (error) {
       eligibleAfter = githubRateLimitUntil(error, deps.clock().getTime())
@@ -118,45 +106,24 @@ export async function publishSummary(
  * prevent pipeline progress, including a failed request deposit. */
 export async function refreshSummaryBoundary(deps: SummaryDeps): Promise<boolean> {
   try {
-    const events = await deps.store.getEvents(deps.slug)
-    const boundary = summaryBoundary(events)
+    const events = (await readBuildFacts(deps.store, deps.slug)).value
+    const boundary = events.summaryBoundary
     if (boundary === undefined) return false
-    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
+    const workspace = events.latestWorkspace
     if (workspace?.type === 'workspace.provisioned' && isRemoteWorkspace(workspace.payload)) {
-      const request = events.find(
-        (event) =>
-          event.type === 'pr-summary.requested' && event.payload.occurrence === boundary.occurrence,
-      )
+      const request = events.summaryRequested[String(boundary.occurrence)]
       if (request !== undefined) {
         // A lost result/disposition append must not repeatedly park a guest.
+        if (events.summaryAttempts.includes(boundary.occurrence)) return false
         if (
-          events.some(
-            (event) =>
-              event.type === 'pr-summary.attempted' &&
-              event.payload.occurrence === boundary.occurrence,
-          )
+          events.summaryEligibleAfter !== undefined &&
+          Date.parse(events.summaryEligibleAfter) > deps.clock().getTime()
         )
           return false
-        if (
-          events.some(
-            (event) =>
-              event.type === 'pr-summary.result' &&
-              event.payload.eligibleAfter !== undefined &&
-              Date.parse(event.payload.eligibleAfter) > deps.clock().getTime(),
-          )
-        )
-          return false
-        return pendingSummaryRequests(events).some((event) => event.seq === request.seq)
+        return events.summaryRequests.some((event) => event.seq === request.seq)
       }
-      if (
-        reduceBuild(events).pr === undefined &&
-        !events.some(
-          (event) =>
-            event.type === 'publication.requested' && event.payload.operation === 'finalize',
-        )
-      )
-        return false
-      const written = await deps.store.appendIfCurrent(deps.slug, events.at(-1)?.seq ?? 0, {
+      if (events.state.pr === undefined && !events.finalizePublicationRequested) return false
+      const written = await deps.store.appendIfCurrent(deps.slug, events.state.lastSeq, {
         actor: KERNEL,
         type: 'pr-summary.requested',
         payload: boundary,
@@ -178,10 +145,10 @@ export async function settleSummaryRequests(
   let acquired = false
   let heartbeat: ReturnType<typeof setInterval> | undefined
   try {
-    let events = await deps.store.getEvents(deps.slug)
-    if (openExecution(events) !== null) return
+    let events = (await readBuildFacts(deps.store, deps.slug)).value
+    if (events.open !== null) return
     // Repair a crash after terminal/session completion but before guest handoff.
-    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
+    const workspace = events.latestWorkspace
     if (workspace?.type !== 'workspace.provisioned' || !isRemoteWorkspace(workspace.payload)) return
     const holder = deps.reservation ?? deps.holder
     acquired = await deps.store.claimLease(deps.slug, holder, 60_000)
@@ -189,11 +156,11 @@ export async function settleSummaryRequests(
     heartbeat = setInterval(() => {
       void deps.store.heartbeat(deps.slug, holder).catch(() => {})
     }, 15_000)
-    events = await deps.store.getEvents(deps.slug)
-    if (openExecution(events) !== null) return
+    events = (await readBuildFacts(deps.store, deps.slug)).value
+    if (events.open !== null) return
     await refreshSummaryBoundary(deps)
-    events = await deps.store.getEvents(deps.slug)
-    const requests = pendingSummaryRequests(events)
+    events = (await readBuildFacts(deps.store, deps.slug)).value
+    const requests = events.summaryRequests
     const latest = requests.at(-1)
     for (const request of requests) {
       if (request.type !== 'pr-summary.requested') continue

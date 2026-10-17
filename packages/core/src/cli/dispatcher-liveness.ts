@@ -1,30 +1,30 @@
+import { readRepositoryFacts, readDispatcherRunFacts } from '../store/reduced-reads'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, RepositoryRecord } from '../store/types'
 import { formatDispatcherIdentity, projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 
-/** Bounded first; a later yielding invocation can hide the owner's identity or
- * an earlier stop. Only this correlation query falls back to full history. */
+/** Correlate only the latest, stopped and lease-holder runs through persisted values. */
 export async function readDispatcherLiveness(
   store: BuildStore,
   repo: string,
   now = new Date(),
-  subset?: RepositoryEvent[],
+  _subset?: RepositoryEvent[],
 ) {
   const record = await store.getRepo(repo)
-  let events = record === null ? [] : (subset ?? (await store.getRepoStateEvents(repo)))
-  const bounded = projectDispatcherLiveness(record, events, now)
-  if (
-    record &&
-    ((record.lease &&
-      !events.some(
-        (e) => e.type === 'dispatcher.run-started' && e.payload.run === record.lease!.holder,
-      )) ||
-      (bounded.state !== 'held' &&
-        events.some((e) => e.type === 'dispatcher.run-started') &&
-        !events.some((e) => e.type === 'dispatcher.run-stopped')))
-  ) {
-    events = await store.getRepoEvents(repo)
-  }
+  const facts = record === null ? undefined : (await readRepositoryFacts(store, repo)).value
+  const runs = new Set(
+    [facts?.latestRun, facts?.latestStoppedRun, record?.lease?.holder].filter(
+      (run): run is string => run !== undefined,
+    ),
+  )
+  const correlations = await Promise.all(
+    [...runs].map(async (run) => (await readDispatcherRunFacts(store, repo, run)).value),
+  )
+  const events = correlations.flatMap((run) =>
+    [run.start, run.latestStart, run.stop, run.tick].filter(
+      (event): event is RepositoryEvent => event !== undefined,
+    ),
+  )
   return { record, events, dispatcher: projectDispatcherLiveness(record, events, now) }
 }
 
@@ -59,12 +59,9 @@ export class StandbyIdentityResolver {
     this.attempted.add(holder)
     const lookup = (async () => {
       try {
-        this.ingest(await this.store.getRepoStateEvents(this.repo))
-        let complete = false
-        if (!this.starts.has(holder)) {
-          this.ingest(await this.store.getRepoEvents(this.repo, 0))
-          complete = true
-        }
+        const facts = (await readDispatcherRunFacts(this.store, this.repo, holder)).value
+        this.ingest(facts.start ? [facts.start] : [])
+        const complete = false // This lookup correlates one holder, not the complete journal.
         this.history?.remember([...this.starts.values()], complete)
       } catch {
         // Identity is best effort; the sampled holder id remains sufficient.

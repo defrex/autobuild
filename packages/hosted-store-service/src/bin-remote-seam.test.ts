@@ -203,10 +203,10 @@ test('an abort mid-hold tears down a real held remote request promptly', async (
       json: true,
       signal: external.signal,
     })
-    // The first GET is the initial scan's immediate read; the second is
-    // the held request. It cannot complete before the abort — the build is
+    // Registration uses a persisted seed; the first event GET is the held
+    // request. It cannot complete before the abort — the build is
     // quiet and the hold bound is 25 s.
-    while (eventReads < 2) await Bun.sleep(10)
+    while (eventReads < 1) await Bun.sleep(10)
     external.abort()
     await watch
     expect(Date.now() - started).toBeLessThan(5_000)
