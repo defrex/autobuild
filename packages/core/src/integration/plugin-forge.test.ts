@@ -3,10 +3,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { reduceBuild } from '../kernel/reducer'
 import { emptyTickReport } from '../processes/dispatcher'
-import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   CONFIG_TOML,
-  GIT_ID,
   happyHandlers,
   makeHarness,
   ofType,
@@ -85,11 +83,6 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
     }
     const baseSha = context.conflict?.baseSha
     if (baseSha === undefined) throw new Error('reconcile context omitted baseSha')
-    const merge = await spawnExec(
-      ['git', ...GIT_ID, 'merge', '--no-ff', '-m', 'reconcile plugin forge', baseSha],
-      { cwd: cli.ws },
-    )
-    if (merge.exitCode !== 0) throw new Error(merge.stderr)
     const notes = await writeFileIn(
       cli.ws,
       '.ab/reconcile-notes.md',
@@ -111,7 +104,8 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
     let events = await h.events(slug)
     expect(ofType(events, 'pr.conflicted')).toHaveLength(1)
     expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
-    expect(h.forge.pushes).toHaveLength(2)
+    expect(h.forge.pushes).toHaveLength(1)
+    expect(ofType(events, 'reconcile.rewritten')).toHaveLength(1)
 
     h.forge.setPrState(1, { state: 'merged', sha: 'reconciled-plugin-squash' })
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })

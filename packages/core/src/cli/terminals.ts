@@ -1,3 +1,9 @@
+import {
+  prepareRestack,
+  publishRestack,
+  requireRewrite,
+  validateRestack,
+} from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
@@ -40,11 +46,7 @@ import {
   type ReviewVerdictKind,
 } from '../ontology'
 import type { Forge } from '../ports/types'
-import {
-  phaseScratchRejection,
-  reconcileScratchViolations,
-  scratchPathsTouchedInRange,
-} from '../ports/workspace/phase-scratch'
+import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/workspace/phase-scratch'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
@@ -494,55 +496,87 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       const notesPath = requireNotes(opts.notes, "reconcile's 'ab done' deposits reconcile-notes")
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
-      // The resolution lands as a merge commit (§15.7) — HEAD must have 2+
-      // parents (base merged into the branch, never rebase — D1).
-      const parentsLine = (await git(deps, ['rev-list', '--parents', '-n', '1', 'HEAD'])).trim()
-      const parts = parentsLine.split(/\s+/)
-      const head = parts[0]!
-      if (parts.length < 3) {
+      const transaction = events.reconcileTransaction
+      if (transaction === undefined || transaction.attempt !== env.round)
         throw new Error(
-          `reconcile's 'ab done' requires HEAD to be a merge commit (2+ parents) — ` +
-            `HEAD ${head} has ${parts.length - 1} parent(s); merge the base branch ` +
-            'into this branch first (§15.7, D1: never rebase)',
+          'reconcile requires a kernel-prepared single-change replay; restart this reconcile occurrence',
         )
-      }
-      const scratchPaths = await reconcileScratchViolations(
-        deps.exec,
-        deps.workspacePath,
-        head,
-        parts.slice(1),
+      const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
+      const priorIntent = events.reconcileHistory.findLast(
+        (event) =>
+          event.type === 'reconcile.publish-intended' && event.payload.id === transaction.id,
       )
-      if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
-      const branch = await buildBranch(deps)
-      if (remotePublication(events)) {
-        const { event } = await store.appendWithArtifacts(
-          env.build,
-          [{ kind: 'reconcile-notes', content: notes }],
-          (deposited) => ({
-            actor,
-            type: 'publication.requested',
-            payload: {
-              operation: 'reconcile',
-              branch,
-              sha: head,
-              artifact: refOf(deposited[0]),
-            },
-          }),
+      if (
+        priorIntent?.type === 'reconcile.publish-intended' &&
+        priorIntent.payload.headSha !== head
+      )
+        throw new Error(
+          'the durable reconcile publication intent names another resolved head; restore that head before retrying completion',
         )
-        return event
-      }
-      // Regular push, NEVER force (D1): the merge commit extends the branch.
-      await deps.forge.pushBranch(deps.workspacePath, branch)
-      const { event } = await store.appendWithArtifacts(
+      const restack = { ...deps, slug: env.build }
+      await validateRestack(restack, transaction, head)
+      const conflicted =
+        events.reconcileReplay?.id === transaction.id && events.reconcileReplay.conflicted
+      const { event: intended } = await store.appendWithArtifacts(
         env.build,
         [{ kind: 'reconcile-notes', content: notes }],
         (deposited) => ({
-          actor,
-          type: 'reconcile.completed',
-          payload: { mergeCommit: head, artifact: refOf(deposited[0]) },
+          actor: KERNEL,
+          type: 'reconcile.publish-intended',
+          payload: { ...transaction, headSha: head, conflicted, artifact: refOf(deposited[0]) },
         }),
       )
-      return event
+      if (remotePublication(events)) {
+        return store.append(env.build, {
+          actor,
+          type: 'publication.requested',
+          payload: {
+            operation: 'reconcile',
+            branch: transaction.branch,
+            sha: head,
+            artifact: intended.payload.artifact,
+            rewrite: { ...transaction, conflicted },
+          },
+        })
+      }
+      const result = await publishRestack(restack, intended.payload)
+      if (result.kind === 'lease-mismatch') {
+        if (result.actual === null)
+          throw new Error('build branch was deleted; operator resolution is required')
+        const capability = requireRewrite(deps.forge)
+        const observed = await capability.snapshot({
+          workspacePath: deps.workspacePath,
+          branch: transaction.branch,
+          destinationRef: `refs/autobuild/reconcile/${env.build}/head`,
+        })
+        const descendant = await deps.exec(['git', 'merge-base', '--is-ancestor', head, observed], {
+          cwd: deps.workspacePath,
+        })
+        const compatible = await deps.exec(
+          ['git', 'merge-base', '--is-ancestor', transaction.oldHead, observed],
+          { cwd: deps.workspacePath },
+        )
+        if (descendant.exitCode !== 0 && compatible.exitCode !== 0)
+          throw new Error(
+            `build branch diverged to ${observed}; preserve its history and request operator resolution`,
+          )
+        await prepareRestack(restack, {
+          attempt: env.round,
+          branch: transaction.branch,
+          oldBase: descendant.exitCode === 0 ? transaction.targetBase : transaction.oldBase,
+          targetBase: transaction.targetBase,
+          oldHead: observed,
+          id: deps.ids('rewrite').replaceAll('_', '-'),
+        })
+        throw new Error(
+          'build branch changed during publication; its complete change has been replayed onto the same frozen base. Inspect the new replay, resolve any conflicts, then retry ab done',
+        )
+      }
+      return store.append(env.build, {
+        actor,
+        type: 'reconcile.completed',
+        payload: { headSha: head, rewriteId: transaction.id, artifact: intended.payload.artifact },
+      })
     }
 
     default:

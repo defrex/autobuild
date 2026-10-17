@@ -1,65 +1,57 @@
 ---
 name: reconcile
-description: Resolve a conflicted PR by merging base into the build branch. Invoked by the build-runner as the reconcile phase; takes only the build slug.
+description: Resolve the kernel-prepared replay of a build's single change onto its refreshed base. Invoked by the build-runner as the reconcile phase; takes only the build slug.
 ---
 
 # /ab-reconcile <build>
 
-The build's PR no longer merges cleanly: main moved. Your job is one merge
-commit — base merged *into* the build branch — that preserves both what this
-build was for and what landed on main since. **Never rebase**: rebasing
-re-resolves conflicts against a moving target and severs recorded SHA
-provenance, so it is banned in this system.
+The kernel has collapsed this build's contribution into one change and replayed
+it onto a frozen refreshed base. Your job is to preserve both the build's intent
+and the behavior already landed upstream. Work on the prepared detached HEAD;
+the kernel retains the published branch until guarded publication succeeds.
 
 ## Session shape
 
-1. Run `ab context`. Read the manifest path printed by the command (normally
-   `.ab/context.json`) and use its `materialized` paths for the spec, plan, and
-   implement notes; legacy tracked paths may relocate them. It also contains
-   conflict info (`baseSha`) and — when a human answered an escalation a previous
-   attempt raised — `.ab/guidance.json`, their answer to it. Kernel plumbing
-   fetched the PR's configured base and resolved this SHA immediately before
-   your session, so the commit already exists locally; it is not the older
-   conflict-detection snapshot.
-2. `git merge <baseSha>` in the workspace and resolve every conflict with
-   the explicit charge to **regress against neither side**:
-   - The spec and plan tell you what this branch's changes are *for* — a
-     resolution that quietly drops the behavior they describe is a failed
-     reconcile, even if it compiles.
-   - The incoming base commits are already merged reality — a resolution
-     that undoes them will break main.
-3. Textual conflicts with one faithful resolution: resolve them. Then run
-   the repo's checks (typecheck, tests) — a merge that compiles but fails
-   tests is not resolved.
-4. Write the manifest's `notesPath` (normally `.ab/reconcile-notes.md`) with
-   each conflicted file, what collided, and why the resolution preserves both
-   sides; then run `ab done --notes <notesPath>`. The notes bytes reach the
-   store only through this flag; the file is never committed.
+1. Run `ab context`. Read the printed manifest and its `materialized` paths for
+   the spec, approved plan, implement-notes, and any `.ab/guidance.json` guidance. `replay` names the
+   original head, old contribution base, single change, frozen target base and
+   whether replay conflicted. Never fetch, merge, rebase, select another base,
+   or move the named branch yourself. Missing replay inputs require escalation.
+2. Inspect `git status` and the prepared replay. If conflicts remain, resolve
+   them with the explicit charge to regress against neither side:
+   - Preserve the behavior the spec and approved plan require.
+   - Preserve the behavior already landed on the target base.
+   Stage only the resolved files and run `git cherry-pick --continue`. If the
+   change is now redundant, preserve an empty commit with `git commit
+   --allow-empty --no-edit`; never skip away the build's identity. A clean
+   replay already has its commit and still needs inspection and checks.
+3. Run the repository's required checks. The result must be exactly one commit
+   with exactly one parent equal to `replay.targetBase` and exactly one terminal
+   `Autobuild-Build: <build>` trailer. Do not create a merge commit.
+4. Write the manifest's `notesPath`: what collided, how each resolution preserves
+   both sides, and the checks run. Never commit notes or any other `.ab/` path.
+   Legacy tracked scratch may be inherited unchanged from either input; do not
+   author scratch changes as part of resolution.
+5. Run `ab done --notes <notesPath>`. The kernel validates, archives recorded
+   evidence, and publishes with an exact expected-head lease. If the branch
+   changed, it prepares another replay of the observed complete contribution
+   onto the same frozen base. Read context again, inspect and resolve that replay,
+   run checks, update notes, then retry completion. Never push yourself.
 
-   `ab done` requires the merge commit to exist and the worktree to be
-   clean; the push is plumbing. Verification re-runs in full afterward
-   because reconciliation changed code — that is expected, not a failure.
+A remote publication success message parks this turn for trusted publication;
+do not repeat `ab done` after success. Post-reconcile verification follows the
+captured policy and begins a fresh cycle after confirmed publication.
 
 ## When not to resolve
 
-A **semantic** conflict — both sides changed the same behavior's meaning,
-the resolution needs a decision the spec doesn't make, or preserving both
-sides is impossible — escalates rather than guesses:
+Escalate semantic conflicts, incompatible or deleted branch history, or choices
+that the spec does not settle. Do not guess away either side's behavior:
 
 ```
-ab escalate "main's abc123 changed the session-token format; this build's rate limiter keys on the old format. Adopt the new format (touches spec criterion 3) or key differently?" --refs src/auth.ts
+ab escalate "The target changes the session-token format but the build keys its limiter on the old format. Which behavior should the limiter adopt?" --refs src/auth.ts
 ```
 
-When an earlier attempt escalated and a human answered, `.ab/guidance.json`
-carries the escalation id and their answer. It is authoritative feedback for
-this attempt — resolve the way it says — while the spec remains the contract
-this phase is measured against; if the two cannot both be satisfied, escalate
-again rather than guess. Reconcile has no review round, so guidance is the only
-feedback it ever receives.
-
-Never stage or commit anything under `.ab/`, including with `git add -f`.
-Tracked legacy scratch needs no index flags or stash: leave it untouched and
-let the normal merge inherit, update, or delete it from a parent.
-
-A wrong guess here lands directly on main. Exactly one terminal command:
-`ab done` or `ab escalate`.
+A human answer in guidance is authoritative while the spec remains the contract.
+If they cannot both be satisfied, escalate the contradiction. Reconcile has no
+code-review round; risky resolutions need human judgment. The only successful
+terminal commands are `ab done` and `ab escalate`.

@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { checkIncremental, pick, seededRandom, shuffled } from '../kernel/incremental-contract'
@@ -102,7 +103,7 @@ const oracle = {
           e.payload.commits.head === p.sha
         )
       if (p.operation === 'reconcile')
-        return e.type === 'reconcile.completed' && e.payload.mergeCommit === p.sha
+        return e.type === 'reconcile.completed' && reconcileHead(e.payload) === p.sha
       if (p.operation === 'finalize')
         return e.type === 'finalize.completed' && e.payload.pr.headSha === p.sha
       return (
@@ -215,8 +216,8 @@ function generated(seed: number): AbEvent[] {
 }
 
 describe('publicationStateReducer', () => {
-  test('version starts at 1', () => {
-    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(1)
+  test('version includes cancelled rewrite requests', () => {
+    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(4)
   })
 
   test('counterexample: an irrelevant event between workspace facts is a scan barrier', () => {

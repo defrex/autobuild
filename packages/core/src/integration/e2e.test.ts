@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 /**
  * End-to-end seam tests (SPEC §15.6 walkthroughs as LIVE scenarios, §8.7,
  * §12 outer loop, §15.7 janitor): the whole system composed — Dispatcher →
@@ -1047,7 +1048,7 @@ test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, a
 
 // ── a2. Reconcile refreshes a moved base at execution time (§15.7) ──────────
 
-test('a2. reconcile merges the current base when main advances after conflict detection', async () => {
+test('a2. reconcile replays one change onto the current base after conflict detection', async () => {
   let suppliedBase: string | undefined
   let mergeCommit: string | undefined
   const handlers = happyHandlers()
@@ -1064,17 +1065,15 @@ test('a2. reconcile merges the current base when main advances after conflict de
     // The advanced base and feature both added rate-limit.txt, so real Git
     // must stop for a resolution. The scripted agent preserves both sides and
     // finishes through the real `ab done` reconcile terminal.
-    const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-edit', suppliedBase], {
-      cwd: cli.ws,
-    })
-    expect(merge.exitCode).not.toBe(0)
-    expect(`${merge.stdout}\n${merge.stderr}`).toContain('CONFLICT')
+    expect(await git(['ls-files', '-u'], cli.ws)).not.toBe('')
     await writeFileIn(
       cli.ws,
       'rate-limit.txt',
       'base audit behavior preserved\nfeature throttle after 5 preserved\n',
     )
-    mergeCommit = await commitAll(cli.ws, 'reconcile: merge current main')
+    await git(['add', 'rate-limit.txt'], cli.ws)
+    await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
+    mergeCommit = await git(['rev-parse', 'HEAD'], cli.ws)
     const notes = await writeFileIn(
       cli.ws,
       '.ab/reconcile-notes.md',
@@ -1120,6 +1119,8 @@ test('a2. reconcile merges the current base when main advances after conflict de
   expect(currentBase).not.toBe(detectedBase)
 
   const reconciled = await h.runLatest()
+  if (reconciled.status !== 'running')
+    throw new Error(JSON.stringify(ofType(await h.events(SLUG), 'phase.failed')))
   expect(reconciled.status).toBe('running')
   expect(reconciled.prState).toBe('open')
   expect(suppliedBase).toBe(currentBase)
@@ -1140,9 +1141,9 @@ test('a2. reconcile merges the current base when main advances after conflict de
     throw new Error('reconcile handler did not create a merge commit')
   }
   const parents = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)).split(/\s+/)
-  expect(parents).toEqual([mergeCommit, featureBeforeReconcile, currentBase])
-  expect(ofType(events, 'reconcile.completed')[0]!.payload.mergeCommit).toBe(mergeCommit)
-  expect(h.forge.pushes.at(-1)).toEqual({ workspacePath: ws, branch: BRANCH })
+  expect(parents).toEqual([mergeCommit, currentBase])
+  expect(reconcileHead(ofType(events, 'reconcile.completed')[0]!.payload)).toBe(mergeCommit)
+  expect(await git(['ls-remote', 'origin', `refs/heads/${BRANCH}`], ws)).toContain(mergeCommit!)
   expect(h.cliErrors).toEqual([])
 
   // With the stale-base obstacle gone, the ordinary janitor can observe the
@@ -1173,17 +1174,15 @@ test.each([false, true])(
       // The advanced base and feature both added rate-limit.txt, so real Git
       // must stop for a resolution. The scripted agent preserves both sides and
       // finishes through the real `ab done` reconcile terminal.
-      const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-edit', suppliedBase], {
-        cwd: cli.ws,
-      })
-      expect(merge.exitCode).not.toBe(0)
-      expect(`${merge.stdout}\n${merge.stderr}`).toContain('CONFLICT')
+      expect(await git(['ls-files', '-u'], cli.ws)).not.toBe('')
       await writeFileIn(
         cli.ws,
         'rate-limit.txt',
         'base audit behavior preserved\nfeature throttle after 5 preserved\n',
       )
-      mergeCommit = await commitAll(cli.ws, 'reconcile: merge current main')
+      await git(['add', 'rate-limit.txt'], cli.ws)
+      await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
+      mergeCommit = await git(['rev-parse', 'HEAD'], cli.ws)
       const notes = await writeFileIn(
         cli.ws,
         '.ab/reconcile-notes.md',
@@ -1270,9 +1269,9 @@ test.each([false, true])(
       throw new Error('reconcile handler did not create a merge commit')
     }
     const parents = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)).split(/\s+/)
-    expect(parents).toEqual([mergeCommit, featureBeforeReconcile, currentBase])
-    expect(ofType(events, 'reconcile.completed')[0]!.payload.mergeCommit).toBe(mergeCommit)
-    expect(h.forge.pushes.at(-1)).toEqual({ workspacePath: ws, branch: BRANCH })
+    expect(parents).toEqual([mergeCommit, currentBase])
+    expect(reconcileHead(ofType(events, 'reconcile.completed')[0]!.payload)).toBe(mergeCommit)
+    expect(await git(['ls-remote', 'origin', `refs/heads/${BRANCH}`], ws)).toContain(mergeCommit!)
     expect(h.cliErrors).toEqual([])
 
     expect(h.forge.comments.at(-1)?.body).toContain('skipped by post-reconcile policy')
@@ -1333,14 +1332,9 @@ test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile
     expect(relocatedReconcileInput).not.toBe('.ab/implement-notes.md')
     expect(await readFile(join(cli.ws, relocatedReconcileInput), 'utf8')).toBe(artifactNotes)
     expect(await readFile(join(cli.ws, '.ab/implement-notes.md'), 'utf8')).toBe(
-      'repository base notes\n',
+      'base advanced notes\n',
     )
     if (manifest.conflict === undefined) throw new Error('reconcile context omitted base SHA')
-    const merge = await spawnExec(
-      ['git', ...GIT_ID, 'merge', '--no-edit', manifest.conflict.baseSha],
-      { cwd: cli.ws },
-    )
-    expect(merge.exitCode).toBe(0)
     expect(await readFile(join(cli.ws, '.ab/implement-notes.md'), 'utf8')).toBe(
       'base advanced notes\n',
     )
@@ -1439,14 +1433,11 @@ readyState = "Ready"
     const baseSha = context.conflict?.baseSha
     if (baseSha === undefined) throw new Error('reconcile context omitted baseSha')
 
-    const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-ff', '--no-commit', baseSha], {
-      cwd: cli.ws,
-    })
-    expect(merge.exitCode).toBe(0)
     // This build-owned reconciliation change brings visual verification
     // into scope. The upstream-only base-only/ file must remain excluded.
     await writeFileIn(cli.ws, 'src/ui/reconciled.ts', 'export const reconciled = true\n')
-    await commitAll(cli.ws, 'reconcile: add visual resolution')
+    await git(['add', 'src/ui/reconciled.ts'], cli.ws)
+    await git([...GIT_ID, 'commit', '--amend', '--no-edit'], cli.ws)
     const notes = await writeFileIn(
       cli.ws,
       '.ab/reconcile-notes.md',

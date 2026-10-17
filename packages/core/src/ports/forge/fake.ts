@@ -85,6 +85,28 @@ type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
   readonly name = 'fake'
+  readonly archives = new Map<string, string>()
+  readonly rewrites: { branch: string; expected: string; sha: string }[] = []
+  rewrite: import('../types').ForgeRewrite = {
+    snapshot: async ({ branch }) => {
+      const sha = this.remoteBranches.get(branch)
+      if (sha === undefined) throw new Error(`fake: unknown build branch ${branch}`)
+      return sha
+    },
+    archive: async ({ ref, sha }) => {
+      const prior = this.archives.get(ref)
+      if (prior !== undefined && prior !== sha) throw new Error(`immutable archive ${ref} differs`)
+      this.archives.set(ref, sha)
+    },
+    replace: async ({ branch, expected, sha }) => {
+      const actual = this.remoteBranches.get(branch) ?? null
+      if (actual === sha) return { kind: 'published' }
+      if (actual !== expected) return { kind: 'lease-mismatch', actual }
+      this.rewrites.push({ branch, expected, sha })
+      this.remoteBranches.set(branch, sha)
+      return { kind: 'published' }
+    },
+  }
   readonly prAttachments?: PrAttachmentHosting
 
   /** Optional checkout-less read seam (SPEC §16.1 pipeline pinning): seeded
