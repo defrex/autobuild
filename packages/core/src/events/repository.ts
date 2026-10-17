@@ -411,9 +411,12 @@ export const dispatcherStatusEventPayloadSchemas = {
     run: dispatchRun,
     error: z.string().min(1),
   }),
-  /** Brackets the one unsafe-to-force dispatcher turn. A supervisor may kill
-   * an unresponsive child only when no started turn remains open. */
-  'dispatcher.tick-started': z.strictObject({ run: dispatchRun }),
+  /** Recorded boundaries of meaningful turns. The repository tick observation
+   * protects active work from forced stop while these facts are buffered. */
+  'dispatcher.tick-started': z.strictObject({
+    run: dispatchRun,
+    startedAt: z.iso.datetime().optional(),
+  }),
   'dispatcher.tick-completed': z.strictObject({
     run: dispatchRun,
     queued: z.number().int().nonnegative(),
@@ -421,6 +424,7 @@ export const dispatcherStatusEventPayloadSchemas = {
      * dispatcher child transported a display sample in its tick fact. */
     observations: z.number().int().nonnegative().optional(),
     counters: tickCountersSchema,
+    blockedDiagnostics: boundedDiagnostics.optional(),
     janitorDiagnostics: boundedDiagnostics,
     ticketDiagnostics: boundedDiagnostics,
     creationDiagnostics: boundedDiagnostics.optional(),

@@ -127,10 +127,31 @@ export interface BuildDigest {
   executionOpen?: true
 }
 
+export type RepoTickCompletion =
+  | {
+      outcome: 'completed'
+      counters: RepositoryEventEnvelope<'dispatcher.tick-completed'>['payload']['counters']
+    }
+  | { outcome: 'failed'; error: string }
+
+/** Bounded operational telemetry; never workflow or queue authority. */
+export interface RepoTickObservation {
+  /** The run that last began or finished a tick. */
+  run: string
+  open?: { startedAt: string }
+  /** Retained across begin, even when the next run has a different holder. */
+  finished?: RepoTickCompletion & { run: string; startedAt: string; completedAt: string }
+}
+export interface RepoTickFinish {
+  observation: RepoTickObservation
+  events: RepositoryEvent[]
+}
+
 export interface RepositoryRecord {
   repo: string
   createdAt: string
   updatedAt: string
+  tick?: RepoTickObservation
   /** Repository workflow lease (harvest single-flight), separate from builds. */
   lease?: { holder: string; expiresAt: string }
   heartbeatAt?: string
@@ -456,6 +477,16 @@ export interface BuildStore {
     kind: string,
     name: string,
   ): Promise<TicketAssetMeta | null>
+  /** Fenced by the unexpired repository lease. Null means authority was lost.
+   * Finish validates all boundaries before atomically depositing them and telemetry.
+   * Neither method renews the lease. */
+  beginRepoTick(repo: string, holder: string): Promise<string | null>
+  finishRepoTick(
+    repo: string,
+    holder: string,
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null>
   claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean>
   heartbeatRepo(repo: string, holder: string): Promise<boolean>
   releaseRepoLease(repo: string, holder: string): Promise<void>

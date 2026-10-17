@@ -554,6 +554,8 @@ command = "postgres"
     'appendRepoWithArtifacts',
     'putRepoArtifact',
     'claimRepoLease',
+    'beginRepoTick',
+    'finishRepoTick',
     'heartbeatRepo',
     'releaseRepoLease',
     'createSession',

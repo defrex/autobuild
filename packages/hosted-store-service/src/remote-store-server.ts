@@ -55,6 +55,7 @@ import {
   type StreamScope,
 } from '@defrex/autobuild/plugin-sdk'
 import {
+  finishRepoTickBodySchema,
   appendStreamBodySchema,
   closeStreamBodySchema,
   conditionalEventBodySchema,
@@ -737,6 +738,18 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           200,
           await store.listRepoArtifacts(repo, url.searchParams.get('kind') ?? undefined),
         )
+      case 'POST tick/begin': {
+        const body = await readBody(req, leaseHolderBodySchema)
+        return json(200, await store.beginRepoTick(repo, body.holder))
+      }
+      case 'POST tick/finish': {
+        const body = await readBody(req, finishRepoTickBodySchema)
+        const events = body.events.map((event) => ({
+          ...event,
+          actor: enforceVia(scope, event.actor),
+        })) as RepositoryEventWrite[]
+        return json(200, await store.finishRepoTick(repo, body.holder, body.completion, events))
+      }
       case 'POST lease/claim': {
         const body = await readBody(req, leaseClaimBodySchema)
         return json(200, {

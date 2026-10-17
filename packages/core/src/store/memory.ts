@@ -1,3 +1,5 @@
+import { validateTickFinish } from './repo-tick'
+import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from './types'
 /**
  * The in-memory BuildStore — the reference adapter. Its behavior *is* the
  * contract: the suite in `store/contract.ts` is written against this and
@@ -121,6 +123,7 @@ interface Lease {
 }
 
 interface RepoState {
+  tick?: RepoTickObservation
   record: {
     repo: string
     createdAt: string
@@ -563,6 +566,7 @@ export class MemoryBuildStore implements BuildStore {
 
   private repoSnapshot(state: RepoState): RepositoryRecord {
     return {
+      ...(state.tick ? { tick: structuredClone(state.tick) } : {}),
       repo: state.record.repo,
       createdAt: state.record.createdAt,
       updatedAt: state.record.updatedAt,
@@ -894,6 +898,60 @@ export class MemoryBuildStore implements BuildStore {
       removed: true,
     })
     return structuredClone(latest.meta)
+  }
+
+  async beginRepoTick(repo: string, holder: string): Promise<string | null> {
+    const state = this.repoState(repo)
+    if (
+      !state.lease ||
+      state.lease.holder !== holder ||
+      state.lease.expiresAt <= this.clock().getTime()
+    )
+      return null
+    const startedAt = this.now()
+    state.tick = {
+      run: holder,
+      open: { startedAt },
+      ...(state.tick?.finished ? { finished: state.tick.finished } : {}),
+    }
+    state.record.updatedAt = startedAt
+    return startedAt
+  }
+
+  async finishRepoTick(
+    repo: string,
+    holder: string,
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    const validated = validateTickFinish(holder, completion, events)
+    const state = this.repoState(repo)
+    if (
+      !state.lease ||
+      state.lease.holder !== holder ||
+      state.lease.expiresAt <= this.clock().getTime()
+    )
+      return null
+    if (state.tick?.run !== holder || !state.tick.open) throw new Error('no open repository tick')
+    const completedAt = this.now()
+    const envelopes = validated.map((event, index) => ({
+      ...event,
+      repo,
+      seq: state.events.length + index + 1,
+      ts: completedAt,
+    })) as RepositoryEvent[]
+    state.tick = {
+      run: holder,
+      finished: {
+        ...structuredClone(completion),
+        run: holder,
+        startedAt: state.tick.open.startedAt,
+        completedAt,
+      },
+    }
+    state.events.push(...structuredClone(envelopes))
+    state.record.updatedAt = completedAt
+    return structuredClone({ observation: state.tick, events: envelopes })
   }
 
   async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {

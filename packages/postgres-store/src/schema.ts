@@ -16,7 +16,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -836,7 +836,11 @@ CREATE TABLE IF NOT EXISTS ticket_grants (
  execution text NOT NULL, kind text NOT NULL CHECK (kind IN ('runner','phase')),
  parent text REFERENCES ticket_grants(id), expires_at timestamptz NOT NULL, revoked_at timestamptz
 );`
-export const SCHEMA_DDL = `${SCHEMA_V12_DDL}\n${TICKET_POLICY_SCHEMA_DDL}\n${TICKET_GRANT_SCHEMA_DDL}`
+export const SCHEMA_V13_DDL = `${SCHEMA_V12_DDL}\n${TICKET_POLICY_SCHEMA_DDL}\n${TICKET_GRANT_SCHEMA_DDL}`
+export const SCHEMA_V13_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V13_DDL)
+  .digest('hex')
+export const SCHEMA_DDL = `${SCHEMA_V13_DDL}\nALTER TABLE repo_streams ADD COLUMN IF NOT EXISTS tick jsonb;`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -1038,6 +1042,7 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['lease_expires_at', 'timestamp with time zone', false],
     ['lease_ttl_ms', 'bigint', false],
     ['heartbeat_at', 'timestamp with time zone', false],
+    ['tick', 'jsonb', false],
   ],
   repo_events: [
     ['repo', 'text', true],
@@ -1660,6 +1665,8 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 13 && marker.checksum === SCHEMA_V13_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 12 && marker.checksum === SCHEMA_V12_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
             applied_at = ${new Date().toISOString()} WHERE singleton = true`

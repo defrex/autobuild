@@ -58,9 +58,14 @@ test('identities are strict stable versions with known independent protocols', (
   }
   const oldest = supportedClientRange().minVersion
   for (const value of [oldest, AUTOBUILD_VERSION.replace(/\.\d+$/, '.999')])
-    expect(clientIdentityError(value, '3')).toBeUndefined()
-  for (const protocol of [null, '2', '4', '03'])
-    expect(clientIdentityError(oldest, protocol)).toContain('version mismatch')
+    expect(
+      clientIdentityError(
+        value,
+        value === oldest ? RELEASE_LINE_PROTOCOLS[oldest.split('.').slice(0, 2).join('.')]! : '4',
+      ),
+    ).toBeUndefined()
+  for (const protocol of [null, '2', '3', '04'])
+    expect(clientIdentityError(AUTOBUILD_VERSION, protocol)).toContain('version mismatch')
 })
 
 // Exercise negotiation, rather than just range arithmetic, against the actual

@@ -13,6 +13,8 @@
  * `subscribe` is the shared polling implementation over `getEvents(since)`
  * (§7.2); `close()` is a no-op — the server owns the backing store.
  */
+import { beginRepoTickResponseSchema, finishRepoTickResponseSchema } from './protocol'
+import type { RepoTickCompletion, RepoTickFinish } from '../types'
 import {
   EventValidationError,
   type AbEvent,
@@ -820,6 +822,28 @@ export class RemoteBuildStore implements BuildStore {
       removeTicketAssetResponseSchema,
       { kind, name },
     )
+  }
+
+  async beginRepoTick(repo: string, holder: string): Promise<string | null> {
+    return this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/tick/begin`,
+      beginRepoTickResponseSchema,
+      { holder },
+    )
+  }
+  async finishRepoTick(
+    repo: string,
+    holder: string,
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    return (await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/tick/finish`,
+      finishRepoTickResponseSchema,
+      { holder, completion, events },
+    )) as RepoTickFinish | null
   }
 
   async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
