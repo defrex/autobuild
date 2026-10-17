@@ -1287,3 +1287,14 @@ test('a store that predates the snapshot routes reads as no snapshots, never an 
     old.stop(true)
   }
 })
+
+test('hosted frontend read budget stays flat across thousands of journal events', async () => {
+  const { dispatchReadBudget } = await import('@defrex/autobuild/testing')
+  const backing = new MemoryBuildStore()
+  const server = startStoreServer({ store: backing })
+  try {
+    await dispatchReadBudget(new RemoteBuildStore({ url: server.url }), backing)
+  } finally {
+    server.stop()
+  }
+})

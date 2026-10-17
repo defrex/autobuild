@@ -1,0 +1,291 @@
+import { expect, test } from 'bun:test'
+import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
+import { MemoryBuildStore } from '../store/memory'
+import { DispatchRepositoryFeed } from './dispatch-repository-feed'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
+
+const tickCounters = {
+  merged: 0,
+  closed: 0,
+  conflicted: 0,
+  abandoned: 0,
+  discarded: 0,
+  janitorFailed: 0,
+  recovered: 0,
+  dispatchFailed: 0,
+  resumed: 0,
+  swept: 0,
+  dispatched: 0,
+  authored: 0,
+  bounced: 0,
+  claimRaces: 0,
+  invalidTickets: 0,
+  dependencyBlocked: 0,
+  harvestStarted: 0,
+  harvestResumed: 0,
+  harvestCompleted: 0,
+  harvestEscalated: 0,
+  harvestFailed: 0,
+}
+
+const repo = '/feed'
+const clock = () => new Date('2026-10-16T00:00:00Z')
+async function setting(store: MemoryBuildStore, enabled = false) {
+  return store.appendRepo(repo, {
+    actor: humanActor('test'),
+    type: 'dispatcher.intake-set',
+    payload: { enabled },
+  })
+}
+async function start(store: MemoryBuildStore, run: string) {
+  return store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: { run, pid: 1, effectiveConfig: { kind: 'config', rev: 0 }, roleWarnings: [] },
+  })
+}
+
+test('persisted projection advances past discarded events and restarts with only a delta', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  await start(store, 'old')
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'old', outcome: 'normal' },
+  })
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  const snapshot = await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1)
+  expect(snapshot?.cursor).toBe(3)
+  expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
+  await setting(store, true)
+  store.getRepoStateEvents = async () => {
+    throw new Error('must restore')
+  }
+  const resumed = new DispatchRepositoryFeed(store, repo, clock)
+  expect((await resumed.refresh()).map((e) => e.seq)).toEqual([4])
+  expect(reduceDispatchSettings(resumed.events)).toEqual(
+    reduceDispatchSettings(await store.getRepoEvents(repo)),
+  )
+})
+
+for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
+  test(`${bad} snapshot uses bounded seed without full replay`, async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await setting(store)
+    await start(store, 'old')
+    if (bad !== 'missing')
+      await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
+        version: bad === 'version' ? 2 : 1,
+        cursor: bad === 'ahead' ? 999 : 1,
+        state: bad === 'malformed' ? { retained: [{}] } : { retained: [] },
+      })
+    if (bad === 'unreadable')
+      store.getReducerSnapshot = async () => {
+        throw new Error('offline')
+      }
+    const reads: number[] = []
+    const get = store.getRepoEvents.bind(store)
+    store.getRepoEvents = async (repo, since = 0) => {
+      reads.push(since)
+      return get(repo, since)
+    }
+    const feed = new DispatchRepositoryFeed(store, repo, clock)
+    await feed.warm()
+    expect(reads.every((since) => since > 0)).toBe(true)
+    expect(feed.events).toHaveLength(1)
+  })
+}
+
+test('a gapped delta leaves the committed cursor retryable; overlapping refreshes consume once', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  await setting(store, true)
+  await setting(store, false)
+  const get = store.getRepoEvents.bind(store)
+  store.getRepoEvents = async (repo, since) => (await get(repo, since)).slice(1)
+  await expect(feed.refresh()).rejects.toThrow('invalid dashboard')
+  expect(feed.events).toHaveLength(1)
+  store.getRepoEvents = get
+  const deltas = await Promise.all([feed.refresh(), feed.refresh()])
+  expect(deltas.map((delta) => delta.length)).toEqual([2, 0])
+  expect(feed.events.map((e) => e.seq)).toEqual([1, 2, 3])
+})
+
+test('failed prelaunch seed recovers all invocation facts despite a competing anchor', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const seed = store.getRepoStateEvents.bind(store)
+  store.getRepoStateEvents = async () => {
+    throw new Error('timeout')
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await expect(feed.warm()).rejects.toThrow('timeout')
+  await start(store, 'own')
+  await start(store, 'competitor')
+  store.getRepoStateEvents = seed
+  expect((await feed.refresh()).map((e) => e.seq)).toEqual([2, 3])
+  expect(feed.identities.map((e) => e.type === 'dispatcher.run-started' && e.payload.run)).toEqual([
+    'own',
+    'competitor',
+  ])
+})
+
+test('high water before bounded seed handles concurrent appends and failed snapshot writes', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const seed = store.getRepoStateEvents.bind(store)
+  store.getRepoStateEvents = async (repo) => {
+    const subset = await seed(repo)
+    await setting(store, true)
+    return subset
+  }
+  store.putReducerSnapshot = async () => {
+    throw new Error('offline')
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  expect(feed.events.map((e) => e.seq)).toEqual([1, 2])
+  expect(await feed.refresh()).toEqual([])
+})
+
+test('SQLite frontend read budget stays flat across thousands of journal events', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { openLocalStore } = await import('../store/local/store')
+  const { dispatchReadBudget } = await import('../testing/dispatch-read-budget')
+  const root = await mkdtemp(join(tmpdir(), 'ab-dashboard-feed-'))
+  try {
+    const store = openLocalStore(root)
+    await dispatchReadBudget(store, store)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('scripted harvest, settings and live status retain full replay and rendered parity', async () => {
+  const { randomHarvestJournal, randomSettingsJournal, randomStatusJournal } = await import(
+    '../kernel/generators/repository-journals'
+  )
+  const { reduceDispatchStatus } = await import('../kernel/dispatch-status')
+  const { reduceHarvest } = await import('../kernel/harvest')
+  const { unclaimedObservationCount } = await import('../processes/harvest')
+  const { buildDashboardFromProjected } = await import('./dashboard/model')
+  const { renderDashboard } = await import('./dashboard/render')
+  const { reduceBuildDigest } = await import('../store/digest')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  const digests = new Map(
+    Array.from({ length: 30 }, (_, i) => {
+      const slug = `b${i + 1}`
+      return [
+        slug,
+        {
+          slug,
+          ...reduceBuildDigest([
+            { type: 'observation.recorded', seq: 1, ts: clock().toISOString() },
+          ]),
+        },
+      ] as const
+    }),
+  )
+  let status = reduceDispatchStatus([], 'run-a')
+  const log = [
+    ...randomHarvestJournal(2, 100),
+    ...randomSettingsJournal(4, 30),
+    ...randomStatusJournal(5, 100),
+  ]
+  for (const fact of log) {
+    if (fact.type === 'dispatcher.intake-set' || fact.type === 'dispatcher.operator-reported')
+      fact.actor = humanActor('test')
+    if (fact.type === 'harvest.paused') {
+      fact.actor = KERNEL
+      fact.payload = {}
+    }
+    if (fact.type === 'dispatcher.tick-completed') fact.payload.counters = tickCounters
+    await store.appendRepo(repo, { actor: fact.actor, type: fact.type, payload: fact.payload })
+    const delta = await feed.refresh()
+    status = reduceDispatchStatus(delta, 'run-a', status)
+    const full = await store.getRepoEvents(repo)
+    expect(status).toEqual(reduceDispatchStatus(full, 'run-a'))
+    const { lastSeq: _projectedSeq, ...projectedHarvest } = reduceHarvest(feed.events)
+    const { lastSeq: _fullSeq, ...fullHarvest } = reduceHarvest(full)
+    expect(projectedHarvest).toEqual(fullHarvest)
+    expect(reduceDispatchSettings(feed.events)).toEqual(reduceDispatchSettings(full))
+    const count = unclaimedObservationCount({ digests, harvestEvents: feed.events })
+    expect(count).toBe(unclaimedObservationCount({ digests, harvestEvents: full }))
+    const input = {
+      repo,
+      queued: status.queued ?? 0,
+      activeCount: 0,
+      capacity: 4,
+      observationCount: count,
+      observationLimit: 10,
+    }
+    const options = { color: true, width: 100, height: 24, now: clock().getTime() }
+    expect(renderDashboard(buildDashboardFromProjected([], input, feed.events), options)).toEqual(
+      renderDashboard(buildDashboardFromProjected([], input, full), options),
+    )
+  }
+})
+
+test('a failed prelaunch boundary preserves exceptional full-read recovery', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const high = store.getRepoHighWater.bind(store)
+  store.getRepoHighWater = async () => {
+    throw new Error('offline')
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await expect(feed.warm()).rejects.toThrow('offline')
+  await start(store, 'own')
+  await start(store, 'competitor')
+  store.getRepoHighWater = high
+  expect((await feed.refresh()).map((e) => e.seq)).toEqual([1, 2, 3])
+})
+
+test('foreign repository cache facts are rejected and missing repositories are not materialized', async () => {
+  const store = new MemoryBuildStore()
+  const empty = new DispatchRepositoryFeed(store, repo, clock)
+  expect(await empty.refresh()).toEqual([])
+  expect(await store.getRepo(repo)).toBeNull()
+  await store.ensureRepo(repo)
+  const fact = await setting(store)
+  await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
+    version: 1,
+    cursor: 1,
+    state: { retained: [{ ...fact, repo: '/other' }] },
+  })
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  expect(feed.events).toEqual([fact])
+})
+
+test('a stale frontend cannot replace a newer persisted cursor', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const stale = new DispatchRepositoryFeed(store, repo, clock)
+  await stale.warm()
+  const current = new DispatchRepositoryFeed(store, repo, clock)
+  await current.warm()
+  await setting(store, true)
+  await current.refresh()
+  await current.save(true)
+  await stale.save(true)
+  expect(
+    (await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.cursor,
+  ).toBe(2)
+})

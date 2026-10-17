@@ -1,0 +1,191 @@
+import { expect } from 'bun:test'
+import { DispatchFrontend } from '../cli/dispatch-frontend'
+import type { DispatchChildResult } from '../cli/dispatch-process'
+import { createTerminalModeController } from '../cli/terminal-restore'
+import { DISPATCHER, humanActor } from '../events/envelope'
+import type { BuildStore } from '../store/types'
+
+const tickCounters = {
+  merged: 0,
+  closed: 0,
+  conflicted: 0,
+  abandoned: 0,
+  discarded: 0,
+  janitorFailed: 0,
+  recovered: 0,
+  dispatchFailed: 0,
+  resumed: 0,
+  swept: 0,
+  dispatched: 0,
+  authored: 0,
+  bounced: 0,
+  claimRaces: 0,
+  invalidTickets: 0,
+  dependencyBlocked: 0,
+  harvestStarted: 0,
+  harvestResumed: 0,
+  harvestCompleted: 0,
+  harvestEscalated: 0,
+  harvestFailed: 0,
+}
+
+/** Run the actual frontend lifecycle with a deterministic child and manual
+ * refreshes. Instrument the backing boundary, including HTTP server reads. */
+export async function dispatchReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+  const repo = '/dashboard-read-budget'
+  await backing.ensureRepo(repo)
+  const metrics = { rows: 0, events: 0, state: 0, snapshots: 0, digests: 0, records: 0, high: 0 }
+  const getEvents = backing.getRepoEvents.bind(backing)
+  const getState = backing.getRepoStateEvents.bind(backing)
+  const getSnapshot = backing.getReducerSnapshot.bind(backing)
+  const getDigests = backing.getRepoBuildDigests.bind(backing)
+  const getRepo = backing.getRepo.bind(backing)
+  const getHigh = backing.getRepoHighWater.bind(backing)
+  backing.getRepoEvents = async (repo, since) => {
+    const events = await getEvents(repo, since)
+    metrics.events++
+    metrics.rows += events.length
+    return events
+  }
+  backing.getRepoStateEvents = async (repo) => {
+    metrics.state++
+    return getState(repo)
+  }
+  backing.getReducerSnapshot = async (...args) => {
+    metrics.snapshots++
+    return getSnapshot(...args)
+  }
+  backing.getRepoBuildDigests = async (repo) => {
+    metrics.digests++
+    return getDigests(repo)
+  }
+  backing.getRepo = async (repo) => {
+    metrics.records++
+    return getRepo(repo)
+  }
+  backing.getRepoHighWater = async (repo) => {
+    metrics.high++
+    return getHigh(repo)
+  }
+  let now = 0
+  let finish!: (result: DispatchChildResult) => void
+  let started!: () => void
+  let childRun = ''
+  const startup = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'test',
+    store,
+    env: {},
+    once: true,
+    clock: () => new Date(now),
+    input: { start: () => () => {} },
+    terminal: {
+      columns: 100,
+      rows: 24,
+      interactive: true,
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    launchChild: ({ run }) => {
+      childRun = run
+      const completed = new Promise<DispatchChildResult>((resolve) => {
+        finish = resolve
+      })
+      void backing
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+            },
+          }),
+        )
+        .then(started)
+      return { completed, stop: async () => {} }
+    },
+  })
+  const running = frontend.run()
+  await startup
+  // Exercise exactly the controller operation used by timers and actions,
+  // without a wall-clock timer determining the batch boundaries.
+  const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+  await refresh()
+  const initialSize = JSON.stringify(
+    (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.state,
+  ).length
+  let recordReads: number | undefined
+  try {
+    for (let batch = 0; batch < 24; batch++) {
+      for (let i = 0; i < 128; i++) {
+        await backing.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-completed',
+          payload: {
+            run: childRun,
+            queued: 0,
+            counters: tickCounters,
+            janitorDiagnostics: [],
+            ticketDiagnostics: [],
+            creationDiagnostics: [],
+            dependencyDiagnostics: [],
+          },
+        })
+      }
+      const before = { ...metrics }
+      now += 6000
+      await refresh()
+      expect(metrics.rows - before.rows).toBe(128)
+      expect(metrics.events - before.events).toBe(1)
+      expect(metrics.state - before.state).toBe(0)
+      expect(metrics.snapshots - before.snapshots).toBe(0)
+      expect(metrics.digests - before.digests).toBe(1)
+      expect(metrics.high - before.high).toBe(0)
+      recordReads ??= metrics.records - before.records
+      expect(metrics.records - before.records).toBe(recordReads)
+      const size = JSON.stringify(
+        (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.state,
+      ).length
+      // First advancement adds the child's identity; ticks add nothing.
+      expect(size).toBeLessThan(initialSize + 1000)
+      const rows = metrics.rows
+      await refresh()
+      expect(metrics.rows).toBe(rows)
+    }
+  } finally {
+    finish({ outcome: 'normal', exitCode: 0 })
+    await running
+  }
+  await backing.appendRepo(repo, {
+    actor: humanActor('test'),
+    type: 'dispatcher.pause-set',
+    payload: { enabled: true },
+  })
+  // A new invocation restores persisted state without any bounded/full seed.
+  const { DispatchRepositoryFeed } = await import('../cli/dispatch-repository-feed')
+  const feed = new DispatchRepositoryFeed(store, repo, () => new Date(now))
+  const before = { ...metrics }
+  expect((await feed.refresh()).length).toBe(1)
+  expect(metrics.rows - before.rows).toBe(1)
+  expect(metrics.state - before.state).toBe(0)
+}

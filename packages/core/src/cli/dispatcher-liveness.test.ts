@@ -129,3 +129,36 @@ test('missing starts permit only one full lookup per holder', async () => {
     expect(await f.resolver.refresh('self', 'missing', f.now())).toBe('missing')
   expect(f.reads()).toEqual({ fullReads: 1, boundedReads: 1 })
 })
+
+test('frontend warm history never correlates; cold history remembers a holder once', async () => {
+  const f = await fixture()
+  let bounded = 0
+  let full = 0
+  const state = f.store.getRepoStateEvents.bind(f.store)
+  const events = f.store.getRepoEvents.bind(f.store)
+  f.store.getRepoStateEvents = async (repo) => {
+    bounded++
+    return state(repo)
+  }
+  f.store.getRepoEvents = async (repo, since) => {
+    full++
+    return events(repo, since)
+  }
+  const remembered: import('../events/repository').RepositoryEvent[] = []
+  const warm = new StandbyIdentityResolver(f.store, f.repo, {
+    allowLookup: () => false,
+    remember: () => {},
+  })
+  expect(await warm.refresh('self', undefined, f.now())).toBe('owner')
+  expect([bounded, full]).toEqual([0, 0])
+  const cold = new StandbyIdentityResolver(f.store, f.repo, {
+    allowLookup: () => true,
+    remember: (events) => remembered.push(...events),
+  })
+  expect(await cold.refresh('self', undefined, f.now())).toContain('pid 123')
+  await cold.refresh('self', undefined, f.now())
+  expect([bounded, full]).toEqual([1, 1])
+  warm.ingest(remembered)
+  expect(await warm.refresh('self', undefined, f.now())).toContain('pid 123')
+  expect([bounded, full]).toEqual([1, 1])
+})
