@@ -529,12 +529,9 @@ export class LocalGitForge implements Forge {
   async containsBuild(workspacePath: string, branch: string, buildSlug: string): Promise<boolean> {
     await this.assertRef(`refs/heads/${branch}`, workspacePath)
     const tip = await this.sha(`refs/heads/${branch}`, workspacePath)
-    const forge = this
+    const history = await this.command(['log', '--format=%B%x00', tip, '--'], workspacePath)
     async function* messages() {
-      const history = await forge.command(['rev-list', tip, '--'], workspacePath)
-      for (const sha of history.stdout.trim().split('\n')) {
-        yield await forge.readCommitMessage(workspacePath, sha)
-      }
+      for (const message of history.stdout.split('\0')) yield message
     }
     return historyContainsBuild(messages(), buildSlug)
   }

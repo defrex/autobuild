@@ -476,3 +476,23 @@ test('pre-upgrade pending candidate is rebuilt before landing, but landed histor
   await fresh.squashMerge(f.workspace, pr.number, pr.headSha, { buildSlug: 'different' })
   expect(await git(f.root, 'rev-parse', 'main')).toBe(landed)
 })
+
+test('containsBuild reads reachable messages with one history process regardless of commit count', async () => {
+  const f = await fixture()
+  const tree = await git(f.root, 'rev-parse', 'main^{tree}')
+  let tip = await git(f.root, 'rev-parse', 'main')
+  for (let index = 0; index < 25; index++) {
+    tip = await git(f.root, 'commit-tree', tree, '-p', tip, '-m', `History ${index}`)
+  }
+  await git(f.root, 'update-ref', 'refs/heads/history-scan', tip)
+  const calls: string[][] = []
+  const forge = new LocalGitForge({
+    exec: async (cmd, opts) => {
+      calls.push(cmd)
+      return bunExec(cmd, opts)
+    },
+  })
+  expect(await forge.containsBuild(f.root, 'history-scan', 'absent')).toBe(false)
+  expect(calls.map((cmd) => cmd[1])).toEqual(['check-ref-format', 'rev-parse', 'log'])
+  expect(calls[2]).toEqual(['git', 'log', '--format=%B%x00', tip, '--'])
+})
