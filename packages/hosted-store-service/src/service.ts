@@ -39,8 +39,7 @@ import {
   randomIds,
   type Config,
   type OperatorTicketContext,
-  effectiveConfig,
-  findEffectiveConfigRef,
+  decodeEffectiveConfig,
   OperatorQueryError,
   type OperatorSandboxService,
 } from '@defrex/autobuild/operator'
@@ -198,6 +197,7 @@ async function hostedSandboxBackend(
   })
 }
 const storeResourceRoutes = new Set([
+  'POST reducer-values',
   'GET events',
   'POST events',
   // The session-events compare-and-append (AUT-342): the same resource route
@@ -499,11 +499,36 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         )
     return policyPromise
   }
+  const configReference = async (store: BuildStore, repo: string) => {
+    const result = await store.getReducerValue(
+      { kind: 'repo', repo },
+      { reducer: 'effectiveConfig' },
+    )
+    return result.value as { run?: string; reference?: { kind: string; rev: number } }
+  }
+  const ticketConfiguration = async (store: BuildStore, repo: string) => {
+    const facts = (await store.getRepo(repo)) ? await configReference(store, repo) : {}
+    const ref = facts.reference
+    if (!ref)
+      throw new OperatorQueryError(
+        'effective-config-unavailable',
+        facts.run === undefined
+          ? `effective config unavailable for repository "${repo}": no dispatcher run is recorded`
+          : `effective config unavailable for repository "${repo}"`,
+      )
+    const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
+    if (artifact === null)
+      throw new OperatorQueryError(
+        'effective-config-unavailable',
+        `effective config ${ref.kind}@${ref.rev} is not retrievable`,
+      )
+    return decodeEffectiveConfig(artifact.content, `${ref.kind}@${ref.rev}`)
+  }
   const ticketContext = async (repo: string): Promise<OperatorTicketContext> => {
     if (!(await projects.has(repo))) throw new MachineAuthError(403, 'project not registered')
     const policy = await (await openPolicy()).get(repo)
     if (policy) return { repo, tickets: policy.tickets, teamKey: policy.tickets.teamKey }
-    const { config } = await effectiveConfig(await openTicketStore(), repo)
+    const config = await ticketConfiguration(await openTicketStore(), repo)
     const legacy = ticketLifecycle(config.tickets, true)
     return {
       repo,
@@ -784,8 +809,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             if (!priorPolicy) {
               const priorStore = await openTicketStore()
               if (await priorStore.getRepo(repo))
-                hasPriorConfig =
-                  findEffectiveConfigRef(await priorStore.getRepoEvents(repo)) !== undefined
+                hasPriorConfig = (await configReference(priorStore, repo)).reference !== undefined
             }
             if (priorPolicy || hasPriorConfig) {
               const previous = await ticketContext(repo)

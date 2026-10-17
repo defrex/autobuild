@@ -355,6 +355,66 @@ part of this protocol. Retention is enforced server-side inside the store at
 deposit time (bounded pruning of dispatcher run/config artifact revisions),
 not through any endpoint.
 
+### Named reducer values
+
+`POST /builds/{slug}/reducer-values` and
+`POST /repos/{repo}/reducer-values` accept at most 4 KiB of JSON:
+
+```json
+{"reducer":"dispatchStatus","args":{"run":"run-a"}}
+```
+
+The response is `200 {"version":2,"cursor":123,"value":{...}}`. Only the
+finished JSON answer is returned, with no accumulator or raw-log bundle. `cursor`
+is the authoritative prefix included in the answer, not a guarantee to include
+appends concurrent with the request. Every call checks durable progress and
+persisted state; parallel instances may safely advance the same checkpoint.
+Snapshots are disposable caches: deletion, corruption, wrong versions and
+unreadable cache storage cause replay. Log read failures remain errors.
+
+The executable catalog is `kernel/reducer-registry.ts`. All requests reject
+unknown names, excluded reducers, wrong scopes and invalid/extra arguments with
+`400 validation`. A missing resource is `404`, project and delegated authority
+checks are the same as other reads, and unsupported methods remain unavailable.
+The operation is read-only authority even though its HTTP verb is POST and its
+internal cache may advance. It does not accept caller-supplied state. This is an
+additive protocol route: historical snapshot and event handlers and the supported
+client version window are unchanged.
+
+| Scope | Reducers with no arguments |
+| --- | --- |
+| Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `pinnedAssets`, `buildDelegation` |
+| Repository | `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
+
+| Reducer | Scope | Required arguments |
+| --- | --- | --- |
+| `dispatchStatus`, `openTick` | Repository | `run`: nonempty string |
+| `dispatchFailureBudget` | Build | `infrastructureOwnsWorkspace`: boolean |
+| `phaseFailures` | Build | `phase`: valid phase name; `round`: nonnegative integer |
+
+Arguments are canonicalized into the cache identity; variants never reuse one
+another's accumulator. `effectiveConfig` returns an object with optional `run`
+and `reference: {kind, rev}`. Absence is distinct from an unreadable referenced
+artifact. Delegation values contain semantic lifecycle facts indexed by prefixed
+identifiers, not authorization decisions; request time and grace expiry are
+always evaluated against those facts on the service.
+
+Each remaining registered reducer is explicitly excluded:
+
+| Reducers | Reason |
+| --- | --- |
+| `journalView`, `repositoryStateEvents` | Raw repository event lists |
+| `session` | Operator-session log scope |
+| `publicationState` | Selector functions in finished value |
+| `logIndex` | Maps and Sets in finished value |
+| `hostedPrAttachments` | Map as finished value |
+| `summaryBoundary`, `ticketSourceHealth`, `frozenPrImageHost`, `publishedBranchHead`, `verifyDiffBase`, `recordedBaseSha`, `baseBranch`, `provisionMarker`, `recoveryCheckpoint` | Existing finished contract can return top-level `undefined`, which is not JSON |
+
+`GET /repos/{repo}/state-events` is **deprecated**. Its response remains unchanged
+for supported clients, including the current dispatcher run's event tail. It is
+the compatibility exception to flat event-row reads; new callers should request
+named values. The current product no longer loads or writes raw-tail snapshots.
+
 ### Reducer snapshots
 
 A reducer snapshot is one registered reducer's serialized state as of a log

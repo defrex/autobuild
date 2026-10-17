@@ -797,3 +797,131 @@ test('composed ticket routing binds delegated harvest access to its authenticate
   expect((await service.fetch(request('/tickets/list-ready', f.token, {}))).status).toBe(403)
   expect(opened).toEqual([A])
 })
+
+test('persisted lifecycle facts match full replay for historical anchors, duplicates, retries and invalid endings', async () => {
+  const { resolveReducerValue } = await import('@defrex/autobuild/remote-store')
+  const { evaluateDelegationLifecycle, evaluateDelegationFacts } = await import(
+    './delegated-authority'
+  )
+  const { MemoryBuildStore, sampleBuildInput } = await import('@defrex/autobuild/plugin-sdk')
+  const store = new MemoryBuildStore()
+  const build = await store.createBuild(sampleBuildInput('oracle', { repo: A }))
+  const at = '2026-01-01T00:00:00.000Z'
+  const buildSpecs = [
+    ['observation.recorded', { id: 'o', kind: 'followup', summary: 'test' }],
+    [
+      'session.started',
+      { session: 'phase', phase: 'implement', round: 1, role: 'implement', runner: 'test' },
+    ],
+    [
+      'session.started',
+      { session: 'phase', phase: 'implement', round: 1, role: 'implement', runner: 'test' },
+    ],
+    ['session.ended', { session: 'wrong', outcome: 'completed' }],
+    ['session.ended', { session: 'phase', outcome: 'completed' }],
+    ['build.aborted', {}],
+  ] as const
+  const repoSpecs = [
+    ['harvest.started', { run: 'run', observations: [], scan: { kind: 'scan', rev: 0 } }],
+    [
+      'harvest.execution.authorized',
+      { run: 'run', execution: 'exec', leaseHolder: 'holder', launch: 'started' },
+    ],
+    [
+      'harvest.session.started',
+      {
+        run: 'run',
+        session: 'phase',
+        step: 'synthesize',
+        round: 1,
+        role: 'harvest',
+        runner: 'test',
+        args: [],
+      },
+    ],
+    [
+      'harvest.session.started',
+      {
+        run: 'run',
+        session: 'phase',
+        step: 'synthesize',
+        round: 1,
+        role: 'harvest',
+        runner: 'test',
+        args: [],
+      },
+    ],
+    [
+      'harvest.failed',
+      { run: 'run', step: 'synthesize', round: 1, attempt: 1, error: 'test', willRetry: true },
+    ],
+    ['harvest.session.ended', { run: 'run', session: 'wrong', outcome: 'completed' }],
+    ['harvest.session.ended', { run: 'run', session: 'phase', outcome: 'completed' }],
+    [
+      'harvest.execution.released',
+      { execution: 'exec', environmentId: 'env', snapshots: { outcome: 'confirmed' } },
+    ],
+    [
+      'harvest.failed',
+      { run: 'run', step: 'synthesize', round: 1, attempt: 2, error: 'test', willRetry: false },
+    ],
+  ] as const
+  for (const domain of ['build', 'repo'] as const) {
+    const specs = domain === 'build' ? buildSpecs : repoSpecs
+    for (const invalid of [false, true]) {
+      const events = specs.map(([type, payload], index) => ({
+        [domain === 'build' ? 'build' : 'repo']: domain === 'build' ? 'oracle' : A,
+        seq: index + 1,
+        ts: invalid && index === specs.length - 1 ? 'invalid timestamp' : at,
+        type,
+        payload,
+        actor: { kind: 'kernel' },
+      }))
+      for (let length = 0; length <= events.length; length++) {
+        const prefix = events.slice(0, length)
+        const { reducer } = resolveReducerValue(
+          domain === 'build' ? { kind: 'build', slug: 'oracle' } : { kind: 'repo', repo: A },
+          { reducer: domain === 'build' ? 'buildDelegation' : 'harvestDelegation' },
+        )
+        const facts = reducer.finish(
+          reducer.advance(reducer.advance(reducer.initial(), prefix.slice(0, 2)), prefix.slice(2)),
+        )
+        for (const anchor of [1, 2, 3, 4, 5, 99])
+          for (const session of [undefined, 'phase', 'wrong'])
+            for (const offset of [-1, 59999, 60000, 60001]) {
+              const claims = {
+                repo: A,
+                id: domain === 'build' ? 'oracle' : 'run',
+                anchor,
+                kind:
+                  domain === 'build'
+                    ? session
+                      ? 'build-phase'
+                      : 'build-runner'
+                    : session
+                      ? 'harvest-phase'
+                      : 'harvest-runner',
+                ...(domain === 'repo' ? { execution: 'exec', leaseHolder: 'holder' } : {}),
+                ...(session ? { session } : {}),
+              } as DelegatedTokenScope['delegation']
+              const lifecycle =
+                domain === 'build'
+                  ? {
+                      build,
+                      buildEvents:
+                        prefix as unknown as import('@defrex/autobuild/plugin-sdk').AbEvent[],
+                    }
+                  : {
+                      repositoryEvents:
+                        prefix as unknown as import('@defrex/autobuild/remote-store').RepositoryEvent[],
+                    }
+              const now = new Date(Date.parse(at) + offset)
+              expect(evaluateDelegationFacts(claims, facts, now)).toBe(
+                evaluateDelegationLifecycle(claims, lifecycle, now),
+              )
+            }
+      }
+    }
+  }
+  await store.close()
+})
