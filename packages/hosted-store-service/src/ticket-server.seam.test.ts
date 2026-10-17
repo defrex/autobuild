@@ -254,6 +254,41 @@ test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
   },
 )
 
+test('retired 0.10 clients are rejected before ticket source access, regardless of capability opt-ins', async () => {
+  const { server, contexts } = harness()
+  for (const capability of [undefined, '1']) {
+    for (const [operation, input] of [
+      ['get', { id: 'AUT-1' }],
+      ['list-ready', {}],
+      ['create', { draft: { title: 'Retired client', body: 'Body' } }],
+    ] as const) {
+      const headers = new Headers({
+        authorization: `Bearer ${operator}`,
+        [AUTOBUILD_VERSION_HEADER]: '0.10.0',
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        'content-type': 'application/json',
+      })
+      if (capability !== undefined) {
+        headers.set('x-autobuild-ticket-comments', capability)
+        headers.set(TICKET_REVISIONS_HEADER, capability)
+      }
+      const response = await server.fetch(
+        new Request(`https://tickets.example/tickets/${operation}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+        }),
+      )
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({
+        kind: 'conflict',
+        error: expect.stringContaining("upgrade the project's Autobuild"),
+      })
+    }
+  }
+  expect(contexts).toEqual([])
+})
+
 test('revision opt-in distinguishes new and released clients reporting the same 0.12.0 version', async () => {
   const { server } = harness()
   const headersSeen: Headers[] = []

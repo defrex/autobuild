@@ -39,6 +39,10 @@ export class StandbyIdentityResolver {
   constructor(
     private readonly store: BuildStore,
     private readonly repo: string,
+    private readonly history?: {
+      allowLookup: () => boolean
+      remember: (events: RepositoryEvent[], complete: boolean) => void
+    },
   ) {}
 
   ingest(events: readonly RepositoryEvent[]): void {
@@ -51,11 +55,17 @@ export class StandbyIdentityResolver {
     const pending = this.pending.get(holder)
     if (pending !== undefined) return pending
     if (this.starts.has(holder) || this.attempted.has(holder)) return
+    if (this.history && !this.history.allowLookup()) return
     this.attempted.add(holder)
     const lookup = (async () => {
       try {
         this.ingest(await this.store.getRepoStateEvents(this.repo))
-        if (!this.starts.has(holder)) this.ingest(await this.store.getRepoEvents(this.repo, 0))
+        let complete = false
+        if (!this.starts.has(holder)) {
+          this.ingest(await this.store.getRepoEvents(this.repo, 0))
+          complete = true
+        }
+        this.history?.remember([...this.starts.values()], complete)
       } catch {
         // Identity is best effort; the sampled holder id remains sufficient.
       }

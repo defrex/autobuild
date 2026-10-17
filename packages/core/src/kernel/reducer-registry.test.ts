@@ -108,6 +108,7 @@ describe('reducer registry', () => {
         "currentPrAttachments": 1,
         "dashboardFacts": 1,
         "dispatchFailureBudget": 1,
+        "dispatchFrontend": 2,
         "dispatchSettings": 1,
         "dispatchStatus": 2,
         "executionNoProgress": 1,
