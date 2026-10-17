@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#629](https://github.com/defrex/autobuild/pull/629) — Make persisted reducer values the default read path
 - [#628](https://github.com/defrex/autobuild/pull/628) — Serve reducer values from persisted state
 - [#627](https://github.com/defrex/autobuild/pull/627) — Suppress unchanged idle dispatcher ticks
 - [#626](https://github.com/defrex/autobuild/pull/626) — Read interactive dashboard repository events incrementally
