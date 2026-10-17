@@ -1,3 +1,4 @@
+import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { executionNoProgressReducer } from '../processes/execution-no-progress'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budget'
@@ -61,6 +62,7 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 export const REDUCERS: Record<string, RegisteredReducer> = {
+  dispatchFrontend: { reducer: dispatchFrontendReducer, covers: [] },
   executionNoProgress: { reducer: executionNoProgressReducer, covers: [] },
   summaryBoundary: { reducer: summaryBoundaryReducer, covers: ['summaryBoundary'] },
   summaryRequests: { reducer: summaryRequestsReducer, covers: ['pendingSummaryRequests'] },

@@ -1,10 +1,11 @@
+import { DispatchRepositoryFeed } from './dispatch-repository-feed'
 import { StandbyIdentityResolver } from './dispatcher-liveness'
 import { configSchema, type Config } from '../config/schema'
 import { humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import type { BuildState } from '../kernel/reducer'
-import { sampleUnclaimedObservationCount } from '../processes/harvest'
+import { unclaimedObservationCount } from '../processes/harvest'
 import {
   controlHarvestRun,
   OperatorControlError,
@@ -68,15 +69,6 @@ function isStaleAbortControlError(error: unknown): error is BuildControlError {
   )
 }
 
-function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
-  return (
-    event.type.startsWith('harvest.') ||
-    event.type === 'dispatcher.intake-set' ||
-    event.type === 'dispatcher.pause-set' ||
-    event.type === 'dispatcher.auto-merge-default-set'
-  )
-}
-
 interface ResumePrompt {
   slug: string
   escalationIds: string[]
@@ -121,11 +113,7 @@ export class DispatchFrontend {
   private readonly region: LiveRegion
   private readonly keyboard
   private child: DispatchChildHandle | undefined
-  private repositorySeq = 0
-  /** Set only after a successful initial fold; every later `events()` call
-   * takes the delta path. */
-  private seeded = false
-  private repositoryEvents: RepositoryEvent[] = []
+  private readonly repositoryFeed: DispatchRepositoryFeed
   private dispatchStatus: DispatchStatus = reduceDispatchStatus([], this.runId)
   private eventRefreshTail: Promise<void> = Promise.resolve()
   private cache: DashboardBuildPollCache | undefined
@@ -155,8 +143,12 @@ export class DispatchFrontend {
   private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
-    this.standbyResolver = new StandbyIdentityResolver(opts.store, opts.repo)
     this.clock = opts.clock ?? systemClock
+    this.repositoryFeed = new DispatchRepositoryFeed(opts.store, opts.repo, this.clock)
+    this.standbyResolver = new StandbyIdentityResolver(opts.store, opts.repo, {
+      allowLookup: () => this.repositoryFeed.incompleteIdentities,
+      remember: (events) => this.repositoryFeed.remember(events),
+    })
     this.keyboard = createKeyboardProtocol(
       (chunk) => opts.terminal.write(chunk),
       opts.terminal.modes,
@@ -170,47 +162,14 @@ export class DispatchFrontend {
    * are retained for their existing replay reducers. */
   private async events(): Promise<RepositoryEvent[]> {
     const refresh = this.eventRefreshTail.then(async () => {
-      if (!this.seeded) {
-        // Initial fold (AUT-534): the whole-journal read the first poll used
-        // to pay is replaced by AUT-489's bounded read where that is provably
-        // equivalent. The bounded attempt is confined to the pre-launch
-        // window (`this.child === undefined`): before `launchChild` no
-        // run-scoped journal fact can carry `this.runId` (only the supervised
-        // child appends run-scoped facts with it), so every run-scoped event
-        // in the bounded subset is skipped by `reduceDispatchStatus` exactly
-        // as it would be in a full replay, and the dashboard filter keeps
-        // only durable types, which the subset carries in full. After launch
-        // a bounded subset cannot guarantee the child's `run-started` under a
-        // competing dispatcher's later anchor — dropping it would leave
-        // `effectiveConfig` unset and the first frame would never render —
-        // so a post-launch seed always takes the full read (the pre-AUT-534
-        // behavior). `once` mode's teardown fold runs after the child exits,
-        // so the same guard routes it to the full read.
-        const seed =
-          this.child === undefined
-            ? await this.opts.store.getRepoStateEvents(this.opts.repo).catch(() =>
-                // Bounded-read failure falls back to the exact pre-AUT-534
-                // full read within this same seed attempt.
-                this.opts.store.getRepoEvents(this.opts.repo, 0),
-              )
-            : await this.opts.store.getRepoEvents(this.opts.repo, 0)
-        this.standbyResolver.ingest(seed)
-        this.repositorySeq = seed.at(-1)?.seq ?? 0
-        this.dispatchStatus = reduceDispatchStatus(seed, this.runId)
-        this.repositoryEvents.push(...seed.filter(isDashboardRepositoryEvent))
-        this.seeded = true
-        return
-      }
-      const delta = await this.opts.store.getRepoEvents(this.opts.repo, this.repositorySeq)
-      if (delta.length === 0) return
+      const delta = await this.repositoryFeed.refresh(false)
+      this.standbyResolver.ingest(this.repositoryFeed.identities)
       this.standbyResolver.ingest(delta)
-      this.repositorySeq = delta.at(-1)!.seq
       this.dispatchStatus = reduceDispatchStatus(delta, this.runId, this.dispatchStatus)
-      this.repositoryEvents.push(...delta.filter(isDashboardRepositoryEvent))
     })
     this.eventRefreshTail = refresh.catch(() => {})
     await refresh
-    return this.repositoryEvents
+    return this.repositoryFeed.events
   }
 
   private async report(message: string, level: 'info' | 'warning' = 'info'): Promise<void> {
@@ -333,14 +292,10 @@ export class DispatchFrontend {
     }
     const config = await this.loadConfig(ref.kind, ref.rev)
     try {
-      // Journal + digests (AUT-487): one journal read for the claimed set
-      // (this class's cached `repositoryEvents` is dashboard-filtered, so the
-      // claimed set needs the full journal, exactly as the old per-build scan
-      // read it) plus one repo-scoped digest read — the sample's store
-      // traffic stays flat as finished builds accumulate. A journal record
-      // that does not yet exist reads as an empty journal (AUT-524); the
-      // sample writes nothing.
-      this.observationCount = await sampleUnclaimedObservationCount(this.opts.store, this.opts.repo)
+      this.observationCount = unclaimedObservationCount({
+        digests: await this.opts.store.getRepoBuildDigests(this.opts.repo),
+        harvestEvents: repositoryEvents,
+      })
     } catch {
       // Before the first successful sample there is no factual zero to place in
       // a complete frame. Leave the prior frame untouched and retry on the next
@@ -401,6 +356,7 @@ export class DispatchFrontend {
     ) {
       this.view = undefined
     }
+    await this.repositoryFeed.save()
     this.model = projected
     this.syncControls()
     this.paint()
@@ -1057,13 +1013,13 @@ export class DispatchFrontend {
       })
     }
 
-    // Warm the initial fold before `launchChild` (AUT-534): the bounded seed
-    // is only safe while `this.child === undefined`, so the one opportunity
-    // to take it is here. A failed warm-up leaves the seed unset; the poll
-    // loop's existing failure reporting covers the retry, which then takes
-    // the full-read path post-launch. `once` mode gains no read — its single
-    // fold runs from `finishPresentation()` after the child exits.
-    if (!this.opts.once) await this.events().catch(() => {})
+    try {
+      const delta = await this.repositoryFeed.warm()
+      this.standbyResolver.ingest(this.repositoryFeed.identities)
+      this.dispatchStatus = reduceDispatchStatus(delta, this.runId, this.dispatchStatus)
+    } catch {
+      /* Display initialization must not gate the kernel. */
+    }
 
     const options: DispatchChildOptions = {
       targetRepo: this.opts.checkout ?? this.opts.repo,
@@ -1104,6 +1060,7 @@ export class DispatchFrontend {
       this.opts.signal?.removeEventListener('abort', stop)
       await this.child.stop()
       await this.finishPresentation()
+      await this.repositoryFeed.save(true)
     }
   }
 }
