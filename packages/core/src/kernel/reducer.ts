@@ -747,6 +747,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
+      case 'reconcile.rewritten':
+        if (pr !== undefined) pr = { ...pr, headSha: event.payload.headSha }
+        break
       case 'reconcile.completed': {
         if ('headSha' in event.payload && pr !== undefined)
           pr = { ...pr, headSha: event.payload.headSha }

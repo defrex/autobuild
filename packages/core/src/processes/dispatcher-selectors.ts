@@ -109,6 +109,8 @@ export const recoveryCheckpointReducer = defineReducer<
         acc.original = event.payload.base.sha
       } else if (event.type === 'implement.completed') {
         acc.settled = event.payload.commits.head
+      } else if (event.type === 'reconcile.rewritten') {
+        acc.settled = event.payload.headSha
       } else if (event.type === 'reconcile.completed') {
         acc.settled = reconcileHead(event.payload)
       } else if (

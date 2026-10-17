@@ -451,6 +451,8 @@ export const publishedBranchHeadReducer = defineReducer<
     for (const event of events) {
       if (event.type === 'implement.completed') {
         acc.head = event.payload.commits.head
+      } else if (event.type === 'reconcile.rewritten') {
+        acc.head = event.payload.headSha
       } else if (event.type === 'reconcile.completed') {
         acc.head = reconcileHead(event.payload)
       } else if (

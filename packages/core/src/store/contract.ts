@@ -1145,7 +1145,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               archives: [{ ref: `refs/autobuild/archive/${slug}/${old}`, sha: old }],
             },
           })
-          expect(await readBuildSelector(store, slug, 'publishedBranchHead')).toBeUndefined()
+          expect(await readBuildSelector(store, slug, 'publishedBranchHead')).toBe(head)
+          expect(await readBuildSelector(store, slug, 'verifyDiffBase')).toBe(old)
           await store.append(slug, {
             actor: agentActor('reconcile', 'resolver'),
             type: 'reconcile.completed',
