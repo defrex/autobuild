@@ -1860,3 +1860,35 @@ describe('GitHub integration refs', () => {
     expect(calls[2]?.path).toBe('repos/acme/app/compare/parent...node')
   })
 })
+
+test('GitHub no-commits classification reads nested validation messages only', async () => {
+  const opts = {
+    workspacePath: '/ws',
+    head: 'ab-node/x',
+    base: 'main',
+    title: 'Node',
+    body: 'Integration',
+  }
+  const body = {
+    message: 'Validation Failed',
+    errors: [
+      { resource: 'PullRequest', code: 'custom', message: 'No commits between main and ab-node/x' },
+    ],
+  }
+  const empty = makeForge([{ json: [] }, { status: 422, json: body }, { json: [] }])
+  await expect(empty.forge.openPr(opts)).rejects.toMatchObject({
+    name: 'NoCommitsBetweenBranchesError',
+  })
+  const unrelated = makeForge([
+    { json: [] },
+    {
+      status: 422,
+      json: {
+        message: 'Validation Failed',
+        errors: [{ resource: 'PullRequest', code: 'custom', message: 'base is invalid' }],
+      },
+    },
+    { json: [] },
+  ])
+  await expect(unrelated.forge.openPr(opts)).rejects.toBeInstanceOf(GitHubApiError)
+})

@@ -1879,3 +1879,52 @@ test('armed finalize and self-healing failures stay silent for attention; explic
   expect(await abWait({ ...explicit.base, slugs: ['b1'], since })).toBe(0)
   expect(JSON.parse(explicit.out[0]!).event.type).toBe('phase.failed')
 })
+
+test('repository discovery retains collecting integrations through later lifecycle events', async () => {
+  const store = makeStore()
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'N' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    },
+  })
+  await store.append('node', {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: 'opening' },
+  })
+  let tick = 0
+  const h = harness(store, {
+    onTick: async () => {
+      tick += 1
+      if (tick === 1)
+        await store.append('node', {
+          actor: DISPATCHER,
+          type: 'pr.opened',
+          payload: { pr: { number: 1, url: 'https://example/pr/1', headSha: 'child' } },
+        })
+      if (tick === 2)
+        await store.append('node', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+    },
+  })
+  await abWait({ ...h.base, timeout: '5s', forValues: ['done'] })
+  expect(h.out.join('\n')).toContain('build.completed')
+})
+
+test('collecting is an accepted wait status condition', () => {
+  expect(parseConditions(['collecting'], []).conditions).toEqual([
+    { text: 'collecting', cond: { kind: 'status', status: 'collecting' } },
+  ])
+})

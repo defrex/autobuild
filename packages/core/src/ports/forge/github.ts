@@ -764,8 +764,16 @@ export class GitHubForge implements Forge {
       if (error instanceof GitHubApiError && error.status === 422) {
         const raced = await probe()
         if (raced) return raced
-        if (/no commits between/i.test(error.message))
-          throw new NoCommitsBetweenBranchesError(error.message)
+        const validation = z
+          .object({
+            errors: z.array(z.object({ message: z.string().optional() }).passthrough()).optional(),
+          })
+          .passthrough()
+          .safeParse(error.body)
+        const noCommits = validation.success
+          ? validation.data.errors?.find((item) => /no commits between/i.test(item.message ?? ''))
+          : undefined
+        if (noCommits?.message) throw new NoCommitsBetweenBranchesError(noCommits.message)
       }
       throw error
     }

@@ -1954,7 +1954,7 @@ those builds, and an unknown slug is an error before waiting begins. Inside a
 phase, only the ambient build may be waited on.
 
 At least one `--for <condition>` or `--event <glob>` is required. The condition
-vocabulary is closed: `blocked`, `paused`, `running`, `done`, `aborted`,
+vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `aborted`,
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and

@@ -2383,3 +2383,47 @@ test('fresh watch baselines every historically eligible PR even when armed befor
     )
   }
 })
+
+test('repository discovery retains collecting integrations through later lifecycle events', async () => {
+  const store = makeStore()
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'N' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    },
+  })
+  await store.append('node', {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: 'opening' },
+  })
+  let tick = 0
+  const h = harness(store, {
+    onTick: async () => {
+      tick += 1
+      if (tick === 1)
+        await store.append('node', {
+          actor: DISPATCHER,
+          type: 'pr.opened',
+          payload: { pr: { number: 1, url: 'https://example/pr/1', headSha: 'child' } },
+        })
+      if (tick === 2)
+        await store.append('node', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+    },
+  })
+  await abWatch({ ...h.base, count: 2, timeout: '5s', events: ['pr.opened', 'build.completed'] })
+  expect(h.out.join('\n')).toContain('build.completed')
+  expect(h.out.join('\n')).toContain('pr.opened')
+})

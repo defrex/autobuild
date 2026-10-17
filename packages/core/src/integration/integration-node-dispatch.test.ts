@@ -83,6 +83,12 @@ test('nodes open at full work capacity and abort immediately closes admission', 
       action: { kind: 'abort' },
     })
     await h.dispatcher.tick()
+    // Saturated work-only intake retains the historical fast path. Finish the
+    // existing work before asking the admission scan for target diagnostics.
+    await h.runLatest()
+    const work = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'WORK')!
+    const workState = reduceBuild(await h.events(work.slug))
+    await h.forgeAdapter.squashMerge(h.origin, workState.pr!.number, workState.pr!.headSha)
     h.clock.advance(60_000)
     const report = await h.dispatcher.tick()
     expect(report.dependencyDiagnostics.join(' ')).toContain('closed')

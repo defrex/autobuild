@@ -31,7 +31,7 @@ import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { LinearTicketSource } from '../ports/tickets/linear'
-import { TicketSourceRateLimitError } from '../ports/types'
+import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
 import type { Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -229,6 +229,7 @@ async function seedBuild(
   h: Harness,
   opts: {
     slug?: string
+    baseBranch?: string
     ticketId?: string
     ticketSource?: string
     repo?: string
@@ -260,7 +261,14 @@ async function seedBuild(
   await h.store.append(slug, {
     actor: DISPATCHER,
     type: 'build.created',
-    payload: { ticket, repo, baseBranch: 'main' },
+    payload: {
+      ticket,
+      repo,
+      baseBranch: opts.baseBranch ?? 'main',
+      ...(opts.baseBranch
+        ? { target: { ticket: { source: 'fake', id: 'NODE' }, build: 'node-build' } }
+        : {}),
+    },
   })
   if (opts.workspace !== false) {
     await h.store.append(slug, {
@@ -399,8 +407,12 @@ async function seedInterrupted(
 }
 
 /** Seed a fully green build parked in the post-PR epilogue. */
-async function seedAwaitingPr(h: Harness, slug = 'auth-limit'): Promise<string> {
-  await seedBuild(h, { slug })
+async function seedAwaitingPr(
+  h: Harness,
+  slug = 'auth-limit',
+  baseBranch?: string,
+): Promise<string> {
+  await seedBuild(h, { slug, baseBranch })
   await seedLoopsApproved(h, slug)
   await h.store.append(slug, {
     actor: KERNEL,
@@ -2205,7 +2217,7 @@ describe('Dispatcher in-flight creation gate', () => {
     const creationKey = crypto.randomUUID()
     const h = harness({
       tickets: [
-        readyTicket('T-held', { title: 'Held generated work', creationKey }),
+        readyTicket('T-held', { title: 'Held generated work', creationKey, target: 'UNCLAIMED' }),
         readyTicket('T-next', { title: 'Independent work' }),
       ],
     })
@@ -9389,3 +9401,123 @@ describe('integration crash boundaries', () => {
     expect(h.launches).toHaveLength(0)
   })
 })
+
+describe('integration review regressions', () => {
+  test.each(['present', 'absent'] as const)(
+    'targeted leaf automatic landing uses frozen node base (%s)',
+    async (gate) => {
+      const h = harness()
+      const nodeBase = 'ab-node/parent'
+      const slug = await seedAwaitingPr(h, 'targeted-child', nodeBase)
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      h.forge.setPrState(1, { state: 'open', mergeable: true })
+      h.forge.setPrHeadSha(1, PR.headSha)
+      h.forge.setGatePresence(1, gate)
+      const native = h.forge.setAutoMerge.bind(h.forge)
+      const squash = h.forge.squashMerge.bind(h.forge)
+      const nativeBases: (string | undefined)[] = []
+      const squashBases: (string | undefined)[] = []
+      h.forge.setAutoMerge = async (...args) => {
+        nativeBases.push(args[3]?.baseBranch)
+        return native(...args)
+      }
+      h.forge.squashMerge = async (...args) => {
+        squashBases.push(args[3]?.baseBranch)
+        return squash(...args)
+      }
+      await h.dispatcher.tick()
+      expect(nativeBases).toEqual([nodeBase])
+      expect(squashBases).toEqual(gate === 'absent' ? [nodeBase] : [])
+    },
+  )
+
+  test('a waiting target clears dependency-source degradation without being claimed', async () => {
+    const h = harness({ tickets: [readyTicket('CHILD', { target: 'UNCLAIMED' })] })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-source-degraded',
+      payload: {
+        source: 'fake',
+        operation: 'dependency-check',
+        cause: 'rate-limited',
+        message: 'temporary limit',
+        resetAt: '2026-07-15T13:00:00.000Z',
+      },
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyCheckFailed).toBe(0)
+    expect(h.tickets.claims).toEqual([])
+    expect(
+      (await h.store.getRepoEvents(REPO)).some(
+        (e) => e.type === 'dispatcher.ticket-source-recovered',
+      ),
+    ).toBe(true)
+  })
+
+  test('full work capacity preserves the root-only dependency preflight fast path', async () => {
+    const h = harness({ tickets: [readyTicket('WAITING', { blockedBy: ['EXTERNAL'] })] })
+    await seedBuild(h, { slug: 'occupied' })
+    let reads = 0
+    h.tickets.dependencyStates = async () => {
+      reads += 1
+      throw new Error('must not query at capacity')
+    }
+    const report = await h.dispatcher.tick()
+    expect(reads).toBe(0)
+    expect(report).toMatchObject({ queued: 1, dependencyBlocked: 0, dependencyCheckFailed: 0 })
+  })
+
+  test.each([
+    ['pause', 'resume', 'collecting'],
+    ['resume', 'pause', 'paused'],
+  ] as const)(
+    'node commands %s then %s respect the newest intent',
+    async (first, second, expected) => {
+      const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+      h.forge.remoteBranches.set('main', BASE_SHA)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds())[0]!
+      for (const command of [first, second])
+        await h.store.append(node.slug, {
+          actor: humanActor('operator'),
+          type: command === 'pause' ? 'build.pause-requested' : 'build.resume-requested',
+          payload: {},
+        })
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe(expected)
+      expect(reduceBuild(await h.store.getEvents(node.slug)).pendingCommands).toEqual([])
+      expect(h.launches).toEqual([])
+    },
+  )
+})
+
+test.each([true, false])(
+  'node PR race refreshes emptiness only for classified no-commits errors (%s)',
+  async (classified) => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    h.forge.remoteBranches.set(node.branch!, 'child')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    h.forge.openPr = async () => {
+      h.forge.nodeComparisons.set(`main...${node.branch}`, 0)
+      throw classified
+        ? new NoCommitsBetweenBranchesError('No commits between main and node')
+        : new Error('permission denied')
+    }
+    const report = await h.dispatcher.tick()
+    expect(report.janitorFailed).toBe(classified ? 0 : 1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr).toBeUndefined()
+    expect(reduceBuild(await h.store.getEvents(node.slug)).nodeComparison?.ahead).toBe(
+      classified ? 0 : 1,
+    )
+  },
+)

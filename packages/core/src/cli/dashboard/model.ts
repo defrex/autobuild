@@ -866,11 +866,7 @@ export function projectBuildFromFacts(
         ? [
             step('spec', state.specRev !== undefined, false),
             step('open', state.nodeOpened !== undefined, state.nodeOpened === undefined),
-            step(
-              state.nodeComparison?.ahead === 0 || !state.pr ? 'empty' : 'collecting',
-              false,
-              state.nodeOpened !== undefined,
-            ),
+            step(buildVocabulary(state).integration!, false, state.nodeOpened !== undefined),
             step('merge', false, state.pr !== undefined, {
               qualifier: 'waiting',
               reason: 'integration requires human landing',

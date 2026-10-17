@@ -1790,7 +1790,7 @@ export class Dispatcher {
         }
         if (state.kind === 'node' && state.status !== 'aborted') {
           const command =
-            state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(-1)
+            state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(0)
           if (command !== undefined) {
             await this.store.append(record.slug, {
               actor: DISPATCHER,
@@ -3284,7 +3284,7 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
-    if (paused) {
+    if (paused || (capacity <= 0 && !ready.some((ticket) => ticket.kind === 'node'))) {
       await this.sourceCondition(undefined, 'ready-scan')
       if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
       return
@@ -3309,16 +3309,18 @@ export class Dispatcher {
     let scanSuccessful = true
     const verdicts = new Map<string, DependencyVerdict>()
     const failed = new Set<string>()
+    const targetBlocked = new Set<string>()
     for (const ticket of ready) {
+      if (this.outOfBudget(opts)) return
+      if (withheld.has(ticket.ref.id)) continue
       const target = await this.resolveNodeTarget(ticket)
       if (typeof target === 'string') {
-        failed.add(ticket.ref.id)
+        targetBlocked.add(ticket.ref.id)
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
         continue
       }
       if (this.outOfBudget(opts)) return
-      if (withheld.has(ticket.ref.id)) continue
       if (ticket.blockersResolved === true || (ticket.blockedBy ?? []).length === 0) continue
       let verdict: DependencyVerdict
       try {
@@ -3351,7 +3353,7 @@ export class Dispatcher {
       if (this.outOfBudget(opts)) break
       if (ticket.kind !== 'node' && capacity <= 0) continue
       if (withheld.has(ticket.ref.id)) continue
-      if (failed.has(ticket.ref.id)) continue
+      if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
       if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
 
       const target = await this.resolveNodeTarget(ticket)
