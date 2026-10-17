@@ -667,12 +667,31 @@ if (postgresUrl) {
         try {
           const made = await mcp.callTool({
             name: 'tickets.create',
-            arguments: { repo: REPO, title: 'Readable', body: 'Body' },
+            arguments: { repo: REPO, title: 'Readable', body: 'Body', kind: 'node' },
           })
           expect(made.isError).toBeUndefined()
           expect(JSON.parse((made.content as { text: string }[])[0]!.text).ticket.ref.id).toBe(
             'ENG-1',
           )
+          const child = await mcp.callTool({
+            name: 'tickets.create',
+            arguments: { repo: REPO, title: 'Child', body: 'Body', target: 'eNg-1' },
+          })
+          expect(child.isError).toBeUndefined()
+          expect(JSON.parse((child.content as { text: string }[])[0]!.text).ticket).toMatchObject({
+            kind: 'work',
+            target: 'ENG-1',
+          })
+          const invalid = await mcp.callTool({
+            name: 'tickets.update',
+            arguments: { repo: REPO, id: 'ENG-1', title: 'Lost', kind: 'work' },
+          })
+          expect(invalid.isError).toBe(true)
+          const cleared = await mcp.callTool({
+            name: 'tickets.update',
+            arguments: { repo: REPO, id: 'ENG-2', target: null },
+          })
+          expect(cleared.isError).toBeUndefined()
           const shown = await mcp.callTool({
             name: 'tickets.get',
             arguments: { repo: REPO, id: 'eNg-1' },

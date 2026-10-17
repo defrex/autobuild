@@ -20,6 +20,8 @@ import { createOperatorServer } from './operator-server'
 import { createHostedStoreService } from './service'
 import * as storeWire from './compatibility-fixtures/store-v0.9'
 import * as ticketWire from './compatibility-fixtures/tickets-v0.9'
+import * as ticket12 from './compatibility-fixtures/tickets-v0.12'
+import * as ticket13 from './compatibility-fixtures/tickets-v0.13'
 import * as operatorWire from './compatibility-fixtures/operator-v0.9'
 
 const secret = 'historical-contract'
@@ -228,9 +230,12 @@ for (const version of frozenBaseline) {
       await call('create', { draft: { title: 'Old client', body: '# Spec' } }),
     )
     const id = created.ref.id
+    const parent = await source.create({ title: 'Parent', body: 'Body', kind: 'node' })
+    await source.update(id, { kind: 'node', target: parent.ref.id })
     ticketWire.ticketWireSchema.parse(await call('get', { id }))
     ticketWire.ticketListingWireSchema.parse(await call('list-ready', {}))
     ticketWire.successWireSchema.parse(await call('update', { id, patch: { title: 'Updated' } }))
+    expect(await source.get(id)).toMatchObject({ kind: 'node', target: parent.ref.id })
     ticketWire.successWireSchema.parse(await call('comment', { id, body: 'hello' }))
     ticketWire.claimWireSchema.parse(await call('claim', { id }))
     const blocker = ticketWire.ticketWireSchema.parse(
@@ -410,5 +415,48 @@ for (const version of frozenBaseline) {
         )
       ).status,
     ).toBe(200)
+  })
+}
+
+for (const version of ['0.12.0', '0.13.0', '0.14.0'].filter(isSupported)) {
+  test(`frozen ${version} strict ticket decoder preserves tree metadata behind projection`, async () => {
+    const wire = version === '0.12.0' ? ticket12 : ticket13
+    const source = new FakeTicketSource()
+    const parent = await source.create({ title: 'Parent', body: 'Body', kind: 'node' })
+    const node = await source.create(
+      { title: 'Node', body: 'Body', kind: 'node', target: parent.ref.id },
+      { idempotencyKey: 'adopt-node' },
+    )
+    const server = createTicketServer({ secret, sourceFor: () => source })
+    const call = async (operation: 'create' | 'get' | 'update' | 'list-ready', input: unknown) => {
+      const body = wire.hostedTicketRequestSchemas[operation].parse({
+        context: { teamKey: 'ENG' },
+        input,
+      })
+      const req = request(`/tickets/${operation}`, version, body, token)
+      if (version !== '0.12.0') {
+        req.headers.set('x-autobuild-ticket-revisions', '1')
+        req.headers.set('x-autobuild-ticket-comments', '1')
+      }
+      const response = await server.fetch(req)
+      expect(response.ok).toBe(true)
+      return response.json()
+    }
+    wire.ticketWireSchema.parse(await call('get', { id: node.ref.id }))
+    wire.ticketWireSchema.parse(
+      await call('create', {
+        draft: { title: 'Adopt', body: 'Body' },
+        options: { idempotencyKey: 'adopt-node' },
+      }),
+    )
+    wire.ticketListingWireSchema.parse(await call('list-ready', {}))
+    wire.successWireSchema.parse(
+      await call('update', { id: node.ref.id, patch: { title: 'Updated' } }),
+    )
+    expect(await source.get(node.ref.id)).toMatchObject({
+      title: 'Updated',
+      kind: 'node',
+      target: parent.ref.id,
+    })
   })
 }

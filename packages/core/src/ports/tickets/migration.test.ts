@@ -377,3 +377,39 @@ test('state creation response loss adopts a rediscovered unique case-insensitive
     'In Progress': 'In-Progress',
   })
 })
+
+test('tree import establishes identities before edges and resumes adopted nested nodes', async () => {
+  const source = new FileTicketSource({ dir: join(root, 'tree-source') })
+  await source.create({ title: 'Root', body: 'Body', kind: 'node' }, { requestedId: 'z-root' })
+  await source.create(
+    { title: 'Nested', body: 'Body', kind: 'node', target: 'z-root' },
+    { requestedId: 'm-node' },
+  )
+  await source.create(
+    { title: 'Child', body: 'Body', target: 'm-node' },
+    { requestedId: 'a-child' },
+  )
+  const dir = join(root, 'tree-export')
+  await exportTickets({ source, dir, repo: 'repo' })
+  const target = new FileTicketSource({ dir: join(root, 'tree-target') })
+  await importTickets({ source: target, dir, repo: 'repo' })
+  await target.update('a-child', { target: null })
+  await importTickets({ source: target, dir, repo: 'repo' })
+  expect((await target.get('a-child'))?.target).toBe('m-node')
+  expect(await target.get('m-node')).toMatchObject({ kind: 'node', target: 'z-root' })
+  expect((await target.listAll()).tickets).toHaveLength(3)
+})
+
+test('invalid target graphs fail before destination changes', async () => {
+  const dir = join(root, 'bad-tree', 'ready')
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'child.md'),
+    serializeTicketFile({ id: 'child', title: 'Child', target: 'missing', labels: [] }, 'Body'),
+  )
+  const target = new FileTicketSource({ dir: join(root, 'bad-target') })
+  await expect(
+    importTickets({ source: target, dir: join(root, 'bad-tree'), repo: 'repo' }),
+  ).rejects.toThrow('orphan')
+  expect((await target.listAll()).tickets).toHaveLength(0)
+})

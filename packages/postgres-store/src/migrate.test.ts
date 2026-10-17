@@ -1220,7 +1220,7 @@ if (testUrl) {
           before[key].map(({ team: _team, ...row }: Row) => ({
             repo,
             ...row,
-            ...(key === 'tickets' ? { revision: 1 } : {}),
+            ...(key === 'tickets' ? { revision: 1, kind: 'work', target_id: null } : {}),
           })),
         )
       expect(world.requests.length).toBeGreaterThan(0)
@@ -1685,7 +1685,7 @@ if (testUrl)
       try {
         await migratePostgres(world.url)
         await sql`DROP TABLE ab_ticket_states, ab_ticket_counters`
-        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number, DROP COLUMN kind, DROP COLUMN target_id`
         await sql`ALTER TABLE ab_tickets DROP COLUMN revision`
         await sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
         if (version === 3)
@@ -1724,3 +1724,53 @@ if (testUrl)
       }
     },
   )
+
+if (testUrl)
+  test('populated frozen ticket v5 upgrades idempotently without changing revisions or relations', async () => {
+    const world = await schemaHarness()
+    try {
+      await migratePostgres(world.url)
+      const sql = new SQL(world.url)
+      try {
+        await sql`ALTER TABLE ab_tickets DROP COLUMN kind, DROP COLUMN target_id`
+        await sql`UPDATE ab_ticket_schema_migrations SET version = 5, checksum = ${FROZEN.ticket.get(5)!.checksum}`
+        await sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,labels,created_at,updated_at,revision) VALUES ('repo','internal','ENG-1',1,'Existing','Body','done',ARRAY[]::text[],now(),now(),42)`
+        await sql`INSERT INTO ab_ticket_comments VALUES ('repo','internal',1,'Comment',now())`
+        await migratePostgres(world.url)
+        const before = await sql`SELECT * FROM ab_tickets`
+        expect(before[0]).toMatchObject({
+          kind: 'work',
+          target_id: null,
+          readable_id: 'ENG-1',
+          revision: '42',
+        })
+        await migratePostgres(world.url)
+        expect(await sql`SELECT * FROM ab_tickets`).toEqual(before)
+        expect((await sql`SELECT body FROM ab_ticket_comments`)[0].body).toBe('Comment')
+      } finally {
+        await sql.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+if (testUrl)
+  test.each([
+    'ALTER TABLE ab_tickets DROP COLUMN kind',
+    'ALTER TABLE ab_tickets DROP CONSTRAINT ab_tickets_kind_check',
+    'ALTER TABLE ab_tickets DROP CONSTRAINT ab_tickets_target_fk',
+    'ALTER TABLE ab_tickets DROP CONSTRAINT ab_tickets_target_self_check',
+    'DROP INDEX ab_tickets_target_idx',
+  ])('ticket tree structural guard refuses %s', async (ddl) => {
+    const world = await schemaHarness()
+    const sql = new SQL(world.url)
+    try {
+      await migratePostgres(world.url)
+      await sql.unsafe(ddl)
+      await expect(assertTicketSchema(sql)).rejects.toThrow('missing or mismatched')
+    } finally {
+      await sql.close()
+      await world.cleanup()
+    }
+  })
