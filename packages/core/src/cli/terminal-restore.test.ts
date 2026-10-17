@@ -204,3 +204,45 @@ describe('process terminal restore hook', () => {
     for (const signal of TERMINATING_SIGNALS) expect(boundary.listenerCount(signal)).toBe(0)
   })
 })
+
+test('presentation suspension balances focus and Kitty modes and removes late resume listeners', async () => {
+  const { FOCUS_REPORTING_MODE, installPresentationSuspension } = await import('./terminal-restore')
+  const boundary = new FakeProcess()
+  const writes: string[] = []
+  const modes = createTerminalModeController((chunk) => {
+    writes.push(chunk)
+  })
+  modes.enter(FOCUS_REPORTING_MODE)
+  modes.enter(ALTERNATE_SCREEN_MODE)
+  modes.enter(KITTY_KEYBOARD_MODE)
+  let pauses = 0
+  let resumes = 0
+  const hook = installPresentationSuspension(
+    modes,
+    () => {
+      pauses++
+    },
+    () => {
+      resumes++
+    },
+    boundary,
+  )
+  for (let i = 0; i < 2; i++) {
+    boundary.emit('SIGTSTP')
+    expect(modes.activeModes).toEqual([])
+    expect(boundary.actions.at(-1)).toBe('kill:SIGTSTP')
+    boundary.emit('SIGCONT')
+    expect(modes.isActive(FOCUS_REPORTING_MODE)).toBe(true)
+    expect(boundary.listenerCount('SIGTSTP')).toBe(1)
+  }
+  expect(pauses).toBe(2)
+  expect(resumes).toBe(2)
+  expect(writes.filter((s) => s === KITTY_KEYBOARD_MODE.enter)).toHaveLength(3)
+  expect(writes.filter((s) => s === KITTY_KEYBOARD_MODE.restore)).toHaveLength(2)
+  hook.close()
+  modes.restoreAll()
+  boundary.emit('SIGCONT')
+  expect(modes.activeModes).toEqual([])
+  expect(boundary.listenerCount('SIGTSTP')).toBe(0)
+  expect(boundary.listenerCount('SIGCONT')).toBe(0)
+})
