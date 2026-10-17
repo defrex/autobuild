@@ -1,3 +1,9 @@
+import {
+  repositoryRead,
+  hasRepositoryReadContext,
+  knownRepositoryExists,
+  recordRepositoryExistence,
+} from './request-context'
 import { readPersistedBuildDigests } from '@defrex/autobuild/store-adapter'
 import { assertPublicSnapshotReducer } from '@defrex/autobuild/store-adapter'
 import {
@@ -923,10 +929,13 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {
-    return this.run(async (q) => {
-      const rows: Row[] = await q`SELECT * FROM repo_streams WHERE repo=${repo}`
-      return rows[0] ? this.repoRecord(rows[0]) : null
-    })
+    return repositoryRead(this, repo, () =>
+      this.run(async (q) => {
+        const rows: Row[] = await q`SELECT * FROM repo_streams WHERE repo=${repo}`
+        recordRepositoryExistence(this, repo, !!rows[0])
+        return rows[0] ? this.repoRecord(rows[0]) : null
+      }),
+    )
   }
 
   private async appendRepoLocked(
@@ -1019,8 +1028,8 @@ export class PostgresBuildStore implements BuildStore {
     sinceSeq = 0,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
+    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
     const read = async (): Promise<RepositoryEvent[]> => {
-      if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
       const rows: Row[] = await this.run(
         (q) => q`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`,
       )
@@ -1123,6 +1132,19 @@ export class PostgresBuildStore implements BuildStore {
 
   private async valueTail(scope: SnapshotScope): Promise<number | undefined> {
     const key = scope.kind === 'build' ? scope.slug : scope.repo
+    if (scope.kind === 'repo' && hasRepositoryReadContext()) {
+      if (knownRepositoryExists(this, key) === false) return undefined
+      const rows: Row[] = await this.run(
+        (q) => q`SELECT COALESCE(MAX(seq),0) AS tail FROM repo_events WHERE repo=${key}`,
+      )
+      const tail = num(rows[0]?.tail ?? 0)
+      // A nonempty journal proves its FK parent exists, without an unlocked
+      // record read before a delegated harvest mutation takes its own lock.
+      if (tail > 0) recordRepositoryExistence(this, key, true)
+      else if (knownRepositoryExists(this, key) === undefined && !(await this.getRepo(key)))
+        return undefined
+      return tail
+    }
     const rows: Row[] =
       scope.kind === 'build'
         ? await this.run(
@@ -1143,6 +1165,10 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<ReducerSnapshot | null> {
     assertPublicSnapshotReducer(reducer)
     const key = scope.kind === 'build' ? scope.slug : scope.repo
+    const repoExists =
+      scope.kind === 'repo' && hasRepositoryReadContext()
+        ? (knownRepositoryExists(this, key) ?? (await this.getRepo(key)) !== null)
+        : undefined
     try {
       const rows: Row[] = await this.run(
         (q) => q`SELECT s.version, s.cursor, s.state FROM reducer_snapshots s
@@ -1153,7 +1179,11 @@ export class PostgresBuildStore implements BuildStore {
               ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
             AND CASE WHEN ${scope.kind}='build'
               THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
-              ELSE EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key}) END`,
+              ELSE ${
+                repoExists === undefined
+                  ? this.sql`EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key})`
+                  : this.sql`${repoExists}::boolean`
+              } END`,
       )
       const row = rows[0]
       if (row === undefined) return null
@@ -1180,9 +1210,14 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<boolean> {
     const key = scope.kind === 'build' ? scope.slug : scope.repo
     const state = JSON.stringify(snapshot.state ?? null)
+    const repoExists =
+      scope.kind === 'repo' && hasRepositoryReadContext()
+        ? (knownRepositoryExists(this, key) ?? (await this.getRepo(key)) !== null)
+        : undefined
     try {
-      // One statement: the existence and log-tail guards, and the
-      // never-decrease rule, evaluate atomically against concurrent writers.
+      // Tail bounds and never-decrease guards remain atomic. Outside a request
+      // the existence guard is atomic too; request-scoped reuse is safe because
+      // repository journals have no deletion API.
       const rows: Row[] = await this.run(
         (q) => q`INSERT INTO reducer_snapshots
             (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
@@ -1193,7 +1228,11 @@ export class PostgresBuildStore implements BuildStore {
               ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
             AND CASE WHEN ${scope.kind}='build'
               THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
-              ELSE EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key}) END
+              ELSE ${
+                repoExists === undefined
+                  ? this.sql`EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key})`
+                  : this.sql`${repoExists}::boolean`
+              } END
           ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
             version = EXCLUDED.version, cursor = EXCLUDED.cursor,
             state = EXCLUDED.state, updated_at = EXCLUDED.updated_at

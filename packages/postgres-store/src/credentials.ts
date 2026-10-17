@@ -19,6 +19,7 @@ export interface CredentialMetadata {
   purpose: 'project-owner' | 'dispatcher'
 }
 export interface CredentialReader {
+  /** Success includes fresh project registration validation. */
   authenticate(token: string, now: Date): Promise<CredentialMetadata | null>
 }
 export interface CredentialStore extends CredentialReader {
@@ -36,6 +37,7 @@ export class ProjectNotRegisteredError extends Error {
     super('project not registered')
   }
 }
+export const LAST_USE_INTERVAL_MS = 60_000
 const hash = (secret: string) => createHash('sha256').update(secret).digest()
 const stamp = (value: unknown): string | null =>
   value == null ? null : new Date(value as string).toISOString()
@@ -113,7 +115,9 @@ export class PostgresCredentialStore implements CredentialStore {
   async authenticate(token: string, now: Date): Promise<CredentialMetadata | null> {
     const parts = /^abp_1_([a-f0-9]{32})_([a-f0-9]{64})$/.exec(token)
     if (!parts) return null
-    const [row] = await this.sql`SELECT * FROM project_credentials WHERE id = ${parts[1]!}`
+    const [row] = await this.sql`SELECT c.*, (SELECT action FROM project_journal
+      WHERE repo = c.repo ORDER BY seq DESC LIMIT 1) AS project_action
+      FROM project_credentials c WHERE id = ${parts[1]!}`
     if (
       !row ||
       !timingSafeEqual(hash(parts[2]!), Buffer.from(row.digest, 'hex')) ||
@@ -121,11 +125,21 @@ export class PostgresCredentialStore implements CredentialStore {
       (row.expires_at && new Date(row.expires_at) <= now)
     )
       return null
-    if (!(await this.projects.has(row.repo))) throw new ProjectNotRegisteredError()
-    // The conditional update also closes a revoke racing the initial read.
+    if (row.project_action !== 'added') throw new ProjectNotRegisteredError()
+    const cutoff = new Date(now.getTime() - LAST_USE_INTERVAL_MS).toISOString()
+    if (
+      row.last_used_at &&
+      new Date(row.last_used_at).getTime() > now.getTime() - LAST_USE_INTERVAL_MS
+    )
+      return metadata(row)
+    // Competing writers recheck the cutoff after waiting for the row lock.
+    // An in-flight authentication may finish after revocation.
     const [used] = await this.sql`UPDATE project_credentials SET last_used_at = ${now.toISOString()}
-      WHERE id = ${row.id} AND revoked_at IS NULL RETURNING *`
-    return used ? metadata(used) : null
+      WHERE id = ${row.id} AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > ${now.toISOString()})
+        AND (last_used_at IS NULL OR last_used_at <= ${cutoff})
+      RETURNING *`
+    return metadata(used ?? row)
   }
   async list(raw: string): Promise<CredentialMetadata[]> {
     const rows = await this

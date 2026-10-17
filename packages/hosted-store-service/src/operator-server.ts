@@ -1,3 +1,4 @@
+import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '@defrex/autobuild/hosted-tickets'
 import {
   createMachineAuth,
@@ -301,7 +302,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     }
     const repo = parts[3]
     requireProject(scope, repo)
-    if (!(await opts.projects.has(repo))) throw new HttpError(403, 'auth', 'project not registered')
+    if (scope.kind !== 'project' && scope.kind !== 'internal' && !(await opts.projects.has(repo)))
+      throw new HttpError(403, 'auth', 'project not registered')
     const rest = parts.slice(4)
 
     // The registry's protocol face: one generic route for the whole closed
@@ -742,60 +744,63 @@ export function createOperatorServer(opts: OperatorServerOptions): {
   }
 
   return {
-    async fetch(req: Request): Promise<Response> {
-      try {
-        return await route(req)
-      } catch (error) {
-        if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
-        if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
-        if (error instanceof TicketRevisionConflict) return failure(409, 'conflict', error.message)
-        if (error instanceof TicketRevisionUnsupported)
-          return failure(409, 'refusal', error.message)
-        if (error instanceof TicketOperationError) {
-          return failure(
-            error.code === 'not-found' ? 404 : 409,
-            error.code === 'not-found' ? 'not-found' : 'refusal',
-            error.message,
-            { code: error.code },
-          )
-        }
-        if (error instanceof OperatorSessionError) {
-          return failure(
-            error.code === 'not-found' ? 404 : error.code === 'forbidden' ? 403 : 409,
-            error.code === 'not-found'
-              ? 'not-found'
-              : error.code === 'forbidden'
-                ? 'auth'
-                : 'refusal',
-            error.message,
-          )
-        }
-        if (error instanceof BuildControlError || error instanceof OperatorControlError) {
-          return failure(409, 'refusal', error.message, { code: error.code })
-        }
-        if (error instanceof BulkWalkError) {
-          return failure(409, 'refusal', error.message, {
-            code: 'bulk-partial',
-            progress: error.progress,
-          })
-        }
-        if (error instanceof OperatorQueryError) {
-          return failure(
-            error.code === 'not-found' ? 404 : 409,
-            error.code === 'not-found' ? 'not-found' : 'conflict',
-            error.message,
-            { code: error.code },
-          )
-        }
-        if (opts.onInternalError !== undefined) {
-          try {
-            await opts.onInternalError(error, req)
-          } catch {
-            // Diagnostics must never replace the protocol response.
+    fetch(req: Request): Promise<Response> {
+      return withRepositoryReads(async () => {
+        try {
+          return await route(req)
+        } catch (error) {
+          if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
+          if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
+          if (error instanceof TicketRevisionConflict)
+            return failure(409, 'conflict', error.message)
+          if (error instanceof TicketRevisionUnsupported)
+            return failure(409, 'refusal', error.message)
+          if (error instanceof TicketOperationError) {
+            return failure(
+              error.code === 'not-found' ? 404 : 409,
+              error.code === 'not-found' ? 'not-found' : 'refusal',
+              error.message,
+              { code: error.code },
+            )
           }
+          if (error instanceof OperatorSessionError) {
+            return failure(
+              error.code === 'not-found' ? 404 : error.code === 'forbidden' ? 403 : 409,
+              error.code === 'not-found'
+                ? 'not-found'
+                : error.code === 'forbidden'
+                  ? 'auth'
+                  : 'refusal',
+              error.message,
+            )
+          }
+          if (error instanceof BuildControlError || error instanceof OperatorControlError) {
+            return failure(409, 'refusal', error.message, { code: error.code })
+          }
+          if (error instanceof BulkWalkError) {
+            return failure(409, 'refusal', error.message, {
+              code: 'bulk-partial',
+              progress: error.progress,
+            })
+          }
+          if (error instanceof OperatorQueryError) {
+            return failure(
+              error.code === 'not-found' ? 404 : 409,
+              error.code === 'not-found' ? 'not-found' : 'conflict',
+              error.message,
+              { code: error.code },
+            )
+          }
+          if (opts.onInternalError !== undefined) {
+            try {
+              await opts.onInternalError(error, req)
+            } catch {
+              // Diagnostics must never replace the protocol response.
+            }
+          }
+          return failure(500, 'internal', 'operator API is unavailable')
         }
-        return failure(500, 'internal', 'operator API is unavailable')
-      }
+      })
     },
   }
 }

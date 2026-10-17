@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import { assertPublicSnapshotReducer } from '@defrex/autobuild/remote-store'
 import { reducerValueRequestSchema, resolveReducerValue } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
@@ -411,9 +413,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           credentials: { authenticate: async () => null },
           projects: { has: async () => false, list: async () => [] },
         }))
+  const principals = new AsyncLocalStorage<Map<Request, Promise<MachinePrincipal>>>()
   async function principal(req: Request): Promise<MachinePrincipal | null> {
     if (!auth) return null
-    const value = await auth.authenticate(req)
+    const context = principals.getStore()!
+    let pending = context.get(req)
+    if (!pending) {
+      pending = auth.authenticate(req)
+      context.set(req, pending)
+    }
+    const value = await pending
     requireMachineAccess(value)
     return value
   }
@@ -918,7 +927,17 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     } catch (error) {
       throw new RequestError(400, 'validation', String(error))
     }
-    return json(200, await store.getReducerValue(scope, body))
+    try {
+      return json(200, await store.getReducerValue(scope, body))
+    } catch (error) {
+      if (
+        scope.kind === 'repo' &&
+        error instanceof Error &&
+        error.message === 'unknown reducer scope'
+      )
+        throw new Error(`unknown repo "${scope.repo}"`)
+      throw error
+    }
   }
 
   /** A body ceiling for one snapshot: generous for a long build's accumulator,
@@ -1291,13 +1310,33 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (segments[2] === 'tickets' && segments.length >= 5 && segments[4] === 'assets') {
         return ticketAssetRoute(req, url, repo, segments[3]!, segments.slice(5).join('/'))
       }
-      const record = await store.getRepo(repo)
-      if (record === null) {
-        return fail(404, 'not-found', `unknown repo "${repo}"`)
-      }
-      if (segments.length === 2) {
-        if (req.method === 'GET') return json(200, record)
-        return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
+      const rest = segments.slice(2).join('/')
+      // Store reads/locks own existence for these operations. Streams only
+      // check existence on creation; listing/addressing and snapshots need a gate.
+      const storeGated = [
+        'GET events',
+        'POST events',
+        'GET high-water',
+        'GET state-events',
+        'POST deposits',
+        'POST artifacts',
+        'GET artifacts',
+        'GET artifact-list',
+        'POST tick/begin',
+        'POST tick/finish',
+        'POST lease/claim',
+        'POST lease/heartbeat',
+        'POST lease/release',
+        'POST streams',
+        'POST reducer-values',
+      ].includes(`${req.method} ${rest}`)
+      if (!storeGated) {
+        const record = await store.getRepo(repo)
+        if (record === null) return fail(404, 'not-found', `unknown repo "${repo}"`)
+        if (segments.length === 2) {
+          if (req.method === 'GET') return json(200, record)
+          return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
+        }
       }
       return repoRoute(req, url, repo, segments.slice(2).join('/'), scope)
     }
@@ -1381,21 +1420,24 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   return {
-    fetch: async (req: Request): Promise<Response> => {
-      try {
-        return await route(req)
-      } catch (error) {
-        const response = errorResponse(error)
-        if (response.status >= 500 && opts.onInternalError !== undefined) {
+    fetch: async (req: Request): Promise<Response> =>
+      withRepositoryReads(() =>
+        principals.run(new Map(), async () => {
           try {
-            await opts.onInternalError(error, req)
-          } catch {
-            // Diagnostics must never replace the protocol response.
+            return await route(req)
+          } catch (error) {
+            const response = errorResponse(error)
+            if (response.status >= 500 && opts.onInternalError !== undefined) {
+              try {
+                await opts.onInternalError(error, req)
+              } catch {
+                // Diagnostics must never replace the protocol response.
+              }
+            }
+            return response
           }
-        }
-        return response
-      }
-    },
+        }),
+      ),
   }
 }
 

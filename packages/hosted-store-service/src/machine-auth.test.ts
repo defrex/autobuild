@@ -345,3 +345,52 @@ test('ticket project admission preserves shared backend and rejects repo injecti
   expect((await server.fetch(request('/tickets/list-ready', a.token, {}))).status).toBe(403)
   expect(calls).toBe(2)
 })
+
+test('each route authenticates once per invocation, including reused requests and refusals', async () => {
+  const projects = testProjects([A])
+  const { store: credentials, auth } = testCredentials(projects)
+  const issued = await credentials.issue(A, 'owner')
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo(A)
+  const session = await backing.createSession({ repo: A, operator: 'owner' })
+  const stream = await backing.createStream({ kind: 'repo', repo: A }, 'output')
+  let calls = 0
+  const server = createStoreServer({
+    store: backing,
+    secret: 'secret',
+    auth: {
+      authenticate: (req) => {
+        calls++
+        return auth.authenticate(req)
+      },
+    },
+  })
+  const checks: Array<[string, unknown?]> = [
+    ['/repos', { repo: A }],
+    [`/repos/${encodeURIComponent(A)}`],
+    [`/sessions/${session.id}`],
+    ['/builds'],
+    ['/builds/missing'],
+    [`/streams/${stream.id}`],
+    [`/streams/${stream.id}/chunks`],
+    [`/streams/${stream.id}/chunks`, { parts: [] }],
+    [`/streams/${stream.id}/close`, { outcome: 'completed' }],
+    ['/streams/missing'],
+    ['/credentials/delegate', {}],
+    [`/repos/${encodeURIComponent(B)}/events`],
+  ]
+  for (const [path, body] of checks) {
+    calls = 0
+    await server.fetch(request(path, issued.token, body))
+    expect(calls).toBe(1)
+  }
+  const repeated = request('/builds', issued.token)
+  await server.fetch(repeated)
+  calls = 0
+  await server.fetch(repeated)
+  expect(calls).toBe(1)
+  await credentials.revoke(A, issued.credential.id, 'owner')
+  calls = 0
+  expect((await server.fetch(repeated)).status).toBe(401)
+  expect(calls).toBe(1)
+})

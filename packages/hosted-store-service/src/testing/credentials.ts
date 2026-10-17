@@ -3,7 +3,10 @@ import type {
   CredentialMetadata,
   CredentialStore,
 } from '@defrex/autobuild-postgres-store/credentials'
-import { ProjectNotRegisteredError } from '@defrex/autobuild-postgres-store/credentials'
+import {
+  LAST_USE_INTERVAL_MS,
+  ProjectNotRegisteredError,
+} from '@defrex/autobuild-postgres-store/credentials'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import { createMachineAuth } from '../machine-auth'
 
@@ -45,7 +48,11 @@ export function testCredentials(
       )
         return null
       if (!(await projects.has(row.meta.repo))) throw new ProjectNotRegisteredError()
-      row.meta.lastUsedAt = now.toISOString()
+      if (
+        !row.meta.lastUsedAt ||
+        now.getTime() - Date.parse(row.meta.lastUsedAt) >= LAST_USE_INTERVAL_MS
+      )
+        row.meta.lastUsedAt = now.toISOString()
       return { ...row.meta }
     },
     async list(repo) {
