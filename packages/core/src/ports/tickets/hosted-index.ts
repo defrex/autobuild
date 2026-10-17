@@ -5,6 +5,8 @@ export { HostedTicketSource } from './remote'
 export type { HostedTicketFetch, HostedTicketSourceOptions } from './remote'
 export {
   HOSTED_TICKET_OPERATIONS,
+  TICKET_TREE_HEADER,
+  TICKET_TREE_CAPABILITY,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
   hostedTicketContextSchema,

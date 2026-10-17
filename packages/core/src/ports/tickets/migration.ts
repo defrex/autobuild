@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'no
 import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { Ticket, TicketSource, TicketAssetStore } from '../types'
+import { projectTicketTree } from './tree'
 import { FileTicketSource } from './file'
 import { parseTicketFile, serializeTicketFile } from './file-codec'
 import { validateFileTicketId } from './requested-id'
@@ -110,6 +111,8 @@ export async function exportTickets(opts: MigrationOptions): Promise<void> {
       raw: serializeTicketFile(
         {
           id: ticket.ref.id,
+          kind: ticket.kind,
+          target: ticket.target,
           title: ticket.title,
           labels: ticket.labels,
           blockedBy: ticket.blockedBy,
@@ -160,6 +163,12 @@ export async function importTickets(opts: MigrationOptions): Promise<void> {
   const dir = resolve(opts.dir)
   const input = new FileTicketSource({ dir })
   const tickets = await inventory(input)
+  projectTicketTree(tickets, 'import')
+  if (
+    !opts.source.integrationTree &&
+    tickets.some((t) => t.kind === 'node' || t.target !== undefined)
+  )
+    throw new Error('target source cannot preserve kind/target metadata')
   const bundles = new Map<string, PortableAsset[]>()
   for (const ticket of tickets) {
     const path = join(dir, ticket.state!, `${ticket.ref.id}.md`)
@@ -287,7 +296,12 @@ export async function importTickets(opts: MigrationOptions): Promise<void> {
       const result =
         byKey.get(key) ??
         (await opts.source.create(
-          { title: ticket.title, body: ticket.body, labels: ticket.labels },
+          {
+            title: ticket.title,
+            body: ticket.body,
+            labels: ticket.labels,
+            ...(opts.source.integrationTree ? { kind: ticket.kind ?? 'work' } : {}),
+          },
           {
             state: states[ticket.state!]!,
             idempotencyKey: key,
@@ -297,6 +311,16 @@ export async function importTickets(opts: MigrationOptions): Promise<void> {
       mapping[ticket.ref.id] = result.ref.id
       await saveMap()
       opts.print?.(`${ticket.ref.id} → ${result.ref.id}`)
+    }
+    if (opts.source.integrationTree) {
+      for (const ticket of tickets)
+        if (ticket.kind === 'node')
+          await opts.source.update(mapping[ticket.ref.id]!, { kind: 'node' })
+      for (const ticket of tickets)
+        await opts.source.update(mapping[ticket.ref.id]!, {
+          kind: ticket.kind ?? 'work',
+          target: ticket.target === undefined ? null : mapping[ticket.target]!,
+        })
     }
     for (const ticket of tickets) {
       const id = mapping[ticket.ref.id]!

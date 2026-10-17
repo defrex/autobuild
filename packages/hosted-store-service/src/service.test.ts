@@ -1,7 +1,9 @@
+import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
+import { ticketProject } from './testing/ticket-project'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
-import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { OperatorApiClient } from './operator-api'
 import { reduceSession } from './session-reducer'
@@ -916,4 +918,78 @@ test('project discovery opens independently of blobs and retries failed initiali
   await projects.remove('https://github.com/acme/one', 'Ada')
   expect(await service.projects.list()).toEqual([])
   expect(attempts).toBe(2)
+})
+
+test('hosted HTTP preserves tree validation refusals without reporting internal failures', async () => {
+  const project = await ticketProject(repo, env.AB_STORE_SECRET, clock)
+  const backend = new FakeTicketSource()
+  const reports: unknown[] = []
+  const responses: { status: number; body: unknown }[] = []
+  const service = createHostedStoreService({
+    ...project,
+    env,
+    clock,
+    sourceFor: () => backend,
+    reportInternalError: (error) => {
+      reports.push(error)
+    },
+  })
+  const source = new HostedTicketSource({
+    url: 'https://hosted.test',
+    token: project.token,
+    teamKey: 'ENG',
+    fetchFn: async (input, init) => {
+      const response = await service.fetch(new Request(input, init))
+      responses.push({ status: response.status, body: await response.clone().json() })
+      return response
+    },
+  })
+  const work = await source.create({ title: 'Work', body: 'Body' })
+  const node = await source.create({ title: 'Node', body: 'Body', kind: 'node' })
+  const child = await source.create({ title: 'Child', body: 'Body', target: node.ref.id })
+  for (const [operation, message] of [
+    [
+      () => source.create({ title: 'Invalid', body: 'Body', target: work.ref.id }),
+      `target ${work.ref.id} is not a node`,
+    ],
+    [
+      () => source.update(child.ref.id, { title: 'Lost', target: work.ref.id }),
+      `target ${work.ref.id} is not a node`,
+    ],
+    [
+      () => source.update(node.ref.id, { target: node.ref.id }),
+      `target ${node.ref.id} would create a cycle (or has a cyclic ancestor chain)`,
+    ],
+    [
+      () => source.update(node.ref.id, { kind: 'work' }),
+      `cannot change node ${node.ref.id} to work: ticket ${child.ref.id} targets it`,
+    ],
+  ] as const) {
+    await expect(operation()).rejects.toThrow(message)
+    expect(responses.at(-1)).toEqual({ status: 400, body: { kind: 'validation', error: message } })
+  }
+  expect((await source.get(child.ref.id))?.title).toBe('Child')
+  // The database uses its own transaction-local validation wording.
+  for (const message of [
+    'target ENG-1 would create a cycle',
+    'cannot demote node: ticket ENG-3 targets it',
+    'target ENG-1 does not exist in the configured file source',
+    'target ENG-1 is in a different source',
+  ]) {
+    backend.update = async () => {
+      throw new Error(message)
+    }
+    await expect(source.update(child.ref.id, { target: node.ref.id })).rejects.toThrow(message)
+    expect(responses.at(-1)).toEqual({ status: 400, body: { kind: 'validation', error: message } })
+  }
+  expect(reports).toEqual([])
+  const failure = new Error('postgres://private:secret@database/internal')
+  backend.update = async () => {
+    throw failure
+  }
+  await expect(source.update(child.ref.id, { title: 'Unavailable' })).rejects.toThrow(
+    'hosted store is unavailable',
+  )
+  expect(responses.at(-1)?.status).toBe(500)
+  expect(reports).toEqual([failure])
 })
