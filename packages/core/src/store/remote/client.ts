@@ -1,3 +1,9 @@
+import {
+  resolveReducerValue,
+  reducerValueSchema,
+  type ReducerValueRequest,
+  type ReducerValue,
+} from '../reducer-values'
 /**
  * RemoteBuildStore (SPEC §7.2 adapter 2): the client half of the remote
  * store — a full BuildStore over the wire protocol in protocol.ts. The
@@ -537,6 +543,17 @@ export class RemoteBuildStore implements BuildStore {
           opts?.signal,
         ) as Promise<RepositoryEvent[]>,
     )
+  }
+
+  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    resolveReducerValue(scope, request)
+    const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
+    return this.requestJson(
+      'POST',
+      `${root}/reducer-values`,
+      reducerValueSchema,
+      request,
+    ) as Promise<ReducerValue>
   }
 
   private snapshotPath(scope: SnapshotScope, reducer: string): string {

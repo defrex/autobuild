@@ -1,3 +1,9 @@
+import {
+  readReducerValue,
+  resolveReducerValue,
+  type ReducerValueRequest,
+  type ReducerValue,
+} from './reducer-values'
 /**
  * The in-memory BuildStore — the reference adapter. Its behavior *is* the
  * contract: the suite in `store/contract.ts` is written against this and
@@ -712,6 +718,48 @@ export class MemoryBuildStore implements BuildStore {
         ? this.builds.get(scope.slug)?.events
         : this.repos.get(scope.repo)?.events
     return events === undefined ? undefined : (events.at(-1)?.seq ?? 0)
+  }
+
+  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    // Reject invalid requests before touching storage.
+    resolveReducerValue(scope, request)
+    return readReducerValue(scope, request, {
+      highWater: async () => {
+        const tail = this.snapshotTail(scope)
+        if (tail === undefined) throw new Error('unknown reducer scope')
+        return tail
+      },
+      events: async (since, through) =>
+        structuredClone(
+          (scope.kind === 'build'
+            ? this.state(scope.slug).events
+            : this.repoState(scope.repo).events
+          ).slice(since, through),
+        ) as (AbEvent | RepositoryEvent)[],
+      put: (key, snapshot) => this.putReducerSnapshot(scope, key, snapshot),
+      read: async (key) => {
+        const snapshot = this.snapshots.get(`${snapshotScopeKey(scope)}\u0000${key}`)
+        return snapshot === undefined
+          ? null
+          : { snapshot: structuredClone(snapshot), token: JSON.stringify(snapshot) }
+      },
+      repair: async (key, observed, snapshot) => {
+        const cacheKey = `${snapshotScopeKey(scope)}\u0000${key}`
+        const current = this.snapshots.get(cacheKey)
+        const tail = this.snapshotTail(scope)
+        if (
+          !current ||
+          JSON.stringify(current) !== observed.token ||
+          tail === undefined ||
+          snapshot.cursor > tail
+        )
+          return false
+        if (observed.snapshot.cursor > snapshot.cursor && tail >= observed.snapshot.cursor)
+          return false
+        this.snapshots.set(cacheKey, JSON.parse(JSON.stringify(snapshot)))
+        return true
+      },
+    })
   }
 
   async getReducerSnapshot(

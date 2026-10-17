@@ -1,3 +1,5 @@
+import { REDUCERS } from '../kernel/reducer-registry'
+import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
 import { MemoryBuildStore } from './memory'
 /**
@@ -918,6 +920,119 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(tick.seq).toBe(2)
           expect(await store.getRepoHighWater('acme/hw')).toBe(2)
           expect((await store.getRepoEvents('acme/hw')).at(-1)?.seq).toBe(2)
+        })
+      })
+    })
+
+    describe('named reducer value reads', () => {
+      test('all admitted reducers match replay on both scopes and isolate parameter variants', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'values'
+          const repo = 'acme/values'
+          await store.createBuild(sampleBuildInput(slug))
+          await store.ensureRepo(repo)
+          await store.append(slug, sampleEventWrite('hello'))
+          await store.appendRepo(repo, {
+            actor: humanActor('op'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: false },
+          })
+          const buildEvents = await store.getEvents(slug)
+          const repoEvents = await store.getRepoEvents(repo)
+          for (const [name, entry] of Object.entries(REDUCERS)) {
+            const read = entry.valueRead
+            const scope =
+              read && !('excluded' in read) && read.scope === 'repo'
+                ? { kind: 'repo' as const, repo }
+                : { kind: 'build' as const, slug }
+            if ('excluded' in read) {
+              await expect(store.getReducerValue(scope, { reducer: name })).rejects.toThrow(
+                'excluded',
+              )
+              continue
+            }
+            const variants =
+              name === 'openTick' || name === 'dispatchStatus'
+                ? [{ run: 'run-a' }, { run: 'run-b' }]
+                : name === 'phaseFailures'
+                  ? [
+                      { phase: 'plan', round: 1 },
+                      { phase: 'implement', round: 2 },
+                    ]
+                  : name === 'dispatchFailureBudget'
+                    ? [
+                        { infrastructureOwnsWorkspace: false },
+                        { infrastructureOwnsWorkspace: true },
+                      ]
+                    : [{}]
+            for (const args of variants) {
+              const request = { reducer: name, args }
+              const resolved = resolveReducerValue(scope, request)
+              const events = scope.kind === 'repo' ? repoEvents : buildEvents
+              const expected = JSON.parse(JSON.stringify(resolved.reducer.reduce(events)))
+              const answer = await store.getReducerValue(scope, request)
+              expect(answer).toEqual({
+                version: resolved.reducer.version,
+                cursor: events.at(-1)?.seq ?? 0,
+                value: expected,
+              })
+              if (answer.value && typeof answer.value === 'object')
+                Object.assign(answer.value, { poison: true })
+              expect((await store.getReducerValue(scope, request)).value).toEqual(expected)
+              const snapshot = await store.getReducerSnapshot(
+                scope,
+                resolved.key,
+                resolved.reducer.version,
+              )
+              expect(snapshot?.cursor).toBe(events.at(-1)?.seq ?? 0)
+            }
+          }
+        })
+      })
+      test('repairs a malformed same-cursor row and unknown scopes create nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const scope = { kind: 'build' as const, slug: 'value-repair' }
+          await store.createBuild(sampleBuildInput(scope.slug))
+          await store.append(scope.slug, sampleEventWrite('first'))
+          const request = { reducer: 'build' }
+          const resolved = resolveReducerValue(scope, request)
+          await store.putReducerSnapshot(scope, resolved.key, {
+            version: resolved.reducer.version,
+            cursor: 1,
+            state: { identity: resolved.identity, acc: { nested: 'corrupt' } },
+          })
+          const answer = await store.getReducerValue(scope, request)
+          expect(answer.value).toEqual(
+            JSON.parse(JSON.stringify(reduceBuild(await store.getEvents(scope.slug)))),
+          )
+          const repaired = await store.getReducerSnapshot(
+            scope,
+            resolved.key,
+            resolved.reducer.version,
+          )
+          expect((repaired!.state as { acc: unknown }).acc).toEqual(
+            resolved.reducer.advance(resolved.reducer.initial(), await store.getEvents(scope.slug)),
+          )
+          await expect(
+            store.getReducerValue({ kind: 'build', slug: 'unknown' }, request),
+          ).rejects.toThrow()
+          await expect(
+            store.getReducerValue(
+              { kind: 'repo', repo: 'unknown' },
+              { reducer: 'dispatchSettings' },
+            ),
+          ).rejects.toThrow()
+          expect(await store.getRepo('unknown')).toBeNull()
+          await expect(
+            store
+              .scopeBuild(scope.slug)
+              .getReducerValue({ kind: 'repo', repo: 'unknown' }, { reducer: 'dispatchSettings' }),
+          ).rejects.toThrow()
+          await expect(
+            store
+              .scopeBuild(scope.slug)
+              .getReducerValue({ kind: 'build', slug: 'unknown' }, request),
+          ).rejects.toThrow()
         })
       })
     })

@@ -35,3 +35,20 @@ export { delegateCredential } from './credentials'
 
 export { reduceBuild } from '../../kernel/reducer'
 export { reduceHarvest } from '../../kernel/harvest'
+
+export {
+  readReducerValue,
+  resolveReducerValue,
+  reducerValueRequestSchema,
+  reducerValueSchema,
+} from '../reducer-values'
+export type {
+  ReducerValue,
+  ReducerValueRequest,
+  ReducerValueStorage,
+  ValueCacheRow,
+} from '../reducer-values'
+
+export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/service-facts'
+
+export { delegationFactKey } from '../../kernel/service-facts'

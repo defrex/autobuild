@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError } from '../events/catalog'
-import { KERNEL } from '../events/envelope'
+import { KERNEL, humanActor } from '../events/envelope'
 import {
   describeBlobStoreContract,
   describeBuildStoreContract,
@@ -271,4 +271,50 @@ describe('MemoryBuildStore held event pacing (AUT-383)', () => {
   test('EVENT_WAIT_POLL_MS pins the one-second hosted poll interval (AUT-383)', () => {
     expect(EVENT_WAIT_POLL_MS).toBe(1000)
   })
+})
+
+test('persisted value reads touch only delta array entries after several thousand facts', async () => {
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('value-cost'))
+  await store.ensureRepo('value-cost')
+  for (let i = 0; i < 3000; i++) {
+    await store.append('value-cost', sampleEventWrite())
+    await store.appendRepo('value-cost', {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+  }
+  for (const scope of [
+    { kind: 'build' as const, slug: 'value-cost' },
+    { kind: 'repo' as const, repo: 'value-cost' },
+  ]) {
+    const request = { reducer: scope.kind === 'build' ? 'setupStreak' : 'effectiveConfig' }
+    await store.getReducerValue(scope, request)
+    const states = Reflect.get(store, scope.kind === 'build' ? 'builds' : 'repos') as Map<
+      string,
+      { events: unknown[] }
+    >
+    const state = states.get('value-cost')!
+    let entries = 0
+    state.events = new Proxy(state.events, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) entries++
+        return Reflect.get(target, key, receiver)
+      },
+    })
+    await store.getReducerValue(scope, request)
+    expect(entries).toBe(1) // one high-water lookup; no old log entries
+    if (scope.kind === 'build') await store.append(scope.slug, sampleEventWrite())
+    else
+      await store.appendRepo(scope.repo, {
+        actor: humanActor('op'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+    entries = 0
+    await store.getReducerValue(scope, request)
+    expect(entries).toBe(3) // delta plus read/write high-water lookups
+  }
+  await store.close()
 })

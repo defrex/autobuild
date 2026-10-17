@@ -1,3 +1,4 @@
+import type { ReducerValueRequest, ReducerValue } from '../store/reducer-values'
 import { executionNoProgressReducer } from './execution-no-progress'
 /**
  * The dispatcher's in-process repository view (AUT-647): a `BuildStore`
@@ -1039,6 +1040,10 @@ export class RepoViewStore implements BuildStore {
       if (!this.recorded) return this.backing.getRepoStateEvents(repo)
       return [...this.journal]
     })
+  }
+
+  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    return this.backing.getReducerValue(scope, request)
   }
 
   getReducerSnapshot(

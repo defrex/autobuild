@@ -610,3 +610,186 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+if (testUrl)
+  test('fresh Postgres connections read only value deltas and repair corrupt or ahead rows', async () => {
+    const database = await isolatedDatabase()
+    const blobs = new MemoryBlobStore()
+    const writer = await openPostgresBuildStore(database.url, blobs)
+    const reader = await openPostgresBuildStore(database.url, blobs)
+    const sql = new SQL(database.url)
+    try {
+      await writer.createBuild(sampleBuildInput('value-cost'))
+      await writer.ensureRepo('value-cost')
+      const event = sampleEventWrite()
+      // Repeat valid facts at the SQL boundary so seeding does not dominate the test.
+      await sql`INSERT INTO events(build,seq,ts,actor,type,payload) SELECT 'value-cost',n,now(),${JSON.stringify(event.actor)}::jsonb,${event.type},${JSON.stringify(event.payload)}::jsonb FROM generate_series(1,3000) n`
+      await sql`INSERT INTO repo_events(repo,seq,ts,actor,type,payload) SELECT 'value-cost',n,now(),' {"kind":"human","user":"operator"}'::jsonb,'dispatcher.intake-set','{"enabled":true}'::jsonb FROM generate_series(1,3000) n`
+      const scopes = [
+        { kind: 'build' as const, slug: 'value-cost' },
+        { kind: 'repo' as const, repo: 'value-cost' },
+      ]
+      for (const scope of scopes)
+        await writer.getReducerValue(scope, {
+          reducer: scope.kind === 'build' ? 'setupStreak' : 'effectiveConfig',
+        })
+      const costs = { events: 0, metadata: 0 }
+      const run = Reflect.get(reader, 'run').bind(reader)
+      Reflect.set(reader, 'run', (body: (query: unknown) => Promise<unknown>) =>
+        run((q: unknown) =>
+          body(
+            new Proxy(q as object, {
+              get(target, key) {
+                const method = Reflect.get(target, key)
+                if (key === 'unsafe' && typeof method === 'function')
+                  return (...args: unknown[]) =>
+                    Promise.resolve(Reflect.apply(method, target, args)).then((rows) => {
+                      const events = /SELECT \* FROM (?:repo_)?events\b/i.test(String(args[0]))
+                      costs[events ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+                      return rows
+                    })
+                return typeof method === 'function' ? method.bind(target) : method
+              },
+              apply(target, thisArg, args) {
+                const result = Reflect.apply(target as CallableFunction, thisArg, args)
+                const eventQuery = /SELECT \* FROM (?:repo_)?events\b/i.test(args[0].join(' '))
+                return Promise.resolve(result).then((rows) => {
+                  costs[eventQuery ? 'events' : 'metadata'] += Array.isArray(rows) ? rows.length : 0
+                  return rows
+                })
+              },
+            }),
+          ),
+        ),
+      )
+      const { resolveReducerValue } = await import('@defrex/autobuild/store-adapter')
+      for (const scope of scopes) {
+        const request = { reducer: scope.kind === 'build' ? 'setupStreak' : 'effectiveConfig' }
+        costs.events = 0
+        costs.metadata = 0
+        await reader.getReducerValue(scope, request)
+        expect(costs.events).toBe(0)
+        expect(costs.metadata).toBeLessThanOrEqual(4)
+        if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+        else
+          await writer.appendRepo(scope.repo, {
+            actor: { kind: 'human', user: 'operator' },
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+        costs.events = 0
+        costs.metadata = 0
+        const advanced = await reader.getReducerValue(scope, request)
+        expect(advanced.cursor).toBe(3001)
+        expect(costs.events).toBe(1)
+        expect(costs.metadata).toBeLessThanOrEqual(5)
+        const { key } = resolveReducerValue(scope, request)
+        for (const cursor of [3001, 99999]) {
+          await sql`UPDATE reducer_snapshots SET cursor=${cursor},state='{"invalid":true}'::jsonb WHERE reducer=${key}`
+          expect(await reader.getReducerValue(scope, request)).toEqual(advanced)
+          costs.events = 0
+          expect(await reader.getReducerValue(scope, request)).toEqual(advanced)
+          expect(costs.events).toBe(0)
+        }
+        await sql`DELETE FROM reducer_snapshots WHERE reducer=${key}`
+        expect(await reader.getReducerValue(scope, request)).toEqual(advanced)
+        await sql`UPDATE reducer_snapshots SET state='"not JSON"'::jsonb WHERE reducer=${key}`
+        expect(await reader.getReducerValue(scope, request)).toEqual(advanced)
+        costs.events = 0
+        await reader.getReducerValue(scope, request)
+        expect(costs.events).toBe(0)
+        const originalPut = reader.putReducerSnapshot.bind(reader)
+        let release!: () => void
+        let entered!: () => void
+        const started = new Promise<void>((resolve) => {
+          entered = resolve
+        })
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        reader.putReducerSnapshot = async (target, name, snapshot) => {
+          entered()
+          await gate
+          return originalPut(target, name, snapshot)
+        }
+        if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+        else
+          await writer.appendRepo(scope.repo, {
+            actor: { kind: 'human', user: 'operator' },
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+        const delayed = reader.getReducerValue(scope, request)
+        await started
+        if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+        else
+          await writer.appendRepo(scope.repo, {
+            actor: { kind: 'human', user: 'operator' },
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+        const winner = await writer.getReducerValue(scope, request)
+        release()
+        expect((await delayed).cursor).toBe(3002)
+        expect(winner.cursor).toBe(3003)
+        reader.putReducerSnapshot = originalPut
+        expect(await reader.getReducerValue(scope, request)).toEqual(winner)
+        await sql`UPDATE reducer_snapshots SET state='{"corrupt":true}'::jsonb WHERE reducer=${key}`
+        const originalRun = Reflect.get(reader, 'run').bind(reader)
+        let releaseRepair!: () => void
+        let enteredRepair!: () => void
+        const repairStarted = new Promise<void>((resolve) => {
+          enteredRepair = resolve
+        })
+        const repairGate = new Promise<void>((resolve) => {
+          releaseRepair = resolve
+        })
+        Reflect.set(reader, 'run', (body: (q: unknown) => Promise<unknown>) =>
+          originalRun((q: unknown) =>
+            body(
+              new Proxy(q as object, {
+                apply(target, thisArg, args) {
+                  const execute = () => Reflect.apply(target as CallableFunction, thisArg, args)
+                  if (String(args[0][0]).startsWith('UPDATE reducer_snapshots')) {
+                    enteredRepair()
+                    return repairGate.then(execute)
+                  }
+                  return execute()
+                },
+              }),
+            ),
+          ),
+        )
+        const staleRepair = reader.getReducerValue(scope, request)
+        await repairStarted
+        if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+        else
+          await writer.appendRepo(scope.repo, {
+            actor: { kind: 'human', user: 'operator' },
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+        const repairedWinner = await writer.getReducerValue(scope, request)
+        releaseRepair()
+        expect((await staleRepair).cursor).toBe(3003)
+        expect(repairedWinner.cursor).toBe(3004)
+        Reflect.set(reader, 'run', originalRun)
+        expect(await reader.getReducerValue(scope, request)).toEqual(repairedWinner)
+      }
+      for (const run of ['parameter-a', 'parameter-b']) {
+        const scope = { kind: 'repo' as const, repo: 'value-cost' }
+        const request = { reducer: 'openTick', args: { run } }
+        await writer.getReducerValue(scope, request)
+        costs.events = 0
+        costs.metadata = 0
+        expect((await reader!.getReducerValue(scope, request)).value).toBe(false)
+        expect(costs.events).toBe(0)
+        expect(costs.metadata).toBeLessThanOrEqual(4)
+      }
+    } finally {
+      await reader.close()
+      await writer.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 30_000)

@@ -1154,7 +1154,7 @@ export class BuildRunner {
       { kind: 'paths', step: decision.step, paths: decision.paths },
       changedPaths,
     )
-    if (!applicability.applies) {
+    if (applicability.applies === false) {
       await this.skipVerify({
         kind: 'skip-verify',
         step: decision.step,

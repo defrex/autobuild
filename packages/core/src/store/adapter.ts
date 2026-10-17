@@ -120,3 +120,16 @@ export {
   snapshotSupersedes,
 } from './snapshots'
 export type { ReducerSnapshot, SnapshotScope } from './snapshots'
+
+export {
+  readReducerValue,
+  resolveReducerValue,
+  reducerValueRequestSchema,
+  reducerValueSchema,
+} from './reducer-values'
+export type {
+  ReducerValue,
+  ReducerValueRequest,
+  ReducerValueStorage,
+  ValueCacheRow,
+} from './reducer-values'

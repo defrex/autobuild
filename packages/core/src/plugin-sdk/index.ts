@@ -229,3 +229,16 @@ export type {
   TicketAssetMeta,
   TicketAssetSummary,
 } from '../store/ticket-assets'
+
+export {
+  readReducerValue,
+  resolveReducerValue,
+  reducerValueRequestSchema,
+  reducerValueSchema,
+} from '../store/reducer-values'
+export type {
+  ReducerValue,
+  ReducerValueRequest,
+  ReducerValueStorage,
+  ValueCacheRow,
+} from '../store/reducer-values'

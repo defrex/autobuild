@@ -932,3 +932,114 @@ describe('SqliteBuildStore held event pacing (AUT-394)', () => {
     expect(EVENT_WAIT_POLL_MS).toBe(1000)
   })
 })
+
+test('fresh SQLite handles read only reducer deltas across thousands of events and repair poison', async () => {
+  const root = await freshRoot()
+  const writer = openLocalStore(root)
+  let reader: SqliteBuildStore | undefined
+  try {
+    await writer.createBuild(sampleBuildInput('value-cost'))
+    await writer.ensureRepo('value-cost')
+    for (let index = 0; index < 3000; index++) {
+      await writer.append('value-cost', sampleEventWrite())
+      await writer.appendRepo('value-cost', {
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    }
+    for (const scope of [
+      { kind: 'build' as const, slug: 'value-cost' },
+      { kind: 'repo' as const, repo: 'value-cost' },
+    ])
+      await writer.getReducerValue(scope, {
+        reducer: scope.kind === 'build' ? 'setupStreak' : 'effectiveConfig',
+      })
+    reader = openLocalStore(root)
+    const db = Reflect.get(reader, 'sqlite') as Database
+    const costs = { events: 0, metadata: 0 }
+    db.query = new Proxy(db.query, {
+      apply(target, thisArg, args) {
+        const statement = Reflect.apply(target, thisArg, args)
+        const eventQuery = /SELECT \* FROM (?:repo_)?events\b/i.test(String(args[0]))
+        return new Proxy(statement, {
+          get(target, key) {
+            const method = Reflect.get(target, key)
+            if ((key === 'get' || key === 'all') && typeof method === 'function')
+              return (...inputs: unknown[]) => {
+                const result = Reflect.apply(method, target, inputs)
+                const count =
+                  key === 'all' && Array.isArray(result) ? result.length : result === null ? 0 : 1
+                costs[eventQuery ? 'events' : 'metadata'] += count
+                return result
+              }
+            return typeof method === 'function' ? method.bind(target) : method
+          },
+        })
+      },
+    })
+    for (const scope of [
+      { kind: 'build' as const, slug: 'value-cost' },
+      { kind: 'repo' as const, repo: 'value-cost' },
+    ]) {
+      const request = { reducer: scope.kind === 'build' ? 'setupStreak' : 'effectiveConfig' }
+      costs.events = 0
+      costs.metadata = 0
+      await reader.getReducerValue(scope, request)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThanOrEqual(3)
+      if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+      else
+        await writer.appendRepo(scope.repo, {
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+      costs.events = 0
+      costs.metadata = 0
+      expect((await reader.getReducerValue(scope, request)).cursor).toBe(3001)
+      expect(costs.events).toBe(1)
+      expect(costs.metadata).toBeLessThanOrEqual(4)
+      const prefix = reader.getReducerValue(scope, request)
+      if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
+      else
+        await writer.appendRepo(scope.repo, {
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+      const earlier = await prefix
+      const later = await writer.getReducerValue(scope, request)
+      expect(earlier.cursor).toBeLessThanOrEqual(later.cursor)
+      expect(later.cursor).toBe(3002)
+      expect(await reader.getReducerValue(scope, request)).toEqual(later)
+      const { resolveReducerValue } = await import('../reducer-values')
+      const { key } = resolveReducerValue(scope, request)
+      for (const cursor of [3002, 99999]) {
+        db.query('UPDATE reducer_snapshots SET cursor=?1,state=?2 WHERE reducer=?3').run(
+          cursor,
+          'malformed JSON',
+          key,
+        )
+        expect(await reader.getReducerValue(scope, request)).toEqual(later)
+        costs.events = 0
+        expect(await reader.getReducerValue(scope, request)).toEqual(later)
+        expect(costs.events).toBe(0)
+      }
+    }
+    for (const run of ['parameter-a', 'parameter-b']) {
+      const scope = { kind: 'repo' as const, repo: 'value-cost' }
+      const request = { reducer: 'openTick', args: { run } }
+      await writer.getReducerValue(scope, request)
+      costs.events = 0
+      costs.metadata = 0
+      expect((await reader!.getReducerValue(scope, request)).value).toBe(false)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThanOrEqual(4)
+    }
+  } finally {
+    await reader?.close()
+    await writer.close()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)

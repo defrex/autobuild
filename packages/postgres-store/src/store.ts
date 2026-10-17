@@ -1,3 +1,9 @@
+import {
+  readReducerValue,
+  resolveReducerValue,
+  type ReducerValueRequest,
+  type ReducerValue,
+} from '@defrex/autobuild/store-adapter'
 import { SQL } from 'bun'
 import {
   contentHash,
@@ -1030,6 +1036,84 @@ export class PostgresBuildStore implements BuildStore {
     const code =
       (error as { code?: string; errno?: string }).errno ?? (error as { code?: string }).code
     return code === '42P01'
+  }
+
+  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    // Reject invalid requests before touching storage.
+    resolveReducerValue(scope, request)
+    return readReducerValue(scope, request, {
+      highWater: async () => {
+        const tail = await this.valueTail(scope)
+        if (tail === undefined) throw new Error('unknown reducer scope')
+        return tail
+      },
+      events: async (since, through) => {
+        const key = scope.kind === 'build' ? scope.slug : scope.repo
+        const rows: Row[] =
+          scope.kind === 'build'
+            ? await this.run(
+                (q) =>
+                  q`SELECT * FROM events WHERE build=${key} AND seq>${since} AND seq<=${through} ORDER BY seq`,
+              )
+            : await this.run(
+                (q) =>
+                  q`SELECT * FROM repo_events WHERE repo=${key} AND seq>${since} AND seq<=${through} ORDER BY seq`,
+              )
+        return rows.map((row) => ({
+          ...(scope.kind === 'build' ? { build: key } : { repo: key }),
+          seq: num(row.seq),
+          ts: iso(row.ts),
+          actor: json(row.actor),
+          type: String(row.type),
+          payload: json(row.payload),
+        })) as (AbEvent | RepositoryEvent)[]
+      },
+      put: (key, snapshot) => this.putReducerSnapshot(scope, key, snapshot),
+      read: async (key) => {
+        const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
+        const rows: Row[] = await this.run(
+          (q) =>
+            q`SELECT version, cursor, state, state::text AS raw FROM reducer_snapshots WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key}`,
+        )
+        const row = rows[0]
+        if (!row) return null
+        let state: unknown = null
+        try {
+          state = json(row.state)
+        } catch {
+          /* malformed JSON cache string */
+        }
+        return {
+          snapshot: { version: num(row.version), cursor: num(row.cursor), state },
+          token: String(row.raw),
+        }
+      },
+      repair: async (key, observed, snapshot) => {
+        const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
+        const rows: Row[] = await this.run(
+          (q) =>
+            q`UPDATE reducer_snapshots SET version=${snapshot.version}::integer, cursor=${snapshot.cursor}::bigint, state=${JSON.stringify(snapshot.state)}::jsonb, updated_at=${this.now()}::timestamptz WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key} AND version=${observed.snapshot.version}::integer AND cursor=${observed.snapshot.cursor}::bigint AND state::text=${observed.token}
+          AND (${observed.snapshot.cursor}::bigint <= ${snapshot.cursor}::bigint OR ${observed.snapshot.cursor}::bigint > CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END)
+          AND ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END RETURNING 1`,
+        )
+        return rows.length > 0
+      },
+    })
+  }
+
+  private async valueTail(scope: SnapshotScope): Promise<number | undefined> {
+    const key = scope.kind === 'build' ? scope.slug : scope.repo
+    const rows: Row[] =
+      scope.kind === 'build'
+        ? await this.run(
+            (q) =>
+              q`SELECT (SELECT COALESCE(MAX(seq),0) FROM events WHERE build=${key}) AS tail FROM builds WHERE slug=${key}`,
+          )
+        : await this.run(
+            (q) =>
+              q`SELECT (SELECT COALESCE(MAX(seq),0) FROM repo_events WHERE repo=${key}) AS tail FROM repo_streams WHERE repo=${key}`,
+          )
+    return rows[0] ? num(rows[0].tail) : undefined
   }
 
   async getReducerSnapshot(

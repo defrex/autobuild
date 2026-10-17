@@ -1,3 +1,4 @@
+import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 /**
  * The BuildStore seam (SPEC §7): the durable home of everything a build
  * produces — events, artifacts, transcripts — one logical place whether
@@ -390,6 +391,7 @@ export interface BuildStore {
    * cursor is ahead of the scope's log tail, or when the scope is unknown (no
    * `ensureRepo` side effect, no rejection). A store without snapshot storage
    * answers `null`. */
+  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue>
   getReducerSnapshot(
     scope: SnapshotScope,
     reducer: string,
