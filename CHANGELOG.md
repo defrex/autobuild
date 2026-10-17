@@ -2,10 +2,15 @@
 
 ## Unreleased
 
+## v0.14.0 — 2026-10-17
+
+This release is mostly about performance and efficiency. Reducer values are now served from persisted state, and that is the default read path, so reads no longer have to rebuild state from the full event log. The interactive dashboard reads repository events incrementally instead of re-reading them, and the dispatcher no longer emits idle ticks when nothing has changed, which cuts redundant work and noise.
+
 - [#629](https://github.com/defrex/autobuild/pull/629) — Make persisted reducer values the default read path
 - [#628](https://github.com/defrex/autobuild/pull/628) — Serve reducer values from persisted state
 - [#627](https://github.com/defrex/autobuild/pull/627) — Suppress unchanged idle dispatcher ticks
 - [#626](https://github.com/defrex/autobuild/pull/626) — Read interactive dashboard repository events incrementally
+
 ## v0.13.0 — 2026-10-16
 
 This release separates hosted tickets from build storage, so local builds can now use a hosted ticket service through the `[tickets] url` setting or `ab connect --tickets URL`. Hosted tickets also get readable project-scoped IDs, custom states, attachments stored on the ticket service, revision-checked writes with a guarded editor flow, and comment reading from both the CLI and MCP. Hosted policy now defaults to the states triage, ready, doing and done, but existing tickets keep their names and you can configure the old state names explicitly. On reliability, the dispatcher now makes decisions from each build's pinned pipeline, runners stop relaunching after three executions with no progress, and self-upgrade works with Bun isolated installs. You can also export tickets in a portable format and migrate between ticket sources with a migration that can resume.
