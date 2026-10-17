@@ -1,3 +1,4 @@
+import { readRepositoryFacts } from '../store/reduced-reads'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, RepositoryRecord } from '../store/types'
 import { formatDispatcherIdentity, projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
@@ -8,23 +9,20 @@ export async function readDispatcherLiveness(
   store: BuildStore,
   repo: string,
   now = new Date(),
-  subset?: RepositoryEvent[],
+  _subset?: RepositoryEvent[],
 ) {
   const record = await store.getRepo(repo)
-  let events = record === null ? [] : (subset ?? (await store.getRepoStateEvents(repo)))
-  const bounded = projectDispatcherLiveness(record, events, now)
-  if (
-    record &&
-    ((record.lease &&
-      !events.some(
-        (e) => e.type === 'dispatcher.run-started' && e.payload.run === record.lease!.holder,
-      )) ||
-      (bounded.state !== 'held' &&
-        events.some((e) => e.type === 'dispatcher.run-started') &&
-        !events.some((e) => e.type === 'dispatcher.run-stopped')))
-  ) {
-    events = await store.getRepoEvents(repo)
-  }
+  const facts = record === null ? undefined : (await readRepositoryFacts(store, repo)).value
+  const events = facts
+    ? Object.values(facts.runs).flatMap((run) =>
+        [
+          run.start,
+          ...(run.latestStart?.seq === run.start?.seq ? [] : [run.latestStart]),
+          run.stop,
+          run.tick,
+        ].filter((event): event is RepositoryEvent => event !== undefined),
+      )
+    : []
   return { record, events, dispatcher: projectDispatcherLiveness(record, events, now) }
 }
 
@@ -59,12 +57,9 @@ export class StandbyIdentityResolver {
     this.attempted.add(holder)
     const lookup = (async () => {
       try {
-        this.ingest(await this.store.getRepoStateEvents(this.repo))
-        let complete = false
-        if (!this.starts.has(holder)) {
-          this.ingest(await this.store.getRepoEvents(this.repo, 0))
-          complete = true
-        }
+        const facts = (await readRepositoryFacts(this.store, this.repo)).value
+        this.ingest(Object.values(facts.runs).flatMap((run) => (run.start ? [run.start] : [])))
+        const complete = true
         this.history?.remember([...this.starts.values()], complete)
       } catch {
         // Identity is best effort; the sampled holder id remains sufficient.

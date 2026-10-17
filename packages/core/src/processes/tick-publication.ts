@@ -75,3 +75,36 @@ export function shouldPublishTick(
     (source) => source.requiresRetry && !source.retried && Date.parse(startedAt) >= source.deadline,
   )
 }
+
+export function shouldPublishTickFromFacts(
+  report: TickReport,
+  facts: import('../store/reduced-reads').RepositoryReadFacts,
+  run: string,
+  startedAt: string,
+): boolean {
+  if (
+    Object.entries(report).some(
+      ([key, value]) =>
+        key !== 'queued' && (typeof value === 'number' ? value !== 0 : value.length > 0),
+    )
+  )
+    return true
+  const previous = facts.runs[JSON.stringify(run)]?.completed
+  if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
+    return true
+  if (
+    [
+      previous.payload.blockedDiagnostics ?? [],
+      previous.payload.janitorDiagnostics,
+      previous.payload.ticketDiagnostics,
+      previous.payload.creationDiagnostics ?? [],
+      previous.payload.dependencyDiagnostics,
+    ].some((list) => list.length > 0)
+  )
+    return true
+  if (facts.runs[JSON.stringify(run)]?.tick?.type === 'dispatcher.tick-failed') return true
+  return facts.attention.sources.some(
+    ([, source]) =>
+      source.requiresRetry && !source.retryObserved && Date.parse(startedAt) >= source.deadline,
+  )
+}

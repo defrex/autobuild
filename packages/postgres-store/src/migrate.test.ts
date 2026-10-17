@@ -188,7 +188,7 @@ if (testUrl) {
         await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
           VALUES ('v6-build', 'acme/v6', ${CONTRACT_T0}, ${CONTRACT_T0})`
         await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
-          VALUES ('v6-build', 1, ${CONTRACT_T0}, '"dispatcher"', 'build.created', '{}')`
+          VALUES ('v6-build', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'build.created', '{}')`
 
         await migratePostgres(harness.url)
 

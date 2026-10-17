@@ -337,7 +337,7 @@ async function repositoryReading(store: BuildStore, repo: string) {
     builds[slug] = { facts: await plainFacts(view, slug), state: await view.buildState(slug) }
   }
   return {
-    journal: view.recordedJournal(),
+    journal: (await store.getRepo(repo)) === null ? [] : await store.getRepoStateEvents(repo),
     digests: [...(await view.getRepoBuildDigests(repo)).entries()].sort(([a], [b]) =>
       a.localeCompare(b),
     ),
@@ -360,7 +360,6 @@ export async function assertSnapshotEquivalence(store: BuildStore, repo: string)
     if (canonical(got) !== canonical(want)) {
       throw new Error(`snapshot-restored reading differs from full replay (${round})`)
     }
-    await restoredView.persistSnapshots({ force: true })
   }
   // The operator routes derive from the same view: each response with
   // snapshots present equals the response with every snapshot deleted.

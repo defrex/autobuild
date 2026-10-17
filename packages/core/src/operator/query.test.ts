@@ -265,7 +265,7 @@ describe('operator query wiring', () => {
     await seedFinished(store, 'done-1', 'done')
     const summaries = await listOperatorBuilds({ store, repo: REPO, scope: 'active', now })
     expect(summaries.map((b) => b.slug)).toEqual(['active-1'])
-    expect(store.calls).toEqual(['listBuilds', 'getRepoBuildDigests'])
+    expect(store.calls).toEqual(['listBuilds', 'getRepoBuildDigests', 'listBuilds'])
   })
 
   test('a missing digest entry is treated as a build with work and still lists it', async () => {
@@ -584,7 +584,11 @@ command = "postgres"
         if (typeof value !== 'function') return value
         return (...args: unknown[]) => {
           counts.set(prop, (counts.get(prop) ?? 0) + 1)
-          if (prop === 'getEvents') eventSlugs.push(args[0] as string)
+          if (
+            prop === 'getReducerValue' &&
+            (args[1] as { reducer: string }).reducer === 'buildReadFacts'
+          )
+            eventSlugs.push((args[0] as { slug: string }).slug)
           if (prop === 'getArtifact') artifactSlugs.push(args[0] as string)
           return (value as (...a: unknown[]) => unknown).apply(t, args)
         }
@@ -892,7 +896,7 @@ command = "postgres"
     // (ACs 2–4, AUT-487).
     expect(counting.counts.get('listBuilds')).toBe(1)
     expect(counting.counts.get('getRepo')).toBe(1)
-    expect(counting.counts.get('getRepoStateEvents')).toBe(1)
+    expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
     expect(counting.eventSlugs).toHaveLength(rowBuilds.length)
@@ -987,9 +991,9 @@ command = "postgres"
 
     // Full read budget for one getOperatorBuild call on a done build.
     expect(counting.counts.get('getBuild')).toBe(1)
-    expect(counting.counts.get('getEvents')).toBe(1)
-    expect(counting.counts.get('getRepo')).toBe(1)
-    expect(counting.counts.get('getRepoStateEvents')).toBe(1)
+    expect(counting.counts.get('getEvents') ?? 0).toBe(0)
+    expect(counting.counts.get('getRepo') ?? 0).toBe(0)
+    expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     for (const method of MUTATING_STORE_METHODS) {
       expect(counting.counts.get(method) ?? 0).toBe(0)

@@ -1,4 +1,3 @@
-import { summaryBoundary } from '../kernel/pr-summary'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 /**
  * Last-chance publication settlement at the workspace-release boundary
@@ -12,11 +11,6 @@ import { isRemoteWorkspace } from '../events/workspace-remote'
  */
 import { DISPATCHER } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
-import {
-  latestUncompletedPublicationRequest,
-  publicationLostRecorded,
-  publicationRequestCompleted,
-} from './publication-state'
 import type { BuildStore } from '../store/types'
 
 export interface PublicationLossDeps {
@@ -35,36 +29,56 @@ export interface PublicationLossDeps {
 export async function settlePublicationBeforeRelease(
   deps: PublicationLossDeps,
   slug: string,
-  events: AbEvent[],
+  _events: AbEvent[],
   reason: string,
 ): Promise<AbEvent[]> {
-  const request = latestUncompletedPublicationRequest(events)
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  await settlePublicationFactsBeforeRelease(
+    deps,
+    slug,
+    (await readBuildFacts(deps.store, slug)).value,
+    reason,
+  )
+  // Legacy callers explicitly requested the raw event output.
+  return deps.store.getEvents(slug)
+}
+
+/** Current-state release guard; the returned facts follow every settlement write. */
+export async function settlePublicationFactsBeforeRelease(
+  deps: PublicationLossDeps,
+  slug: string,
+  facts: import('../store/reduced-reads').CurrentBuildFacts,
+  reason: string,
+) {
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const request = facts.publication.latestUncompletedRequest()
   if (request === undefined) {
-    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
     if (
-      workspace?.type === 'workspace.provisioned' &&
-      isRemoteWorkspace(workspace.payload) &&
-      summaryBoundary(events) !== undefined
+      facts.workspace &&
+      isRemoteWorkspace(facts.workspace) &&
+      facts.summaryBoundary !== undefined
     ) {
       try {
         await deps.settlePublication?.(slug)
       } catch {
         /* Summary is best effort. */
       }
-      return deps.store.getEvents(slug)
+      return (await readBuildFacts(deps.store, slug)).value
     }
-    return events
+    return facts
   }
   try {
     await deps.settlePublication?.(slug)
   } catch {
-    // A throw means the request is still uncompleted (or settlement failed);
-    // either way the loss record below is what makes the release safe.
+    /* Record loss before release. */
   }
-  const refreshed = await deps.store.getEvents(slug)
-  if (publicationRequestCompleted(refreshed, request)) return refreshed
-  if (publicationLostRecorded(refreshed, request)) return refreshed
-  const appended = await deps.store.append(slug, {
+  const refreshed = (await readBuildFacts(deps.store, slug)).value
+  if (
+    refreshed.publication.requestCompleted(request) ||
+    refreshed.publication.lostRecorded(request)
+  )
+    return refreshed
+  await deps.store.append(slug, {
     actor: DISPATCHER,
     type: 'publication.lost',
     payload: {
@@ -75,5 +89,5 @@ export async function settlePublicationBeforeRelease(
       reason,
     },
   })
-  return [...refreshed, appended]
+  return (await readBuildFacts(deps.store, slug)).value
 }

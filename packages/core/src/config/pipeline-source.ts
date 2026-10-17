@@ -55,7 +55,8 @@ export interface PipelineSource {
 export interface PipelineSourceInput {
   slug: string
   record: Pick<BuildRecord, 'branch'>
-  events: readonly AbEvent[]
+  events?: readonly AbEvent[]
+  recordedBase?: string
   /** 'origin' reads through the forge; 'checkout' reads through git exec in
    * the dispatcher's checkout (build branches are refs of the shared repo). */
   mode: 'origin' | 'checkout'
@@ -250,7 +251,7 @@ export async function resolvePipelineSource(
         }
       }
     }
-    const baseSha = recordedBaseSha(events)
+    const baseSha = input.recordedBase ?? recordedBaseSha(events ?? [])
     if (baseSha === undefined) {
       onFailure({ kind: 'no-base', detail: 'no recorded base commit (legacy build)' })
       return undefined
@@ -368,7 +369,7 @@ export async function resolvePipelineSource(
       return parsed
     }
   }
-  const baseSha = recordedBaseSha(events)
+  const baseSha = input.recordedBase ?? recordedBaseSha(events ?? [])
   if (baseSha === undefined) {
     onFailure({ kind: 'no-base', detail: 'no recorded base commit (legacy build)' })
     return undefined

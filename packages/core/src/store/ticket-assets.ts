@@ -1,3 +1,4 @@
+import { readPinnedAssets, readBuildFacts } from './reduced-reads'
 /**
  * Ticket assets (SPEC §7.1): named, versioned bundles of files attached to a
  * ticket and kept in its service (hosted) or BuildStore (other sources), keyed by `(repo, ticketId, kind, name)`.
@@ -466,7 +467,7 @@ export function findPinnedRevision(
  * needed, so a finished build still answers. Null when the build never pinned
  * `kind/name` (or the revision). Rejects an unknown build. */
 export async function resolvePinnedAsset(
-  store: Pick<BuildStore, 'getBuild' | 'getEvents' | 'getTicketAsset' | 'getRepoArtifact'>,
+  store: Pick<BuildStore, 'getBuild' | 'getReducerValue' | 'getTicketAsset' | 'getRepoArtifact'>,
   slug: string,
   kind: string,
   name: string,
@@ -475,15 +476,14 @@ export async function resolvePinnedAsset(
   const record = await store.getBuild(slug)
   if (record === null) throw new Error(`unknown build "${slug}"`)
   if (record.ticket === undefined) return null
-  const events = await store.getEvents(slug)
-  const sets = pinnedAssetsReducer.reduce(events).pins
+  const sets = (await readPinnedAssets(store, slug)).value.pins
   const pin =
     rev === undefined
       ? sets.at(-1)?.find((a) => a.kind === kind && a.name === name)
       : sets.flat().find((a) => a.kind === kind && a.name === name && a.revision === rev)
   if (!pin) return null
   if (pin.snapshot) {
-    const created = events.find((event) => event.type === 'build.created')
+    const created = (await readBuildFacts(store, slug)).value.created
     const asset = await readAssetSnapshot(
       store,
       record.repo,

@@ -385,10 +385,10 @@ test('a restarted partial identity cache correlates an older takeover holder and
   await store.releaseRepoLease(repo, 'self')
   await store.claimRepoLease(repo, 'older-owner', 60000)
   expect(await resolver.refresh('self', undefined, clock())).toContain('older-owner; pid 1;')
-  expect([bounded, full]).toEqual([1, 1])
+  expect([bounded, full]).toEqual([0, 0])
   expect(restarted.incompleteIdentities).toBe(false)
   await resolver.refresh('self', undefined, clock())
-  expect([bounded, full]).toEqual([1, 1])
+  expect([bounded, full]).toEqual([0, 0])
 
   // Snapshot puts are monotone: a later journal delta publishes the newly
   // correlated identities and completeness mark at its advanced cursor.
@@ -404,10 +404,10 @@ test('a restarted partial identity cache correlates an older takeover holder and
   })
   warm.ingest(complete.identities)
   expect(await warm.refresh('self', undefined, clock())).toContain('older-owner; pid 1;')
-  expect([bounded, full]).toEqual([1, 1])
+  expect([bounded, full]).toEqual([0, 0])
 })
 
-test('bounded identity correlation keeps the persisted history incomplete', async () => {
+test('persisted identity correlation completes the identity cache without history replay', async () => {
   const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
   const store = new MemoryBuildStore({ clock })
   await store.ensureRepo(repo)
@@ -424,10 +424,10 @@ test('bounded identity correlation keeps the persisted history incomplete', asyn
   })
   resolver.ingest(feed.identities)
   expect(await resolver.refresh('self', undefined, clock())).toContain('new-holder; pid 1;')
-  expect(feed.incompleteIdentities).toBe(true)
+  expect(feed.incompleteIdentities).toBe(false)
   await feed.refresh()
   await feed.save(true)
   const restarted = new DispatchRepositoryFeed(store, repo, clock)
   await restarted.warm()
-  expect(restarted.incompleteIdentities).toBe(true)
+  expect(restarted.incompleteIdentities).toBe(false)
 })

@@ -1,3 +1,4 @@
+import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
@@ -10,7 +11,7 @@ export type InfrastructureCause = EventPayload<'infrastructure.failed'>['cause']
 
 export interface InfrastructureFailureInput {
   slug: string
-  events: readonly AbEvent[]
+  events: readonly AbEvent[] | CurrentBuildFacts
   maxAttempts: number
   provider: string
   workspaceRef: string
@@ -23,7 +24,7 @@ export interface InfrastructureFailureInput {
 }
 
 export interface InfrastructureFailureDependencies {
-  store: Pick<BuildStore, 'append' | 'getEvents'>
+  store: Pick<BuildStore, 'append' | 'getReducerValue'>
   ids: IdSource
 }
 
@@ -104,10 +105,14 @@ export async function recordInfrastructureFailure(
   deps: InfrastructureFailureDependencies,
   input: InfrastructureFailureInput,
 ): Promise<AbEvent[]> {
-  const lastReset = infrastructureFailureResetSeq(input.events)
-  const attempt =
-    input.events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
-      .length + 1
+  const lastReset = Array.isArray(input.events)
+    ? infrastructureFailureResetSeq(input.events)
+    : (input.events as CurrentBuildFacts).infrastructureReset
+  const attempt = Array.isArray(input.events)
+    ? input.events.filter(
+        (event) => event.type === 'infrastructure.failed' && event.seq > lastReset,
+      ).length + 1
+    : (input.events as CurrentBuildFacts).infrastructureCount + 1
   const message = normalizeInfrastructureError(input.error)
   const failure = await deps.store.append(input.slug, {
     actor: DISPATCHER,
@@ -130,15 +135,8 @@ export async function recordInfrastructureFailure(
 
   if (attempt < input.maxAttempts) return appended
 
-  const currentEvents = await deps.store.getEvents(input.slug)
-  if (
-    !currentEvents.some(
-      (event) =>
-        event.seq > lastReset &&
-        event.type === 'escalation.raised' &&
-        event.payload.policyCause === 'infrastructure-failure-limit',
-    )
-  ) {
+  const current = (await readBuildFacts(deps.store, input.slug)).value
+  if (current.infrastructureRaisedSeq <= lastReset) {
     appended.push(
       await deps.store.append(input.slug, {
         actor: DISPATCHER,

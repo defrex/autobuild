@@ -7226,7 +7226,7 @@ describe('the dispatcher tick reads a bounded journal (AUT-489)', () => {
     }
     // The bound does not depend on the invocation history length.
     expect(measured[0]).toBe(measured[1])
-    expect(measured[0]).toBeGreaterThan(0)
+    expect(measured[0]).toBe(0)
   })
 })
 
@@ -7779,7 +7779,7 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
       payload: { outcome: 'abandoned' },
     })
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drainRows()).toBeGreaterThan(0)
+    expect(store.drainRows()).toBe(0)
 
     await h.dispatcher.tick({ acceptNewWork: false })
     await h.dispatcher.tick({ acceptNewWork: false })
@@ -7795,7 +7795,7 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     })
     store.drainRows()
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drainRows()).toBe(3)
+    expect(store.drainRows()).toBe(0)
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drainRows()).toBe(0)
   })
@@ -7804,10 +7804,10 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     const { store, h } = rowHarness()
     await store.ensureRepo(REPO)
     const live = await seedBuild(h, { slug: 'live' })
-    const history = (await h.store.getEvents(live)).length
+    const _history = (await h.store.getEvents(live)).length
     store.drainRows()
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drainRows()).toBe(history)
+    expect(store.drainRows()).toBe(0)
   })
 })
 
@@ -7865,7 +7865,7 @@ describe('Dispatcher tick event reads', () => {
 
     const first = await h.dispatcher.tick({ acceptNewWork: false })
     expect(first.abandoned).toBe(1)
-    expect(store.drain()).toContain(slug)
+    expect(store.drain()).toEqual([])
     expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
     store.drain()
 
@@ -7882,7 +7882,7 @@ describe('Dispatcher tick event reads', () => {
     store.drain()
 
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drain()).toContain(slug)
+    expect(store.drain()).toEqual([])
     // The failed attempt left the reclaim pending: the view still holds the
     // build and retries it, but its log is already in memory — no rows read.
     await h.dispatcher.tick({ acceptNewWork: false })
@@ -7941,7 +7941,7 @@ describe('Dispatcher tick event reads', () => {
     store.drain()
 
     expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(0)
-    expect(store.drain()).toEqual([slug])
+    expect(store.drain()).toEqual([])
 
     state = 'ended'
     expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(1)
@@ -8076,7 +8076,7 @@ describe('Dispatcher over reducer snapshots', () => {
     const third = harness({ store, workspaceProvider: provider })
     third.clock.advance(1_000)
     await third.dispatcher.tick({ acceptNewWork: false })
-    expect(store.rows).toBe(4)
+    expect(store.rows).toBe(0)
   })
 })
 

@@ -137,3 +137,5 @@ export {
 } from './query'
 
 export { ticketStateCreateRequestSchema } from './protocol'
+
+export { readBuildFacts } from '../store/reduced-reads'

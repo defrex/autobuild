@@ -1081,19 +1081,24 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               continue
             }
             const variants =
-              name === 'openTick' || name === 'dispatchStatus'
-                ? [{ run: 'run-a' }, { run: 'run-b' }]
-                : name === 'phaseFailures'
-                  ? [
-                      { phase: 'plan', round: 1 },
-                      { phase: 'implement', round: 2 },
-                    ]
-                  : name === 'dispatchFailureBudget'
+              name === 'terminalGuard'
+                ? [
+                    { phase: 'plan', round: 1, session: 'session-a' },
+                    { phase: 'implement', round: 2, session: 'session-b' },
+                  ]
+                : name === 'openTick' || name === 'dispatchStatus'
+                  ? [{ run: 'run-a' }, { run: 'run-b' }]
+                  : name === 'phaseFailures'
                     ? [
-                        { infrastructureOwnsWorkspace: false },
-                        { infrastructureOwnsWorkspace: true },
+                        { phase: 'plan', round: 1 },
+                        { phase: 'implement', round: 2 },
                       ]
-                    : [{}]
+                    : name === 'dispatchFailureBudget'
+                      ? [
+                          { infrastructureOwnsWorkspace: false },
+                          { infrastructureOwnsWorkspace: true },
+                        ]
+                      : [{}]
             for (const args of variants) {
               const request = { reducer: name, args }
               const resolved = resolveReducerValue(scope, request)

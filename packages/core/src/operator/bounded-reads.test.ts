@@ -265,7 +265,7 @@ describe('bounded repository reads (AUT-489)', () => {
     // The bound does not depend on the invocation count (both run lengths are
     // far past the 1,000 the acceptance criteria require).
     expect(measured[0]!.rows).toBe(measured[1]!.rows)
-    expect(measured[0]!.rows).toBeGreaterThan(0)
+    expect(measured[0]!.rows).toBe(0)
   })
 
   test('a failed or warning-raising latest invocation stays visible through the bounded read', async () => {

@@ -31,6 +31,12 @@ async function fixture() {
   let failRecord = false
   const counted = new Proxy(store, {
     get(target, key) {
+      if (key === 'getReducerValue')
+        return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+          boundedReads++
+          if (failReads) throw new Error('unavailable')
+          return target.getReducerValue(...args)
+        }
       if (key === 'getRepoEvents')
         return async (repo: string, cursor = 0) => {
           if (cursor === 0) fullReads++
@@ -77,26 +83,26 @@ test('standby refresh caches correlation, recomputes age, isolates peers and cle
   const first = await Promise.all([refresh(), refresh()])
   expect(first[0]).toContain('owner; pid 123; host owner-host; started ')
   expect(first[0]).toContain('heartbeat 0ms ago')
-  expect(f.reads()).toEqual({ fullReads: 1, boundedReads: 1 })
+  expect(f.reads()).toEqual({ fullReads: 0, boundedReads: 1 })
   for (let i = 1; i <= 3; i++) {
     f.advance(1000)
     expect(await refresh()).toContain(`heartbeat ${i * 1000}ms ago`)
   }
-  expect(f.reads()).toEqual({ fullReads: 1, boundedReads: 1 })
+  expect(f.reads()).toEqual({ fullReads: 0, boundedReads: 1 })
   await f.store.releaseRepoLease(f.repo, 'owner')
   await f.start('peer', 456)
   await f.start('later') // force the permitted second full lookup
   await f.store.claimRepoLease(f.repo, 'peer', 60000)
   expect(await refresh()).toContain('peer; pid 456; host peer-host;')
-  expect(f.reads().fullReads).toBe(2)
+  expect(f.reads().fullReads).toBe(0)
   await f.store.releaseRepoLease(f.repo, 'peer')
   await f.store.claimRepoLease(f.repo, 'owner', 60000)
   expect(await refresh()).toContain('owner; pid 123;')
-  expect(f.reads().fullReads).toBe(2)
+  expect(f.reads().fullReads).toBe(0)
   await f.store.releaseRepoLease(f.repo, 'owner')
   await f.store.claimRepoLease(f.repo, 'self', 60000)
   expect(await refresh()).toBeUndefined()
-  expect(f.reads().fullReads).toBe(2)
+  expect(f.reads().fullReads).toBe(0)
 })
 
 test('negative lookups stay cached; later deltas fill identity without another replay', async () => {
@@ -127,7 +133,7 @@ test('missing starts permit only one full lookup per holder', async () => {
   await f.store.claimRepoLease(f.repo, 'missing', 60000)
   for (let i = 0; i < 3; i++)
     expect(await f.resolver.refresh('self', 'missing', f.now())).toBe('missing')
-  expect(f.reads()).toEqual({ fullReads: 1, boundedReads: 1 })
+  expect(f.reads()).toEqual({ fullReads: 0, boundedReads: 1 })
 })
 
 test('frontend warm history never correlates; cold history remembers a holder once', async () => {
@@ -157,8 +163,8 @@ test('frontend warm history never correlates; cold history remembers a holder on
   })
   expect(await cold.refresh('self', undefined, f.now())).toContain('pid 123')
   await cold.refresh('self', undefined, f.now())
-  expect([bounded, full]).toEqual([1, 1])
+  expect([bounded, full]).toEqual([0, 0])
   warm.ingest(remembered)
   expect(await warm.refresh('self', undefined, f.now())).toContain('pid 123')
-  expect([bounded, full]).toEqual([1, 1])
+  expect([bounded, full]).toEqual([0, 0])
 })

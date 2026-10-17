@@ -141,3 +141,5 @@ export type {
 } from './reducer-values'
 
 export { assertPublicSnapshotReducer } from './snapshots'
+
+export { readPersistedBuildDigests } from './reduced-reads'

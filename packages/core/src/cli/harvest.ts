@@ -1,3 +1,4 @@
+import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 /** Typed agent/operator surface for repository-scoped harvest workflows. Agent
  * stdout is never interpreted: proposal sets and review verdicts land through
  * this module as validated repository events and versioned artifacts. */
@@ -67,8 +68,8 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-function runForEnv(events: RepositoryEvent[], env: HarvestCliEnv): HarvestRunState {
-  const run = reduceHarvest(events).runs.find((candidate) => candidate.run === env.run)
+function runForEnv(events: RepositoryReadFacts, env: HarvestCliEnv): HarvestRunState {
+  const run = events.harvest.runs.find((candidate) => candidate.run === env.run)
   if (!run) throw new Error(`unknown harvest run "${env.run}" in repo "${env.repo}"`)
   if (run.status !== 'running') {
     throw new Error(
@@ -78,34 +79,44 @@ function runForEnv(events: RepositoryEvent[], env: HarvestCliEnv): HarvestRunSta
   return run
 }
 
-function assertNoSessionTerminal(events: RepositoryEvent[], env: HarvestCliEnv): void {
-  for (const event of events) {
-    if (
-      event.type === 'harvest.proposals.submitted' &&
-      env.phase === 'synthesize' &&
-      event.payload.run === env.run &&
-      event.payload.round === env.round
-    ) {
-      throw new Error(
-        `second harvest terminal rejected: proposals for ${env.run} synthesize@${env.round} already landed at repo seq ${event.seq}`,
-      )
-    }
-    if (
-      event.type === 'harvest.review.verdict' &&
-      env.phase === 'review' &&
-      event.payload.run === env.run &&
-      event.payload.round === env.round
-    ) {
-      throw new Error(
-        `second harvest terminal rejected: verdict for ${env.run} review@${env.round} already landed at repo seq ${event.seq}`,
-      )
-    }
-    if (event.type === 'harvest.session.ended' && event.payload.session === env.session) {
-      throw new Error(
-        `harvest terminal rejected: session "${env.session}" already ended at repo seq ${event.seq}`,
-      )
-    }
-  }
+function assertNoSessionTerminal(events: RepositoryReadFacts, env: HarvestCliEnv): void {
+  const run = events.harvest.runs.find((run) => run.run === env.run)
+  const proposal =
+    env.phase === 'synthesize'
+      ? run?.proposals.find((proposal) => proposal.round === env.round)
+      : undefined
+  const review =
+    env.phase === 'review'
+      ? events.harvestVerdicts[JSON.stringify([env.run, env.round])]?.first
+      : undefined
+  const ended = events.harvestSessionEndings[JSON.stringify(env.session)]
+  const errors = [
+    ...(proposal
+      ? [
+          {
+            seq: proposal.seq,
+            message: `second harvest terminal rejected: proposals for ${env.run} synthesize@${env.round} already landed at repo seq ${proposal.seq}`,
+          },
+        ]
+      : []),
+    ...(review
+      ? [
+          {
+            seq: review.seq,
+            message: `second harvest terminal rejected: verdict for ${env.run} review@${env.round} already landed at repo seq ${review.seq}`,
+          },
+        ]
+      : []),
+    ...(ended
+      ? [
+          {
+            seq: ended,
+            message: `harvest terminal rejected: session "${env.session}" already ended at repo seq ${ended}`,
+          },
+        ]
+      : []),
+  ].sort((a, b) => a.seq - b.seq)
+  if (errors[0]) throw new Error(errors[0].message)
 }
 
 async function readArtifactJson(
@@ -122,7 +133,7 @@ async function readArtifactJson(
 export async function buildHarvestContext(deps: HarvestCliDeps): Promise<HarvestContextManifest> {
   const { store, env, workspacePath } = deps
   // Bounded read (AUT-489): runForEnv reduces harvest facts only.
-  const events = await store.getRepoStateEvents(env.repo)
+  const events = (await readRepositoryFacts(store, env.repo)).value
   const run = runForEnv(events, env)
   const packet = await loadScanPacket(store, env.repo, run.scan)
   const abDir = join(workspacePath, '.ab')
@@ -230,7 +241,7 @@ export async function submitHarvestProposals(
   }
   // Bounded read (AUT-489): runForEnv and assertNoSessionTerminal consume
   // harvest facts only.
-  const events = await store.getRepoStateEvents(env.repo)
+  const events = (await readRepositoryFacts(store, env.repo)).value
   const run = runForEnv(events, env)
   assertNoSessionTerminal(events, env)
 
@@ -322,7 +333,7 @@ export async function submitHarvestVerdict(
   }
   // Bounded read (AUT-489): runForEnv and assertNoSessionTerminal consume
   // harvest facts only.
-  const events = await store.getRepoStateEvents(env.repo)
+  const events = (await readRepositoryFacts(store, env.repo)).value
   const run = runForEnv(events, env)
   assertNoSessionTerminal(events, env)
   if (proposalArtifactForRound(run, env.round) === undefined) {
@@ -602,19 +613,35 @@ function projectHarvestRunStatus(run: HarvestRunState): Omit<HarvestRunStatusVie
 
 export function projectHarvestStatus(
   repo: string,
-  events: RepositoryEvent[],
+  events: RepositoryEvent[] | RepositoryReadFacts,
   newestEvents?: number,
   streams?: readonly StreamRecord[],
 ): HarvestStatusView {
-  const state = reduceHarvest(events)
+  const state = Array.isArray(events) ? reduceHarvest(events) : events.harvest
   const history =
-    newestEvents === undefined ? undefined : events.filter(isHarvestEvent).slice(-newestEvents)
+    newestEvents === undefined || !Array.isArray(events)
+      ? undefined
+      : events.filter(isHarvestEvent).slice(-newestEvents)
   const unresolved = [...parkedHarvestRuns(state), ...unresolvedHarvestAttentionRuns(state)]
   const open = openHarvestRuns(state)
   const included = new Set(
     [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map((run) => run.run),
   )
-  const sessionsByRun = projectHarvestSessions(events, streams)
+  const sessionsByRun = Array.isArray(events)
+    ? projectHarvestSessions(events, streams)
+    : new Map<string, HarvestSessionStatusView[]>()
+  if (!Array.isArray(events))
+    for (const { run, ...session } of events.harvestSessions) {
+      const record = streams?.find(
+        (record) => record.scope.kind === 'repo' && record.label === `session:${session.session}`,
+      )
+      const list = sessionsByRun.get(run) ?? []
+      list.push({
+        ...session,
+        ...(record ? { stream: record.id, streamStatus: record.status } : {}),
+      })
+      sessionsByRun.set(run, list)
+    }
   const runs = state.runs
     .filter((run) => included.has(run.run))
     .map((run) => ({
@@ -802,7 +829,7 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
     async ({ store, repo }) => {
       const record = await store.getRepo(repo)
       // Bounded read (AUT-489): projectHarvestStatus reduces harvest facts only.
-      const events = record === null ? [] : await store.getRepoStateEvents(repo)
+      const events = (await readRepositoryFacts(store, repo)).value
       // Best-effort stream enrichment for the session rows, mirroring the
       // degrade-gracefully pattern of 'ab build status': a store that cannot
       // list streams keeps the payload-derived projection instead of failing.
@@ -814,7 +841,12 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
           streams = undefined
         }
       }
-      const view = projectHarvestStatus(repo, events, opts.events, streams)
+      const view = projectHarvestStatus(repo, events, undefined, streams)
+      if (opts.events !== undefined)
+        view.events =
+          record === null
+            ? []
+            : (await store.getRepoEvents(repo)).filter(isHarvestEvent).slice(-opts.events)
       if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
       else for (const line of renderHarvestStatus(view)) opts.stdout(line)
     },

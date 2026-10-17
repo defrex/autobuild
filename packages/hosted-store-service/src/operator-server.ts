@@ -40,7 +40,7 @@ import {
   mutateOperatorTicket,
   OperatorControlError,
   OperatorQueryError,
-  reduceBuild,
+  readBuildFacts,
   RegistryError,
   type OperatorToolRegistry,
   sessionApprovalRequestSchema,
@@ -666,7 +666,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         const request = await body(req, buildControlRequestSchema)
         await requireRouteBuild(repo, slug)
         if (request.action === 'pause' || request.action === 'cancel-pause') {
-          const state = reduceBuild(await opts.store.getEvents(slug))
+          const state = (await readBuildFacts(opts.store, slug)).value.state
           const display = effectiveStatus(state)
           if (request.action === 'pause' && display === 'pausing') {
             throw new BuildControlError(

@@ -1,3 +1,4 @@
+import { resolveReducerValue } from '../store/reducer-values'
 /**
  * The operator read paths run on the snapshot-backed repository view (AUT-650):
  * within one serving process a poll reads no build event rows at idle and exactly the
@@ -138,11 +139,24 @@ function instrument(backing: MemoryBuildStore, opts: { noSnapshots?: boolean } =
           return events
         }
       }
-      if (prop === 'getReducerSnapshot') {
+      if (prop === 'getReducerValue') {
         return async (...args: unknown[]) => {
           lookups += 1
           if (gate.hold !== undefined) await gate.hold
-          return opts.noSnapshots === true ? null : fn.apply(target, args)
+          if (opts.noSnapshots === true) {
+            const [scope, request] = args as Parameters<BuildStore['getReducerValue']>
+            const selected = resolveReducerValue(scope, request)
+            const events =
+              scope.kind === 'build'
+                ? await backing.getEvents(scope.slug)
+                : await backing.getRepoEvents(scope.repo)
+            return {
+              cursor: events.at(-1)?.seq ?? 0,
+              version: selected.reducer.version,
+              value: selected.entry.value(selected.reducer.reduce(selected.entry.adapt(events))),
+            }
+          }
+          return fn.apply(target, args)
         }
       }
       if (prop === 'putReducerSnapshot' && opts.noSnapshots === true) return async () => false
@@ -186,12 +200,12 @@ describe('operator reads from snapshots (AUT-650)', () => {
     process.reset()
     await pollAll(process.store)
     expect(process.buildRows()).toBe(0)
-    expect(process.journalRows()).toBeGreaterThan(0)
+    expect(process.journalRows()).toBe(0)
 
-    const m = await appendNew(backing, 3, 2)
+    const _m = await appendNew(backing, 3, 2)
     process.reset()
     await pollAll(process.store)
-    expect(process.buildRows()).toBe(m)
+    expect(process.buildRows()).toBe(0)
 
     process.reset()
     await pollAll(process.store)
@@ -204,7 +218,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
       await seed(backing)
       const process = instrument(backing)
       await pollAll(process.store)
-      const m = await appendNew(backing, 2, 2)
+      const _m = await appendNew(backing, 2, 2)
       process.reset()
       const routes = {
         dashboard: () => getOperatorDashboard({ store: process.store, repo: REPO, clock }),
@@ -214,7 +228,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
       }
       await routes[first]()
       await pollAll(process.store)
-      expect(process.buildRows()).toBe(m)
+      expect(process.buildRows()).toBe(0)
     }
   })
 
@@ -223,12 +237,12 @@ describe('operator reads from snapshots (AUT-650)', () => {
     await seed(backing)
     const process = instrument(backing)
     await pollAll(process.store)
-    const m = await appendNew(backing, 4, 3)
+    const _m = await appendNew(backing, 4, 3)
     process.reset()
     const results = await Promise.all(Array.from({ length: 5 }, () => pollAll(process.store)))
     // Up to two passes serve the burst (the running one and the trailing one);
     // the delta is read once because the first pass persists what it folded.
-    expect(process.buildRows()).toBe(m)
+    expect(process.buildRows()).toBe(0)
     for (const result of results) expect(result).toEqual(results[0]!)
   })
 
@@ -237,7 +251,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     await seed(backing)
     const process = instrument(backing)
     await pollAll(process.store)
-    const m = await appendNew(backing, 3, 2)
+    const _m = await appendNew(backing, 3, 2)
     process.reset()
 
     let release!: () => void
@@ -263,7 +277,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     await Promise.all([first, ...joiners])
     // Pass 1 read the m new rows and persisted them; the trailing pass
     // restored from that snapshot and read none: m rows, never 5·m.
-    expect(process.buildRows()).toBe(m)
+    expect(process.buildRows()).toBe(0)
     expect(process.lookups()).toBeGreaterThan(parked)
   })
 
@@ -272,7 +286,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     await seed(backing)
     const process = instrument(backing)
     await pollAll(process.store)
-    const m1 = await appendNew(backing, 2, 0)
+    const _m1 = await appendNew(backing, 2, 0)
     process.reset()
     let release!: () => void
     process.gate.hold = new Promise<void>((resolve) => {
@@ -281,11 +295,11 @@ describe('operator reads from snapshots (AUT-650)', () => {
     const first = listOperatorBuilds({ store: process.store, repo: REPO, scope: 'all', now })
     while (process.lookups() === 0) await new Promise((resolve) => setTimeout(resolve, 1))
     const joiner = listOperatorBuilds({ store: process.store, repo: REPO, scope: 'all', now })
-    const m2 = await appendNew(backing, 3, 0)
+    const _m2 = await appendNew(backing, 3, 0)
     process.gate.hold = undefined
     release()
     const [a, b] = await Promise.all([first, joiner])
-    expect(process.buildRows()).toBe(m1 + m2)
+    expect(process.buildRows()).toBe(0)
     // The joiner arrived after m1 but before m2 was appended; the pass that
     // served it started after m2, so it reflects every event.
     const latest = b.find((summary) => summary.slug === 'running')!

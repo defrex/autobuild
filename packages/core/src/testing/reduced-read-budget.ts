@@ -1,0 +1,257 @@
+import { Dispatcher } from '../processes/dispatcher'
+import { FakeTicketSource } from '../ports/tickets/fake'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { FakeForge } from '../ports/forge/fake'
+import { sequentialIds } from '../ids'
+import { parseConfig } from '../config/load'
+import {
+  getOperatorDashboard,
+  listOperatorBuilds,
+  getOperatorBuild,
+  getRepositoryStatus,
+} from '../operator/query'
+import { buildRegistry } from '../operator/registry'
+import { expect } from 'bun:test'
+import type { BuildStore } from '../store/types'
+import { KERNEL, DISPATCHER, humanActor } from '../events/envelope'
+import {
+  readBuildFacts,
+  readBuildStreamSeed,
+  readRepositoryFacts,
+  readRepositoryAttention,
+  readBuildDigests,
+} from '../store/reduced-reads'
+import { RepoViewStore } from '../processes/repo-view'
+import { abWatch, decodeCursor } from '../cli/watch'
+import { abWait } from '../cli/wait'
+import type { Exec } from '../ports/workspace/git-worktree'
+
+export interface ReducedReadCosts {
+  events: number
+  metadata: number
+}
+const repo = '/reduced-read-budget'
+const slug = 'reduced-budget'
+const exec: Exec = async (args) =>
+  args[1] === 'remote'
+    ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+    : { stdout: `${repo}/.git\n${repo}/.git\n${repo}\n`, stderr: '', exitCode: 0 }
+
+/** Shared actual-consumer scenario. Costs must instrument SQL statement results,
+ * including private reducer storage, rather than just public getEvents calls. */
+export async function reducedReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+  storeRef?: string
+}) {
+  const { store, costs } = opts
+  await store.ensureRepo(repo)
+  const config = parseConfig(
+    '[tickets]\nsource="file"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const { verify: _verify, finalize: _finalize, ...root } = config
+  const configArtifact = await store.putRepoArtifact(repo, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'budget-run',
+      pid: 1,
+      roleWarnings: [],
+      effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+    },
+  })
+  await store.createBuild({ slug, repo })
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'budget', host: 'host' },
+  })
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 7, url: 'https://example.test/7', headSha: 'abc' } },
+  })
+  await store.append(slug, {
+    actor: humanActor('human'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  const reset = () => {
+    costs.events = 0
+    costs.metadata = 0
+  }
+  for (const length of [32, 256]) {
+    for (let i = 0; i < length; i++) {
+      await store.append(slug, {
+        actor: humanActor('human'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await store.appendRepo(repo, {
+        actor: humanActor('human'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    }
+    // Warm persisted values independently of any consumer instance.
+    await readBuildStreamSeed(store, slug)
+    await readBuildFacts(store, slug)
+    await readRepositoryFacts(store, repo)
+    await readBuildDigests(store, repo)
+    await readRepositoryAttention(store, repo)
+    const handle = await opts.fresh()
+    const cold = new Proxy(handle, {
+      get(target, key) {
+        if (key === 'close') return async () => {}
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    reset()
+    const view = new RepoViewStore(cold, { repo })
+    await view.refresh()
+    expect((await view.buildFacts(slug)).state.pr?.number).toBe(7)
+    expect((await view.buildState(slug)).status).toBe('running')
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(100)
+
+    const dispatcher = () =>
+      new Dispatcher({
+        store: cold,
+        repo,
+        config,
+        tickets: new FakeTicketSource([]),
+        workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
+        forge: new FakeForge(),
+        ids: sequentialIds(),
+        clock: () => new Date(1000),
+        exec,
+        launchRunner: async () => 'scheduled',
+      })
+    await dispatcher().tick({ acceptNewWork: false })
+    await getOperatorDashboard({ store: cold, repo, clock: () => new Date(1000) })
+    reset()
+    await dispatcher().tick({ acceptNewWork: false })
+    await getOperatorDashboard({ store: cold, repo, clock: () => new Date(1000) })
+    await listOperatorBuilds({ store: cold, repo, scope: 'all', now: new Date(1000) })
+    await getOperatorBuild({ store: cold, repo, slug, now: new Date(1000) })
+    await getRepositoryStatus(cold, repo, new Date(1000))
+    await buildRegistry({ store: cold, clock: () => new Date(1000) }).call('builds.get', {
+      repo,
+      slug,
+    })
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(400)
+
+    // A fresh watch must suppress historical PR eligibility despite armed
+    // consent at registration, including its first event-bearing poll.
+    reset()
+    let ticks = 0
+    let time = 0
+    const out: string[] = []
+    await abWatch({
+      targetRepo: repo,
+      env: {},
+      exec,
+      storeRef: opts.storeRef ?? '/budget',
+      openStore: () => cold,
+      slugs: [slug],
+      json: true,
+      timeout: '2',
+      now: () => new Date(time),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+      delay: async () => {
+        time += 1000
+        if (++ticks === 1)
+          await store.append(slug, {
+            actor: humanActor('human'),
+            type: 'build.auto-merge-cancelled',
+            payload: {},
+          })
+      },
+    })
+    expect(out).toHaveLength(1)
+    const cursor = JSON.parse(out[0]!).cursor
+    expect(
+      decodeCursor(cursor, { store: opts.storeRef ?? '/budget', repo }).deliveredAttention,
+    ).toEqual([JSON.stringify([slug, 7])])
+    expect(costs.events).toBeLessThanOrEqual(4)
+    expect(costs.metadata).toBeLessThan(100)
+
+    await store.append(slug, {
+      actor: humanActor('human'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await readBuildStreamSeed(store, slug)
+    reset()
+    let discoveryTick = 0
+    time = 0
+    const discovered = new Proxy(cold, {
+      get(target, key) {
+        if (key === 'listBuilds')
+          return async () => (discoveryTick === 0 ? [] : target.listBuilds())
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const discoveryOut: string[] = []
+    await abWatch({
+      targetRepo: repo,
+      env: {},
+      exec,
+      storeRef: opts.storeRef ?? '/budget',
+      openStore: () => discovered,
+      json: true,
+      timeout: '3',
+      now: () => new Date(time),
+      stdout: (line) => discoveryOut.push(line),
+      stderr: () => {},
+      delay: async () => {
+        time += 1000
+        if (++discoveryTick === 2)
+          await store.append(slug, {
+            actor: humanActor('human'),
+            type: 'build.auto-merge-cancelled',
+            payload: {},
+          })
+      },
+    })
+    expect(discoveryOut).toHaveLength(1)
+    expect(costs.events).toBeLessThanOrEqual(6)
+    expect(costs.metadata).toBeLessThan(180)
+
+    // Wait applies its current-attention policy instead of watch suppression.
+    await readBuildStreamSeed(store, slug)
+    reset()
+    const waitOut: string[] = []
+    const result = await abWait({
+      targetRepo: repo,
+      env: {},
+      exec,
+      storeRef: opts.storeRef ?? '/budget',
+      openStore: () => cold,
+      slugs: [slug],
+      forValues: ['attention'],
+      json: true,
+      now: () => new Date(time),
+      stdout: (line) => waitOut.push(line),
+      stderr: () => {},
+    })
+    expect(result).toBe(0)
+    expect(JSON.parse(waitOut[0]!).observation.pr.number).toBe(7)
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(40)
+    await store.append(slug, {
+      actor: humanActor('human'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+  }
+}

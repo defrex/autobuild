@@ -1,3 +1,7 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
+import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
+import { historicalBuildState, historicalRepositoryAttention } from './historical-build-state'
 import { readDispatcherLiveness } from './dispatcher-liveness'
 import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 import type { RepositoryRecord } from '../store/types'
@@ -44,7 +48,7 @@ import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import {
-  mergeDecision,
+  mergeDecisionFromFacts,
   mergeIdentity,
   RepositoryAttention,
   repositoryNeedsAttention,
@@ -52,7 +56,7 @@ import {
   type PersistenceObservation,
 } from './attention'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
-import { reduceBuild } from '../kernel/reducer'
+import { buildReducer } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { PhaseSessionError } from '../store/phase-session'
@@ -516,7 +520,7 @@ interface BuildStream {
   slug: string
   named: boolean
   /** The full prefix, appended in seq order — what `reduceBuild` runs over. */
-  events: AbEvent[]
+  seed: BuildStreamSeed
   lastSeq: number
   status: BuildStatus
 }
@@ -597,11 +601,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         ? decodeCursor(opts.since, { store: storeRef, repo })
         : undefined
       const deliveredAttention = new Set(resumedCursor?.deliveredAttention ?? [])
-      const repositoryAttention = new RepositoryAttention()
+      let repositoryAttention = new RepositoryAttention()
       let attentionInitialized = false
       let livenessEvents: RepositoryEvent[] = []
-      let livenessSeq = 0
-      let livenessInitialized = false
       const observedOwners = new Map<string, RepositoryRecord>()
       const streams = new Map<string, Stream>()
       // Every stream's position — matching or not, delivered or baselined —
@@ -674,29 +676,14 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           if (stop) return
         }
       }
-      const baselineMerge = (slug: string, events: AbEvent[]): void => {
-        // Old cursors already consumed finalize attention. Infer every eligible
-        // historical prefix, even if consent was subsequently armed again.
-        const prefix: AbEvent[] = []
-        for (const event of events) {
-          prefix.push(event)
-          const observation = mergeDecision(prefix, now())
-          if (observation) deliveredAttention.add(mergeIdentity(slug, observation.pr.number))
-        }
+      const baselineMerge = (slug: string, seed: BuildStreamSeed): void => {
+        for (const pr of seed.mergeAttentionPrs) deliveredAttention.add(mergeIdentity(slug, pr))
       }
 
       const checkLiveness = async (): Promise<void> => {
         if (!followRepository || stop) return
-        if (!livenessInitialized) {
-          const input = await readDispatcherLiveness(store, repo, now())
-          livenessEvents = input.events
-          livenessSeq = input.events.at(-1)?.seq ?? 0
-          livenessInitialized = true
-        }
         if ((await store.getRepo(repo)) === null) return
-        const fresh = await store.getRepoEvents(repo, livenessSeq)
-        livenessEvents.push(...fresh)
-        livenessSeq = fresh.at(-1)?.seq ?? livenessSeq
+        livenessEvents = (await readDispatcherLiveness(store, repo, now())).events
         // Sample metadata after the journal. Recheck both immediately before
         // reporting: a failed read is infrastructure, never evidence of death.
         const record = await store.getRepo(repo)
@@ -709,9 +696,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             Date.parse(owner.lease.expiresAt) > now().getTime()
           )
             continue
-          const delta = await store.getRepoEvents(repo, livenessSeq)
-          livenessEvents.push(...delta)
-          livenessSeq = delta.at(-1)?.seq ?? livenessSeq
+          livenessEvents = (await readDispatcherLiveness(store, repo, now())).events
           const current = await store.getRepo(repo)
           if (current?.lease?.holder === id) {
             observedOwners.set(id, current)
@@ -758,14 +743,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * stream's just-extended array; the resume path replays the backlog
        * into a scratch prefix so a resumed record never leaks state from
        * events that landed after it. */
-      const processBuildEvent = (stream: BuildStream, event: AbEvent, prefix: AbEvent[]): void => {
+      const processBuildEvent = (stream: BuildStream, event: AbEvent): void => {
         if (stop) return
         stream.lastSeq = event.seq
         positions[stream.slug] = event.seq
-        const state = reduceBuild(prefix)
+        stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
+        const state = buildReducer.finish(stream.seed.build)
+        stream.status = state.status
         if (matchesBuildFilter(event.type, filters)) emit(event, state)
         if (!filters.length && !stop) {
-          const observation = mergeDecision(prefix, now(), state)
+          const observation = mergeDecisionFromFacts(state, stream.seed.deferral, now())
           if (observation)
             emitObservation(
               observation,
@@ -799,44 +786,28 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         if (streams.has(slug)) return true
         const record = await store.getBuild(slug)
         if (record === null) return false
-        // AUT-545: this full-log read is deliberate, accepted growth — the
-        // retained prefix is consumed at full replay depth by every later
-        // reduction (approvals, findings, answered escalations, PR facts,
-        // observations), so bounding it would need reducer-partition store
-        // machinery out of AUT-545's scope. Required for `--since` replay and
-        // the baselined stream prefix. Mirrors cli/wait.ts trackBuild.
-        const events = await store.getEvents(slug)
+        const current = await readBuildStreamSeed(store, slug)
+        const seed =
+          resumeSeq === undefined
+            ? current.value
+            : await historicalBuildState(store, slug, resumeSeq, current)
         const stream: BuildStream = {
           kind: 'build',
           slug,
           named: slugs.includes(slug),
-          events,
-          lastSeq: events.at(-1)?.seq ?? 0,
-          status: reduceBuild(events).status,
+          seed,
+          lastSeq: resumeSeq ?? current.cursor,
+          status: buildReducer.finish(current.value.build).status,
         }
         streams.set(slug, stream)
         positions[slug] = stream.lastSeq
-        if (resumeSeq === undefined) {
-          baselineMerge(slug, events)
-          return true
-        }
-        positions[slug] = resumeSeq
-        if (resumedCursor?.deliveredAttention === undefined)
-          baselineMerge(
-            slug,
-            events.filter((event) => event.seq <= resumeSeq),
-          )
-        stream.lastSeq = resumeSeq
-        // Replay the backlog into a scratch prefix: each record's state is
-        // the reduction of the prefix ENDING at that event, never the
-        // reduction of the full loaded prefix, which would leak state from
-        // events that landed after the one being recorded.
-        const replay: AbEvent[] = events.filter((event) => event.seq <= resumeSeq)
-        for (const event of events) {
-          if (event.seq <= resumeSeq) continue
-          replay.push(event)
-          processBuildEvent(stream, event, replay)
-          if (stop) break
+        if (resumeSeq === undefined || resumedCursor?.deliveredAttention === undefined)
+          baselineMerge(slug, seed)
+        if (resumeSeq !== undefined) {
+          for (const event of await store.getEvents(slug, resumeSeq)) {
+            processBuildEvent(stream, event)
+            if (stop) break
+          }
         }
         return true
       }
@@ -856,26 +827,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * the throw stay tracked, so the retry neither duplicates nor skips.
        */
       const discoverBuilds = async (): Promise<void> => {
-        // AUT-545: the terminal filter is the AUT-487 digest, not a full-log read —
-        // one flat batch read replaces a full getEvents per candidate build, per
-        // discovery pass; `terminal` is reduceBuild's exact terminal rule
-        // (store/digest's reduceBuildDigest, pinned by contract). The per-build
-        // full read below remains deliberate for builds the digest cannot retire:
-        // its retained prefix is consumed at full replay depth by every later
-        // reduction (approvals, findings, answered escalations, PR facts,
-        // observations), so bounding it would need reducer-partition store
-        // machinery out of AUT-545's scope. The reduceBuild re-check stays: it is
-        // the legacy-record fallback (a record whose `repo` predates origin
-        // normalization is in `mine` via `repoOrigin` but absent from the digest
-        // map, which keys on `record.repo`) and it keeps this filter unable to
-        // diverge from reduceBuild. Mirrors cli/wait.ts discoverBuilds.
-        const digests = await store.getRepoBuildDigests(repo)
+        const digests = await readBuildDigests(store, repo)
         for (const record of (await store.listBuilds()).filter(mine)) {
           if (streams.has(record.slug) || retired.has(record.slug)) continue
           const digest = digests.get(record.slug)
           if (digest !== undefined && digest.terminal !== undefined) continue
-          const events = await store.getEvents(record.slug)
-          const status = reduceBuild(events).status
+          const current = await readBuildStreamSeed(store, record.slug)
+          const status = buildReducer.finish(current.value.build).status
           if (!NONTERMINAL_STATUSES.includes(status)) {
             // Terminal is permanent (reduceBuild never clears it): a legacy
             // record the digest cannot retire is read once, not every pass.
@@ -886,12 +844,12 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             kind: 'build',
             slug: record.slug,
             named: false,
-            events,
-            lastSeq: events.at(-1)?.seq ?? 0,
+            seed: current.value,
+            lastSeq: current.cursor,
             status,
           }
           streams.set(record.slug, stream)
-          baselineMerge(record.slug, events)
+          baselineMerge(record.slug, current.value)
           positions[record.slug] = stream.lastSeq
         }
       }
@@ -903,18 +861,21 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         positions[REPO_STREAM_KEY] = stream.lastSeq
         try {
           if ((await store.getRepo(repo)) !== null) {
-            // Full bootstrap is intentional: degradation can predate run anchors.
-            const history = await store.getRepoEvents(repo)
-            const baseline = resumeSeq ?? history.at(-1)?.seq ?? 0
-            for (const event of history) {
-              if (event.seq <= baseline) repositoryAttention.fold(event)
-            }
+            const current = await readRepositoryAttention(store, repo)
+            const baseline = resumeSeq ?? current.cursor
+            const seed =
+              resumeSeq === undefined
+                ? current.value
+                : await historicalRepositoryAttention(store, repo, resumeSeq, current)
+            repositoryAttention = new RepositoryAttention(seed)
             attentionInitialized = true
             stream.lastSeq = baseline
             positions[REPO_STREAM_KEY] = baseline
-            for (const event of history) {
-              if (event.seq <= baseline || stop) continue
-              processRepositoryEvent(stream, event)
+            if (resumeSeq !== undefined) {
+              for (const event of await store.getRepoEvents(repo, baseline)) {
+                if (stop) break
+                processRepositoryEvent(stream, event)
+              }
             }
             if (!stop) checkPersistence()
           } else attentionInitialized = true
@@ -931,12 +892,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
           if (stop) break
-          stream.events.push(event)
-          processBuildEvent(stream, event, stream.events)
+          processBuildEvent(stream, event)
           if (stop) break
         }
         if (fresh.length > 0 && !stop) {
-          stream.status = reduceBuild(stream.events).status
+          stream.status = buildReducer.finish(stream.seed.build).status
         }
         return true
       }
@@ -951,11 +911,14 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         if ((await store.getRepo(repo)) === null) return true
         if (!attentionInitialized) {
           repositoryInitialization ??= (async () => {
-            const history = await store.getRepoEvents(repo)
-            const baseline = sinceStreams[REPO_STREAM_KEY] ?? history.at(-1)?.seq ?? 0
-            for (const event of history) {
-              if (event.seq <= baseline) repositoryAttention.fold(event)
-            }
+            const current = await readRepositoryAttention(store, repo)
+            const resumeSeq = sinceStreams[REPO_STREAM_KEY]
+            const baseline = resumeSeq ?? current.cursor
+            const seed =
+              resumeSeq === undefined
+                ? current.value
+                : await historicalRepositoryAttention(store, repo, resumeSeq, current)
+            repositoryAttention = new RepositoryAttention(seed)
             stream.lastSeq = baseline
             positions[REPO_STREAM_KEY] = baseline
             attentionInitialized = true

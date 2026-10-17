@@ -175,7 +175,7 @@ test('hosted snapshots validate canonical assets for aliases and retain historic
       await resolvePinnedAsset(
         {
           getBuild: async () => ({ ...record, ticket: { source: 'hosted', id: 'ENG-1' } }),
-          getEvents: destination.getEvents.bind(destination),
+          getReducerValue: destination.getReducerValue.bind(destination),
           getTicketAsset: destination.getTicketAsset.bind(destination),
           getRepoArtifact: destination.getRepoArtifact.bind(destination),
         },

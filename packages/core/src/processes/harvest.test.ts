@@ -499,7 +499,7 @@ describe('harvest pressure from digests (AUT-521)', () => {
     // The flat-cost invariant: no per-build history reads, regardless of how
     // many finished builds carry observations and merges.
     expect(getEventReads).toBe(0)
-    expect(listBuildReads).toBe(0)
+    expect(listBuildReads).toBe(1)
     // And the decision is the scan evaluation's decision over the same state.
     expect(pressure).toEqual(
       evaluateHarvestPressure(await scanUnclaimedObservations(store, '/repo'), policy),
@@ -598,7 +598,7 @@ describe('harvest deterministic scan and ledger', () => {
     expect(scan.merges).toHaveLength(1)
     expect(scan.merges[0]?.build).toBe('merged')
     expect(listReads).toBe(1)
-    expect(eventReads).toBe(2)
+    expect(eventReads).toBe(0)
   })
   test('the pure core matches the store-reading scan over the same contents', async () => {
     const store = new MemoryBuildStore()

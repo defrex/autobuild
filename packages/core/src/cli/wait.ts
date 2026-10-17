@@ -1,3 +1,8 @@
+import { readBuildDigests } from '../store/reduced-reads'
+import { readBuildStreamSeed } from '../store/reduced-reads'
+import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
+import { historicalBuildState } from './historical-build-state'
+import { currentDeferralObservationReducer, type DeferralLedger } from '../kernel/auto-merge'
 /**
  * `ab wait` — the blocking sibling of `ab watch` (§8.2, §7.2). It follows the
  * event logs of one, several, or all active builds in the repository and
@@ -31,11 +36,11 @@
  * Read-only: it appends no event, claims or renews no lease, and creates no
  * build or repository record. Output carries no ANSI, ever, in either form.
  */
-import { buildNeedsAttention, mergeDecision, mergeIdentity } from './attention'
+import { mergeDecisionFromFacts, mergeIdentity } from './attention'
 import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
-import { reduceBuild } from '../kernel/reducer'
+import { buildReducer, reduceBuild } from '../kernel/reducer'
 import { isPhase, type BuildStatus, type Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import {
@@ -156,8 +161,25 @@ export function parseConditions(
   return { conditions, globs }
 }
 
+function attentionFrom(
+  input: AbEvent[] | { state: BuildState; deferral: DeferralLedger },
+  state?: BuildState,
+) {
+  return Array.isArray(input)
+    ? mergeDecisionFromFacts(
+        state ?? reduceBuild(input),
+        currentDeferralObservationReducer.reduce(input),
+        new Date(0),
+      )
+    : mergeDecisionFromFacts(input.state, input.deferral, new Date(0))
+}
+
 /** Does one condition body hold over a reduction? Attention includes current escalation and merge state. */
-function stateSatisfies(cond: ConditionBody, state: BuildState, events: AbEvent[] = []): boolean {
+function stateSatisfies(
+  cond: ConditionBody,
+  state: BuildState,
+  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
+): boolean {
   switch (cond.kind) {
     case 'status':
       return state.status === cond.status
@@ -168,7 +190,7 @@ function stateSatisfies(cond: ConditionBody, state: BuildState, events: AbEvent[
     case 'phase':
       return (state.phase ?? null) === cond.phase
     case 'attention':
-      return buildNeedsAttention(events, state)
+      return (state.openEscalations?.length ?? 0) > 0 || attentionFrom(events, state) !== null
   }
 }
 
@@ -180,7 +202,7 @@ function stateSatisfies(cond: ConditionBody, state: BuildState, events: AbEvent[
 export function matchState(
   conditions: readonly WaitCondition[],
   state: BuildState,
-  events: AbEvent[] = [],
+  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
     if (stateSatisfies(cond, state, events)) return text
@@ -195,13 +217,12 @@ export function matchEvent(
   event: Pick<AbEvent, 'type'>,
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
-  events: AbEvent[] = [],
+  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) ||
-        (events.length > 0 && mergeDecision(events, new Date(0)) !== null))
+      (isAttentionEvent(event.type) || attentionFrom(events) !== null)
     )
       return text
   }
@@ -222,14 +243,13 @@ function matchFirst(
   state: BuildState,
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
-  events: AbEvent[] = [],
+  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
     if (stateSatisfies(cond, state, events)) return text
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) ||
-        (events.length > 0 && mergeDecision(events, new Date(0)) !== null))
+      (isAttentionEvent(event.type) || attentionFrom(events) !== null)
     )
       return text
   }
@@ -276,7 +296,7 @@ interface WaitStream {
   slug: string
   named: boolean
   /** The full prefix, appended in seq order — what `reduceBuild` runs over. */
-  events: AbEvent[]
+  seed: BuildStreamSeed
   lastSeq: number
   status: BuildStatus
 }
@@ -357,11 +377,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const finish = (condition: string | null, event: AbEvent, state: BuildState): number => {
         const observation =
           condition === 'attention' && event.type !== 'escalation.raised'
-            ? mergeDecision(
-                streams.get(event.build)?.events.filter((e) => e.seq <= event.seq) ?? [],
-                now(),
-                state,
-              )
+            ? mergeDecisionFromFacts(state, streams.get(event.build)!.seed.deferral, now())
             : null
         if (observation) deliveredAttention.add(mergeIdentity(event.build, observation.pr.number))
         const record = {
@@ -394,22 +410,30 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         if (satisfied === null) satisfied = { event, state, condition }
       }
 
-      const eventConditions = (event: AbEvent, prefix: AbEvent[]): readonly WaitCondition[] => {
+      const eventConditions = (event: AbEvent, seed: BuildStreamSeed): readonly WaitCondition[] => {
         if (event.type === 'escalation.raised') return conditions
-        const observation = mergeDecision(prefix, now())
+        const observation = mergeDecisionFromFacts(
+          buildReducer.finish(seed.build),
+          seed.deferral,
+          now(),
+        )
         return observation &&
           !deliveredAttention.has(mergeIdentity(event.build, observation.pr.number))
           ? conditions
           : conditions.filter(({ cond }) => cond.kind !== 'attention')
       }
 
-      const registerStream = (slug: string, events: AbEvent[], named: boolean): WaitStream => {
-        const state = reduceBuild(events)
+      const registerStream = (
+        slug: string,
+        current: { value: BuildStreamSeed; cursor: number },
+        named: boolean,
+      ): WaitStream => {
+        const state = buildReducer.finish(current.value.build)
         const stream: WaitStream = {
           slug,
           named,
-          events,
-          lastSeq: events.at(-1)?.seq ?? 0,
+          seed: current.value,
+          lastSeq: current.cursor,
           status: state.status,
         }
         streams.set(slug, stream)
@@ -421,10 +445,10 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * already satisfying when it becomes targeted ends the wait with its
        * latest event. Not cursor-relative — `--since` does not suppress it. */
       const checkRegistrationState = (stream: WaitStream): void => {
-        const state = reduceBuild(stream.events)
-        const condition = matchState(conditions, state, stream.events)
-        if (condition !== null && stream.events.length > 0) {
-          match(stream.events.at(-1)!, state, condition)
+        const state = buildReducer.finish(stream.seed.build)
+        const condition = matchState(conditions, state, { state, deferral: stream.seed.deferral })
+        if (condition !== null && state.lastEvent !== undefined) {
+          match(state.lastEvent!, state, condition)
         }
       }
       /**
@@ -438,42 +462,43 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         if (streams.has(slug)) return
         const record = await store.getBuild(slug)
         if (record === null) return
-        // AUT-545: this full-log read is deliberate, accepted growth — the
-        // retained prefix is consumed at full replay depth by every later
-        // reduction (approvals, findings, answered escalations, PR facts,
-        // observations), so bounding it would need reducer-partition store
-        // machinery out of AUT-545's scope. Required for `--since` replay and
-        // the registration state check over the full reduction.
-        const events = await store.getEvents(slug)
-        const stream = registerStream(slug, events, slugs.includes(slug))
+        const current = await readBuildStreamSeed(store, slug)
+        const stream = registerStream(slug, current, slugs.includes(slug))
         if (resumeSeq !== undefined) {
+          stream.seed = await historicalBuildState(store, slug, resumeSeq, current)
           stream.lastSeq = resumeSeq
           positions[slug] = resumeSeq
-          // Replay the backlog into a scratch prefix: each evaluated state is
-          // the reduction of the prefix ENDING at that event, never the
-          // reduction of the full loaded prefix.
-          const replay: AbEvent[] = events.filter((event) => event.seq <= resumeSeq)
           if (resumedCursor?.deliveredAttention === undefined) {
-            const historical: AbEvent[] = []
-            for (const event of replay) {
-              historical.push(event)
-              const observation = mergeDecision(historical, now())
-              if (observation) deliveredAttention.add(mergeIdentity(slug, observation.pr.number))
-            }
+            for (const pr of stream.seed.mergeAttentionPrs)
+              deliveredAttention.add(mergeIdentity(slug, pr))
           }
-          for (const event of events) {
-            if (event.seq <= resumeSeq) continue
-            replay.push(event)
+          for (const event of await store.getEvents(slug, resumeSeq)) {
+            stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
             stream.lastSeq = event.seq
             positions[slug] = event.seq
-            const condition = matchEvent(event, eventConditions(event, replay), globs, replay)
+            const state = buildReducer.finish(stream.seed.build)
+            const condition = matchEvent(event, eventConditions(event, stream.seed), globs, {
+              state,
+              deferral: stream.seed.deferral,
+            })
             if (condition !== null) {
-              match(event, reduceBuild(replay), condition)
+              match(event, state, condition)
               break
             }
           }
         }
-        if (satisfied === null) checkRegistrationState(stream)
+        if (satisfied === null) {
+          // Registration checks current state independently from historical replay.
+          const latest = buildReducer.finish(current.value.build)
+          const condition = matchState(conditions, latest, {
+            state: latest,
+            deferral: current.value.deferral,
+          })
+          if (condition !== null && latest.lastEvent) {
+            stream.seed = current.value
+            match(latest.lastEvent, latest, condition)
+          }
+        }
       }
 
       /** Builds discovery read in full and found terminal; never re-read. */
@@ -488,33 +513,20 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * build to appear.
        */
       const discoverBuilds = async (): Promise<void> => {
-        // AUT-545: the terminal filter is the AUT-487 digest, not a full-log read —
-        // one flat batch read replaces a full getEvents per candidate build, per
-        // discovery pass; `terminal` is reduceBuild's exact terminal rule
-        // (store/digest.ts, pinned by contract). The per-build full read below
-        // remains deliberate for builds the digest cannot retire: its retained
-        // prefix is consumed at full replay depth by every later reduction
-        // (approvals, findings, answered escalations, PR facts, observations), so
-        // bounding it would need reducer-partition store machinery out of
-        // AUT-545's scope. The reduceBuild re-check stays: it is the
-        // legacy-record fallback (a record whose `repo` predates origin
-        // normalization is in `mine` via `repoOrigin` but absent from the digest
-        // map, which keys on `record.repo`) and it keeps this filter unable to
-        // diverge from reduceBuild.
-        const digests = await store.getRepoBuildDigests(repo)
+        const digests = await readBuildDigests(store, repo)
         for (const record of (await store.listBuilds()).filter(mine)) {
           if (streams.has(record.slug) || retired.has(record.slug)) continue
           const digest = digests.get(record.slug)
           if (digest !== undefined && digest.terminal !== undefined) continue
-          const events = await store.getEvents(record.slug)
-          const status = reduceBuild(events).status
+          const current = await readBuildStreamSeed(store, record.slug)
+          const status = buildReducer.finish(current.value.build).status
           if (!NONTERMINAL_STATUSES.includes(status)) {
             // Terminal is permanent (reduceBuild never clears it): a legacy
             // record the digest cannot retire is read once, not every pass.
             retired.add(record.slug)
             continue
           }
-          const stream = registerStream(record.slug, events, false)
+          const stream = registerStream(record.slug, current, false)
           if (satisfied === null) checkRegistrationState(stream)
         }
       }
@@ -525,18 +537,15 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       ): Promise<void> => {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
-          stream.events.push(event)
+          stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
           stream.lastSeq = event.seq
           positions[stream.slug] = event.seq
-          const state = reduceBuild(stream.events)
+          const state = buildReducer.finish(stream.seed.build)
           stream.status = state.status
-          const condition = matchFirst(
-            event,
+          const condition = matchFirst(event, state, eventConditions(event, stream.seed), globs, {
             state,
-            eventConditions(event, stream.events),
-            globs,
-            stream.events,
-          )
+            deferral: stream.seed.deferral,
+          })
           if (condition !== null) {
             match(event, state, condition)
             return
@@ -556,21 +565,19 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       /** The exit-2 record: among the named builds' terminal events, the one
        * with the latest `ts` (ties broken by slug order) — the event that made
        * the final named build terminal. */
-      const pickTerminalRecord = (): { event: AbEvent; state: BuildState } => {
+      const pickTerminalRecord = async (): Promise<{ event: AbEvent; state: BuildState }> => {
         let best: { event: AbEvent; state: BuildState; slug: string } | null = null
         for (const slug of slugs) {
           const stream = streams.get(slug)
           if (stream === undefined) continue
-          const terminalEvent = [...stream.events]
-            .reverse()
-            .find((event) => event.type === 'build.completed' || event.type === 'build.aborted')
+          const terminalEvent = stream.seed.terminalEvent
           if (terminalEvent === undefined) continue
           if (
             best === null ||
             terminalEvent.ts > best.event.ts ||
             (terminalEvent.ts === best.event.ts && slug < best.slug)
           ) {
-            best = { event: terminalEvent, state: reduceBuild(stream.events), slug }
+            best = { event: terminalEvent, state: buildReducer.finish(stream.seed.build), slug }
           }
         }
         // A named build is terminal only through its terminal event, so
@@ -647,7 +654,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       } else if (namedAllTerminal()) {
         // Decision 5, start form: every named build is already terminal and
         // no condition held — show how the build ended.
-        const terminal = pickTerminalRecord()
+        const terminal = await pickTerminalRecord()
         return finish(null, terminal.event, terminal.state)
       }
 
@@ -664,7 +671,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           if (aborted()) break
           await tick()
           if (!hasMatch() && namedAllTerminal()) {
-            const terminal = pickTerminalRecord()
+            const terminal = await pickTerminalRecord()
             return finish(null, terminal.event, terminal.state)
           }
         }
@@ -752,7 +759,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         // conditions live — so after the quiesce drain this decision re-reads
         // the same live predicates (`hasMatch`, `namedAllTerminal`, `aborted`,
         // the deadline) to pick the exit.
-        const terminal = pickTerminalRecord()
+        const terminal = await pickTerminalRecord()
         return finish(null, terminal.event, terminal.state)
       }
       if (aborted()) {

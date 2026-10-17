@@ -1,14 +1,8 @@
+import { readBuildFacts } from '../store/reduced-reads'
 import type { IdSource } from '../ids'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { Forge, WorkspacePublication } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { openExecution } from '../processes/execution-settlement'
-import {
-  latestUncompletedPublicationRequest,
-  publicationLostRecorded,
-  publicationRequestCompleted,
-  publicationRequestSettled,
-} from '../processes/publication-state'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { completeFinalizePr } from './terminals'
 
@@ -41,11 +35,11 @@ export async function settlePendingPublication(
 ): Promise<void> {
   const publication = deps.publication
   if (publication === undefined) return
-  let events = await deps.store.getEvents(slug)
-  const request = latestUncompletedPublicationRequest(events)
+  let events = (await readBuildFacts(deps.store, slug)).value
+  const request = events.publication.latestUncompletedRequest()
   if (request === undefined) return
 
-  const abandoned = publicationRequestSettled(events, request)
+  const abandoned = events.publication.requestSettled(request)
   // Consulted for every uncompleted request, not only abandoned ones: a guest
   // that pushed its branch before dying is owed its completion fact, not a
   // re-push or a loss record.
@@ -59,7 +53,7 @@ export async function settlePendingPublication(
     // returning silently — the exact drop that lost the validate-hosted-
     // dispatcher generation-1 work. The finalize-step publish-failure path
     // below is unchanged: it already settles loudly via its failed outcome.
-    if (!publicationLostRecorded(events, request)) {
+    if (!events.publication.lostRecorded(request)) {
       await deps.store.append(slug, {
         actor: DISPATCHER,
         type: 'publication.lost',
@@ -85,12 +79,8 @@ export async function settlePendingPublication(
       const leaseLive =
         record?.lease !== undefined &&
         new Date(record.lease.expiresAt).getTime() > clock().getTime()
-      if (openExecution(events) !== null && leaseLive) return
-      let ref: string | undefined
-      for (const event of events) {
-        if (event.type === 'workspace.provisioned') ref = event.payload.ref
-        else if (event.type === 'workspace.released') ref = undefined
-      }
+      if (events.open !== null && leaseLive) return
+      const ref = events.workspace?.ref
       if (ref === undefined)
         throw new Error(`build ${slug} has a publication request but no open workspace`)
       await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
@@ -115,8 +105,8 @@ export async function settlePendingPublication(
     })
     return
   }
-  events = await deps.store.getEvents(slug)
-  if (publicationRequestCompleted(events, request)) return
+  events = (await readBuildFacts(deps.store, slug)).value
+  if (events.publication.requestCompleted(request)) return
 
   if (request.payload.operation === 'implement') {
     await deps.store.append(slug, {
@@ -157,7 +147,7 @@ export async function settlePendingPublication(
   const newline = text.indexOf('\n')
   const title = (newline === -1 ? text : text.slice(0, newline)).replace(/^#+\s*/, '').trim()
   if (title === '') throw new Error(`empty PR title for ${slug}`)
-  const created = events.findLast((event) => event.type === 'build.created')
+  const created = events.lastCreated
   if (created?.type !== 'build.created') throw new Error(`missing build.created for ${slug}`)
 
   await completeFinalizePr(

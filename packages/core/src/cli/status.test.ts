@@ -1465,7 +1465,7 @@ describe('abBuilds store cost (AUT-488)', () => {
         if (typeof value !== 'function') return value
         return (...args: unknown[]) => {
           counts.set(prop, (counts.get(prop) ?? 0) + 1)
-          if (prop === 'getEvents') eventSlugs.push(args[0] as string)
+          if (prop === 'getReducerValue') eventSlugs.push((args[0] as { slug: string }).slug)
           return (value as (...a: unknown[]) => unknown).apply(t, args)
         }
       },
@@ -1545,7 +1545,7 @@ describe('abBuilds store cost (AUT-488)', () => {
         // The bound: exactly one digest read, and one history read per
         // non-terminal record — identical at both finished-build counts.
         expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
-        expect(counting.counts.get('getEvents')).toBe(3)
+        expect(counting.counts.get('getReducerValue')).toBe(3)
         for (const slug of finishedSlugs) expect(counting.eventSlugs).not.toContain(slug)
         // Output equivalence — rendered text and JSON against the old algorithm.
         const expected = await legacySummaries(store, { queued })
@@ -1570,7 +1570,7 @@ describe('abBuilds store cost (AUT-488)', () => {
     const counting = countingStore(store)
     const text = await runCounting(counting.store, { all: true })
     expect(counting.counts.get('getRepoBuildDigests')).toBeUndefined()
-    expect(counting.counts.get('getEvents')).toBe(4)
+    expect(counting.counts.get('getReducerValue')).toBe(4)
     const expected = await legacySummaries(store, { all: true })
     expect(text).toEqual(renderSummaries(expected, NOW, `no builds for ${REPO}`))
     const jsonOut = await runCounting(store, { all: true, json: true })
@@ -1613,7 +1613,7 @@ describe('abBuilds store cost (AUT-488)', () => {
     // The legacy fallback does not disturb the digest-gated count for the
     // origin-keyed records: one digest read, one history per remaining record.
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
-    expect(counting.counts.get('getEvents')).toBe(2)
+    expect(counting.counts.get('getReducerValue')).toBe(2)
   })
 
   test('a missing digest entry for an identity-keyed record fails loudly', async () => {

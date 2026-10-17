@@ -1,3 +1,4 @@
+import { readBuildFacts, readBuildSelector, readPhaseFailures } from '../store/reduced-reads'
 import { delegateCredential } from '../store/remote/credentials'
 import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
 /**
@@ -50,12 +51,11 @@ import type { Config } from '../config/schema'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { KERNEL, agentActor, type Actor } from '../events/envelope'
-import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
-import { decideNext, type Decision } from '../kernel/engine'
+import { decideNextFromFacts, type Decision } from '../kernel/engine'
 import { defineReducer } from '../kernel/incremental'
 import { PHASE_SPECS } from '../kernel/phases'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
 import {
   verifyPhase,
@@ -89,7 +89,6 @@ import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/work
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
-import { publicationPending } from './publication-state'
 
 export { publicationPending } from './publication-state'
 
@@ -639,9 +638,6 @@ export class BuildRunner {
   /** Consecutive durable setup failures since the latest successful attachment
    * or explicit human answer. The answer re-arms the budget but deliberately
    * does not erase the current diagnostic while recovery is still running. */
-  private setupStreak(events: readonly AbEvent[]): number {
-    return setupStreakReducer.reduce(events)
-  }
 
   private setupQuestion(failure: EventPayload<'runner.setup-failed'>): string {
     const status =
@@ -671,10 +667,10 @@ export class BuildRunner {
    * announce takeover against that same boundary. If a write is interrupted,
    * no attachment lands; the next runner reduces the newer prefix and closes
    * only sessions that remain open. */
-  private async reclaimSessionsAndAttach(events: readonly AbEvent[]): Promise<void> {
+  private async reclaimSessionsAndAttach(state: BuildState): Promise<void> {
     const { store, slug, instance, host } = this.deps
-    const resumedFromSeq = events.at(-1)?.seq ?? 0
-    for (const session of reduceBuild([...events]).sessions.open) {
+    const resumedFromSeq = state.lastSeq
+    for (const session of state.sessions.open) {
       await store.append(slug, {
         actor: KERNEL,
         type: 'session.ended',
@@ -709,8 +705,8 @@ export class BuildRunner {
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!claimed) throw new LeaseHeldError(slug, instance)
 
-    let events = await store.getEvents(slug)
-    const decision = decideNext(events, config)
+    let facts = (await readBuildFacts(store, slug)).value
+    const decision = decideNextFromFacts(facts.state, facts.log, config)
     if (
       decision.kind === 'acknowledge' &&
       (decision.command === 'pause' || decision.command === 'abort')
@@ -719,12 +715,12 @@ export class BuildRunner {
       return { kind: 'control-acknowledged', command: decision.command }
     }
 
-    const state = reduceBuild(events)
+    const state = facts.state
     const currentFailure = state.setupFailure
     const openSetupEscalation = state.openEscalations.some(
       (escalation) => escalation.phase === 'setup' && escalation.source === 'policy',
     )
-    const streak = this.setupStreak(events)
+    const streak = await readBuildSelector(store, slug, 'setupStreak')
 
     // Crash-safe exhaustion: the final failure and escalation are separate
     // appends. If only the failure landed, raise the blocker before another
@@ -738,7 +734,7 @@ export class BuildRunner {
     }
 
     const recovering = currentFailure !== undefined
-    if (!recovering) await this.reclaimSessionsAndAttach(events)
+    if (!recovering) await this.reclaimSessionsAndAttach(facts.state)
 
     // First beat immediately (liveness visible without waiting an interval),
     // then keep-alive. Setup runs under this heartbeat so a slow install cannot
@@ -800,8 +796,8 @@ export class BuildRunner {
 
     if (recovering) {
       try {
-        events = await store.getEvents(slug)
-        await this.reclaimSessionsAndAttach(events)
+        facts = (await readBuildFacts(store, slug)).value
+        await this.reclaimSessionsAndAttach(facts.state)
       } catch (error) {
         this.stopHeartbeat()
         this.attached = false
@@ -819,8 +815,8 @@ export class BuildRunner {
   async step(): Promise<Decision> {
     const config = await this.captureConfig()
     const { store, slug } = this.deps
-    const events = await store.getEvents(slug)
-    const decision = decideNext(events, config)
+    const facts = (await readBuildFacts(store, slug)).value
+    const decision = decideNextFromFacts(facts.state, facts.log, config)
     switch (decision.kind) {
       case 'capture-reconcile-policy':
         await store.append(slug, {
@@ -851,25 +847,25 @@ export class BuildRunner {
         await this.raiseEscalation(decision)
         return decision
       case 'run-phase':
-        await this.runPhase(decision, events)
+        await this.runPhase(decision)
         return decision
       case 'run-check':
         await this.runCheck(decision)
         return decision
       case 'run-agent-verify':
-        await this.runAgentVerify(decision, events)
+        await this.runAgentVerify(decision)
         return decision
       case 'evaluate-verify':
-        await this.evaluateVerify(decision, events)
+        await this.evaluateVerify(decision)
         return decision
       case 'skip-verify':
         await this.skipVerify(decision)
         return decision
       case 'run-finalize-step':
-        await this.runFinalizeStep(decision, events)
+        await this.runFinalizeStep(decision)
         return decision
       case 'check-reconcile-progress':
-        await this.checkReconcileProgress(decision, events)
+        await this.checkReconcileProgress(decision)
         return decision
     }
   }
@@ -885,23 +881,24 @@ export class BuildRunner {
     if (!this.attached) {
       const attachment = await this.attach()
       if (attachment.kind === 'control-acknowledged') {
-        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       }
     }
     try {
       if (await this.refreshSummary())
-        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
-      if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
-        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+      if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.publication.pending()) {
+        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       }
       for (;;) {
         await this.ensureLease()
         const decision = await this.step()
         if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
-        if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
+        if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.publication.pending())
+          break
       }
-      return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+      return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } finally {
       this.stopHeartbeat()
       await this.closeProducerSessions()
@@ -982,12 +979,14 @@ export class BuildRunner {
    * reuse the snapshot as the merge target: actual phase startup refreshes
    * again, preserving the execution-boundary freshness guarantee.
    */
-  private async checkReconcileProgress(
-    decision: CheckReconcileProgressDecision,
-    events: AbEvent[],
-  ): Promise<void> {
+  private async checkReconcileProgress(decision: CheckReconcileProgressDecision): Promise<void> {
     const { nextAttempt } = decision
-    const failures = this.phaseFailures(events, 'reconcile', nextAttempt)
+    const failures = await readPhaseFailures(
+      this.deps.store,
+      this.deps.slug,
+      'reconcile',
+      nextAttempt,
+    )
     if (failures.count >= this.maxPhaseAttempts) {
       await this.raisePolicyExhausted('reconcile', nextAttempt, failures)
       return
@@ -999,7 +998,7 @@ export class BuildRunner {
 
     let baseSha: string
     try {
-      baseSha = await this.refreshReconcileBase(events)
+      baseSha = await this.refreshReconcileBase()
     } catch (error) {
       await this.failPhase(
         'reconcile',
@@ -1022,13 +1021,13 @@ export class BuildRunner {
   }
 
   /** A core-phase run: retry guard (D5), started event (§15.3), session. */
-  private async runPhase(decision: RunPhaseDecision, events: AbEvent[]): Promise<void> {
+  private async runPhase(decision: RunPhaseDecision): Promise<void> {
     const { store, slug } = this.deps
     const { phase, round } = decision
 
     // D5 RETRY GUARD first: at the cap, escalate instead of running — a
     // failing phase must never loop forever.
-    const failures = this.phaseFailures(events, phase, round)
+    const failures = await readPhaseFailures(this.deps.store, this.deps.slug, phase, round)
     if (failures.count >= this.maxPhaseAttempts) {
       await this.raisePolicyExhausted(phase, round, failures)
       return
@@ -1045,7 +1044,7 @@ export class BuildRunner {
     let reconcileBaseSha: string | undefined
     if (phase === 'reconcile') {
       try {
-        reconcileBaseSha = await this.refreshReconcileBase(events)
+        reconcileBaseSha = await this.refreshReconcileBase()
       } catch (error) {
         await this.failPhase(
           phase,
@@ -1081,20 +1080,20 @@ export class BuildRunner {
    * would let another build overwrite the object this attempt resolves. The
    * explicit ref also makes the fetched remote-only commit available locally.
    */
-  private async refreshReconcileBase(events: AbEvent[]): Promise<string> {
-    const created = events.find((event) => event.type === 'build.created')
-    if (created === undefined || created.type !== 'build.created') {
+  private async refreshReconcileBase(): Promise<string> {
+    const baseBranch = await readBuildSelector(this.deps.store, this.deps.slug, 'baseBranch')
+    if (baseBranch === undefined) {
       throw new Error(
         'this build has no build.created event — cannot resolve its frozen baseBranch (§15.3)',
       )
     }
 
-    const sourceRef = `refs/heads/${created.payload.baseBranch}`
+    const sourceRef = `refs/heads/${baseBranch}`
     const targetRef = `refs/autobuild/reconcile/${this.deps.slug}/base`
     if (this.deps.forge.snapshotBase !== undefined) {
       const sha = await this.deps.forge.snapshotBase({
         workspacePath: this.deps.workspacePath,
-        base: created.payload.baseBranch,
+        base: baseBranch,
         destinationRef: targetRef,
       })
       if (!GIT_OBJECT_ID.test(sha)) {
@@ -1138,9 +1137,10 @@ export class BuildRunner {
    * a canonical kernel-authored skip and launches no command or session.
    * Inclusion delegates to the existing verifier path unchanged.
    */
-  private async evaluateVerify(decision: EvaluateVerifyDecision, events: AbEvent[]): Promise<void> {
+  private async evaluateVerify(decision: EvaluateVerifyDecision): Promise<void> {
     const { exec, workspacePath } = this.deps
-    const baseSha = selectVerifyDiffBase(events)
+    const baseSha = await readBuildSelector(this.deps.store, this.deps.slug, 'verifyDiffBase')
+    if (baseSha === undefined) throw new Error('no verify diff base is recorded')
     const args = ['git', 'diff', '--no-renames', '--name-only', '-z', baseSha, 'HEAD', '--']
     const result = await exec(args, { cwd: workspacePath })
     if (result.exitCode !== 0) {
@@ -1167,7 +1167,7 @@ export class BuildRunner {
     if (decision.action.kind === 'run-check') {
       await this.runCheck(decision.action)
     } else {
-      await this.runAgentVerify(decision.action, events)
+      await this.runAgentVerify(decision.action)
     }
   }
 
@@ -1245,14 +1245,14 @@ export class BuildRunner {
   }
 
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
-  private async runAgentVerify(decision: RunAgentVerifyDecision, events: AbEvent[]): Promise<void> {
+  private async runAgentVerify(decision: RunAgentVerifyDecision): Promise<void> {
     const { store, slug } = this.deps
     const { step, skill, attempt, feedback } = decision
     const phase = verifyPhase(step)
 
     // D5 guard, extended to agent-verify (see module doc): keyed by
     // verify:<step> with the verify attempt as the round.
-    const failures = this.phaseFailures(events, phase, attempt)
+    const failures = await readPhaseFailures(this.deps.store, this.deps.slug, phase, attempt)
     if (failures.count >= this.maxPhaseAttempts) {
       await this.raisePolicyExhausted(phase, attempt, failures)
       return
@@ -1292,10 +1292,7 @@ export class BuildRunner {
    * Step, Git, and Forge failures become the ordinary failed outcome plus an
    * observation and never route a green build backward.
    */
-  private async runFinalizeStep(
-    decision: RunFinalizeStepDecision,
-    events: AbEvent[],
-  ): Promise<void> {
+  private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
     const { step, action } = decision
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,
@@ -1308,7 +1305,8 @@ export class BuildRunner {
 
     try {
       await this.requireFinalizeWorktreeClean('before the post-step starts')
-      durableHead = selectPublishedBranchHead(events)
+      durableHead = await readBuildSelector(this.deps.store, this.deps.slug, 'publishedBranchHead')
+      if (durableHead === undefined) throw new Error('no published branch head is recorded')
     } catch (error) {
       failureNote = `finalize publication preflight failed: ${errorMessage(error)}`
     }
@@ -1338,9 +1336,8 @@ export class BuildRunner {
             head,
           )
           if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
-          const remote = events.some(
-            (event) => event.type === 'workspace.provisioned' && isRemoteWorkspace(event.payload),
-          )
+          const remote = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+            .remoteWorkspace
           if (remote) {
             await this.deps.store.append(this.deps.slug, {
               actor,
@@ -2642,18 +2639,6 @@ export class BuildRunner {
    * an applicable answer count again, so a still-failing phase re-escalates on
    * new evidence instead of deadlocking before its recovery session starts.
    */
-  private phaseFailures(
-    events: AbEvent[],
-    phase: Phase,
-    round: number,
-  ): {
-    count: number
-    lastError?: string
-    lastWillRetry?: boolean
-    lastProviderAttempts?: readonly ProviderAttempt[]
-  } {
-    return phaseFailuresReducer(phase, round).reduce(events)
-  }
 
   private async failPhase(
     phase: Phase,

@@ -1,9 +1,8 @@
 /**
  * The operator read paths' repository view: every poll-driven route (dashboard,
  * repository and harvest status, build listings) derives its state from a
- * `RepoViewStore` cold-started from stored reducer snapshots and advanced with
- * delta reads for builds. Each pass loads the bounded journal subset; its raw
- * tail is held only for that pass, never restored from a snapshot.
+ * `RepoViewStore` backed by persisted reduced values. Each pass refreshes
+ * repository facts and metadata without hydrating raw history.
  *
  * Passes are single-flight per `(store, repo)` within one serving process: at
  * most one pass runs at a time, and requests arriving while it runs join the
@@ -58,14 +57,6 @@ async function pass(store: BuildStore, repo: string, waiters: Waiter[]): Promise
     return
   }
   await Promise.all(waiters.map((waiter) => waiter.run(view).then(waiter.resolve, waiter.reject)))
-  // Leave the advanced state behind for the next pass (this process's or
-  // another's). `held` also writes a settled build read for a listing. The
-  // cache never fails a read.
-  try {
-    await view.persistSnapshots({ force: true, held: true })
-  } catch {
-    // A cache: the next pass retries.
-  }
 }
 
 async function drain(store: BuildStore, repo: string, flight: Flight): Promise<void> {

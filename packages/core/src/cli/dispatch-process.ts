@@ -1,6 +1,6 @@
+import { readRepositoryFacts, readOpenTick } from '../store/reduced-reads'
 import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
-import { hasOpenTick } from '../processes/tick-state'
 import type { BuildStore } from '../store/types'
 
 export const DISPATCH_CHILD_OPTIONS_ENV = 'AB_DISPATCH_CHILD_OPTIONS'
@@ -168,10 +168,9 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   // chooses/awaits process termination, avoiding check-then-append races.
   const completed = child.exited.then(async (exitCode): Promise<DispatchChildResult> => {
     const processSignal = child.signalCode === null ? requestedSignal : String(child.signalCode)
-    const events = await deps.store.getRepoEvents(deps.repo)
-    const recorded = events.findLast(
-      (event) => event.type === 'dispatcher.run-stopped' && event.payload.run === deps.run,
-    )
+    const recorded = (await readRepositoryFacts(deps.store, deps.repo)).value.runs[
+      JSON.stringify(deps.run)
+    ]?.stop
     if (recorded?.type === 'dispatcher.run-stopped') {
       const signal = processSignal ?? recorded.payload.signal
       return {
@@ -251,7 +250,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
           open =
             record?.tick?.run === deps.run
               ? record.tick.open !== undefined
-              : hasOpenTick(await deps.store.getRepoEvents(deps.repo), deps.run)
+              : await readOpenTick(deps.store, deps.repo, deps.run)
         } catch {
           // Unreadable telemetry cannot authorize an unsafe kill.
         }

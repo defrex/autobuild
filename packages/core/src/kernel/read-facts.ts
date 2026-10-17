@@ -1,0 +1,599 @@
+import { encodeLog } from './log-index-value'
+import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
+import { infrastructureFailureResetReducer } from '../processes/infrastructure-failure-budget'
+import {
+  frozenPrImageHostReducer,
+  currentPrAttachmentsReducer,
+  hostedPrAttachmentsReducer,
+  pendingPrAttachmentReclaimsReducer,
+} from './pr-attachments'
+import { isRemoteWorkspace } from '../events/workspace-remote'
+/** JSON-safe projections for persisted current-state consumers. */
+import type { AbEvent } from '../events/catalog'
+import { defineReducer } from './incremental'
+import { buildReducer, type BuildAcc } from './reducer'
+import {
+  currentDeferralObservationReducer,
+  mergeAttentionFromFacts,
+  type DeferralLedger,
+} from './auto-merge'
+import { logIndexReducer } from './log-index'
+import { publicationStateReducer } from '../processes/publication-state'
+import { executionNoProgressReducer } from '../processes/execution-no-progress'
+import {
+  openExecutionReducer,
+  lastExecutionOutcomeReducer,
+} from '../processes/execution-settlement'
+import {
+  baseBranchReducer,
+  provisionMarkerReducer,
+  recoveryCheckpointReducer,
+  openBuildWorkspaceReducer,
+} from '../processes/dispatcher-selectors'
+import { dashboardFactsReducer } from '../cli/dashboard/facts'
+
+export interface BuildStreamSeed {
+  build: BuildAcc
+  deferral: DeferralLedger
+  mergeAttentionPrs: number[]
+  /** Terminal identity can precede later observations; retain it at the seed cursor. */
+  terminalEvent?: AbEvent
+}
+// Bump with either constituent's semantics or historical eligibility semantics.
+export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, BuildStreamSeed>({
+  version: 1 + buildReducer.version + currentDeferralObservationReducer.version,
+  initial: () => ({
+    build: buildReducer.initial(),
+    deferral: currentDeferralObservationReducer.initial(),
+    mergeAttentionPrs: [],
+  }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'build.completed' || event.type === 'build.aborted')
+        acc.terminalEvent = event
+      acc.build = buildReducer.advance(acc.build, [event])
+      acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, [event])
+      const decision = mergeAttentionFromFacts(buildReducer.finish(acc.build), acc.deferral)
+      if (decision && !acc.mergeAttentionPrs.includes(decision.pr.number))
+        acc.mergeAttentionPrs.push(decision.pr.number)
+    }
+  },
+  finish: (acc) => structuredClone(acc),
+})
+
+const parts = {
+  infrastructureReset: infrastructureFailureResetReducer,
+  summaryRequests: summaryRequestsReducer,
+  summaryBoundary: summaryBoundaryReducer,
+  hostedImages: hostedPrAttachmentsReducer,
+  designations: currentPrAttachmentsReducer,
+  imageHost: frozenPrImageHostReducer,
+  pendingAttachments: pendingPrAttachmentReclaimsReducer,
+  recoveryCheckpoint: recoveryCheckpointReducer,
+  provisionMarker: provisionMarkerReducer,
+  baseBranch: baseBranchReducer,
+  build: buildReducer,
+  log: logIndexReducer,
+  publication: publicationStateReducer,
+  executionNoProgress: executionNoProgressReducer,
+  open: openExecutionReducer,
+  workspace: openBuildWorkspaceReducer,
+  lastExecution: lastExecutionOutcomeReducer,
+  dashboard: dashboardFactsReducer,
+  deferral: currentDeferralObservationReducer,
+}
+export interface BuildReadAcc {
+  summaryRequests: ReturnType<typeof summaryRequestsReducer.initial>
+  summaryBoundary: ReturnType<typeof summaryBoundaryReducer.initial>
+  hostedImages: ReturnType<typeof hostedPrAttachmentsReducer.initial>
+  designations: ReturnType<typeof currentPrAttachmentsReducer.initial>
+  imageHost: ReturnType<typeof frozenPrImageHostReducer.initial>
+  pendingAttachments: ReturnType<typeof pendingPrAttachmentReclaimsReducer.initial>
+  recoveryCheckpoint: ReturnType<typeof recoveryCheckpointReducer.initial>
+  provisionMarker: ReturnType<typeof provisionMarkerReducer.initial>
+  baseBranch: ReturnType<typeof baseBranchReducer.initial>
+  build: ReturnType<typeof buildReducer.initial>
+  log: ReturnType<typeof logIndexReducer.initial>
+  publication: ReturnType<typeof publicationStateReducer.initial>
+  executionNoProgress: ReturnType<typeof executionNoProgressReducer.initial>
+  open: ReturnType<typeof openExecutionReducer.initial>
+  workspace: ReturnType<typeof openBuildWorkspaceReducer.initial>
+  lastExecution: ReturnType<typeof lastExecutionOutcomeReducer.initial>
+  dashboard: ReturnType<typeof dashboardFactsReducer.initial>
+  deferral: ReturnType<typeof currentDeferralObservationReducer.initial>
+  summaryHistory: {
+    kind: 'review' | 'verify'
+    phase?: string
+    round?: number
+    verdict?: string
+    count?: number
+    result?: import('../events/payloads').EventPayload<'verify.completed'>
+  }[]
+  summaryAttempts: number[]
+  summaryRequested: Record<string, Extract<AbEvent, { type: 'pr-summary.requested' }>>
+  summaryEligibleAfter?: string
+  finalizePublicationRequested: boolean
+  latestWorkspace?: Extract<AbEvent, { type: 'workspace.provisioned' }>
+  findings: Record<string, import('../ontology').Finding>
+  planFeedback: Record<string, import('../ontology').Feedback | null>
+  feedback: Record<string, import('../ontology').Feedback | null>
+  reconcileBases: Record<string, string>
+  firstWorkspace?: Extract<AbEvent, { type: 'workspace.provisioned' }>
+  latestAbort?: Extract<AbEvent, { type: 'build.abort-requested' }>
+  latestDiscard?: Extract<AbEvent, { type: 'build.discard-requested' }>
+  maxPlanRevision: number
+  created?: Extract<AbEvent, { type: 'build.created' }>
+  lastCreated?: Extract<AbEvent, { type: 'build.created' }>
+  latestRelease?: Extract<AbEvent, { type: 'workspace.released' }>
+  latestWorkspaceFailureSeq: number
+  workspaceGenerations: number
+  dispatchFailureCount: number
+  commentPosted: boolean
+  specRecorded: boolean
+  autoMergeEverRequested: boolean
+  seenTypes: AbEvent['type'][]
+  localWorkspace: boolean
+  cleanupCounts: Record<string, number>
+  reclaimCounts: Record<string, number>
+  infrastructureReset: ReturnType<typeof infrastructureFailureResetReducer.initial>
+  infrastructureCount: number
+  infrastructureRaisedSeq: number
+  remoteWorkspace: boolean
+  terminalEvent?: AbEvent
+  mergeTimes: string[]
+  observationFacts: {
+    payload: import('../events/payloads').EventPayload<'observation.recorded'>
+    seq: number
+    ts: string
+  }[]
+  observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
+}
+export const buildReadFactsReducer = defineReducer({
+  version: 1 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  initial: (): BuildReadAcc => ({
+    summaryRequests: summaryRequestsReducer.initial(),
+    summaryBoundary: summaryBoundaryReducer.initial(),
+    hostedImages: hostedPrAttachmentsReducer.initial(),
+    designations: currentPrAttachmentsReducer.initial(),
+    imageHost: frozenPrImageHostReducer.initial(),
+    pendingAttachments: pendingPrAttachmentReclaimsReducer.initial(),
+    recoveryCheckpoint: recoveryCheckpointReducer.initial(),
+    provisionMarker: provisionMarkerReducer.initial(),
+    baseBranch: baseBranchReducer.initial(),
+    build: buildReducer.initial(),
+    log: logIndexReducer.initial(),
+    publication: publicationStateReducer.initial(),
+    executionNoProgress: executionNoProgressReducer.initial(),
+    open: openExecutionReducer.initial(),
+    workspace: openBuildWorkspaceReducer.initial(),
+    lastExecution: lastExecutionOutcomeReducer.initial(),
+    dashboard: dashboardFactsReducer.initial(),
+    deferral: currentDeferralObservationReducer.initial(),
+    observations: [],
+    observationFacts: [],
+    mergeTimes: [],
+    summaryHistory: [],
+    summaryAttempts: [],
+    summaryRequested: {},
+    finalizePublicationRequested: false,
+    findings: {},
+    feedback: {},
+    planFeedback: {},
+    reconcileBases: {},
+    maxPlanRevision: -1,
+    seenTypes: [],
+    localWorkspace: false,
+    cleanupCounts: {},
+    reclaimCounts: {},
+    infrastructureReset: infrastructureFailureResetReducer.initial(),
+    infrastructureCount: 0,
+    infrastructureRaisedSeq: 0,
+    remoteWorkspace: false,
+    latestWorkspaceFailureSeq: 0,
+    workspaceGenerations: 0,
+    dispatchFailureCount: 0,
+    commentPosted: false,
+    specRecorded: false,
+    autoMergeEverRequested: false,
+  }),
+  fold(acc: BuildReadAcc, events: readonly AbEvent[]) {
+    acc.baseBranch = baseBranchReducer.advance(acc.baseBranch, events)
+    acc.provisionMarker = provisionMarkerReducer.advance(acc.provisionMarker, events)
+    acc.recoveryCheckpoint = recoveryCheckpointReducer.advance(acc.recoveryCheckpoint, events)
+    acc.pendingAttachments = pendingPrAttachmentReclaimsReducer.advance(
+      acc.pendingAttachments,
+      events,
+    )
+    acc.imageHost = frozenPrImageHostReducer.advance(acc.imageHost, events)
+    acc.designations = currentPrAttachmentsReducer.advance(acc.designations, events)
+    acc.hostedImages = hostedPrAttachmentsReducer.advance(acc.hostedImages, events)
+    acc.summaryBoundary = summaryBoundaryReducer.advance(acc.summaryBoundary, events)
+    acc.summaryRequests = summaryRequestsReducer.advance(acc.summaryRequests, events)
+    acc.build = buildReducer.advance(acc.build, events)
+    acc.log = logIndexReducer.advance(acc.log, events)
+    acc.publication = publicationStateReducer.advance(acc.publication, events)
+    acc.executionNoProgress = executionNoProgressReducer.advance(acc.executionNoProgress, events)
+    acc.open = openExecutionReducer.advance(acc.open, events)
+    acc.workspace = openBuildWorkspaceReducer.advance(acc.workspace, events)
+    acc.lastExecution = lastExecutionOutcomeReducer.advance(acc.lastExecution, events)
+    acc.dashboard = dashboardFactsReducer.advance(acc.dashboard, events)
+    acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, events)
+    for (const event of events) {
+      if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict')
+        acc.summaryHistory.push({
+          kind: 'review',
+          phase: event.type === 'plan-review.verdict' ? 'plan-review' : 'code-review',
+          round: event.payload.round,
+          verdict: event.payload.verdict,
+          count: event.payload.findings.length,
+        })
+      if (event.type === 'verify.completed')
+        acc.summaryHistory.push({ kind: 'verify', result: event.payload })
+      if (
+        event.type === 'pr-summary.attempted' &&
+        !acc.summaryAttempts.includes(event.payload.occurrence)
+      )
+        acc.summaryAttempts.push(event.payload.occurrence)
+      if (event.type === 'pr-summary.requested')
+        acc.summaryRequested[String(event.payload.occurrence)] ??= event
+      if (
+        event.type === 'pr-summary.result' &&
+        event.payload.eligibleAfter &&
+        (!acc.summaryEligibleAfter ||
+          Date.parse(event.payload.eligibleAfter) > Date.parse(acc.summaryEligibleAfter))
+      )
+        acc.summaryEligibleAfter = event.payload.eligibleAfter
+      if (event.type === 'publication.requested' && event.payload.operation === 'finalize')
+        acc.finalizePublicationRequested = true
+      if (event.type === 'workspace.provisioned') acc.latestWorkspace = event
+      if (event.type === 'plan-review.verdict')
+        acc.planFeedback[String(event.payload.round + 1)] =
+          event.payload.verdict === 'revise'
+            ? { findings: event.payload.findings.map((finding) => finding.id) }
+            : null
+      if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict')
+        for (const finding of event.payload.findings)
+          acc.findings[JSON.stringify(finding.id)] = finding
+      if (event.type === 'plan.started' || event.type === 'implement.started')
+        acc.feedback[
+          JSON.stringify([
+            event.type === 'plan.started' ? 'plan' : 'implement',
+            event.payload.round,
+          ])
+        ] = event.payload.feedback ?? null
+      if (event.type === 'verify.started')
+        acc.feedback[JSON.stringify([`verify:${event.payload.step}`, event.payload.attempt])] =
+          event.payload.feedback ?? null
+      if (event.type === 'reconcile.started')
+        acc.reconcileBases[String(event.payload.attempt)] = event.payload.baseSha
+      if (event.type === 'workspace.provisioned') acc.firstWorkspace ??= event
+      if (event.type === 'build.abort-requested') acc.latestAbort = event
+      if (event.type === 'build.discard-requested') acc.latestDiscard = event
+      if (event.type === 'plan.completed')
+        acc.maxPlanRevision = Math.max(acc.maxPlanRevision, event.payload.artifact.rev)
+      if (!acc.seenTypes.includes(event.type)) acc.seenTypes.push(event.type)
+      if (event.type === 'workspace.provisioned' && !isRemoteWorkspace(event.payload))
+        acc.localWorkspace = true
+      if (event.type === 'infrastructure.cleanup-attempted') {
+        const key = JSON.stringify(event.payload.workspaceRef)
+        acc.cleanupCounts[key] = (acc.cleanupCounts[key] ?? 0) + 1
+      }
+      if (event.type === 'pr-attachment.reclaim-failed') {
+        const key = String(event.payload.hostedSeq)
+        acc.reclaimCounts[key] = (acc.reclaimCounts[key] ?? 0) + 1
+      }
+      const priorReset = infrastructureFailureResetReducer.finish(acc.infrastructureReset)
+      acc.infrastructureReset = infrastructureFailureResetReducer.advance(acc.infrastructureReset, [
+        event,
+      ])
+      if (infrastructureFailureResetReducer.finish(acc.infrastructureReset) !== priorReset)
+        acc.infrastructureCount = 0
+      if (event.type === 'infrastructure.failed') acc.infrastructureCount++
+      if (
+        event.type === 'escalation.raised' &&
+        event.payload.policyCause === 'infrastructure-failure-limit'
+      )
+        acc.infrastructureRaisedSeq = event.seq
+      if (event.type === 'build.created') {
+        acc.created ??= event
+        acc.lastCreated = event
+      }
+      if (event.type === 'workspace.provisioned') acc.workspaceGenerations++
+      if (event.type === 'workspace.released') acc.latestRelease = event
+      if (event.type === 'dispatch.failed') {
+        acc.dispatchFailureCount++
+        if (event.payload.stage === 'workspace') acc.latestWorkspaceFailureSeq = event.seq
+      }
+      if (event.type === 'dispatch.comment-posted') acc.commentPosted = true
+      if (event.type === 'spec.imported' || event.type === 'spec.authored') acc.specRecorded = true
+      if (event.type === 'build.auto-merge-requested') acc.autoMergeEverRequested = true
+      if (event.type === 'workspace.provisioned' && isRemoteWorkspace(event.payload))
+        acc.remoteWorkspace = true
+      if (event.type === 'build.completed' || event.type === 'build.aborted')
+        acc.terminalEvent = event
+      if (event.type === 'observation.recorded') {
+        acc.observations.push(event.payload)
+        acc.observationFacts.push({ payload: event.payload, seq: event.seq, ts: event.ts })
+      }
+      if (event.type === 'pr.merged') acc.mergeTimes.push(event.ts)
+    }
+  },
+  finish: (acc: BuildReadAcc) => ({
+    summaryRequests: summaryRequestsReducer.finish(acc.summaryRequests),
+    summaryBoundary: summaryBoundaryReducer.finish(acc.summaryBoundary),
+    hostedImages: [...hostedPrAttachmentsReducer.finish(acc.hostedImages)],
+    designations: currentPrAttachmentsReducer.finish(acc.designations),
+    imageHost: frozenPrImageHostReducer.finish(acc.imageHost),
+    pendingAttachments: pendingPrAttachmentReclaimsReducer.finish(acc.pendingAttachments),
+    recoveryCheckpoint: recoveryCheckpointReducer.finish(acc.recoveryCheckpoint),
+    provisionMarker: provisionMarkerReducer.finish(acc.provisionMarker),
+    baseBranch: baseBranchReducer.finish(acc.baseBranch),
+    state: buildReducer.finish(acc.build),
+    log: encodeLog(logIndexReducer.finish(acc.log)),
+    publication: structuredClone(acc.publication),
+    executionNoProgress: executionNoProgressReducer.finish(acc.executionNoProgress),
+    open: openExecutionReducer.finish(acc.open),
+    workspace: openBuildWorkspaceReducer.finish(acc.workspace),
+    lastExecution: lastExecutionOutcomeReducer.finish(acc.lastExecution),
+    dashboard: dashboardFactsReducer.finish(acc.dashboard),
+    deferral: currentDeferralObservationReducer.finish(acc.deferral),
+    observationFacts: structuredClone(acc.observationFacts),
+    mergeTimes: [...acc.mergeTimes],
+    observations: structuredClone(acc.observations),
+    terminalEvent: acc.terminalEvent,
+    summaryHistory: structuredClone(acc.summaryHistory),
+    summaryAttempts: [...acc.summaryAttempts],
+    summaryRequested: structuredClone(acc.summaryRequested),
+    summaryEligibleAfter: acc.summaryEligibleAfter,
+    finalizePublicationRequested: acc.finalizePublicationRequested,
+    latestWorkspace: acc.latestWorkspace,
+    planFeedback: structuredClone(acc.planFeedback),
+    findings: structuredClone(acc.findings),
+    feedback: structuredClone(acc.feedback),
+    reconcileBases: { ...acc.reconcileBases },
+    firstWorkspace: acc.firstWorkspace,
+    latestAbort: acc.latestAbort,
+    latestDiscard: acc.latestDiscard,
+    maxPlanRevision: acc.maxPlanRevision,
+    seenTypes: [...acc.seenTypes],
+    localWorkspace: acc.localWorkspace,
+    cleanupCounts: { ...acc.cleanupCounts },
+    reclaimCounts: { ...acc.reclaimCounts },
+    infrastructureReset: infrastructureFailureResetReducer.finish(acc.infrastructureReset),
+    infrastructureCount: acc.infrastructureCount,
+    infrastructureRaisedSeq: acc.infrastructureRaisedSeq,
+    remoteWorkspace: acc.remoteWorkspace,
+    created: acc.created,
+    lastCreated: acc.lastCreated,
+    latestRelease: acc.latestRelease,
+    latestWorkspaceFailureSeq: acc.latestWorkspaceFailureSeq,
+    workspaceGenerations: acc.workspaceGenerations,
+    dispatchFailureCount: acc.dispatchFailureCount,
+    commentPosted: acc.commentPosted,
+    specRecorded: acc.specRecorded,
+    autoMergeEverRequested: acc.autoMergeEverRequested,
+  }),
+})
+
+import type { RepositoryEvent } from '../events/repository'
+import { repositoryAttentionReducer } from './repository-attention'
+import { dispatchSettingsReducer } from './dispatch-settings'
+import { harvestReducer } from './harvest'
+import { ticketSourceHealthReducer } from './ticket-source-health'
+import { autoMergeDefaultReducer } from './auto-merge-default'
+import { effectiveConfigReducer } from './service-facts'
+import { sandboxStatesReducer } from '../processes/sandbox-state'
+import { openHarvestExecutionsReducer } from '../processes/harvest-execution-state'
+import { dispatchStatusReducer } from './dispatch-status'
+
+export interface RepositoryReadAcc {
+  openHarvest: ReturnType<typeof openHarvestExecutionsReducer.initial>
+  attention: ReturnType<typeof repositoryAttentionReducer.initial>
+  harvestFailures: Record<
+    string,
+    { count: number; latest: Extract<RepositoryEvent, { type: 'harvest.failed' }> }
+  >
+  harvestVerdicts: Record<
+    string,
+    {
+      first: Extract<RepositoryEvent, { type: 'harvest.review.verdict' }>
+      latest: Extract<RepositoryEvent, { type: 'harvest.review.verdict' }>
+    }
+  >
+  harvestAuthorizations: Record<
+    string,
+    Extract<RepositoryEvent, { type: 'harvest.execution.authorized' }>
+  >
+  harvestExecutionStarts: Record<string, string>
+  stopRequests: Record<string, Extract<RepositoryEvent, { type: 'dispatcher.stop-requested' }>>
+  latestHarvestResumedSeq: number
+  harvestSessionEndings: Record<string, number>
+  harvestSessions: (import('../cli/harvest').HarvestSessionStatusView & { run: string })[]
+  pendingHumanResume?: number
+  dismissedThrough: number
+  failedAt: Record<string, string>
+  settings: ReturnType<typeof dispatchSettingsReducer.initial>
+  harvest: ReturnType<typeof harvestReducer.initial>
+  health: ReturnType<typeof ticketSourceHealthReducer.initial>
+  autoMerge: ReturnType<typeof autoMergeDefaultReducer.initial>
+  config: ReturnType<typeof effectiveConfigReducer.initial>
+  sandboxes: ReturnType<typeof sandboxStatesReducer.initial>
+  status: ReturnType<ReturnType<typeof dispatchStatusReducer>['initial']>
+  run?: string
+  scan?: Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }>['payload']
+  runs: Record<
+    string,
+    {
+      start?: RepositoryEvent
+      latestStart?: RepositoryEvent
+      stop?: RepositoryEvent
+      tick?: RepositoryEvent
+      completed?: RepositoryEvent
+    }
+  >
+  publications: Extract<RepositoryEvent, { type: 'orchestrator.sandbox.published' }>[]
+}
+export const repositoryReadFactsReducer = defineReducer({
+  version:
+    1 +
+    openHarvestExecutionsReducer.version +
+    repositoryAttentionReducer.version +
+    dispatchSettingsReducer.version +
+    harvestReducer.version +
+    ticketSourceHealthReducer.version +
+    autoMergeDefaultReducer.version +
+    effectiveConfigReducer.version +
+    sandboxStatesReducer.version +
+    dispatchStatusReducer('version').version,
+  initial: (): RepositoryReadAcc => ({
+    openHarvest: openHarvestExecutionsReducer.initial(),
+    attention: repositoryAttentionReducer.initial(),
+    dismissedThrough: 0,
+    failedAt: {},
+    harvestSessions: [],
+    harvestSessionEndings: {},
+    harvestFailures: {},
+    harvestVerdicts: {},
+    harvestAuthorizations: {},
+    latestHarvestResumedSeq: 0,
+    harvestExecutionStarts: {},
+    stopRequests: {},
+    settings: dispatchSettingsReducer.initial(),
+    harvest: harvestReducer.initial(),
+    health: ticketSourceHealthReducer.initial(),
+    autoMerge: autoMergeDefaultReducer.initial(),
+    config: effectiveConfigReducer.initial(),
+    sandboxes: sandboxStatesReducer.initial(),
+    status: dispatchStatusReducer('initial').initial(),
+    runs: {},
+    publications: [],
+  }),
+  fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
+    acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
+    acc.openHarvest = openHarvestExecutionsReducer.advance(acc.openHarvest, events)
+    acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
+    acc.harvest = harvestReducer.advance(acc.harvest, events)
+    acc.health = ticketSourceHealthReducer.advance(acc.health, events)
+    acc.autoMerge = autoMergeDefaultReducer.advance(acc.autoMerge, events)
+    acc.config = effectiveConfigReducer.advance(acc.config, events)
+    acc.sandboxes = sandboxStatesReducer.advance(acc.sandboxes, events)
+    for (const event of events) {
+      if (event.type === 'harvest.failed') {
+        const key = JSON.stringify([event.payload.run, event.payload.step, event.payload.round])
+        acc.harvestFailures[key] = {
+          count: (acc.harvestFailures[key]?.count ?? 0) + 1,
+          latest: event,
+        }
+      }
+      if (event.type === 'harvest.review.verdict') {
+        const key = JSON.stringify([event.payload.run, event.payload.round])
+        acc.harvestVerdicts[key] = {
+          first: acc.harvestVerdicts[key]?.first ?? event,
+          latest: event,
+        }
+      }
+      if (event.type === 'dispatcher.stop-requested')
+        acc.stopRequests[JSON.stringify(event.payload.run)] ??= event
+      if (event.type === 'harvest.execution.started')
+        acc.harvestExecutionStarts[String(event.seq)] = event.payload.execution
+      if (event.type === 'harvest.execution.authorized')
+        acc.harvestAuthorizations[JSON.stringify(event.payload.execution)] ??= event
+      if (event.type === 'harvest.resumed') acc.latestHarvestResumedSeq = event.seq
+      if (event.type === 'harvest.session.started')
+        acc.harvestSessions.push({
+          run: event.payload.run,
+          session: event.payload.session,
+          role: event.payload.role,
+          step: event.payload.step,
+          round: event.payload.round,
+          status: 'open',
+          ...(event.payload.stream === undefined ? {} : { stream: event.payload.stream }),
+          streamStatus: event.payload.stream === undefined ? 'closed' : 'open',
+        })
+      if (event.type === 'harvest.session.ended') {
+        acc.harvestSessionEndings[JSON.stringify(event.payload.session)] ??= event.seq
+        const session = acc.harvestSessions.findLast(
+          (session) => session.session === event.payload.session && session.status === 'open',
+        )
+        if (session) {
+          session.status = 'ended'
+          session.streamStatus = 'closed'
+        }
+      }
+      if (event.type === 'harvest.resume-requested' && event.actor.kind === 'human')
+        acc.pendingHumanResume = event.seq
+      if (event.type === 'harvest.pause-requested') delete acc.pendingHumanResume
+      if (event.type === 'harvest.resumed' && acc.pendingHumanResume !== undefined)
+        acc.dismissedThrough = Math.max(acc.dismissedThrough, acc.pendingHumanResume)
+      if (event.type === 'harvest.failed' && !event.payload.willRetry)
+        acc.failedAt[JSON.stringify(event.payload.run)] = event.ts
+      if (event.type === 'dispatcher.run-started') {
+        acc.run = event.payload.run
+        acc.status = dispatchStatusReducer(acc.run).initial()
+      }
+      if (acc.run) acc.status = dispatchStatusReducer(acc.run).advance(acc.status, [event])
+      if (event.type === 'dispatcher.ticket-scan-completed') acc.scan = event.payload
+      if (
+        event.type === 'dispatcher.run-started' ||
+        event.type === 'dispatcher.run-stopped' ||
+        event.type === 'dispatcher.tick-completed' ||
+        event.type === 'dispatcher.tick-failed'
+      ) {
+        const key = JSON.stringify(event.payload.run)
+        acc.runs[key] ??= {}
+        const run = acc.runs[key]
+        if (event.type === 'dispatcher.run-started') {
+          run.start ??= event
+          run.latestStart = event
+        } else if (event.type === 'dispatcher.run-stopped') run.stop = event
+        else {
+          run.tick = event
+          if (event.type === 'dispatcher.tick-completed') run.completed = event
+        }
+      }
+      if (event.type === 'orchestrator.sandbox.published') {
+        acc.publications = acc.publications.filter(
+          (prior) =>
+            prior.payload.operator !== event.payload.operator ||
+            prior.payload.branch !== event.payload.branch,
+        )
+        acc.publications.push(event)
+      }
+    }
+  },
+  finish: (acc: RepositoryReadAcc) => ({
+    harvestFailures: structuredClone(acc.harvestFailures),
+    harvestVerdicts: structuredClone(acc.harvestVerdicts),
+    harvestAuthorizations: structuredClone(acc.harvestAuthorizations),
+    stopRequests: structuredClone(acc.stopRequests),
+    harvestExecutionStarts: { ...acc.harvestExecutionStarts },
+    latestHarvestResumedSeq: acc.latestHarvestResumedSeq,
+    harvestSessionEndings: { ...acc.harvestSessionEndings },
+    harvestSessions: structuredClone(acc.harvestSessions),
+    attention: repositoryAttentionReducer.finish(acc.attention),
+    dismissedThrough: acc.dismissedThrough,
+    failedAt: { ...acc.failedAt },
+    openHarvest: openHarvestExecutionsReducer.finish(acc.openHarvest),
+    settings: dispatchSettingsReducer.finish(acc.settings),
+    harvest: harvestReducer.finish(acc.harvest),
+    health: ticketSourceHealthReducer.finish(acc.health),
+    autoMerge: autoMergeDefaultReducer.finish(acc.autoMerge),
+    config: effectiveConfigReducer.finish(acc.config),
+    sandboxes: sandboxStatesReducer.finish(acc.sandboxes),
+    status: acc.run ? dispatchStatusReducer(acc.run).finish(acc.status) : undefined,
+    scan: acc.scan,
+    runs: structuredClone(acc.runs),
+    publications: structuredClone(acc.publications),
+  }),
+})
+
+import type { IncrementalReducer } from './incremental'
+/** Companion for an optional finished answer: absence is represented by an
+ * omitted object field, never top-level undefined. */
+export function optionalValue<A, E, V>(reducer: IncrementalReducer<A, E, V>) {
+  return {
+    ...reducer,
+    finish: (acc: A) => ({ value: reducer.finish(acc) }),
+    reduce: (events: readonly E[]) => ({ value: reducer.reduce(events) }),
+  }
+}

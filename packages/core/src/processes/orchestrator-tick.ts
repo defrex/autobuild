@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../store/reduced-reads'
 /**
  * The dispatcher tick's orchestrator step (AUT-342): resume suspended turns,
  * reap crashed ones, and wake idle sessions from build attention events.
@@ -28,7 +29,6 @@ import { buildRegistry, type OperatorToolRegistry } from '../operator/registry'
 import type { OperatorSandboxService } from '../operator/sandbox'
 import { ticketBackendFromSource } from '../operator/ticket-source-backend'
 import { reduceSession, type SessionTurnTrigger } from '../store/session-reducer'
-import { reduceBuild } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
 import type { BuildStore, Clock } from '../store/types'
 import type { RepoViewStore } from './repo-view'
@@ -315,7 +315,7 @@ export async function runOrchestratorTickStep(
             event,
             buildState: (options.view !== undefined
               ? await options.view.buildState(newest.build)
-              : reduceBuild(await store.getEvents(newest.build))) as unknown as Record<
+              : (await readBuildFacts(store, newest.build)).value.state) as unknown as Record<
               string,
               unknown
             >,

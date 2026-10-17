@@ -13,7 +13,6 @@
 import { createHash } from 'node:crypto'
 import { humanActor } from '../events/envelope'
 import type { Via } from '../events/envelope'
-import type { RepositoryEvent } from '../events/repository'
 import type { Forge } from '../ports/types'
 import {
   SANDBOX_FORBIDDEN_ENV,
@@ -23,8 +22,7 @@ import {
   type SandboxWaitResult,
 } from '../ports/workspace/operator-sandbox'
 import type { WorkspaceProvider } from '../ports/types'
-import { readRepoEventsIfRecorded } from '../processes/harvest'
-import { sandboxStates } from '../processes/sandbox-state'
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 
 /** Hard bound on one sandbox command wait, in seconds — shared with the
@@ -253,8 +251,11 @@ export async function createOperatorSandboxService(
   }
 
   /** The operator's journal state, or undefined when no environment exists. */
-  const operatorState = (identity: string, events: RepositoryEvent[]) =>
-    sandboxStates(events)
+  const operatorState = (
+    identity: string,
+    events: import('../store/reduced-reads').RepositoryReadFacts,
+  ) =>
+    events.sandboxes
       .filter((state) => state.operator === identity && state.state !== 'released')
       .at(-1)
 
@@ -327,7 +328,7 @@ export async function createOperatorSandboxService(
   ): Promise<T> => {
     const key = `${repo}\0${identity}`
     return serialize(key, async () => {
-      const events = await readRepoEventsIfRecorded(store, repo)
+      const events = (await readRepositoryFacts(store, repo)).value
       const state = operatorState(identity, events)
       const resolved = await ensureWithFacts(identity, state).catch((error: unknown) => {
         if (error instanceof SandboxOperationError) throw error
@@ -337,7 +338,7 @@ export async function createOperatorSandboxService(
           { cause: error },
         )
       })
-      const freshEvents = await readRepoEventsIfRecorded(store, repo)
+      const freshEvents = (await readRepositoryFacts(store, repo)).value
       const freshState = operatorState(identity, freshEvents)
       try {
         const result = await operation(resolved, freshState)
@@ -630,7 +631,7 @@ export async function createOperatorSandboxService(
       requireRepo(input.repo)
       const key = `${repo}\0${identity}`
       await serialize(key, async () => {
-        const events = await readRepoEventsIfRecorded(store, repo)
+        const events = (await readRepositoryFacts(store, repo)).value
         const state = operatorState(identity, events)
         const resolved = await capability.describe({ repo, operator: identity })
         await append(identity, 'orchestrator.sandbox.reset', {
@@ -662,7 +663,7 @@ export async function createOperatorSandboxService(
       requireRepo(input.repo)
       const key = `${repo}\0${identity}`
       await serialize(key, async () => {
-        const events = await readRepoEventsIfRecorded(store, repo)
+        const events = (await readRepositoryFacts(store, repo)).value
         const state = operatorState(identity, events)
         // No environment ever provisioned: a no-op, with no fact and no
         // provider traffic beyond the pure describe.
