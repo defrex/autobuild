@@ -137,6 +137,7 @@ import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-ru
 import {
   sampleUnclaimedObservationCount,
   evaluateHarvestPressureFromStore,
+  evaluateHarvestPressureFromDigests,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
 import type { HarvestExecution } from '../ports/workspace/harvest-execution'
@@ -732,6 +733,7 @@ class DispatchLoop {
    * id while it holds the repo lease, else undefined. A losing invocation
    * records `dispatcher.tick-yielded` and performs no claims, launches, or
    * publications. */
+  private repoLeaseValidUntil = 0
   private repoLeaseHolder: string | undefined
   private repoLeaseHeartbeat: ReturnType<typeof setInterval> | undefined
   /** Set when the store reports this supervisor's repo lease was taken over:
@@ -1122,7 +1124,7 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
-      // Every tick first tries the repository supervisor lease. Without it,
+      // Every tick verifies local lease currency, reclaiming when necessary. Without it,
       // this invocation records the yield and performs no claims, launches,
       // or publications — including no tick-completed status publication.
       if (!(await this.ensureRepoLease(this.repoLeaseHolder ?? this.runId))) {
@@ -1161,7 +1163,7 @@ class DispatchLoop {
       const readyObservation =
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
           ? undefined
-          : await this.dispatcher.observeReady()
+          : await this.dispatcher.observeReady({ viewRefreshed: true })
       const report = await this.dispatcher.tick({
         resumeCurrent,
         viewRefreshed: true,
@@ -2222,18 +2224,36 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
+    let tracked: Promise<void>
+    tracked = this.launchHarvestIfNeeded().finally(() => {
+      this.inFlight.delete(tracked)
+      if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
+    })
+    this.harvestInFlight = tracked
+    this.inFlight.add(tracked)
+  }
+
+  private async launchHarvestIfNeeded(): Promise<void> {
+    const state = this.repoView.repositoryFacts().harvest
+    const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
+    if (control.kind === 'park') return
+    if (control.kind === 'proceed' && actionableHarvestRun(state) === undefined) {
+      const pressure = evaluateHarvestPressureFromDigests({
+        digests: await this.repoView.getRepoBuildDigests(this.repoIdentity),
+        harvestEvents: state,
+        policy: this.currentConfig().config.policy,
+      })
+      if (pressure.trigger === undefined) return
+    }
     const hosted = this.wiring.workspaces.harvestExecution
     if (hosted !== undefined) {
       const execution = `${this.host}-harvest-${this.wiring.ids('inst')}`
       this.hostedHarvestExecutions.add(execution)
-      let tracked: Promise<void>
-      tracked = this.launchHostedHarvest(hosted, execution).finally(() => {
+      try {
+        await this.launchHostedHarvest(hosted, execution)
+      } finally {
         this.hostedHarvestExecutions.delete(execution)
-        this.inFlight.delete(tracked)
-        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
-      })
-      this.harvestInFlight = tracked
-      this.inFlight.add(tracked)
+      }
       return
     }
 
@@ -2259,8 +2279,7 @@ class DispatchLoop {
       },
     }
 
-    let tracked: Promise<void>
-    tracked = (async () => {
+    await (async () => {
       const ticketUrl =
         harvestDeps.config.tickets.source === 'hosted'
           ? (harvestDeps.config.tickets.url ?? (/^https?:/i.test(storeRef) ? storeRef : undefined))
@@ -2451,12 +2470,6 @@ class DispatchLoop {
           )
         }
       })
-      .finally(() => {
-        this.inFlight.delete(tracked)
-        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
-      })
-    this.harvestInFlight = tracked
-    this.inFlight.add(tracked)
   }
 
   /** Hosted harvest lifecycle: threshold gate → provision + launch in the
@@ -3746,11 +3759,14 @@ class DispatchLoop {
 
   // ── Repository supervisor lease (§12 serialization) ────────────────────────
 
-  /** Claim (or renew) the repository lease for this invocation and start the
+  /** Claim an unknown or expired repository lease and start the
    * heartbeat timer. False means another supervisor holds it: the caller
    * yields — no claims, launches, or publications. */
   private async ensureRepoLease(holder: string): Promise<boolean> {
     if (this.superseded) return false
+    if (this.repoLeaseHolder === holder && this.wiring.clock().getTime() < this.repoLeaseValidUntil)
+      return true
+    const requestedAt = this.wiring.clock().getTime()
     const claimed = await this.wiring.store
       .claimRepoLease(this.repoIdentity, holder, REPO_LEASE_TTL_MS)
       .catch(() => false)
@@ -3773,6 +3789,7 @@ class DispatchLoop {
       }
       return false
     }
+    this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
     if (this.repoLeaseHolder === undefined) {
       this.repoLeaseHolder = holder
       this.startRepoLeaseHeartbeat(holder)
@@ -3783,9 +3800,13 @@ class DispatchLoop {
   private startRepoLeaseHeartbeat(holder: string): void {
     if (this.repoLeaseHeartbeat !== undefined) return
     this.repoLeaseHeartbeat = setInterval(() => {
+      const requestedAt = this.wiring.clock().getTime()
       this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
-          if (alive) return
+          if (alive) {
+            this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
+            return
+          }
           // A peer holds the repository now. Exit watch mode cleanly after
           // the same teardown every stop takes (detach remote / reap local,
           // signal continuations, release the lease).
@@ -3833,6 +3854,7 @@ class DispatchLoop {
     this.stopRepoLeaseHeartbeat()
     const holder = this.repoLeaseHolder
     this.repoLeaseHolder = undefined
+    this.repoLeaseValidUntil = 0
     if (holder === undefined) return
     try {
       await this.wiring.store.releaseRepoLease(this.repoIdentity, holder)
