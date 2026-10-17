@@ -1,4 +1,4 @@
-import { readRepositoryFacts, readOpenTick } from '../store/reduced-reads'
+import { readDispatcherRunFacts, readOpenTick } from '../store/reduced-reads'
 import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
 import type { BuildStore } from '../store/types'
@@ -168,9 +168,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   // chooses/awaits process termination, avoiding check-then-append races.
   const completed = child.exited.then(async (exitCode): Promise<DispatchChildResult> => {
     const processSignal = child.signalCode === null ? requestedSignal : String(child.signalCode)
-    const recorded = (await readRepositoryFacts(deps.store, deps.repo)).value.runs[
-      JSON.stringify(deps.run)
-    ]?.stop
+    const recorded = (await readDispatcherRunFacts(deps.store, deps.repo, deps.run)).value.stop
     if (recorded?.type === 'dispatcher.run-stopped') {
       const signal = processSignal ?? recorded.payload.signal
       return {

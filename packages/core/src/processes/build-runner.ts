@@ -1140,7 +1140,10 @@ export class BuildRunner {
   private async evaluateVerify(decision: EvaluateVerifyDecision): Promise<void> {
     const { exec, workspacePath } = this.deps
     const baseSha = await readBuildSelector(this.deps.store, this.deps.slug, 'verifyDiffBase')
-    if (baseSha === undefined) throw new Error('no verify diff base is recorded')
+    if (baseSha === undefined)
+      throw new Error(
+        'conditional verify requires a workspace.provisioned base SHA, but this build has none',
+      )
     const args = ['git', 'diff', '--no-renames', '--name-only', '-z', baseSha, 'HEAD', '--']
     const result = await exec(args, { cwd: workspacePath })
     if (result.exitCode !== 0) {
@@ -1306,7 +1309,11 @@ export class BuildRunner {
     try {
       await this.requireFinalizeWorktreeClean('before the post-step starts')
       durableHead = await readBuildSelector(this.deps.store, this.deps.slug, 'publishedBranchHead')
-      if (durableHead === undefined) throw new Error('no published branch head is recorded')
+      if (durableHead === undefined)
+        throw new Error(
+          'finalize publication requires a prior implement.completed, reconcile.completed, ' +
+            'or successful finalize publication head, but this build has none',
+        )
     } catch (error) {
       failureNote = `finalize publication preflight failed: ${errorMessage(error)}`
     }

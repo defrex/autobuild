@@ -1,3 +1,4 @@
+import type { BuildStore } from '../store/types'
 import { expect, test } from 'bun:test'
 import { RepoViewStore } from './repo-view'
 import { MemoryBuildStore } from '../store/memory'
@@ -122,4 +123,40 @@ test('raw cursor reads pass through event output, independently of facts', async
   const second = await store.append('build', { actor: KERNEL, type: 'build.resumed', payload: {} })
   await view.buildFacts('build')
   expect(await view.getEvents('build', first.seq)).toEqual([second])
+})
+
+test('own appends refresh only the changed digest; leases do not repeat discovery', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  await store.createBuild({ slug: 'a', repo: 'repo' })
+  await store.createBuild({ slug: 'b', repo: 'repo' })
+  let batches = 0
+  const singles: string[] = []
+  const counted = new Proxy(store, {
+    get(target, key) {
+      if (key === 'getRepoBuildDigests')
+        return async (repo: string) => {
+          batches++
+          return target.getRepoBuildDigests(repo)
+        }
+      if (key === 'getReducerValue')
+        return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+          if (args[1].reducer === 'buildDigest' && args[0].kind === 'build')
+            singles.push(args[0].slug)
+          return target.getReducerValue(...args)
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const view = new RepoViewStore(counted, { repo: 'repo' })
+  await view.refresh()
+  await view.append('a', { actor: KERNEL, type: 'build.aborted', payload: {} })
+  expect((await view.getRepoBuildDigests('repo')).get('a')?.terminal).toBe('aborted')
+  await view.claimLease('a', 'holder', 60000)
+  await view.heartbeat('a', 'holder')
+  await view.releaseLease('a', 'holder')
+  await view.getRepoBuildDigests('repo')
+  expect(batches).toBe(1)
+  expect(singles).toEqual(['a'])
 })

@@ -5,35 +5,60 @@ import { SqliteBuildStore } from '../store/local/store'
 import { MemoryBlobStore } from '../store/memory'
 import { reducedReadBudget } from '../testing/reduced-read-budget'
 import { readBuildFacts } from '../store/reduced-reads'
-import { KERNEL } from '../events/envelope'
+import { KERNEL, humanActor } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
 
 test('local SQL row budgets include adapter-internal persisted reads on fresh consumers', async () => {
   const database = new Database(':memory:')
   const blobs = new MemoryBlobStore()
   const store = new SqliteBuildStore({ database, blobs })
-  const costs = { events: 0, metadata: 0 }
-  const query = database.query.bind(database)
-  Reflect.set(database, 'query', (sql: string) => {
-    const statement = query(sql)
-    return new Proxy(statement, {
-      get(target, key) {
-        const method = Reflect.get(target, key, target)
-        if (typeof method !== 'function') return method
-        return (...args: unknown[]) => {
-          const result = Reflect.apply(method, target, args)
-          if (key === 'all' || key === 'get' || key === 'values') {
-            const rows =
-              key === 'get' ? (result == null ? 0 : 1) : Array.isArray(result) ? result.length : 0
-            const events = /SELECT \* FROM (?:repo_)?events\b/i.test(sql)
-            costs[events ? 'events' : 'metadata'] += rows
+  const costs = { events: 0, metadata: 0, bytes: 0 }
+  const wrapped = new WeakSet<object>()
+  for (const name of ['query', 'prepare'] as const) {
+    const original = database[name].bind(database)
+    Reflect.set(database, name, (sql: string, ...params: unknown[]) => {
+      const statement = Reflect.apply(original, database, [sql, ...params])
+      if (wrapped.has(statement)) return statement
+      const proxy = new Proxy(statement, {
+        get(target, key) {
+          const method = Reflect.get(target, key, target)
+          if (typeof method !== 'function') return method
+          return (...args: unknown[]) => {
+            const result = Reflect.apply(method, target, args)
+            if (key === 'all' || key === 'get' || key === 'values') {
+              const rows =
+                key === 'get' ? (result == null ? 0 : 1) : Array.isArray(result) ? result.length : 0
+              const events =
+                /\bFROM\s+["`]?(?:repo_)?events\b/i.test(sql) && !/\b(?:max|count)\s*\(/i.test(sql)
+              costs[events ? 'events' : 'metadata'] += rows
+              costs.bytes += Buffer.byteLength(JSON.stringify(result) ?? '')
+            }
+            return result
           }
-          return result
-        }
-      },
+        },
+      })
+      wrapped.add(proxy)
+      return proxy
     })
-  })
+  }
   try {
+    // A deliberate full-log read through Drizzle must trip the same budget.
+    await store.ensureRepo('probe')
+    await store.createBuild({ slug: 'probe', repo: 'probe' })
+    for (let i = 0; i < 50; i++) {
+      await store.append('probe', { actor: KERNEL, type: 'build.paused', payload: {} })
+      await store.appendRepo('probe', {
+        actor: humanActor('probe'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    }
+    costs.events = 0
+    await store.getEvents('probe')
+    expect(costs.events).toBe(50)
+    await store.getRepoEvents('probe')
+    expect(costs.events).toBe(100)
+    expect(() => expect(costs.events).toBeLessThanOrEqual(6)).toThrow()
     await reducedReadBudget({
       store,
       costs,

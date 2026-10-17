@@ -512,7 +512,16 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-    return readPersistedBuildDigests(this, repo)
+    return readPersistedBuildDigests(
+      this,
+      repo,
+      this.db
+        .select()
+        .from(builds)
+        .where(eq(builds.repo, repo))
+        .all()
+        .map((row) => this.toRecord(row)),
+    )
   }
 
   /** Current build-stream tail inside an open transaction. */

@@ -79,7 +79,7 @@ export function shouldPublishTick(
 export function shouldPublishTickFromFacts(
   report: TickReport,
   facts: import('../store/reduced-reads').RepositoryReadFacts,
-  run: string,
+  run: import('../kernel/read-facts').DispatcherRunFacts,
   startedAt: string,
 ): boolean {
   if (
@@ -89,7 +89,7 @@ export function shouldPublishTickFromFacts(
     )
   )
     return true
-  const previous = facts.runs[JSON.stringify(run)]?.completed
+  const previous = run.completed
   if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
     return true
   if (
@@ -102,7 +102,7 @@ export function shouldPublishTickFromFacts(
     ].some((list) => list.length > 0)
   )
     return true
-  if (facts.runs[JSON.stringify(run)]?.tick?.type === 'dispatcher.tick-failed') return true
+  if (run.tick?.type === 'dispatcher.tick-failed') return true
   return facts.attention.sources.some(
     ([, source]) =>
       source.requiresRetry && !source.retryObserved && Date.parse(startedAt) >= source.deadline,

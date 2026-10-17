@@ -1,10 +1,9 @@
-import { readRepositoryFacts } from '../store/reduced-reads'
+import { readRepositoryFacts, readDispatcherRunFacts } from '../store/reduced-reads'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, RepositoryRecord } from '../store/types'
 import { formatDispatcherIdentity, projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 
-/** Bounded first; a later yielding invocation can hide the owner's identity or
- * an earlier stop. Only this correlation query falls back to full history. */
+/** Correlate only the latest, stopped and lease-holder runs through persisted values. */
 export async function readDispatcherLiveness(
   store: BuildStore,
   repo: string,
@@ -13,16 +12,19 @@ export async function readDispatcherLiveness(
 ) {
   const record = await store.getRepo(repo)
   const facts = record === null ? undefined : (await readRepositoryFacts(store, repo)).value
-  const events = facts
-    ? Object.values(facts.runs).flatMap((run) =>
-        [
-          run.start,
-          ...(run.latestStart?.seq === run.start?.seq ? [] : [run.latestStart]),
-          run.stop,
-          run.tick,
-        ].filter((event): event is RepositoryEvent => event !== undefined),
-      )
-    : []
+  const runs = new Set(
+    [facts?.latestRun, facts?.latestStoppedRun, record?.lease?.holder].filter(
+      (run): run is string => run !== undefined,
+    ),
+  )
+  const correlations = await Promise.all(
+    [...runs].map(async (run) => (await readDispatcherRunFacts(store, repo, run)).value),
+  )
+  const events = correlations.flatMap((run) =>
+    [run.start, run.latestStart, run.stop, run.tick].filter(
+      (event): event is RepositoryEvent => event !== undefined,
+    ),
+  )
   return { record, events, dispatcher: projectDispatcherLiveness(record, events, now) }
 }
 
@@ -57,9 +59,9 @@ export class StandbyIdentityResolver {
     this.attempted.add(holder)
     const lookup = (async () => {
       try {
-        const facts = (await readRepositoryFacts(this.store, this.repo)).value
-        this.ingest(Object.values(facts.runs).flatMap((run) => (run.start ? [run.start] : [])))
-        const complete = true
+        const facts = (await readDispatcherRunFacts(this.store, this.repo, holder)).value
+        this.ingest(facts.start ? [facts.start] : [])
+        const complete = false // This lookup correlates one holder, not the complete journal.
         this.history?.remember([...this.starts.values()], complete)
       } catch {
         // Identity is best effort; the sampled holder id remains sufficient.

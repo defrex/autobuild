@@ -1,5 +1,10 @@
 import type { BuildState } from '../kernel/reducer'
-import { readBuildFacts, readRepositoryFacts, readBuildSelector } from '../store/reduced-reads'
+import {
+  readBuildFacts,
+  readRepositoryFacts,
+  readBuildSelector,
+  readDispatcherRunFacts,
+} from '../store/reduced-reads'
 import { shouldPublishTickFromFacts } from '../processes/tick-publication'
 import { issueTicketGrant, ticketGrantRequest } from '../ports/tickets/grants'
 import { RemoteBuildStore } from '../store/remote/client'
@@ -2848,7 +2853,7 @@ class DispatchLoop {
       const publish = shouldPublishTickFromFacts(
         merged,
         this.repoView.repositoryFacts(),
-        this.runId,
+        (await readDispatcherRunFacts(this.repoView, this.repoIdentity, this.runId)).value,
         startedAt,
       )
       const events: RepositoryEventWrite[] = publish
@@ -4381,9 +4386,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     await loop.run()
     const stopRequest =
       resolvedOpts.kernelRunId && resolvedOpts.signal?.aborted
-        ? (await readRepositoryFacts(wiring.store, state.repo)).value.stopRequests[
-            JSON.stringify(runId)
-          ]
+        ? (await readDispatcherRunFacts(wiring.store, state.repo, runId)).value.stopRequest
         : undefined
     const stoppedSignal =
       stopRequest?.type === 'dispatcher.stop-requested'

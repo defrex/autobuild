@@ -188,21 +188,34 @@ export async function readPersistedBuildDigests(
   repo: string,
   records?: import('./types').BuildRecord[],
 ) {
-  const output = new Map<string, import('./types').BuildDigest>()
-  for (const record of records ?? (await store.listBuilds())) {
-    if (record.repo !== repo) continue
-    const result = await readValue<ReturnType<typeof import('./digest').buildDigestReducer.finish>>(
-      store,
-      { kind: 'build', slug: record.slug },
-      'buildDigest',
-    )
-    output.set(record.slug, { slug: record.slug, ...result.value })
-  }
-  return output
+  const entries = await Promise.all(
+    (records ?? (await store.listBuilds()))
+      .filter((record) => record.repo === repo)
+      .map(async (record) => {
+        const result = await readValue<
+          ReturnType<typeof import('./digest').buildDigestReducer.finish>
+        >(store, { kind: 'build', slug: record.slug }, 'buildDigest')
+        return [record.slug, { slug: record.slug, ...result.value }] as const
+      }),
+  )
+  return new Map(entries)
 }
 
 /** Keep the batch boundary for hosted callers; adapter implementations use
  * readPersistedBuildDigests so each digest still comes from a persisted value. */
 export function readBuildDigests(store: Pick<BuildStore, 'getRepoBuildDigests'>, repo: string) {
   return store.getRepoBuildDigests(repo)
+}
+
+export async function readDispatcherRunFacts(store: Reader, repo: string, run: string) {
+  const result = await store.getReducerValue(
+    { kind: 'repo', repo },
+    { reducer: 'dispatcherRunFacts', args: { run } },
+  )
+  if (!validateReducerValue('dispatcherRunFacts', result.value))
+    throw new Error('invalid dispatcherRunFacts value')
+  return {
+    cursor: result.cursor,
+    value: result.value as import('../kernel/read-facts').DispatcherRunFacts,
+  }
 }

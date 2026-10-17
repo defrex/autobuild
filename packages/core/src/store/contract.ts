@@ -1086,7 +1086,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
                     { phase: 'plan', round: 1, session: 'session-a' },
                     { phase: 'implement', round: 2, session: 'session-b' },
                   ]
-                : name === 'openTick' || name === 'dispatchStatus'
+                : name === 'openTick' || name === 'dispatchStatus' || name === 'dispatcherRunFacts'
                   ? [{ run: 'run-a' }, { run: 'run-b' }]
                   : name === 'phaseFailures'
                     ? [

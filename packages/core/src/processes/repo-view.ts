@@ -107,6 +107,7 @@ export class RepoViewStore implements BuildStore {
   private records: BuildRecord[] = []
   private recordsDirty = true
   private discovery = new Map<string, BuildDigest>()
+  private readonly dirtyDigests = new Set<string>()
   private discoveryDirty = true
   private repoFacts = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
   constructor(
@@ -129,6 +130,7 @@ export class RepoViewStore implements BuildStore {
     await this.metaChain.run(async () => {
       this.recordsDirty = false
       this.discoveryDirty = false
+      this.dirtyDigests.clear()
       this.records = await this.backing.listBuilds()
       this.discovery = await readBuildDigests(this.backing, this.repo)
       this.initialized = true
@@ -176,6 +178,17 @@ export class RepoViewStore implements BuildStore {
       if (this.discoveryDirty) {
         this.discoveryDirty = false
         this.discovery = await readBuildDigests(this.backing, repo)
+      }
+      if (this.dirtyDigests.size) {
+        const records = this.records.filter((record) => this.dirtyDigests.has(record.slug))
+        this.dirtyDigests.clear()
+        try {
+          for (const [slug, digest] of await readPersistedBuildDigests(this.backing, repo, records))
+            this.discovery.set(slug, digest)
+        } catch (error) {
+          for (const record of records) this.dirtyDigests.add(record.slug)
+          throw error
+        }
       }
       const missing = this.records.filter(
         (record) => record.repo === repo && !this.discovery.has(record.slug),
@@ -297,20 +310,20 @@ export class RepoViewStore implements BuildStore {
     window.events.push(event)
     window.cursor = event.seq
   }
-  private invalidate(): void {
+  private invalidate(slug?: string): void {
     this.recordsDirty = true
-    this.discoveryDirty = true
+    if (slug) this.dirtyDigests.add(slug)
   }
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
     const record = await this.backing.createBuild(input)
-    this.invalidate()
+    this.invalidate(input.slug)
     return record
   }
   append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     return this.build(slug, async () => {
       const result = await this.backing.append(slug, event)
       this.foldBuildAppend(slug, result as AbEvent)
-      this.invalidate()
+      this.invalidate(slug)
       return result
     })
   }
@@ -326,7 +339,7 @@ export class RepoViewStore implements BuildStore {
         const window = this.windows.get(slug)
         if (window) window.dirty = true
       }
-      this.invalidate()
+      this.invalidate(slug)
       return result
     })
   }
@@ -338,7 +351,7 @@ export class RepoViewStore implements BuildStore {
     return this.build(slug, async () => {
       const result = await this.backing.appendWithArtifacts(slug, artifacts, makeEvent)
       this.foldBuildAppend(slug, result.event as AbEvent)
-      this.invalidate()
+      this.invalidate(slug)
       return result
     })
   }

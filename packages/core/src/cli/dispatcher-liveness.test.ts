@@ -151,6 +151,7 @@ test('frontend warm history never correlates; cold history remembers a holder on
     return events(repo, since)
   }
   const remembered: import('../events/repository').RepositoryEvent[] = []
+  const completeness: boolean[] = []
   const warm = new StandbyIdentityResolver(f.store, f.repo, {
     allowLookup: () => false,
     remember: () => {},
@@ -159,12 +160,21 @@ test('frontend warm history never correlates; cold history remembers a holder on
   expect([bounded, full]).toEqual([0, 0])
   const cold = new StandbyIdentityResolver(f.store, f.repo, {
     allowLookup: () => true,
-    remember: (events) => remembered.push(...events),
+    remember: (events, complete) => {
+      remembered.push(...events)
+      completeness.push(complete)
+    },
   })
   expect(await cold.refresh('self', undefined, f.now())).toContain('pid 123')
   await cold.refresh('self', undefined, f.now())
   expect([bounded, full]).toEqual([0, 0])
+  expect(completeness).toEqual([false])
   warm.ingest(remembered)
   expect(await warm.refresh('self', undefined, f.now())).toContain('pid 123')
+  await f.store.releaseRepoLease(f.repo, 'owner')
+  await f.start('next-owner', 456)
+  await f.store.claimRepoLease(f.repo, 'next-owner', 60000)
+  expect(await cold.refresh('self', undefined, f.now())).toContain('pid 456')
+  expect(completeness).toEqual([false, false])
   expect([bounded, full]).toEqual([0, 0])
 })

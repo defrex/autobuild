@@ -20,6 +20,7 @@ import {
   readRepositoryFacts,
   readRepositoryAttention,
   readBuildDigests,
+  readDispatcherRunFacts,
 } from '../store/reduced-reads'
 import { RepoViewStore } from '../processes/repo-view'
 import { abWatch, decodeCursor } from '../cli/watch'
@@ -29,6 +30,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 export interface ReducedReadCosts {
   events: number
   metadata: number
+  bytes: number
 }
 const repo = '/reduced-read-budget'
 const slug = 'reduced-budget'
@@ -84,7 +86,9 @@ export async function reducedReadBudget(opts: {
   const reset = () => {
     costs.events = 0
     costs.metadata = 0
+    costs.bytes = 0
   }
+  let repositoryBytes: number | undefined
   for (const length of [32, 256]) {
     for (let i = 0; i < length; i++) {
       await store.append(slug, {
@@ -97,7 +101,44 @@ export async function reducedReadBudget(opts: {
         type: 'dispatcher.intake-set',
         payload: { enabled: true },
       })
+      const run = `old-${length}-${String(i).padStart(4, '0')}`
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 1,
+          roleWarnings: [],
+          effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+        },
+      })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run, outcome: 'normal' },
+      })
     }
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'budget-run',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+      },
+    })
+    const factsBytes = Buffer.byteLength(
+      JSON.stringify((await readRepositoryFacts(store, repo)).value),
+    )
+    if (repositoryBytes !== undefined) expect(factsBytes).toBeLessThan(repositoryBytes + 512)
+    repositoryBytes = factsBytes
+    await readDispatcherRunFacts(store, repo, 'budget-run')
+    await readDispatcherRunFacts(
+      store,
+      repo,
+      `old-${length}-${String(length - 1).padStart(4, '0')}`,
+    )
     // Warm persisted values independently of any consumer instance.
     await readBuildStreamSeed(store, slug)
     await readBuildFacts(store, slug)
@@ -147,6 +188,7 @@ export async function reducedReadBudget(opts: {
     })
     expect(costs.events).toBe(0)
     expect(costs.metadata).toBeLessThan(400)
+    expect(costs.bytes).toBeLessThan(1_000_000)
 
     // A fresh watch must suppress historical PR eligibility despite armed
     // consent at registration, including its first event-bearing poll.
@@ -253,5 +295,45 @@ export async function reducedReadBudget(opts: {
       type: 'build.auto-merge-requested',
       payload: {},
     })
+    await readBuildStreamSeed(store, slug)
+    reset()
+    let waitTick = 0
+    time = 0
+    const polled: string[] = []
+    const waited = await abWait({
+      targetRepo: repo,
+      env: {},
+      exec,
+      storeRef: opts.storeRef ?? '/budget',
+      openStore: () => cold,
+      slugs: [slug],
+      forValues: ['attention'],
+      json: true,
+      timeout: '4',
+      now: () => new Date(time),
+      stdout: (line) => polled.push(line),
+      stderr: () => {},
+      delay: async () => {
+        time += 1000
+        // The first pass stays idle; the next delivers the first event batch.
+        if (++waitTick === 1) {
+          expect(costs.events).toBe(0)
+          expect(costs.metadata).toBeLessThan(40)
+        }
+        if (waitTick === 2) {
+          expect(costs.events).toBe(0)
+          await store.append(slug, {
+            actor: humanActor('human'),
+            type: 'build.auto-merge-cancelled',
+            payload: {},
+          })
+        }
+      },
+    })
+    expect(waited).toBe(0)
+    expect(waitTick).toBe(2)
+    expect(JSON.parse(polled[0]!).observation.pr.number).toBe(7)
+    expect(costs.events).toBeLessThanOrEqual(2)
+    expect(costs.metadata).toBeLessThan(50)
   }
 }

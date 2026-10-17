@@ -5,16 +5,12 @@ import exceptions from './persisted-reduced-read-exceptions.json'
 
 test('production current reductions use persisted reads; every exception has a live function identity and reason', async () => {
   const boundaries = []
-  for (const root of [
-    'packages/core/src',
-    'packages/hosted-store-service/src',
-    'packages/hosted-store-service/app',
-  ]) {
+  for (const root of ['bin', 'packages']) {
     for await (const file of new Glob('**/*.{ts,tsx}').scan(root)) {
       if (
         /\.test\.|\/(?:__fixtures__|fixtures|generators)\//.test(`/${file}`) ||
-        (root.endsWith('core/src') && /^(testing|integration)\//.test(file)) ||
-        file === 'store/contract.ts'
+        /(?:^|\/)(testing|integration)\//.test(file) ||
+        file.endsWith('/store/contract.ts')
       )
         continue
       const path = `${root}/${file}`

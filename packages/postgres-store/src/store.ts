@@ -306,7 +306,12 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-    return readPersistedBuildDigests(this, repo)
+    const records = await this.run(async (q) => {
+      const rows: Row[] =
+        await q`SELECT * FROM builds WHERE repo = ${repo} ORDER BY created_at, slug`
+      return rows.map((row) => this.record(row))
+    })
+    return readPersistedBuildDigests(this, repo, records)
   }
 
   private async appendLocked(

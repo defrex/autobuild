@@ -77,3 +77,46 @@ test('one persisted seed includes transient attention even when consent is armed
   expect(facts.cursor).toBe(current.cursor)
   expect(facts.value.state).toEqual(reduceBuild(await store.getEvents('seed')))
 })
+
+test('repository run correlation stays bounded as stopped run history grows', async () => {
+  const { DISPATCHER } = await import('../events/envelope')
+  const { readRepositoryFacts, readDispatcherRunFacts } = await import('../store/reduced-reads')
+  const { readDispatcherLiveness } = await import('../cli/dispatcher-liveness')
+  const { projectDispatcherLiveness } = await import('./dispatcher-liveness')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  const start = (run: string, pid = 1) =>
+    store.appendRepo('repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid,
+        host: 'host',
+        roleWarnings: [],
+        effectiveConfig: { kind: 'config', rev: 0 },
+      },
+    })
+  await start('owner', 7)
+  await store.claimRepoLease('repo', 'owner', 60000)
+  let baseline = 0
+  for (let i = 0; i < 1000; i++) {
+    const run = `run-${String(i).padStart(4, '0')}`
+    await start(run)
+    await store.appendRepo('repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run, outcome: 'normal' },
+    })
+    if (i === 0) baseline = JSON.stringify((await readRepositoryFacts(store, 'repo')).value).length
+  }
+  const facts = (await readRepositoryFacts(store, 'repo')).value
+  expect(JSON.stringify(facts).length).toBeLessThanOrEqual(baseline + 32)
+  const owner = (await readDispatcherRunFacts(store, 'repo', 'owner')).value
+  expect(owner.start?.type).toBe('dispatcher.run-started')
+  expect(JSON.stringify(owner).length).toBeLessThan(1500)
+  const now = new Date()
+  expect((await readDispatcherLiveness(store, 'repo', now)).dispatcher).toEqual(
+    projectDispatcherLiveness(await store.getRepo('repo'), await store.getRepoEvents('repo'), now),
+  )
+})

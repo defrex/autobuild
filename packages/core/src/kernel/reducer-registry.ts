@@ -1,6 +1,7 @@
 import { terminalGuardReducer } from './terminal-guard'
 import { repositoryAttentionReducer } from './repository-attention'
 import {
+  dispatcherRunFactsReducer,
   buildStreamSeedReducer,
   buildReadFactsReducer,
   repositoryReadFactsReducer,
@@ -88,6 +89,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     reducer: terminalGuardReducer({ phase: 'plan', round: 1, session: 'session' }),
     covers: [],
   },
+  dispatcherRunFacts: { reducer: dispatcherRunFactsReducer('run-a'), covers: [] },
   repositoryAttention: { reducer: repositoryAttentionReducer, covers: [] },
   repositoryReadFacts: { reducer: repositoryReadFactsReducer, covers: [] },
   buildStreamSeed: { reducer: buildStreamSeedReducer, covers: [] },
@@ -203,6 +205,7 @@ const valueExclusions: Record<string, string> = {
 }
 const repositoryValues = new Set([
   'repositoryReadFacts',
+  'dispatcherRunFacts',
   'repositoryAttention',
   'effectiveConfig',
   'harvestDelegation',
@@ -225,6 +228,10 @@ const parameterized: Record<string, Pick<ValueCatalogEntry, 'args' | 'create'>> 
   dispatchStatus: {
     args: z.object({ run: z.string().min(1) }).strict(),
     create: ({ run }) => dispatchStatusReducer(run),
+  },
+  dispatcherRunFacts: {
+    args: z.object({ run: z.string().min(1) }).strict(),
+    create: ({ run }) => dispatcherRunFactsReducer(run),
   },
   openTick: {
     args: z.object({ run: z.string().min(1) }).strict(),

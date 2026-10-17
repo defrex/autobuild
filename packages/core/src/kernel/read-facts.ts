@@ -405,7 +405,6 @@ export interface RepositoryReadAcc {
     Extract<RepositoryEvent, { type: 'harvest.execution.authorized' }>
   >
   harvestExecutionStarts: Record<string, string>
-  stopRequests: Record<string, Extract<RepositoryEvent, { type: 'dispatcher.stop-requested' }>>
   latestHarvestResumedSeq: number
   harvestSessionEndings: Record<string, number>
   harvestSessions: (import('../cli/harvest').HarvestSessionStatusView & { run: string })[]
@@ -421,21 +420,13 @@ export interface RepositoryReadAcc {
   status: ReturnType<ReturnType<typeof dispatchStatusReducer>['initial']>
   run?: string
   scan?: Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }>['payload']
-  runs: Record<
-    string,
-    {
-      start?: RepositoryEvent
-      latestStart?: RepositoryEvent
-      stop?: RepositoryEvent
-      tick?: RepositoryEvent
-      completed?: RepositoryEvent
-    }
-  >
+  latestRun?: string
+  latestStoppedRun?: string
   publications: Extract<RepositoryEvent, { type: 'orchestrator.sandbox.published' }>[]
 }
 export const repositoryReadFactsReducer = defineReducer({
   version:
-    1 +
+    2 +
     openHarvestExecutionsReducer.version +
     repositoryAttentionReducer.version +
     dispatchSettingsReducer.version +
@@ -457,7 +448,6 @@ export const repositoryReadFactsReducer = defineReducer({
     harvestAuthorizations: {},
     latestHarvestResumedSeq: 0,
     harvestExecutionStarts: {},
-    stopRequests: {},
     settings: dispatchSettingsReducer.initial(),
     harvest: harvestReducer.initial(),
     health: ticketSourceHealthReducer.initial(),
@@ -465,7 +455,6 @@ export const repositoryReadFactsReducer = defineReducer({
     config: effectiveConfigReducer.initial(),
     sandboxes: sandboxStatesReducer.initial(),
     status: dispatchStatusReducer('initial').initial(),
-    runs: {},
     publications: [],
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
@@ -492,8 +481,6 @@ export const repositoryReadFactsReducer = defineReducer({
           latest: event,
         }
       }
-      if (event.type === 'dispatcher.stop-requested')
-        acc.stopRequests[JSON.stringify(event.payload.run)] ??= event
       if (event.type === 'harvest.execution.started')
         acc.harvestExecutionStarts[String(event.seq)] = event.payload.execution
       if (event.type === 'harvest.execution.authorized')
@@ -533,24 +520,8 @@ export const repositoryReadFactsReducer = defineReducer({
       }
       if (acc.run) acc.status = dispatchStatusReducer(acc.run).advance(acc.status, [event])
       if (event.type === 'dispatcher.ticket-scan-completed') acc.scan = event.payload
-      if (
-        event.type === 'dispatcher.run-started' ||
-        event.type === 'dispatcher.run-stopped' ||
-        event.type === 'dispatcher.tick-completed' ||
-        event.type === 'dispatcher.tick-failed'
-      ) {
-        const key = JSON.stringify(event.payload.run)
-        acc.runs[key] ??= {}
-        const run = acc.runs[key]
-        if (event.type === 'dispatcher.run-started') {
-          run.start ??= event
-          run.latestStart = event
-        } else if (event.type === 'dispatcher.run-stopped') run.stop = event
-        else {
-          run.tick = event
-          if (event.type === 'dispatcher.tick-completed') run.completed = event
-        }
-      }
+      if (event.type === 'dispatcher.run-started') acc.latestRun = event.payload.run
+      if (event.type === 'dispatcher.run-stopped') acc.latestStoppedRun = event.payload.run
       if (event.type === 'orchestrator.sandbox.published') {
         acc.publications = acc.publications.filter(
           (prior) =>
@@ -565,7 +536,6 @@ export const repositoryReadFactsReducer = defineReducer({
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
     harvestAuthorizations: structuredClone(acc.harvestAuthorizations),
-    stopRequests: structuredClone(acc.stopRequests),
     harvestExecutionStarts: { ...acc.harvestExecutionStarts },
     latestHarvestResumedSeq: acc.latestHarvestResumedSeq,
     harvestSessionEndings: { ...acc.harvestSessionEndings },
@@ -582,7 +552,8 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxes: sandboxStatesReducer.finish(acc.sandboxes),
     status: acc.run ? dispatchStatusReducer(acc.run).finish(acc.status) : undefined,
     scan: acc.scan,
-    runs: structuredClone(acc.runs),
+    latestRun: acc.latestRun,
+    latestStoppedRun: acc.latestStoppedRun,
     publications: structuredClone(acc.publications),
   }),
 })
@@ -596,4 +567,38 @@ export function optionalValue<A, E, V>(reducer: IncrementalReducer<A, E, V>) {
     finish: (acc: A) => ({ value: reducer.finish(acc) }),
     reduce: (events: readonly E[]) => ({ value: reducer.reduce(events) }),
   }
+}
+
+/** One run's correlation facts. History for unrelated runs never enters this value. */
+export interface DispatcherRunFacts {
+  start?: RepositoryEvent
+  latestStart?: RepositoryEvent
+  stop?: RepositoryEvent
+  tick?: RepositoryEvent
+  completed?: RepositoryEvent
+  stopRequest?: Extract<RepositoryEvent, { type: 'dispatcher.stop-requested' }>
+}
+export function dispatcherRunFactsReducer(run: string) {
+  return defineReducer<DispatcherRunFacts, RepositoryEvent, DispatcherRunFacts>({
+    version: 1,
+    initial: () => ({}),
+    fold(acc, events) {
+      for (const event of events) {
+        if (!('run' in event.payload) || event.payload.run !== run) continue
+        if (event.type === 'dispatcher.run-started') {
+          acc.start ??= event
+          acc.latestStart = event
+        } else if (event.type === 'dispatcher.run-stopped') acc.stop = event
+        else if (event.type === 'dispatcher.stop-requested') acc.stopRequest ??= event
+        else if (
+          event.type === 'dispatcher.tick-completed' ||
+          event.type === 'dispatcher.tick-failed'
+        ) {
+          acc.tick = event
+          if (event.type === 'dispatcher.tick-completed') acc.completed = event
+        }
+      }
+    },
+    finish: (acc) => structuredClone(acc),
+  })
 }

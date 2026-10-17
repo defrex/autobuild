@@ -636,5 +636,10 @@
   "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/buildRoute::getEvents": {
     "kind": "raw",
     "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
+  },
+  "packages/postgres-store/src/store.ts::PostgresBuildStore/subscribe::getEvents": {
+    "kind": "raw",
+    "cursor": true,
+    "reason": "Subscription delivers actual durable event envelopes after the subscriber cursor."
   }
 }
