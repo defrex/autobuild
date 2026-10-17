@@ -4715,7 +4715,7 @@ function deferred(): {
 
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2_000,
+  timeoutMs = 6_000,
 ): Promise<void> {
   const end = Date.now() + timeoutMs
   while (!(await predicate())) {
@@ -9546,10 +9546,10 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
         input,
       })
       // A live dashboard frame proves renderOnce ran at least once; the sleep
-      // then lets several more 20 ms ticks pass, each with its own frame.
+      // then allows idle discovery (up to five seconds) and live refreshes.
       await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
       const framesAfterFirst = term.frames.length
-      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 5_000)
+      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 10_000)
 
       // Every repository read the frames issued was bounded: no from-zero
       // full-journal read at all. The helper's probe + subset pair is what
@@ -11236,3 +11236,82 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
     }
   })
 }
+
+test('focus-paused frontend leaves the supervised kernel ticking and running a ready ticket', async () => {
+  const { DispatchFrontend } = await import('./dispatch-frontend')
+  const fx = await makeFixture(readyTicket('T-focus-kernel'), happyHandlers())
+  const stop = new AbortController()
+  let focus: ((focused: boolean) => void) | undefined
+  let reads = 0
+  const presentationStore = new Proxy(fx.store, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        if (/^(get|list|read)/u.test(String(key))) reads++
+        return Reflect.apply(value, target, args)
+      }
+    },
+  })
+  const term = fakeTerminal()
+  const frontend = new DispatchFrontend({
+    repo: fx.origin,
+    checkout: fx.checkout,
+    storeRef: 'memory',
+    store: presentationStore,
+    env: {},
+    once: false,
+    terminal: term,
+    input: {
+      start(_handler, hooks) {
+        focus = hooks!.onFocus
+        focus!(false)
+        reads = 0 // The bounded startup seed precedes input/focus ownership.
+        return () => {}
+      },
+    },
+    launchChild: ({ run }) => {
+      const completed = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        kernelRunId: run,
+        wire: fx.wire,
+        signal: stop.signal,
+        intervalMs: 20,
+      }).then(() => ({ outcome: 'normal' as const, exitCode: 0 }))
+      return {
+        completed,
+        async stop() {
+          stop.abort()
+          await completed
+        },
+      }
+    },
+  })
+  let running: Promise<void> | undefined
+  try {
+    running = frontend.run()
+    await waitFor(async () => {
+      const builds = await fx.store.listBuilds()
+      if (builds.length === 0) return false
+      return (await fx.store.getEvents(builds[0]!.slug)).some(
+        (event) => event.type === 'session.started',
+      )
+    })
+    const journal = await fx.store.getRepoEvents(fx.origin)
+    expect(journal.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+    expect(fx.tickets.claims.length).toBeGreaterThan(0)
+    expect(reads).toBe(0)
+    const slug = (await fx.store.listBuilds())[0]!.slug
+    focus!(true)
+    await waitFor(() => term.all().includes(slug))
+    expect(reads).toBeGreaterThan(0)
+  } finally {
+    stop.abort()
+    await running
+    await fx.cleanup()
+  }
+}, 30_000)

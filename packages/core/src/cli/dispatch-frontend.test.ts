@@ -69,7 +69,7 @@ async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   message: string,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  for (let attempt = 0; attempt < 1200; attempt += 1) {
     if (await predicate()) return
     await Bun.sleep(5)
   }
@@ -193,6 +193,7 @@ test('once renders one durable snapshot without starting interactive presentatio
   expect(inputStarts).toBe(0)
   expect(snapshots).toHaveLength(1)
   expect(output).toContain('once snapshot')
+  expect(output).not.toContain('\x1b[?1004')
   const snapshot = snapshots[0]!
   expect(snapshot.builds.map((build) => build.slug)).toContain(slug)
   expect(snapshot.queued).toBe(3)
@@ -805,7 +806,7 @@ test('the terminal observation sample reads a missing journal record as an empty
   )
   expect(sampleJournalReads).toBe(0)
   await running
-})
+}, 30_000)
 
 test('harvest run controls preserve the frontend no-action compatibility report', async () => {
   const invoke = async (
@@ -1407,7 +1408,7 @@ test('frontend keeps the durable effective config across rejection and adopts a 
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
-})
+}, 30_000)
 
 test('frontend elapsed repaint cadence advances while the child remains gated', async () => {
   const repo = '/timer-repo'
@@ -1508,6 +1509,7 @@ interface SessionViewHarness {
   frame: () => string
   /** Renderer invocations — one per paint timer tick. */
   paints: () => number
+  focus: (focused: boolean) => void
   /** Stop the run: interrupt, then release the gated child. */
   finish: () => Promise<void>
 }
@@ -1515,6 +1517,7 @@ interface SessionViewHarness {
 async function seedSessionViewHarness(
   overrides: {
     /** Wrap the store (for a slow or pruned readStream). */
+    refreshScheduler?: import('./dashboard/refresh').RefreshScheduler
     wrapStore?: (store: MemoryBuildStore) => BuildStore
     columns?: number
     rows?: number
@@ -1571,12 +1574,16 @@ async function seedSessionViewHarness(
 
   const chunks: string[] = []
   let handler: ((event: TerminalInputEvent) => void) | undefined
+  let focus: ((focused: boolean) => void) | undefined
   let paintCount = 0
   const childDone = deferred<DispatchChildResult>()
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
     store: overrides.wrapStore ? overrides.wrapStore(store) : store,
+    ...(overrides.refreshScheduler !== undefined
+      ? { refreshScheduler: overrides.refreshScheduler }
+      : {}),
     env: {},
     terminal: {
       write: (chunk: string) => chunks.push(chunk),
@@ -1589,7 +1596,8 @@ async function seedSessionViewHarness(
       interactive: true,
     },
     input: {
-      start: (h) => {
+      start: (h, hooks) => {
+        focus = hooks?.onFocus
         handler = h
         return () => {
           handler = undefined
@@ -1615,6 +1623,7 @@ async function seedSessionViewHarness(
     output: () => stripAnsi(chunks.join('')),
     frame: () => stripAnsi(chunks.join('').split('\x1b[2J\x1b[1;1H').at(-1) ?? ''),
     paints: () => paintCount,
+    focus: (focused) => focus?.(focused),
     finish: async () => {
       handler?.({ type: 'interrupt' })
       childDone.resolve({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
@@ -2673,7 +2682,14 @@ test('frontend standby refreshes ownership independently of yield notices and re
   })
   // Drive ordinary projection cycles directly after the actual supervised-child
   // startup, avoiding wall-clock waits for the frontend's two-second poll timer.
-  const poll = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+  const poll = async () => {
+    const presentation = frontend as unknown as {
+      refresh: { join(): Promise<void> }
+      renderOnce(): Promise<void>
+    }
+    await presentation.refresh.join()
+    await presentation.renderOnce()
+  }
   const running = frontend.run()
   try {
     await ready.promise
@@ -2730,5 +2746,198 @@ test('frontend standby refreshes ownership independently of yield notices and re
   } finally {
     done.resolve({ outcome: 'normal', exitCode: 0 })
     await running
+  }
+})
+
+for (const mode of ['paused', 'idle', 'live'] as const) {
+  test(`frontend full store boundary: ${mode} minute, key wakeup, kernel independence`, async () => {
+    const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+    const time = new FakeRefreshScheduler()
+    const repo = `/focus-${mode}`
+    const backing = new MemoryBuildStore()
+    await backing.ensureRepo(repo)
+    const calls: Record<string, number> = {}
+    const store = new Proxy(backing, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          if (/^(get|list|read)/u.test(String(key)))
+            calls[String(key)] = (calls[String(key)] ?? 0) + 1
+          return Reflect.apply(value, target, args)
+        }
+      },
+    }) as BuildStore
+    const addBuild = async () => {
+      const slug = 'new-build'
+      const ticket = { source: 'fake', id: 'FOCUS', title: 'Focus' }
+      await backing.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+      await backing.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo, ticket, baseBranch: 'main' },
+      })
+    }
+    if (mode === 'live') await addBuild()
+    let hooks: import('./terminal').TerminalInputHooks | undefined
+    let key: ((event: TerminalInputEvent) => void) | undefined
+    const done = deferred<DispatchChildResult>()
+    const started = deferred<void>()
+    const frames: DashboardModel[] = []
+    let output = ''
+    const write = (chunk: string) => {
+      output += chunk
+    }
+    const frontend = new DispatchFrontend({
+      repo,
+      storeRef: 'memory',
+      store,
+      env: {},
+      once: false,
+      refreshScheduler: time,
+      terminal: {
+        interactive: true,
+        columns: 100,
+        rows: 24,
+        write,
+        modes: createTerminalModeController(write),
+      },
+      input: {
+        start(handler, inputHooks) {
+          key = handler
+          hooks = inputHooks
+          return () => {
+            key = undefined
+          }
+        },
+      },
+      resolveDashboardRenderer: () => (model) => {
+        frames.push(model)
+        return ['frame']
+      },
+      launchChild: ({ run }) => {
+        const startup = backing
+          .appendRepoWithArtifacts(
+            repo,
+            [
+              {
+                kind: 'dispatcher-effective-config',
+                content: JSON.stringify({
+                  roles: { default: { runtime: 'claude' } },
+                  tickets: { source: 'file', readyState: 'ready' },
+                }),
+              },
+            ],
+            (artifacts) => ({
+              actor: DISPATCHER,
+              type: 'dispatcher.run-started',
+              payload: {
+                run,
+                pid: 999,
+                roleWarnings: [],
+                effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              },
+            }),
+          )
+          .then(() => {
+            started.resolve()
+          })
+        return { completed: startup.then(() => done.promise), async stop() {} }
+      },
+    })
+    const running = frontend.run()
+    try {
+      await started.promise
+      await time.settle()
+      await time.advance(501)
+      expect(frames.length).toBeGreaterThan(0)
+      if (mode === 'paused') hooks!.onFocus!(false)
+      for (const name of Object.keys(calls)) calls[name] = 0
+      await time.advance(60_000)
+      const expected = mode === 'paused' ? 0 : mode === 'idle' ? 12 : 120
+      expect(calls.listBuilds ?? 0).toBe(expected)
+      expect(calls.getRepoBuildDigests ?? 0).toBe(expected)
+      expect(calls.getRepoEvents ?? 0).toBe(expected)
+      expect(calls.getRepo ?? 0).toBe(expected)
+      expect(calls.getArtifact ?? 0).toBe(0) // unchanged rows reuse enrichment
+      expect(calls.readStream ?? 0).toBe(0)
+      expect(Object.fromEntries(Object.entries(calls).filter(([, count]) => count > 0))).toEqual(
+        expected === 0
+          ? {}
+          : {
+              getRepoEvents: expected,
+              getRepoBuildDigests: expected,
+              listBuilds: expected,
+              getRepo: expected,
+              ...(mode === 'live' ? { getEvents: expected } : {}),
+            },
+      )
+      if (mode === 'paused') {
+        expect(Object.values(calls).reduce((sum, n) => sum + n, 0)).toBe(0)
+        // Simulated kernel commits independently, through the original store.
+        await addBuild()
+        await time.advance(60_000)
+        expect(calls.listBuilds ?? 0).toBe(0)
+        hooks!.onFocus!(true)
+        await time.settle()
+        expect(frames.at(-1)!.builds.map((build) => build.slug)).toContain('new-build')
+        hooks!.onFocus!(false)
+        key!({ type: 'text', text: '?' })
+        await time.settle()
+        const afterKey = calls.listBuilds
+        await time.advance(60_000)
+        expect(calls.listBuilds).toBe(afterKey)
+      }
+      hooks!.onFocus!(false)
+      const beforeQuit = { ...calls }
+      done.resolve({ outcome: 'normal', exitCode: 0 })
+      await running
+      expect(calls).toEqual(beforeQuit)
+      expect(output).toContain('\x1b[?1004h')
+      expect(output).toContain('\x1b[?1004l')
+    } finally {
+      done.resolve({ outcome: 'normal', exitCode: 0 })
+      await running
+    }
+  })
+}
+
+test('focus loss pauses the session feed as well as frame reads for a simulated minute', async () => {
+  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+  const time = new FakeRefreshScheduler()
+  let reads = 0
+  const h = await seedSessionViewHarness({
+    refreshScheduler: time,
+    wrapStore: (backing) =>
+      new Proxy(backing, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target)
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            if (/^(get|list|read)/u.test(String(key))) reads++
+            return Reflect.apply(value, target, args)
+          }
+        },
+      }),
+  })
+  try {
+    await time.advance(501)
+    h.press({ type: 'down' })
+    h.press({ type: 'enter' })
+    await time.settle()
+    h.press({ type: 'enter' })
+    await time.settle()
+    expect(h.frame()).toContain('Prompt: watch the limiter')
+    h.focus(false)
+    reads = 0
+    await h.store.appendStreamParts(h.streamId, [textDeltaPart('t1', ' updated while away')])
+    await time.advance(60_000)
+    expect(reads).toBe(0)
+    h.focus(true)
+    await time.settle()
+    expect(h.frame()).toContain('updated while away')
+    expect(reads).toBeGreaterThan(0)
+  } finally {
+    await h.finish()
   }
 })

@@ -702,6 +702,16 @@ queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
+`packages/core/src/cli/dashboard/refresh.ts` owns the shared presentation read
+scheduler for both terminal paths: focused by default, paused on focus-out,
+immediate on focus-in or keys, 500 ms with retained builds or during a 30-second
+interaction hold, and 5 seconds when idle. Presentation store facades check
+admission at every asynchronous read stage; the kernel uses its original store
+and independent tick timers. Cached clock paints perform no reads. The mode
+ledger owns focus reporting through teardown and catchable faults; job-control
+suspension restores modes and input before stopping and reactivates with assumed
+focus on resume. Plain, non-TTY, and once runs never enable focus reporting.
+
 `packages/core/src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
 inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its
 one-hour `diverged` predicate is presentation-only: reducer status, engine

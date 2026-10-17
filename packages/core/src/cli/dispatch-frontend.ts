@@ -1,3 +1,10 @@
+import {
+  DashboardRefresh,
+  interactionRead,
+  presentationReader,
+  type RefreshScheduler,
+} from './dashboard/refresh'
+import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
 import { DispatchRepositoryFeed } from './dispatch-repository-feed'
 import { StandbyIdentityResolver } from './dispatcher-liveness'
 import { configSchema, type Config } from '../config/schema'
@@ -48,7 +55,6 @@ import {
   type DispatchChildOptions,
 } from './dispatch-process'
 
-const POLL_MS = 500
 const PAINT_MS = 250
 const ABORTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'blocked'])
 
@@ -92,6 +98,7 @@ export interface DispatchFrontendOptions {
   intervalMs?: number
   intake?: boolean
   defaultAutoMerge?: boolean
+  refreshScheduler?: RefreshScheduler
   clock?: Clock
   resolveDashboardRenderer?: DashboardRendererResolver
   launchChild?: (input: {
@@ -134,18 +141,19 @@ export class DispatchFrontend {
   private abortConfirmation: { slug: string } | undefined
   private accepting = false
   private cleanupInput: (() => void) | undefined
-  private pollTimer: ReturnType<typeof setInterval> | undefined
+  private refresh: DashboardRefresh | undefined
+  private suspension: ReturnType<typeof installPresentationSuspension> | undefined
+  private readonly reader: BuildStore
   private paintTimer: ReturnType<typeof setInterval> | undefined
-  private polling = false
-  private pollInFlight: Promise<void> | undefined
   private actionTail: Promise<void> = Promise.resolve()
   private presentationRestored = false
   private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
+    this.reader = presentationReader(opts.store, () => this.refresh?.admitted ?? true)
     this.clock = opts.clock ?? systemClock
-    this.repositoryFeed = new DispatchRepositoryFeed(opts.store, opts.repo, this.clock)
-    this.standbyResolver = new StandbyIdentityResolver(opts.store, opts.repo, {
+    this.repositoryFeed = new DispatchRepositoryFeed(this.reader, opts.repo, this.clock)
+    this.standbyResolver = new StandbyIdentityResolver(this.reader, opts.repo, {
       allowLookup: () => this.repositoryFeed.incompleteIdentities,
       remember: (events, complete) => this.repositoryFeed.remember(events, complete),
     })
@@ -180,8 +188,10 @@ export class DispatchFrontend {
     })
   }
 
-  private queue(operation: () => Promise<void>): void {
-    const result = this.actionTail.then(operation)
+  private queue(operation: () => Promise<void>, interaction = true): void {
+    const result = this.actionTail.then(() =>
+      interaction ? interactionRead(operation) : operation(),
+    )
     this.actionTail = result.then(
       () => undefined,
       async (error) => {
@@ -254,6 +264,7 @@ export class DispatchFrontend {
   }
 
   private paint(): void {
+    if (this.refresh !== undefined && !this.refresh.painting) return
     if (this.model === undefined) return
     const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
     this.region.update(
@@ -269,7 +280,7 @@ export class DispatchFrontend {
   private async loadConfig(kind: string, rev: number): Promise<Config> {
     const key = `${kind}@${rev}`
     if (this.config !== undefined && this.configRef === key) return this.config
-    const artifact = await this.opts.store.getRepoArtifact(this.opts.repo, kind, rev)
+    const artifact = await this.reader.getRepoArtifact(this.opts.repo, kind, rev)
     if (artifact === null) throw new Error(`effective config ${key} is not retrievable`)
     const parsed = configSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
     this.config = parsed
@@ -279,6 +290,12 @@ export class DispatchFrontend {
   }
 
   private async renderOnce(): Promise<void> {
+    if (this.refresh !== undefined) return this.refresh.request(true)
+    return this.readFrame()
+  }
+
+  private async readFrame(): Promise<void> {
+    if (this.refresh !== undefined && !this.refresh.admitted) return
     let repositoryEvents = await this.events()
     let status = this.dispatchStatus
     const ref = status.effectiveConfig
@@ -293,7 +310,7 @@ export class DispatchFrontend {
     const config = await this.loadConfig(ref.kind, ref.rev)
     try {
       this.observationCount = unclaimedObservationCount({
-        digests: await this.opts.store.getRepoBuildDigests(this.opts.repo),
+        digests: await this.reader.getRepoBuildDigests(this.opts.repo),
         harvestEvents: repositoryEvents,
       })
     } catch {
@@ -302,9 +319,11 @@ export class DispatchFrontend {
       // ordinary poll, without manufacturing a repository notice.
       if (this.observationCount === undefined) return
     }
-    this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
+    this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
     const snapshot = await this.cache.refresh(config, this.configRevision)
-    if (!this.cache.isCurrent(snapshot)) return
+    if (!this.cache.isCurrent(snapshot) || (this.refresh !== undefined && !this.refresh.admitted))
+      return
+    this.refresh?.activity(snapshot.states.size > 0)
 
     if (this.resumePrompt !== undefined) {
       const state = snapshot.states.get(this.resumePrompt.slug)
@@ -483,7 +502,7 @@ export class DispatchFrontend {
         follow: true,
         scroll: 0,
       }
-      this.sessionFeed = new SessionStreamFeed(this.opts.store, captured.slug)
+      this.sessionFeed = new SessionStreamFeed(this.reader, captured.slug)
       this.syncControls()
       this.paint()
       // Kick the first read immediately rather than waiting one interval.
@@ -540,6 +559,7 @@ export class DispatchFrontend {
    * feed's identity+cursor fence — the same pattern the DispatchLoop path
    * uses, from the same shared feed module. */
   private pollSessionFeed(): void {
+    if (this.refresh !== undefined && !this.refresh.admitted) return
     const view = this.view
     if (view?.kind !== 'session') return
     if (view.status !== 'open' && view.error === undefined) {
@@ -574,7 +594,7 @@ export class DispatchFrontend {
           }
           this.syncControls()
           this.paint()
-        })
+        }, false)
       })
       .catch(() => {
         // The feed contains its own failures; the next poll retries.
@@ -616,7 +636,7 @@ export class DispatchFrontend {
     const ref = this.dispatchStatus.effectiveConfig
     if (ref === undefined) throw new Error('effective config is not available')
     const config = await this.loadConfig(ref.kind, ref.rev)
-    this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
+    this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
     let snapshot = await this.cache.refresh(config, this.configRevision)
     while (!this.cache.isCurrent(snapshot)) {
       snapshot = await this.cache.refresh(config, this.configRevision)
@@ -794,6 +814,7 @@ export class DispatchFrontend {
   }
 
   private onInput(input: TerminalInputEvent): void {
+    this.refresh?.interaction()
     if (!this.accepting) return
     if (input.type === 'interrupt') {
       this.requestOperatorStop()
@@ -840,7 +861,7 @@ export class DispatchFrontend {
     if (enter) {
       // List/detail identity is captured synchronously before any Store read;
       // a later selection move cannot retarget this navigation.
-      void this.openSelected().catch((error) =>
+      void interactionRead(() => this.openSelected()).catch((error) =>
         this.report(
           `dashboard open action failed: ${error instanceof Error ? error.message : String(error)}`,
           'warning',
@@ -909,38 +930,49 @@ export class DispatchFrontend {
     }
   }
 
-  private startPresentation(): void {
-    this.accepting = true
+  private listen(): void {
     this.cleanupInput = this.opts.input.start((input) => this.onInput(input), {
       onListening: () => this.keyboard.query(),
       onKeyboardFlags: (flags) => this.keyboard.reported(flags),
       onDeviceAttributes: () => this.keyboard.deviceAttributes(),
+      onFocus: (focused) => this.refresh?.focus(focused),
+      onInteraction: () => this.refresh?.interaction(),
+      onSuspend: () => this.suspension?.suspend(),
     })
-    const poll = (): void => {
-      if (this.polling) return
-      this.polling = true
-      const current = this.renderOnce()
-        .catch(async (error) => {
-          try {
-            await this.report(
-              `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
-              'warning',
-            )
-          } catch {
-            // retry on the next poll
-          }
-        })
-        .finally(() => {
-          if (this.pollInFlight === current) this.pollInFlight = undefined
-          this.polling = false
-        })
-      this.pollInFlight = current
-    }
-    this.pollTimer = setInterval(poll, POLL_MS)
+  }
+
+  private startPresentation(): void {
+    this.accepting = true
+    this.refresh = new DashboardRefresh(async () => {
+      try {
+        await this.readFrame()
+      } catch (error) {
+        if (this.refresh?.admitted)
+          await this.report(
+            `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
+            'warning',
+          )
+        throw error
+      }
+    }, this.opts.refreshScheduler)
+    this.listen()
+    this.opts.terminal.modes.enter(FOCUS_REPORTING_MODE)
+    this.suspension = installPresentationSuspension(
+      this.opts.terminal.modes,
+      () => {
+        this.refresh?.suspend()
+        this.cleanupInput?.()
+        this.cleanupInput = undefined
+      },
+      () => {
+        this.listen()
+        this.region.invalidate()
+        this.refresh?.resume()
+      },
+    )
     this.paintTimer = setInterval(() => this.paint(), PAINT_MS)
-    this.pollTimer.unref?.()
     this.paintTimer.unref?.()
-    poll()
+    void this.refresh.request()
   }
 
   private requestOperatorStop(): void {
@@ -959,13 +991,14 @@ export class DispatchFrontend {
     if (this.presentationRestored) return
     this.presentationRestored = true
     this.accepting = false
+    this.refresh?.stop()
+    this.suspension?.close()
+    this.opts.terminal.modes.leave(FOCUS_REPORTING_MODE)
     try {
       this.cleanupInput?.()
     } finally {
       this.cleanupInput = undefined
-      if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
       if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
-      this.pollTimer = undefined
       this.paintTimer = undefined
       this.region.finish()
     }
@@ -974,22 +1007,24 @@ export class DispatchFrontend {
   private async finishPresentation(): Promise<void> {
     if (!this.presentationRestored) {
       this.accepting = false
+      this.refresh?.stop()
+      this.suspension?.close()
+      this.opts.terminal.modes.leave(FOCUS_REPORTING_MODE)
       try {
         this.cleanupInput?.()
       } finally {
         this.cleanupInput = undefined
       }
-      if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
       if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
-      this.pollTimer = undefined
       this.paintTimer = undefined
     }
     try {
-      await this.pollInFlight
+      await this.refresh?.join()
       await this.actionTail
-      await this.renderOnce()
+      if (this.opts.once) await this.readFrame()
+      else if (!this.presentationRestored) await this.refresh?.finalRefresh()
     } catch {
-      // final frame is best-effort
+      // Final presentation remains best-effort.
     } finally {
       this.region.finish()
     }
