@@ -1138,6 +1138,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.claimRepoLease('foreign', 'peer', 1000)
           await stable()
         } finally {
+          await store.close()
           await cleanup?.()
         }
       })
