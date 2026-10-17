@@ -235,7 +235,9 @@ test.each(['0.11.0', '0.12.0', '0.12.1', '0.13.0'])(
           headers: {
             authorization: `Bearer ${operator}`,
             [AUTOBUILD_VERSION_HEADER]: version,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
+              ? REMOTE_STORE_PROTOCOL_VERSION
+              : '3',
             'content-type': 'application/json',
           },
           body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
@@ -299,6 +301,7 @@ test('revision opt-in distinguishes new and released clients reporting the same 
     fetchFn: async (input, init) => {
       const req = new Request(String(input), init)
       req.headers.set(AUTOBUILD_VERSION_HEADER, '0.12.0')
+      req.headers.set(REMOTE_STORE_PROTOCOL_VERSION_HEADER, '3')
       headersSeen.push(new Headers(req.headers))
       return server.fetch(req)
     },
@@ -319,7 +322,7 @@ test('revision opt-in distinguishes new and released clients reporting the same 
       headers: {
         authorization: `Bearer ${operator}`,
         [AUTOBUILD_VERSION_HEADER]: '0.12.0',
-        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '3',
         [TICKET_REVISIONS_HEADER]: 'unknown',
         'content-type': 'application/json',
       },
@@ -369,7 +372,9 @@ test('comments require explicit capability independently of client version on ev
         const headers: Record<string, string> = {
           authorization: `Bearer ${operator}`,
           [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
+            ? REMOTE_STORE_PROTOCOL_VERSION
+            : '3',
           'content-type': 'application/json',
         }
         if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability

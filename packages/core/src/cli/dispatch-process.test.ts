@@ -571,3 +571,80 @@ await withDispatchTerminalRestore('dispatch', terminal, () => abDispatch({ targe
     }, 25000)
   }
 }
+
+test('metadata open boundary prevents forced termination without any journal start', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/repo')
+  await store.claimRepoLease('/repo', 'run-1', 60000)
+  await store.beginRepoTick('/repo', 'run-1')
+  const child = fakeSubprocess()
+  const supervisor = supervisorFixture(store, child)
+  const stopping = supervisor.stop()
+  await Bun.sleep(15)
+  expect(child.kills).toEqual(['SIGINT'])
+  child.finish(0)
+  await stopping
+})
+
+test('finished idle telemetry overrides historical open starts for safe termination', async () => {
+  const { emptyTickReport } = await import('../processes/dispatcher')
+  const {
+    queued,
+    janitorDiagnostics,
+    blockedDiagnostics,
+    ticketDiagnostics,
+    creationDiagnostics,
+    dependencyDiagnostics,
+    ...counters
+  } = emptyTickReport()
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/repo')
+  await store.claimRepoLease('/repo', 'run-1', 60000)
+  await store.appendRepo('/repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-started',
+    payload: { run: 'run-1' },
+  })
+  await store.beginRepoTick('/repo', 'run-1')
+  await store.finishRepoTick('/repo', 'run-1', { outcome: 'completed', counters }, [])
+  const child = fakeSubprocess((signal) => {
+    if (signal === 'SIGKILL') child.finish(137, signal)
+  })
+  const supervisor = supervisorFixture(store, child)
+  await supervisor.stop()
+  expect(child.kills).toEqual(['SIGINT', 'SIGKILL'])
+})
+
+test('failed telemetry read never authorizes forced termination', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/repo')
+  store.getRepo = async () => {
+    throw new Error('unavailable')
+  }
+  const child = fakeSubprocess()
+  const supervisor = supervisorFixture(store, child)
+  const stopping = supervisor.stop()
+  await Bun.sleep(15)
+  expect(child.kills).toEqual(['SIGINT'])
+  child.finish(0)
+  await stopping
+})
+
+test('another run telemetry cannot close a historical unsafe tick', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/repo')
+  await store.claimRepoLease('/repo', 'foreign', 60_000)
+  await store.beginRepoTick('/repo', 'foreign')
+  await store.appendRepo('/repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-started',
+    payload: { run: 'run-1' },
+  })
+  const child = fakeSubprocess()
+  const supervisor = supervisorFixture(store, child)
+  const stopping = supervisor.stop()
+  await Bun.sleep(15)
+  expect(child.kills).toEqual(['SIGINT'])
+  child.finish(0)
+  await stopping
+})

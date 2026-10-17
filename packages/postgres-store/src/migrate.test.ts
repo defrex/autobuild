@@ -586,6 +586,11 @@ if (testUrl) {
           expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
           expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
           expect((await sql`SELECT slug FROM builds WHERE slug = 'guard-canary'`).length).toBe(1)
+          expect(
+            (
+              await sql`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'repo_streams' AND column_name = 'tick' AND data_type = 'jsonb' AND is_nullable = 'YES'`
+            ).length,
+          ).toBe(1)
 
           // Backfill correctness where the branch backfills (streams at
           // v2–v5, sessions at v3): every legacy row carries a distinct

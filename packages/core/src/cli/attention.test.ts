@@ -229,3 +229,22 @@ test('merge attention respects consent, current deferral, changed heads, and ter
   await store.append('b', { actor: DISPATCHER, type: 'pr.closed', payload: {} })
   expect(await read()).toBeNull()
 })
+
+test('buffered start uses actual time and a quiet recovery resets continuous failures', () => {
+  const projection = new RepositoryAttention()
+  projection.fold(degraded(1, 0, { cause: 'rate-limited', resetAt: at(10_000).toISOString() }))
+  projection.fold(
+    repo('dispatcher.tick-started', { run: 'r1', startedAt: at(9_000).toISOString() }, 2, 11_000),
+  )
+  projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 3, 12_000))
+  expect(projection.pending(at(13_000))).toEqual([])
+  projection.fold(
+    repo('dispatcher.tick-started', { run: 'r1', startedAt: at(13_000).toISOString() }, 4, 14_000),
+  )
+  projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 5, 14_000))
+  expect(projection.pending(at(14_000))).toHaveLength(1)
+  projection.fold(repo('dispatcher.ticket-source-recovered', { source: 'linear' }, 6, 15_000))
+  projection.fold(failed(7, 16_000))
+  projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 8, 17_000))
+  expect(projection.pending(at(600_000))).toEqual([])
+})

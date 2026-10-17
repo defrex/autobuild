@@ -1,3 +1,9 @@
+import { validateTickFinish } from '@defrex/autobuild/store-adapter'
+import type {
+  RepoTickCompletion,
+  RepoTickFinish,
+  RepoTickObservation,
+} from '@defrex/autobuild/store-adapter'
 import { SQL } from 'bun'
 import {
   contentHash,
@@ -214,6 +220,7 @@ export class PostgresBuildStore implements BuildStore {
 
   private repoRecord(row: Row): RepositoryRecord {
     return {
+      ...(row.tick ? { tick: structuredClone(row.tick) as RepoTickObservation } : {}),
       repo: String(row.repo),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
@@ -586,6 +593,59 @@ export class PostgresBuildStore implements BuildStore {
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.claim('builds', slug, holder, ttlMs)
   }
+  async beginRepoTick(repo: string, holder: string): Promise<string | null> {
+    return this.tx(async (q) => {
+      const row = await this.lockRepo(q, repo)
+      if (
+        row.lease_holder !== holder ||
+        !row.lease_expires_at ||
+        Date.parse(iso(row.lease_expires_at)) <= this.clock().getTime()
+      )
+        return null
+      const startedAt = this.now()
+      const previous = row.tick as RepoTickObservation | undefined
+      const tick: RepoTickObservation = {
+        run: holder,
+        open: { startedAt },
+        ...(previous?.finished ? { finished: previous.finished } : {}),
+      }
+      await q`UPDATE repo_streams SET tick=${tick}, updated_at=${startedAt} WHERE repo=${repo}`
+      return startedAt
+    })
+  }
+
+  async finishRepoTick(
+    repo: string,
+    holder: string,
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    const validated = validateTickFinish(holder, completion, events)
+    return this.tx(async (q) => {
+      const row = await this.lockRepo(q, repo)
+      if (
+        row.lease_holder !== holder ||
+        !row.lease_expires_at ||
+        Date.parse(iso(row.lease_expires_at)) <= this.clock().getTime()
+      )
+        return null
+      const previous = row.tick as RepoTickObservation | undefined
+      if (previous?.run !== holder || !previous.open) throw new Error('no open repository tick')
+      const completedAt = this.now()
+      const envelopes: RepositoryEvent[] = []
+      for (const event of validated)
+        envelopes.push(
+          (await this.appendRepoLocked(q, repo, event, true, completedAt)) as RepositoryEvent,
+        )
+      const observation: RepoTickObservation = {
+        run: holder,
+        finished: { ...completion, run: holder, startedAt: previous.open.startedAt, completedAt },
+      }
+      await q`UPDATE repo_streams SET tick=${observation}, updated_at=${completedAt} WHERE repo=${repo}`
+      return { observation, events: envelopes }
+    })
+  }
+
   async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.claim('repo_streams', repo, holder, ttlMs)
   }
@@ -908,12 +968,12 @@ export class PostgresBuildStore implements BuildStore {
     repo: string,
     event: RepositoryEventWrite,
     alreadyLocked = false,
+    ts = this.now(),
   ): Promise<RepositoryEventEnvelope> {
     if (!alreadyLocked) await this.lockRepo(q, repo)
     const tails: Row[] =
       await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`
     const seq = num(tails[0]?.seq) + 1
-    const ts = this.now()
     await q`INSERT INTO repo_events (repo, seq, ts, actor, type, payload) VALUES (${repo},${seq},${ts},${event.actor},${event.type},${event.payload})`
     await q`UPDATE repo_streams SET updated_at=${ts} WHERE repo=${repo}`
     return { repo, seq, ts, actor: event.actor, type: event.type, payload: event.payload }

@@ -136,3 +136,60 @@ test('failed ticks supersede counters by sequence and stops correlate by run', a
   expect(result.dispatcher.holder?.lastTick).toEqual({ outcome: 'failed', error: 'failed tick' })
   expect(result.dispatcher.holder?.heartbeatAgeMs).toBe(0)
 })
+
+test('metadata-only completions refresh held and stopped runs; heartbeat and open ticks cannot fabricate completion', async () => {
+  const { emptyTickReport } = await import('../processes/dispatcher')
+  const {
+    queued,
+    janitorDiagnostics,
+    blockedDiagnostics,
+    ticketDiagnostics,
+    creationDiagnostics,
+    dependencyDiagnostics,
+    ...counters
+  } = emptyTickReport()
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo('repo')
+  await start(store, 'repo', 'A')
+  await store.claimRepoLease('repo', 'A', 60_000)
+  const seq = await store.getRepoHighWater('repo')
+  await store.beginRepoTick('repo', 'A')
+  clock.advance(1000)
+  await store.finishRepoTick('repo', 'A', { outcome: 'completed', counters }, [])
+  const completion = clock().toISOString()
+  let result = await readDispatcherLiveness(store, 'repo', clock())
+  expect(result.dispatcher.holder!.lastTickAt).toBe(completion)
+  expect(await store.getRepoHighWater('repo')).toBe(seq)
+  const { getRepositoryStatus } = await import('../operator/query')
+  expect((await getRepositoryStatus(store, 'repo', clock())).dispatcher.holder!.lastTickAt).toBe(
+    completion,
+  )
+  await store.beginRepoTick('repo', 'A')
+  clock.advance(1000)
+  await store.heartbeatRepo('repo', 'A')
+  result = await readDispatcherLiveness(store, 'repo', clock())
+  expect(result.dispatcher.holder!.lastTickAgeMs).toBe(1000)
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'A', outcome: 'normal', exitCode: 0 },
+  })
+  await store.releaseRepoLease('repo', 'A')
+  result = await readDispatcherLiveness(store, 'repo', clock())
+  expect(result.dispatcher.state).toBe('stopped')
+  expect(result.dispatcher.latestStoppedRun!.lastTickAt).toBe(completion)
+  await start(store, 'repo', 'B')
+  await store.claimRepoLease('repo', 'B', 60_000)
+  result = await readDispatcherLiveness(store, 'repo', clock())
+  expect(result.dispatcher.holder!.lastTickAt).toBeNull()
+  await store.beginRepoTick('repo', 'B')
+  result = await readDispatcherLiveness(store, 'repo', clock())
+  expect(result.dispatcher.holder!.lastTickAt).toBeNull()
+  const historical = projectDispatcherLiveness(
+    await store.getRepo('repo'),
+    await store.getRepoEvents('repo'),
+    clock(),
+  )
+  expect(historical.latestStoppedRun!.lastTickAt).toBe(completion)
+})

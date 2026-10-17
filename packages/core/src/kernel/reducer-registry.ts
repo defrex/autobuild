@@ -148,6 +148,8 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
 /** Event-array functions that are deliberately not reducers, each with the
  * concrete reason. */
 export const EXCLUDED: Record<string, string> = {
+  shouldPublishTick:
+    'Publication decision over a new report and actual start time plus the bounded recorded journal; no event-only reduction can decide whether an unrecorded tick has effects.',
   projectDispatcherLiveness:
     'combines mutable repository lease metadata and an explicit clock with correlated facts; cannot be restored from an event-only snapshot',
   decideNext: 'a decision function over config; returns a Decision, not a state',

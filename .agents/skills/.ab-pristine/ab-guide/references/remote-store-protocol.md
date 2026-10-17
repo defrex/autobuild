@@ -37,7 +37,7 @@ headers, or available backend.
   `[store] url` (in that precedence order, before the local default); the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
-  `X-Autobuild-Protocol-Version` with the remote protocol version (`3` in this
+  `X-Autobuild-Protocol-Version` with the remote protocol version (`4` in this
   distribution). Before authentication,
   body parsing, or resource lookup, the server validates the release-line window and known protocol identity.
   Unsupported or missing values receive `409 {"kind":"conflict","error":"…"}`;
@@ -1136,7 +1136,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"3", "supportedClientRange":{"minVersion":"0.9.0",
+  "protocolVersion":"4", "supportedClientRange":{"minVersion":"0.9.0",
   "maxVersionExclusive":"0.12.0"}}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
@@ -1213,3 +1213,17 @@ require a project credential and operate only on its own identity; admin and
 internal operator credentials cannot impersonate self-service. All protocol
 responses are no-store/no-referrer. Connection commands are unavailable in
 build/harvest sessions.
+
+### Repository tick telemetry (protocol 4)
+
+`POST /repos/:repo/tick/begin` accepts `{holder}` and returns the actual start
+ timestamp, or null when the unexpired repository lease does not match.
+`POST /repos/:repo/tick/finish` accepts `{holder, completion, events}`. Completion
+is `{outcome:"completed", counters}` or `{outcome:"failed", error}`; events is
+empty for a quiet success or a matching dispatcher start/terminal pair for that
+holder. The validated batch and finished telemetry commit atomically. The reply
+is `{observation, events}` with assigned envelopes, or null on fencing failure.
+These operations never renew the lease. Repository records optionally expose
+`tick: {run, open?: {startedAt}, finished?: {run, startedAt, completedAt, ...completion}}`.
+They retain the previous completion while a new tick is open and after lease
+release. Build and session credentials cannot mutate repository ticks.
