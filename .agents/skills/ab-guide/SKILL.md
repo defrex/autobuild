@@ -1823,7 +1823,12 @@ cursor from a different repository or store is rejected.
 Dispatcher liveness is also visible through `ab repository status --json`:
 `dispatcher.holder` identifies the unexpired repository lease owner, independently
 of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
-durable progress. Missing historical evidence is null. The liveness query uses
+actual tick completion. Successful unchanged ticks leave no journal pair; bounded,
+lease-fenced repository telemetry still records each actual completion and its
+outcome. Last-tick age refreshes independently of the event cursor and never uses
+heartbeat as completion evidence. Open telemetry protects unsafe work during
+shutdown; historical journals retain their boundary fallback. Missing historical
+evidence is null. The liveness query uses
 bounded repository facts first, with a full-history fallback when a later
 invocation hides the holder start or the latest stop. Other state reads retain
 their bounded semantics.

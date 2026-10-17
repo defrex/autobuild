@@ -387,7 +387,19 @@ SIGTERM restore terminal modes immediately and begin one supervised drain;
 persistent frontend and child handlers keep repeated signals graceful until the
 kernel child is reaped, after which a non-SIGINT terminating signal is replayed
 in the frontend. A parent-liveness watch remains the detached-kernel fallback.
-Timeout escalation is held while a durable `tick-started` fact remains open,
+The repository record carries constant-size, lease-holder-fenced tick telemetry:
+`beginRepoTick` opens the unsafe boundary, and `finishRepoTick` atomically closes
+it and appends selected tick facts. Successful unchanged ticks append nothing;
+queue transitions, counters, diagnostics, attention resets/retries, and failures
+retain their journal evidence. Buffered starts preserve actual `startedAt` for
+attention cooldowns; old starts use their envelope time. Liveness reads refresh
+the repository record even with an unchanged event cursor, merging matching-run
+completion samples with journal ticks. Heartbeat renewal cannot invent progress.
+The memory, SQLite, Postgres and remote adapters share this contract, including
+no mutation after lease expiry and no partial publication on validation failure.
+
+Timeout escalation is held while the matching repository tick observation is open
+(with historical `tick-started` journal fallback when no observation exists),
 because force-killing the ticket claim before build creation would not be
 recoverable. After a build child claims a takeover lease, it reduces one
 captured event prefix and appends transcriptless reclaimed `session.ended`

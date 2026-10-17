@@ -154,7 +154,7 @@ export class RepositoryAttention {
         if (this.failure?.payload.run === event.payload.run) this.failure = undefined
         break
       case 'dispatcher.tick-started':
-        this.tickStarts.set(event.payload.run, Date.parse(event.ts))
+        this.tickStarts.set(event.payload.run, Date.parse(event.payload.startedAt ?? event.ts))
         break
       case 'dispatcher.tick-completed':
         this.observeRetry(event.payload.run)

@@ -1617,12 +1617,8 @@ describe('dispatcher run identity without a kernelRunId', () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()
     try {
-      const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
-      fx.store.appendRepo = async (repo, event) => {
-        if (event.type === 'dispatcher.tick-started') {
-          throw new Error('injected tick failure')
-        }
-        return originalAppendRepo(repo, event)
+      fx.store.beginRepoTick = async () => {
+        throw new Error('injected tick failure')
       }
       await abDispatch({
         targetRepo: fx.checkout,
@@ -2535,19 +2531,15 @@ args = ["--naming-style", "concise"]
       const statusStarted = new Promise<void>((resolve) => {
         markStatusStarted = resolve
       })
-      const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
+      const originalFinish = fx.store.finishRepoTick.bind(fx.store)
       let delayedStatus = false
-      fx.store.appendRepo = async (repo, event) => {
-        if (
-          !delayedStatus &&
-          event.type === 'dispatcher.tick-completed' &&
-          (event.payload as { run?: string }).run === 'harvest-accounting'
-        ) {
+      fx.store.finishRepoTick = async (...args) => {
+        if (!delayedStatus && args[1] === 'harvest-accounting') {
           delayedStatus = true
           markStatusStarted()
           await statusGate
         }
-        return originalAppendRepo(repo, event)
+        return originalFinish(...args)
       }
 
       const dispatch = abDispatch({
@@ -4360,8 +4352,12 @@ describe('abDispatch watch harvest coordination', () => {
       return originalHeartbeatRepo(...args)
     }
 
-    const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
-    fx.store.appendRepo = async (repo, event) => {
+    const originalFinishRepoTick = fx.store.finishRepoTick.bind(fx.store)
+    fx.store.finishRepoTick = async (repo, holder, completion, events) => {
+      for (const event of events) await intercept(event)
+      return originalFinishRepoTick(repo, holder, completion, events)
+    }
+    const intercept = async (event: import('../events/repository').RepositoryEventWrite) => {
       if (event.type === 'dispatcher.tick-completed') {
         // RepositoryEventWrite omits envelope fields from the catalog union as
         // a whole, so its `type` does not preserve payload discrimination.
@@ -4381,7 +4377,6 @@ describe('abDispatch watch harvest coordination', () => {
           throw new Error('injected dispatcher.tick-completed rejection')
         }
       }
-      return originalAppendRepo(repo, event)
     }
 
     try {
@@ -11072,3 +11067,85 @@ for (const selected of [false, true]) {
     }
   }, 30_000)
 }
+
+for (const queued of [false, true]) {
+  test(`quiet watch keeps bounded journal with ${queued ? 'unchanged nonempty' : 'empty'} queue and fresh independent liveness`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture(
+      queued ? [readyTicket('queued-idle')] : [],
+      happyHandlers(),
+      `ticketScanIntervalSeconds = 3600\n${DISPATCH_CONFIG_TOML}`,
+      clock,
+    )
+    const stop = new AbortController()
+    let ticks = 0
+    let baseline = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        kernelRunId: 'quiet-regression',
+        intake: false,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          const events = await fx.store.getRepoEvents(fx.origin)
+          if (ticks === 0) baseline = events.length
+          expect(events).toHaveLength(baseline)
+          const { readDispatcherLiveness } = await import('./dispatcher-liveness')
+          const { dispatcher } = await readDispatcherLiveness(fx.store, fx.origin, clock())
+          expect(dispatcher.state).toBe('held')
+          expect(dispatcher.holder!.lastTickAt).toBe(clock().toISOString())
+          expect(dispatcher.holder!.lastTickAgeMs).toBe(0)
+          expect(events.filter((e) => e.type === 'dispatcher.tick-completed')).toHaveLength(1)
+          if (++ticks === 30) stop.abort()
+          clock.advance(1000)
+        },
+      })
+      expect(ticks).toBe(30)
+      expect(fx.tickets.claims).toEqual([])
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+}
+
+test('a holder change at begin fences the tick before ticket work', async () => {
+  const fx = await makeFixture(readyTicket('fenced-ticket'), happyHandlers())
+  const begin = fx.store.beginRepoTick.bind(fx.store)
+  fx.store.beginRepoTick = async (repo, holder) => {
+    await fx.store.releaseRepoLease(repo, holder)
+    await fx.store.claimRepoLease(repo, 'replacement', 60_000)
+    return begin(repo, holder)
+  }
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      kernelRunId: 'fenced-run',
+      once: true,
+      env: {},
+      exec: spawnExec,
+      wire: fx.wire,
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(fx.tickets.claims).toEqual([])
+    expect(await fx.store.listBuilds()).toEqual([])
+    const events = await fx.store.getRepoEvents(fx.origin)
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'dispatcher.tick-started' ||
+          event.type === 'dispatcher.tick-completed' ||
+          event.type === 'dispatcher.tick-failed',
+      ),
+    ).toEqual([])
+    expect((await fx.store.getRepo(fx.origin))!.lease!.holder).toBe('replacement')
+  } finally {
+    await fx.cleanup()
+  }
+})
