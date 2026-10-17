@@ -220,7 +220,7 @@ const releasedTicketSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 
-test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION])])(
+test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', '0.13.0', AUTOBUILD_VERSION])])(
   'released %s ticket responses honor the supported client window',
   async (version) => {
     const { source, server } = harness()
@@ -360,7 +360,7 @@ test('comments require explicit capability independently of client version on ev
   const { server, source } = harness(backend)
   expect((await source.get('AUT-1'))?.comments).toEqual(comments)
   const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
-  for (const version of new Set(['0.10.0', '0.11.0', '0.12.0', AUTOBUILD_VERSION])) {
+  for (const version of new Set(['0.10.0', '0.11.0', '0.12.0', '0.13.0', AUTOBUILD_VERSION])) {
     for (const [capability, revisionCapability] of [
       [undefined, undefined],
       ['', undefined],

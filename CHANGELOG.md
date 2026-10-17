@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#631](https://github.com/defrex/autobuild/pull/631) — Reduce hosted authentication and repository read overhead
+- [#630](https://github.com/defrex/autobuild/pull/630) — Scope hosted project build listings in Postgres
 ## v0.14.0 — 2026-10-17
 
 This release is mostly about performance and efficiency. Reducer values are now served from persisted state, and that is the default read path, so reads no longer have to rebuild state from the full event log. The interactive dashboard reads repository events incrementally instead of re-reading them, and the dispatcher no longer emits idle ticks when nothing has changed, which cuts redundant work and noise.
