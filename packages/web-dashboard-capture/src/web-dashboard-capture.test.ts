@@ -543,6 +543,7 @@ test('the unnamed consent frame falls back to the raw client id', async () => {
 
   const text = evidenceText(html)
   expect(text).toContain('A client registered as mcp-capture-console')
+  expect(text).toContain('Requested scopes: openid profile email')
   expect(text).not.toContain('Capture MCP Console')
 })
 

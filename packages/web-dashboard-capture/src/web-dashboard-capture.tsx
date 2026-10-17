@@ -332,6 +332,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'Authorize client',
       'A client registered as',
       FIXTURE_CLIENT_ID,
+      FIXTURE_SCOPE,
     ],
     forbids: [FIXTURE_CLIENT_NAME, 'missing its authorization code'],
   },
@@ -713,7 +714,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
                 client_id: FIXTURE_CLIENT_ID,
                 scope: FIXTURE_SCOPE,
               }
-            : { consent_code: FIXTURE_CONSENT_CODE, client_id: FIXTURE_CLIENT_ID },
+            : {
+                consent_code: FIXTURE_CONSENT_CODE,
+                client_id: FIXTURE_CLIENT_ID,
+                scope: FIXTURE_SCOPE,
+              },
         lookupClientName: () =>
           Promise.resolve(spec.id === 'consent-named-wide' ? FIXTURE_CLIENT_NAME : null),
       })
