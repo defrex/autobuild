@@ -200,7 +200,7 @@ export class DispatchFrontend {
             `dashboard action failed: ${error instanceof Error ? error.message : String(error)}`,
             'warning',
           )
-          await this.renderOnce()
+          await this.renderOnce(interaction)
         } catch {
           // The next poll remains the recovery boundary.
         }
@@ -289,8 +289,8 @@ export class DispatchFrontend {
     return parsed
   }
 
-  private async renderOnce(): Promise<void> {
-    if (this.refresh !== undefined) return this.refresh.request(true)
+  private async renderOnce(interaction = true): Promise<void> {
+    if (this.refresh !== undefined) return this.refresh.request(interaction)
     return this.readFrame()
   }
 
