@@ -2225,10 +2225,20 @@ class DispatchLoop {
     if (this.harvestInFlight !== undefined) return
 
     let tracked: Promise<void>
-    tracked = this.launchHarvestIfNeeded().finally(() => {
-      this.inFlight.delete(tracked)
-      if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
-    })
+    tracked = this.launchHarvestIfNeeded()
+      .catch((error: unknown) => {
+        // The gate may read the backing store after tick work dirties the view.
+        // Contain that failure too, without relying on another store write.
+        if (!this.stopped) {
+          this.warn(
+            `harvest launch failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      })
+      .finally(() => {
+        this.inFlight.delete(tracked)
+        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
+      })
     this.harvestInFlight = tracked
     this.inFlight.add(tracked)
   }

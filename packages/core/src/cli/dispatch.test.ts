@@ -11373,3 +11373,63 @@ for (const renewal of ['success', 'error', 'lost'] as const) {
     }
   })
 }
+
+for (const failingRead of ['listBuilds', 'getReducerValue'] as const) {
+  test(`harvest launch gate contains a transient ${failingRead} failure and retries next tick`, async () => {
+    const fx = await makeFixture(readyTicket('gate-read-failure'), happyHandlers())
+    const stop = new AbortController()
+    let failGateRead = false
+    let failures = 0
+    let ticks = 0
+    const create = fx.store.createBuild.bind(fx.store)
+    fx.store.createBuild = async (...args) => {
+      const result = await create(...args)
+      // Creating a build dirties the view's records/digests after the tick's
+      // initial refresh, so the launch gate must read the backing store.
+      failGateRead = true
+      return result
+    }
+    const store = new Proxy(fx.store, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          const digestRead =
+            key === 'getReducerValue' &&
+            (args[1] as { reducer?: string } | undefined)?.reducer === 'buildDigest'
+          if (failGateRead && (failingRead === 'listBuilds' ? key === 'listBuilds' : digestRead)) {
+            failGateRead = false
+            failures++
+            throw new Error('transient gate read outage')
+          }
+          return value.apply(target, args)
+        }
+      },
+    })
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: () => ({ ...fx.wire(), store }),
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          // Let the entire fire-and-forget chain settle; an unhandled
+          // rejection here fails the test even if the tick itself returned.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          ticks++
+          expect(failures).toBe(1)
+          if (ticks === 2) stop.abort()
+        },
+      })
+      expect(ticks).toBe(2)
+      expect(fx.err).toContain('harvest launch failed: transient gate read outage')
+      expect(fx.err.filter((line) => line.includes('transient gate read outage'))).toHaveLength(1)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
