@@ -1,6 +1,6 @@
 /**
  * The shared polling implementation of `subscribe` (SPEC §7.2): push is the
- * specced interface, polling `getEvents(since)` is the v2.0 implementation.
+ * specced interface, polling `getEvents(since)` is the current implementation.
  * Adapters delegate here so delivery semantics (in-order, exactly once per
  * subscription, no overlapping polls) are identical everywhere.
  *

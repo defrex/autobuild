@@ -1,10 +1,11 @@
-# Autobuild v2 — Specification
+# Autobuild — Specification
 
 An agent-driven software development lifecycle system: it takes work from
 *"something should be done"* to a merged PR, with a human in the loop only
-where judgment matters. This is a ground-up rebuild of v1 (preserved in git
-history at `6d4dce3`), keeping v1's validated ideas and replacing what it
-hard-coded with real interfaces.
+where judgment matters. This is a ground-up rebuild of the pilot (preserved in
+git history at `6d4dce3`), keeping the pilot's validated ideas and replacing
+what it hard-coded with real interfaces. Versions are the npm release versions
+of `@defrex/autobuild`; the pilot was never versioned.
 
 **What this document is.** SPEC.md holds the durable design: principles,
 boundaries between components, invariants, and decisions with their rationale
@@ -28,7 +29,8 @@ Status legend: sections describe **decided** design unless marked **[OPEN]**.
 
 ## 1. Why a rebuild
 
-v1 proved the core loop works. Its structural limits, which motivate v2:
+The pilot proved the core loop works. Its structural limits, which motivate
+this design:
 
 - **Repo as database.** Build state and artifacts lived in `build/<feature>/`
   dirs committed to the repo — accumulating noise, bloating the repo, with no
@@ -45,7 +47,7 @@ v1 proved the core loop works. Its structural limits, which motivate v2:
 
 ## 2. Constitution
 
-Principles — the first four carried from v1 — that are non-negotiable and that
+Principles — the first four carried from the pilot — that are non-negotiable and that
 every design decision below answers to:
 
 1. **Judgment in skills, determinism in code.** Agents never decide phase
@@ -441,8 +443,9 @@ continue reading their existing ticket rows.
 
 ## 7. The build store
 
-The v1 repo-bloat and no-observability problems share one root cause: the
-repo did double duty as workspace and database. v2 splits the roles:
+The pilot's repo-bloat and no-observability problems share one root cause:
+the repo did double duty as workspace and database. This design splits the
+roles:
 
 - **Workspace** — the sandbox/worktree. Scratch by construction: the working
   tree plus the gitignored `.ab/` dir agents use as working memory during a
@@ -743,7 +746,7 @@ The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
 service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
 headers, or available backend.
 
-`subscribe` is specced in the interface; the v2.0 implementation is polling
+`subscribe` is specced in the interface; the current implementation is polling
 `getEvents(since)`. True push comes later.
 
 Operator UIs additionally have a repository-scoped batch read,
@@ -818,7 +821,7 @@ mid-turn leaves its transcript behind instead of nothing.
 
 Because state is the event log and artifacts live in the store, a *new*
 sandbox can resume a build a dead sandbox started: pull events, rehydrate
-scratch from latest artifact revisions, continue. v1 structurally could not
+scratch from latest artifact revisions, continue. The pilot structurally could not
 do this.
 
 Four base-selection invariants make this safe with Git:
@@ -996,7 +999,7 @@ It buys three properties at once:
 1. **Storage-agnostic skills** — local or remote store, same commands.
 2. **An enforced ontology** — the CLI validates schemas at deposit; verdicts
    travel a typed channel, never parsed from stdout (the root-cause fix for
-   v1 sentinel parsing).
+   the pilot's sentinel parsing).
 3. **Structured observations at the point of capture**, not prose mined from
    `observations.md` after the fact.
 
@@ -2311,7 +2314,7 @@ wins harmlessly.
 
 Walking the happy path exposed a gap in the grammar: `finalize` creates the
 PR, but *something* must watch it to merge/close, release the workspace, and
-emit `build.completed`. v2 makes it a deterministic **janitor duty of the
+emit `build.completed`. Autobuild makes it a deterministic **janitor duty of the
 dispatcher** (which already polls on cron): it checks open PRs for its
 builds, emits `pr.merged`/`pr.closed`/`pr.conflicted`, releases workspaces,
 and completes builds. Destructive discard, abort, and terminal-PR cleanup defer
@@ -2808,7 +2811,7 @@ discovery conflicts retain their nonzero contract. Local customization survives
 upgrades; divergence is visible instead of silent. No other command checks for
 or installs releases in the foreground or background.
 
-## 17. Out of scope for v2.0 (explicitly)
+## 17. Out of scope (explicitly)
 
 - True push `subscribe` (interface reserved; polling implementation).
 - Live transcript streaming for writers and readers (the stream primitive —
@@ -2823,7 +2826,7 @@ or installs releases in the foreground or background.
 1. **[OPEN] Other-ingester detail** — observation harvest is decided (§8.8,
    §12); per-source filter design for scheduled `ingest:*` sources remains
    open.
-2. **[OPEN] Retention/archival policy** — the v1 archival gap, now a store
+2. **[OPEN] Retention/archival policy** — the pilot's archival gap, now a store
    config concern rather than a repo problem. Needs a default (e.g. prune
    blobs for merged builds after N months, keep events).
 3. **[OPEN] Global capacity** — per-repo capacity is the top-level `capacity`

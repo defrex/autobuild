@@ -1,4 +1,4 @@
-# Autobuild v2
+# Autobuild
 
 `Autobuild` is an agent-driven software-development lifecycle system that takes a groomed ticket through planning, implementation, review, verification, PR creation, conflict reconciliation, and merge. Humans are involved only for grooming and escalations.
 
@@ -6,6 +6,9 @@
 
 - `SPEC.md` is the source of truth for the design and terminology. Sections are decided unless marked `[OPEN]`.
 - `docs/architecture.md` maps the specification to the codebase.
+- `rfcs/` holds proposals for major design changes. An RFC is not decided
+  design: `SPEC.md` describes the running system until a ticket that builds
+  an RFC section amends it.
 - `README.md` sells the project to engineers evaluating it — see
   "What the README is for" before adding anything to it.
 - `autobuild.toml` is this repository's declarative pipeline configuration.

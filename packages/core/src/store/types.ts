@@ -246,7 +246,7 @@ export type Unsubscribe = () => void
 export interface SubscribeOptions {
   /** Deliver events with seq strictly greater than this (default 0 = all). */
   fromSeq?: number
-  /** Poll interval for the v2.0 polling implementation (§7.2). In bounded-wait
+  /** Poll interval for the current polling implementation (§7.2). In bounded-wait
    * mode (`waitSeconds` set) it is the floor between request *starts* —
    * elapsed request time counts toward the gap. */
   pollMs?: number
@@ -358,7 +358,7 @@ export interface BuildStore {
   releaseLease(slug: string, holder: string): Promise<void>
 
   /**
-   * Push is the specced interface; the v2.0 implementation is polling
+   * Push is the specced interface; the current implementation is polling
    * `getEvents(since)` (§7.2). Events are delivered in seq order, each
    * exactly once per subscription.
    */
