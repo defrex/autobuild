@@ -535,6 +535,15 @@ if (testUrl)
         ticket: { source: 'hosted', id: 'ticket-legacy' },
       })
       expect((await store.getBuild('missing-source'))?.ticket?.id).toBe('ticket-legacy')
+      expect(await store.listBuildsForRepo('one')).toEqual(await store.listBuilds())
+      const rawOwn = await store.listBuildsForRepo('one')
+      await store.createBuild({ slug: 'legacy-foreign', repo: 'two' })
+      expect(await store.listBuildsForRepo('one')).toEqual(rawOwn)
+      expect(await store.listBuildsForRepo("quote'repo")).toEqual([])
+
+      expect((await store.listBuildsForRepo('one'))[0]?.ticket?.id).toBe('ticket-legacy')
+      expect(await store.listBuildsForRepo('empty')).toEqual([])
+
       const asset = await store.putTicketAsset('one', 'file-1', {
         kind: 'reference',
         name: 'proof',
@@ -561,11 +570,18 @@ if (testUrl)
     const database = await isolatedDatabase()
     const sql = new SQL(database.url)
     const statements: string[] = []
+    const returned: { statement: string; rows: Record<string, unknown>[]; args: unknown[] }[] = []
     function tracked<T extends SQL>(connection: T): T {
       return new Proxy(connection, {
         apply(target, _receiver, args) {
-          statements.push((args[0] as TemplateStringsArray).join('?'))
-          return Reflect.apply(target, target, args)
+          const statement = (args[0] as TemplateStringsArray).join('?')
+          statements.push(statement)
+          const query = Reflect.apply(target, target, args)
+          if (!statement.includes('projected_ticket_id')) return query
+          return query.then((rows: Record<string, unknown>[]) => {
+            returned.push({ statement, rows, args })
+            return rows
+          })
         },
         get(target, key) {
           if (key === 'reserve') return async () => tracked(await target.reserve())
@@ -580,12 +596,13 @@ if (testUrl)
       for (const repo of ['one', 'two']) {
         await sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,created_at,updated_at)
         VALUES (${repo},'ticket-legacy',${repo === 'one' ? 'ENG-1' : 'OTHER-1'},1,'Title','Body','Ready',${now},${now})`
-        for (let i = 0; i < 20; i++) {
+        for (let i = 19; i >= 0; i--) {
           const ticket = {
             source: 'hosted',
             id: i % 2 ? (repo === 'one' ? 'eng-1' : 'other-1') : 'ticket-legacy',
           }
-          await sql`INSERT INTO builds (slug,repo,ticket,created_at,updated_at) VALUES (${`${repo}-${i}`},${repo},${ticket},${now},${now})`
+          const created = i < 10 ? new Date(Date.parse(now) - 1000).toISOString() : now
+          await sql`INSERT INTO builds (slug,repo,ticket,created_at,updated_at) VALUES (${`${repo}-${i}`},${repo},${ticket},${created},${created})`
         }
       }
       await sql`INSERT INTO builds (slug,repo,ticket,created_at,updated_at) VALUES ('foreign-source','one',${{ source: 'linear', id: 'ticket-legacy' }},${now},${now}), ('missing','one',${{ source: 'hosted', id: 'missing' }},${now},${now})`
@@ -593,6 +610,11 @@ if (testUrl)
       statements.length = 0
       const first = await store.listBuilds()
       expect(statements.length).toBe(3) // optional schema discovery + one joined listing
+      expect(first.map((r) => r.slug)).toEqual(
+        [...first]
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
+          .map((r) => r.slug),
+      )
       expect(
         first.filter((r) => r.slug.startsWith('one-')).every((r) => r.ticket?.id === 'ENG-1'),
       ).toBe(true)
@@ -604,6 +626,34 @@ if (testUrl)
       statements.length = 0
       expect(await store.listBuilds()).toEqual(first)
       expect(statements.length).toBe(1)
+      for (const repo of ['empty', 'one', 'two', "quote'repo"]) {
+        returned.length = 0
+        statements.length = 0
+        expect(await store.listBuildsForRepo(repo)).toEqual(first.filter((r) => r.repo === repo))
+        expect(statements).toHaveLength(1)
+        expect(returned).toHaveLength(1)
+        const observation = returned[0]!
+        expect(observation.rows.map((r) => r.slug)).toEqual(
+          first.filter((r) => r.repo === repo).map((r) => r.slug),
+        )
+        expect(observation.rows.every((r) => r.repo === repo)).toBe(true)
+        // Explain the exact parameterized query executed by the adapter.
+        const parts = observation.args[0] as TemplateStringsArray
+        const query = parts.reduce((text, part, i) => text + (i ? `$${i}` : '') + part, '')
+        const plan = await sql.unsafe(
+          `EXPLAIN (ANALYZE, FORMAT JSON) ${query}`,
+          observation.args.slice(1) as string[],
+        )
+        const limits: number[] = []
+        const visit = (node: Record<string, unknown>) => {
+          if (node['Node Type'] === 'Limit') limits.push(Number(node['Actual Loops']))
+          for (const child of (node.Plans ?? []) as Record<string, unknown>[]) visit(child)
+        }
+        visit(plan[0]['QUERY PLAN'][0].Plan)
+        expect(limits.length).toBeGreaterThan(0)
+        expect(limits.every((loops) => loops <= observation.rows.length)).toBe(true)
+      }
+      expect(await store.listBuilds()).toEqual(first)
       expect(await sql`SELECT slug,ticket FROM builds ORDER BY slug`).toEqual(before)
     } finally {
       await store.close()
