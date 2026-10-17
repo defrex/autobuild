@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#631](https://github.com/defrex/autobuild/pull/631) — Reduce hosted authentication and repository read overhead
 - [#630](https://github.com/defrex/autobuild/pull/630) — Scope hosted project build listings in Postgres
 ## v0.14.0 — 2026-10-17
 
