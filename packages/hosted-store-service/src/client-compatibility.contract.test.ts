@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   mintToken,
+  AUTOBUILD_VERSION,
   RELEASE_LINE_PROTOCOLS,
   REMOTE_STORE_PROTOCOL_VERSION,
   classifyClient,
@@ -42,8 +43,11 @@ function request(
   version: string,
   body?: unknown,
   bearer = admin,
-  protocol = RELEASE_LINE_PROTOCOLS[version.split('.').slice(0, 2).join('.')] ??
-    REMOTE_STORE_PROTOCOL_VERSION,
+  protocol = version.split('.').slice(0, 2).join('.') ===
+  AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')
+    ? REMOTE_STORE_PROTOCOL_VERSION
+    : (RELEASE_LINE_PROTOCOLS[version.split('.').slice(0, 2).join('.')] ??
+      REMOTE_STORE_PROTOCOL_VERSION),
 ) {
   return new Request(`https://test${path}`, {
     method: body === undefined ? 'GET' : 'POST',

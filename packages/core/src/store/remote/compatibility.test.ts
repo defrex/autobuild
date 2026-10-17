@@ -108,3 +108,14 @@ test('the own-line protocol comes from service identity, including new major/min
   // Unknown historical lines remain closed, rather than inheriting a guessed identity.
   expect(clientIdentityError('2.0.0', '4', '2.1.0', '4')).toContain('unsupported protocol identity')
 })
+
+test('a protocol-4 service on 0.14 retains the published 0.13 protocol-3 clients', () => {
+  expect(RELEASE_LINE_PROTOCOLS['0.13']).toBe('3')
+  for (const client of ['0.12.0', '0.13.0', '0.13.999']) {
+    expect(clientIdentityError(client, '3', '0.14.0', '4')).toBeUndefined()
+    expect(clientIdentityError(client, '4', '0.14.0', '4')).toContain(
+      'unsupported protocol identity',
+    )
+  }
+  expect(clientIdentityError('0.14.0', '4', '0.14.0', '4')).toBeUndefined()
+})
