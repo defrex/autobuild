@@ -2292,10 +2292,18 @@ describe('Linear node metadata', () => {
         id: 'uuid-ops',
         identifier: 'OPS-1',
         team: { key: 'OPS' },
+        parent: {
+          team: { key: 'ENG' },
+          id: 'uuid-node',
+          identifier: 'ENG-1',
+          labels: connection([{ name: 'node' }]),
+        },
         labels: connection([{ name: 'node' }]),
       }),
     )
-    expect((await source.get('OPS-1'))!.ref.id).toBe('OPS-1')
+    const inspected = (await source.get('OPS-1'))!
+    expect(inspected.ref.id).toBe('OPS-1')
+    expect(inspected.target).toBeUndefined()
     expect((await source.get('uuid-ops'))!.kind).toBe('node')
     await expect(source.update('ENG-2', { target: 'OPS-1', title: 'Lost' })).rejects.toThrow(
       'different source/team',

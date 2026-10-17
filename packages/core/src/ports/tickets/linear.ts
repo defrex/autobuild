@@ -1183,8 +1183,9 @@ export class LinearTicketSource implements TicketSource {
   private toTicket(issue: GqlIssue): Ticket {
     const blockedBy = blockersOf(issue)
     const kind = issue.labels.nodes.some((label) => label.name === 'node') ? 'node' : 'work'
-    // Cross-team parents remain ordinary grouping relations in this source.
+    // Only same-team issue/parent pairs contribute an edge to this source.
     const target =
+      issue.team?.key === this.teamKey &&
       issue.parent?.team?.key === this.teamKey &&
       issue.parent.labels.nodes.some((label) => label.name === 'node')
         ? issue.parent.identifier
