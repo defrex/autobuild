@@ -393,6 +393,24 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async get(id: string): Promise<Ticket | null> {
+    return this.readTicket(id, false)
+  }
+
+  /** Metadata validation stays within the configured team without narrowing
+   * ordinary identifier/UUID reads, which can inspect workspace issues. */
+  private validateTree(id: string | undefined, patch: TicketDraft | TicketUpdate) {
+    return validateTicketTree(
+      {
+        name: this.name,
+        get: (ticketId) => this.readTicket(ticketId, true),
+        listAll: () => this.listAll(),
+      },
+      id,
+      patch,
+    )
+  }
+
+  private async readTicket(id: string, requireTeam: boolean): Promise<Ticket | null> {
     let data: { issue: GqlIssue | null }
     try {
       data = await this.gql<{ issue: GqlIssue | null }>('get', GET_DETAIL_QUERY, { id })
@@ -409,7 +427,7 @@ export class LinearTicketSource implements TicketSource {
       this.issueIds.set(id, issue.id)
       this.issueIds.set(issue.identifier, issue.id)
     }
-    if (issue.team && issue.team.key !== this.teamKey)
+    if (requireTeam && issue.team && issue.team.key !== this.teamKey)
       throw new Error(`target ${id} is in a different source/team (${issue.team.key})`)
     await this.completeMetadata(issue, false)
     // Detail reads exhaust labels and relations independently of dispatch bounds.
@@ -518,7 +536,7 @@ export class LinearTicketSource implements TicketSource {
     const canonicalTarget =
       draft.target == null && draft.kind === undefined
         ? draft.target
-        : await validateTicketTree(this, reservedId, draft)
+        : await this.validateTree(reservedId, draft)
     const labels = this.effectiveLabels(draft.kind, draft.labels, [])
     const team = await this.getTeamInfo('create')
     const labelIds = await Promise.all(
@@ -582,7 +600,7 @@ export class LinearTicketSource implements TicketSource {
       validated.target !== undefined ||
       validated.labels !== undefined
     ) {
-      const current = await this.get(id)
+      const current = await this.readTicket(id, true)
       if (!current) throw new Error(`linear update: unknown ticket ${id}`)
       validated.labels = this.effectiveLabels(validated.kind, validated.labels, current.labels)
       const effectiveKind = validated.labels?.includes('node')
@@ -591,7 +609,7 @@ export class LinearTicketSource implements TicketSource {
           ? 'work'
           : current.kind
       if (validated.target !== undefined || (current.kind === 'node' && effectiveKind === 'work'))
-        validated.target = await validateTicketTree(this, id, { ...validated, kind: effectiveKind })
+        validated.target = await this.validateTree(id, { ...validated, kind: effectiveKind })
     }
     const issueId = await this.resolveIssueId('update', id)
     const input: Record<string, unknown> = {}
@@ -1165,9 +1183,12 @@ export class LinearTicketSource implements TicketSource {
   private toTicket(issue: GqlIssue): Ticket {
     const blockedBy = blockersOf(issue)
     const kind = issue.labels.nodes.some((label) => label.name === 'node') ? 'node' : 'work'
-    const target = issue.parent?.labels.nodes.some((label) => label.name === 'node')
-      ? issue.parent.identifier
-      : undefined
+    // Cross-team parents remain ordinary grouping relations in this source.
+    const target =
+      issue.parent?.team?.key === this.teamKey &&
+      issue.parent.labels.nodes.some((label) => label.name === 'node')
+        ? issue.parent.identifier
+        : undefined
     return {
       kind,
       ...(target !== undefined ? { target } : {}),

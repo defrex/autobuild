@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { projectTicketTree } from './tree'
 import { TicketSourceRateLimitError } from '../types'
 import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
 
@@ -62,6 +63,7 @@ function gqlIssue(over: Record<string, unknown> = {}) {
   return {
     team: { key: 'ENG' },
     parent: null as null | {
+      team: { key: string }
       id: string
       identifier: string
       labels: {
@@ -2187,7 +2189,12 @@ describe('Linear node metadata', () => {
       id: 'uuid-child',
       identifier: 'ENG-2',
       team: { key: 'ENG' },
-      parent: { id: 'uuid-node', identifier: 'ENG-1', labels: connection([{ name: 'node' }]) },
+      parent: {
+        team: { key: 'ENG' },
+        id: 'uuid-node',
+        identifier: 'ENG-1',
+        labels: connection([{ name: 'node' }]),
+      },
     })
     issues.set('ENG-1', node)
     issues.set('ENG-2', child)
@@ -2232,6 +2239,7 @@ describe('Linear node metadata', () => {
     expect((await source.get('uuid-node'))!.kind).toBe('node')
     expect((await source.get('ENG-2'))!.target).toBe('ENG-1')
     issues.get('ENG-2')!.parent = {
+      team: { key: 'ENG' },
       id: 'group',
       identifier: 'ENG-9',
       labels: connection([{ name: 'group' }]),
@@ -2242,6 +2250,60 @@ describe('Linear node metadata', () => {
     await source.update('ENG-2', { target: null })
     expect(calls.at(-1)!.variables).toEqual({ id: 'uuid-child', input: { parentId: null } })
     expect(calls[0]!.query).toContain('parent { id identifier team { key } labels(first: 50)')
+  })
+
+  test('foreign node parents stay grouping relations and do not break the team tree or demotion', async () => {
+    const { source, calls, child } = fixture()
+    child.parent = {
+      team: { key: 'OPS' },
+      id: 'uuid-ops',
+      identifier: 'OPS-1',
+      labels: connection([{ name: 'node' }]),
+    }
+    const detail = (await source.get('ENG-2'))!
+    expect(detail.kind).toBe('work')
+    expect(detail.target).toBeUndefined()
+    const listing = await source.listAll()
+    expect(listing.tickets.find((ticket) => ticket.ref.id === 'ENG-2')!.target).toBeUndefined()
+    const tree = projectTicketTree(listing.tickets, 'main')
+    expect(tree.children.map((entry) => entry.ticket.ref.id)).toEqual(['ENG-1', 'ENG-2'])
+    await source.update('ENG-1', { kind: 'work' })
+    expect(calls.at(-1)!.variables).toEqual({ id: 'uuid-node', input: { labelIds: ['lb-bug'] } })
+    expect(
+      calls.some((call) => call.variables.id === 'OPS-1' || call.variables.id === 'uuid-ops'),
+    ).toBe(false)
+    await source.update('ENG-2', { body: 'Unrelated edit' })
+    expect(calls.at(-1)!.variables).toEqual({
+      id: 'uuid-child',
+      input: { description: 'Unrelated edit' },
+    })
+    const created = await source.create({ title: 'New', body: 'spec' })
+    expect(created.target).toBeUndefined()
+    expect(calls.at(-1)!.variables).toEqual({
+      input: { teamId: 'team-uuid', title: 'New', description: 'spec', labelIds: [] },
+    })
+  })
+
+  test('ordinary reads can inspect foreign-team issues while explicit target writes reject them', async () => {
+    const { source, calls, issues } = fixture()
+    issues.set(
+      'OPS-1',
+      gqlIssue({
+        id: 'uuid-ops',
+        identifier: 'OPS-1',
+        team: { key: 'OPS' },
+        labels: connection([{ name: 'node' }]),
+      }),
+    )
+    expect((await source.get('OPS-1'))!.ref.id).toBe('OPS-1')
+    expect((await source.get('uuid-ops'))!.kind).toBe('node')
+    await expect(source.update('ENG-2', { target: 'OPS-1', title: 'Lost' })).rejects.toThrow(
+      'different source/team',
+    )
+    await expect(
+      source.create({ title: 'Lost', body: 'spec', target: 'uuid-ops' }),
+    ).rejects.toThrow('different source/team')
+    expect(calls.filter((call) => call.query.startsWith('mutation'))).toHaveLength(0)
   })
 
   test('parent assignment uses canonical UUID and a single mixed mutation', async () => {
@@ -2284,7 +2346,12 @@ describe('Linear node metadata', () => {
       'different source/team',
     )
     node.team = { key: 'ENG' }
-    node.parent = { id: 'uuid-node', identifier: 'ENG-1', labels: connection([{ name: 'node' }]) }
+    node.parent = {
+      team: { key: 'ENG' },
+      id: 'uuid-node',
+      identifier: 'ENG-1',
+      labels: connection([{ name: 'node' }]),
+    }
     await expect(source.update('ENG-2', { target: 'ENG-1' })).rejects.toThrow('cyclic ancestor')
     expect(issues.size).toBe(2)
     expect(calls.filter((call) => call.query.startsWith('mutation'))).toHaveLength(0)
@@ -2326,6 +2393,7 @@ describe('Linear node metadata', () => {
                 gqlIssue({
                   labels: connection([], true, 'own'),
                   parent: {
+                    team: { key: 'ENG' },
                     id: 'parent',
                     identifier: 'ENG-1',
                     labels: connection([], true, 'parent'),

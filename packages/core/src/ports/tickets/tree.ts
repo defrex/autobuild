@@ -21,7 +21,7 @@ export function refuseUnsupportedMetadata(
 
 /** Validate before any part of a mixed patch is written. Canonical refs close alias cycles. */
 export async function validateTicketTree(
-  source: TicketSource,
+  source: Pick<TicketSource, 'name' | 'get' | 'listAll'>,
   id: string | undefined,
   patch: TicketDraft | TicketUpdate,
 ): Promise<string | null | undefined> {
