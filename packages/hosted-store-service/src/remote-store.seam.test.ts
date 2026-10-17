@@ -1365,3 +1365,14 @@ test('remote value reads send one bounded request and receive only a small JSON 
   ).toBe(413)
   await backing.close()
 })
+
+test('hosted frontend read budget stays flat across thousands of journal events', async () => {
+  const { dispatchReadBudget } = await import('@defrex/autobuild/testing')
+  const backing = new MemoryBuildStore()
+  const server = startStoreServer({ store: backing })
+  try {
+    await dispatchReadBudget(new RemoteBuildStore({ url: server.url }), backing)
+  } finally {
+    server.stop()
+  }
+})

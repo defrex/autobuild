@@ -18,6 +18,9 @@ export function projectDispatcherLiveness(
         (e.type === 'dispatcher.tick-completed' || e.type === 'dispatcher.tick-failed') &&
         e.payload.run === id,
     )
+    const finished = record?.tick?.finished?.run === id ? record.tick.finished : undefined
+    const useSample = finished !== undefined && (!tick || finished.completedAt >= tick.ts)
+    const lastTickAt = useSample ? finished.completedAt : (tick?.ts ?? null)
     const heartbeatAt =
       record?.lease?.holder === id && start && record.heartbeatAt && record.heartbeatAt >= start.ts
         ? record.heartbeatAt
@@ -30,10 +33,13 @@ export function projectDispatcherLiveness(
       heartbeatAt,
       heartbeatAgeMs: heartbeatAt === null ? null : age(heartbeatAt),
       leaseExpiresAt: record?.lease?.holder === id ? record.lease.expiresAt : null,
-      lastTickAt: tick?.ts ?? null,
-      lastTickAgeMs: tick ? age(tick.ts) : null,
-      lastTick:
-        tick?.type === 'dispatcher.tick-completed'
+      lastTickAt,
+      lastTickAgeMs: lastTickAt ? age(lastTickAt) : null,
+      lastTick: useSample
+        ? finished.outcome === 'completed'
+          ? { outcome: 'completed' as const, counters: finished.counters }
+          : { outcome: 'failed' as const, error: finished.error }
+        : tick?.type === 'dispatcher.tick-completed'
           ? { outcome: 'completed' as const, counters: tick.payload.counters }
           : tick?.type === 'dispatcher.tick-failed'
             ? { outcome: 'failed' as const, error: tick.payload.error }

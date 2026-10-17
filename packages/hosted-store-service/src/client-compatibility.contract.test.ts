@@ -6,6 +6,9 @@ import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   mintToken,
+  AUTOBUILD_VERSION,
+  RELEASE_LINE_PROTOCOLS,
+  REMOTE_STORE_PROTOCOL_VERSION,
   classifyClient,
   supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
@@ -35,7 +38,17 @@ const operator = mintToken(secret, {
   internalOperator: { user: 'historical', repo: 'repo' },
   exp: Date.now() + 600_000,
 })
-function request(path: string, version: string, body?: unknown, bearer = admin, protocol = '3') {
+function request(
+  path: string,
+  version: string,
+  body?: unknown,
+  bearer = admin,
+  protocol = version.split('.').slice(0, 2).join('.') ===
+  AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')
+    ? REMOTE_STORE_PROTOCOL_VERSION
+    : (RELEASE_LINE_PROTOCOLS[version.split('.').slice(0, 2).join('.')] ??
+      REMOTE_STORE_PROTOCOL_VERSION),
+) {
   return new Request(`https://test${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
@@ -189,7 +202,7 @@ for (const version of [
       ).toBe(401)
       expect((await standalone.fetch(request('/builds', version, undefined, ''))).status).toBe(401)
       expect(
-        (await standalone.fetch(request('/builds', version, undefined, admin, '4'))).status,
+        (await standalone.fetch(request('/builds', version, undefined, admin, '99'))).status,
       ).toBe(409)
     }
   })

@@ -56,6 +56,7 @@ export const repoStreams = sqliteTable('repo_streams', {
   leaseExpiresAt: text('lease_expires_at'),
   leaseTtlMs: integer('lease_ttl_ms'),
   heartbeatAt: text('heartbeat_at'),
+  tick: text('tick', { mode: 'json' }).$type<import('../types').RepoTickObservation>(),
 })
 
 export const repoEvents = sqliteTable(

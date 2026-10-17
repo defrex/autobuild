@@ -1076,8 +1076,14 @@ test('hosted release frozen installs succeed before the new core version is publ
   const testHarness = harness()
   const releaseVersion = '9876.0.0'
   let installs = 0
+  let lockfileRefreshes = 0
   let publications = 0
   const run: CommandRunner = async (request) => {
+    if (request.command === 'bun' && request.args.join(' ') === 'install --lockfile-only') {
+      expect(request.cwd).toBe(fixture.root)
+      lockfileRefreshes++
+      return spawnCommand(request)
+    }
     if (request.command === 'bun' && request.args[0] === 'install') {
       expect(publications).toBe(0)
       expect(request.args).toEqual(['install', '--frozen-lockfile'])
@@ -1109,6 +1115,14 @@ test('hosted release frozen installs succeed before the new core version is publ
     packageArchive: async () => new Uint8Array([1, 2, 3]),
   })
   expect(installs).toBe(2)
+  expect(lockfileRefreshes).toBe(1)
   expect(publications).toBe(3)
   expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+  // The release commit carries the refreshed lockfile, so installs from the
+  // released tree leave it untouched.
+  const released = await command(fixture.root, 'git', ['show', '--name-only', '--format=', 'HEAD'])
+  expect(released.stdout.split('\n')).toContain('bun.lock')
+  const lockfile = await readFile(join(fixture.root, 'bun.lock'), 'utf8')
+  expect(lockfile).toContain(`"version": "${releaseVersion}"`)
+  expect(lockfile).not.toContain('"version": "2.0.0"')
 }, 30_000)

@@ -927,6 +927,11 @@ export async function runRelease(
     for (const candidate of manifestCandidates) {
       printCandidate(output, candidate.path, candidate.content)
     }
+    if (await Bun.file(resolve(root, 'bun.lock')).exists()) {
+      output.log(
+        'Would refresh bun.lock with `bun install --lockfile-only` after the version bump and commit it when the workspace versions change.',
+      )
+    }
     output.log(
       `Would commit CHANGELOG.md, README.md, and ${manifestCandidates.map((entry) => entry.path).join(', ')} as "chore: release ${tag}".`,
     )
@@ -955,13 +960,36 @@ export async function runRelease(
         writeFile(resolve(root, candidate.path), candidate.content),
       ),
     ])
+    // The lockfile records each workspace's version, so a bump that leaves it
+    // stale makes every later install rewrite it in every checkout.
+    let lockfileChanged = false
+    if (await Bun.file(resolve(root, 'bun.lock')).exists()) {
+      const refreshed = await run({
+        command: 'bun',
+        args: ['install', '--lockfile-only'],
+        cwd: root,
+      })
+      if (refreshed.exitCode !== 0) {
+        throw new Error(
+          `could not refresh bun.lock for ${tag}: ${refreshed.stderr.trim() || refreshed.stdout.trim()}`,
+        )
+      }
+      const lockStatus = await git(
+        run,
+        root,
+        ['status', '--porcelain', '--', 'bun.lock'],
+        'could not inspect bun.lock',
+      )
+      lockfileChanged = lockStatus.stdout.trim() !== ''
+    }
+    const releasePaths = [
+      'CHANGELOG.md',
+      'README.md',
+      ...manifestCandidates.map((entry) => entry.path),
+      ...(lockfileChanged ? ['bun.lock'] : []),
+    ]
     await git(run, root, ['diff', '--check'], 'release candidates failed git diff --check')
-    await git(
-      run,
-      root,
-      ['add', '--', 'CHANGELOG.md', 'README.md', ...manifestCandidates.map((entry) => entry.path)],
-      'could not stage release files',
-    )
+    await git(run, root, ['add', '--', ...releasePaths], 'could not stage release files')
     const staged = await git(
       run,
       root,
@@ -969,11 +997,7 @@ export async function runRelease(
       'could not inspect staged release files',
     )
     const stagedPaths = staged.stdout.trim().split(/\r?\n/).sort()
-    const expectedPaths = [
-      'CHANGELOG.md',
-      'README.md',
-      ...manifestCandidates.map((entry) => entry.path),
-    ].sort()
+    const expectedPaths = [...releasePaths].sort()
     if (JSON.stringify(stagedPaths) !== JSON.stringify(expectedPaths)) {
       throw new Error(
         `release commit must contain exactly ${expectedPaths.join(', ')}; found ${stagedPaths.join(', ')}`,

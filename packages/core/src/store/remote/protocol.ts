@@ -24,6 +24,7 @@
  * Arbitrary computation over the assigned revisions inside `makeEvent`
  * (e.g. `rev + 1`, string interpolation) is unsupported by design.
  */
+import { repoTickCompletionSchema, repoTickObservationSchema } from '../repo-tick'
 import { reducerSnapshotWireSchema } from '../snapshots'
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
@@ -104,6 +105,7 @@ export const conditionalEventResponseSchema = eventEnvelopeWireSchema.nullable()
 
 export const ensureRepoBodySchema = z.object({ repo: z.string().min(1) })
 export const repositoryRecordWireSchema = z.object({
+  tick: repoTickObservationSchema.optional(),
   repo: z.string().min(1),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -477,3 +479,15 @@ export type DelegateCredentialTarget = z.infer<typeof delegateCredentialBodySche
 export const delegateCredentialResponseSchema = z.strictObject({ token: z.string().min(1) })
 
 export { reducerValueRequestSchema, reducerValueSchema } from '../reducer-values'
+export const beginRepoTickResponseSchema = z.iso.datetime().nullable()
+export const finishRepoTickBodySchema = z.object({
+  holder: z.string().min(1),
+  completion: repoTickCompletionSchema,
+  events: z.array(z.object({ actor: actorSchema, type: z.string(), payload: z.unknown() })),
+})
+export const finishRepoTickResponseSchema = z
+  .object({
+    observation: repoTickObservationSchema,
+    events: z.array(repositoryEventEnvelopeWireSchema),
+  })
+  .nullable()

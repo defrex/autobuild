@@ -1,3 +1,4 @@
+import { shouldPublishTick } from '../processes/tick-publication'
 import { issueTicketGrant, ticketGrantRequest } from '../ports/tickets/grants'
 import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
@@ -164,7 +165,13 @@ import {
 } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { DispatchFrontend } from './dispatch-frontend'
-import { systemClock, type BuildStore, type Clock } from '../store/types'
+import {
+  systemClock,
+  type BuildStore,
+  type Clock,
+  type RepoTickCompletion,
+  type RepoTickFinish,
+} from '../store/types'
 import { availableRelease } from './self-update'
 import {
   startUpgradeNotice,
@@ -648,6 +655,7 @@ class DispatchLoop {
    * manufacturing a zero queue measurement or losing diagnostics. */
   private lastTickStatus = {
     queued: 0,
+    blockedDiagnostics: [] as string[],
     janitorDiagnostics: [] as string[],
     ticketDiagnostics: [] as string[],
     creationDiagnostics: [] as string[],
@@ -1109,6 +1117,8 @@ class DispatchLoop {
     return reduceDispatchSettings(this.repoView.recordedJournal())
   }
 
+  private tickStartedAt: string | undefined
+
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
     return this.serialize(async () => {
       // Refresh before every watch decision. The owner publishes atomically;
@@ -1121,11 +1131,12 @@ class DispatchLoop {
         await this.recordTickYielded()
         return emptyTickReport()
       }
-      await this.appendStatus({
-        actor: DISPATCHER,
-        type: 'dispatcher.tick-started',
-        payload: { run: this.runId },
-      })
+      const startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
+      if (startedAt === null) {
+        this.superseded = true
+        return emptyTickReport()
+      }
+      this.tickStartedAt = startedAt
 
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick from the journal and one repo-scoped digest read
@@ -1174,6 +1185,7 @@ class DispatchLoop {
       this.queuedCount = publishedReport.queued
       this.lastTickStatus = {
         queued: publishedReport.queued,
+        blockedDiagnostics: [...publishedReport.blockedDiagnostics],
         janitorDiagnostics: [...publishedReport.janitorDiagnostics],
         ticketDiagnostics: [...publishedReport.ticketDiagnostics],
         creationDiagnostics: [...publishedReport.creationDiagnostics],
@@ -2831,15 +2843,38 @@ class DispatchLoop {
       dependencyDiagnostics: _dependencyDiagnostics,
       ...counters
     } = merged
-    await this.appendStatus({
+    const completed = {
       actor: DISPATCHER,
-      type: 'dispatcher.tick-completed',
-      payload: {
-        run: this.runId,
-        ...this.lastTickStatus,
-        counters,
-      },
-    })
+      type: 'dispatcher.tick-completed' as const,
+      payload: { run: this.runId, ...this.lastTickStatus, counters },
+    }
+    if (settlementOnly) {
+      await this.appendStatus(completed)
+    } else {
+      const startedAt = this.tickStartedAt!
+      const publish = shouldPublishTick(
+        merged,
+        this.repoView.recordedJournal(),
+        this.runId,
+        startedAt,
+      )
+      const events: RepositoryEventWrite[] = publish
+        ? [
+            {
+              actor: DISPATCHER,
+              type: 'dispatcher.tick-started',
+              payload: { run: this.runId, startedAt },
+            },
+            completed,
+          ]
+        : []
+      const result = await this.finishTick({ outcome: 'completed', counters }, events)
+      if (result === null) {
+        this.superseded = true
+        throw new Error('repository tick lease lost')
+      }
+      this.tickStartedAt = undefined
+    }
 
     this.pendingHarvest.harvestStarted -= snapshot.harvestStarted
     this.pendingHarvest.harvestResumed -= snapshot.harvestResumed
@@ -2849,10 +2884,72 @@ class DispatchLoop {
     return merged
   }
 
+  /** A remote finish can commit before its response is lost. Confirm that
+   * exact tick through durable telemetry before acknowledging its counters;
+   * never try to close an already committed boundary as a second failure. */
+  private async finishTick(
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    try {
+      return await this.repoView.finishRepoTick(this.repoIdentity, this.runId, completion, events)
+    } catch (error) {
+      const observation = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))
+        ?.tick
+      const finished = observation?.finished
+      if (
+        observation?.run !== this.runId ||
+        observation.open ||
+        finished?.run !== this.runId ||
+        finished.startedAt !== this.tickStartedAt ||
+        finished.outcome !== completion.outcome ||
+        (finished.outcome === 'failed' &&
+          completion.outcome === 'failed' &&
+          finished.error !== completion.error) ||
+        (finished.outcome === 'completed' &&
+          completion.outcome === 'completed' &&
+          Object.entries(completion.counters).some(
+            ([key, value]) => finished.counters[key as keyof typeof finished.counters] !== value,
+          ))
+      )
+        throw error
+      // The failed response bypassed the view's own-write fold. Refresh its
+      // cursor from the journal, including any committed boundary pair.
+      await this.repoView.refresh()
+      return { observation, events: [] }
+    }
+  }
+
+  private async publishTickFailure(error: unknown): Promise<void> {
+    const failed = {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-failed' as const,
+      payload: { run: this.runId, error: error instanceof Error ? error.message : String(error) },
+    }
+    if (this.tickStartedAt === undefined) {
+      await this.appendStatus(failed)
+      return
+    }
+    const result = await this.finishTick({ outcome: 'failed', error: failed.payload.error }, [
+      {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: this.runId, startedAt: this.tickStartedAt },
+      },
+      failed,
+    ])
+    if (result === null) {
+      this.superseded = true
+      return
+    }
+    this.tickStartedAt = undefined
+  }
+
   /** Settlement-only completions are serialized after operational ticks. Loop
    * so a result arriving during an awaited status append gets its own report. */
   private publishSettlementReports(): Promise<TickReport[]> {
     return this.serialize(async () => {
+      if (this.superseded) return []
       const reports: TickReport[] = []
       while (this.hasPendingHarvestResults()) {
         const report = await this.publishTickReport(emptyTickReport(), true)
@@ -3802,14 +3899,7 @@ class DispatchLoop {
         // invocation.
         if (this.pastDeadline()) return
         const initial = await this.dispatcherTick(true).catch(async (error: unknown) => {
-          await this.appendStatus({
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-failed',
-            payload: {
-              run: this.runId,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          })
+          await this.publishTickFailure(error)
           throw error
         })
         const initialPrinted = this.printReport(initial, false)
@@ -3856,11 +3946,7 @@ class DispatchLoop {
           startup = false
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          await this.appendStatus({
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-failed',
-            payload: { run: this.runId, error: message },
-          })
+          await this.publishTickFailure(error)
           this.warn(`tick failed: ${message}`)
         }
         if (this.stopped || this.superseded) break

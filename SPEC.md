@@ -457,7 +457,7 @@ builds       id/slug, ticket ref, repo, branch, status (derived), created/update
              lease + heartbeat (mutable liveness columns — §15.2.6, never events)
 events       build_id, seq, timestamp, actor, type, payload (JSON)   — append-only
 artifacts    build_id, kind, revision, blobRef, metadata
-repo_streams repo, created/updated, lease + heartbeat
+repo_streams repo, created/updated, lease + heartbeat, bounded tick observation
 repo_events  repo, seq, timestamp, actor, type, payload (JSON) — append-only
 repo_artifacts repo, kind, revision, blobRef, metadata
 ticket_assets repo, ticket_id, kind, name, revision, layout, manifest (JSON), size,
@@ -1925,6 +1925,24 @@ leaves the sandbox only through `sandbox.publish`, which takes the checkout's
 head (or an explicit commit) to a deterministic operator branch and a pull
 request against the base branch and records published/publish-failed journal
 facts.
+
+Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
+or attention transition append no tick boundary events. The first queue baseline,
+failed ticks, meaningful ticks, diagnostic clearing, failure recovery, and the
+first retry after a source cooldown remain recorded. Recorded starts may arrive
+with completion; optional `startedAt` preserves the actual start time, falling
+back to envelope time for historical journals.
+
+Repository tick telemetry is bounded mutable operational metadata, like leases.
+`beginRepoTick` persists the open boundary before unsafe work; `finishRepoTick`
+atomically replaces it with actual completion time and outcome and appends any
+validated tick boundaries. Both are fenced by the unexpired repository lease,
+and neither renews it. Quiet completions advance telemetry without advancing the
+journal. Readers refresh telemetry independently of event cursors, correlate it
+by run, and merge with historical completions by actual time; heartbeat never
+stands in for tick completion. Telemetry survives lease release. Safe shutdown
+uses the matching run's open observation, historical journal boundaries when
+absent, and refuses forced termination when the observation cannot be read.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect

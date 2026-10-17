@@ -80,7 +80,9 @@ A real run, in order: runs the three gates; asks Claude non-interactively for
 a short release summary; writes every workspace `package.json`,
 `CHANGELOG.md` (cutting `## Unreleased` into `## vX.Y.Z — DATE` and leaving
 Unreleased empty), and the pinned README install command
-(`bun add -g @defrex/autobuild@X.Y.Z`); commits exactly those files as
+(`bun add -g @defrex/autobuild@X.Y.Z`); refreshes `bun.lock` with
+`bun install --lockfile-only` so it records the new workspace versions;
+commits exactly those files as
 `chore: release vX.Y.Z`; creates an annotated tag; smokes the tag from a clean
 clone; atomically pushes the commit and tag; publishes a GitHub Release whose
 notes are the exact cut changelog section and uploads the guest distribution
@@ -91,8 +93,10 @@ non-private workspace package in dependency order (`@defrex/autobuild`, then
 `@defrex/autobuild-hosted-dispatcher`).
 
 Do not perform any of those steps by hand, and do not add files to the release
-commit — it validates that it contains exactly the changelog, README, and
-workspace manifest paths.
+commit — it validates that it contains exactly the changelog, README,
+workspace manifest paths, and `bun.lock` when the refresh changed it. A release
+that leaves `bun.lock` stale makes every later install rewrite it, so builds
+start with a dirty lockfile.
 
 ## When something goes wrong
 

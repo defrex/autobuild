@@ -289,6 +289,12 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     claimRepoLease(repo: string, _holder: string, _ttlMs: number): Promise<boolean> {
       return Promise.reject(new BuildScopeError(scope, 'claimRepoLease', repo))
     },
+    beginRepoTick(repo: string) {
+      return Promise.reject(new BuildScopeError(scope, 'beginRepoTick', repo))
+    },
+    finishRepoTick(repo: string) {
+      return Promise.reject(new BuildScopeError(scope, 'finishRepoTick', repo))
+    },
     heartbeatRepo(repo: string, _holder: string): Promise<boolean> {
       return Promise.reject(new BuildScopeError(scope, 'heartbeatRepo', repo))
     },

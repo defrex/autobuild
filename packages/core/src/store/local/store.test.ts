@@ -1043,3 +1043,47 @@ test('fresh SQLite handles read only reducer deltas across thousands of events a
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
+test('populated pre-telemetry SQLite repositories upgrade and share quiet completion across connections', async () => {
+  const root = await freshRoot()
+  const clock = manualClock(CONTRACT_T0)
+  try {
+    const legacy = new Database(join(root, 'autobuild.sqlite'), { create: true })
+    legacy.exec(`CREATE TABLE repo_streams (
+      repo TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      lease_holder TEXT, lease_expires_at TEXT, lease_ttl_ms INTEGER, heartbeat_at TEXT
+    )`)
+    legacy
+      .query('INSERT INTO repo_streams (repo, created_at, updated_at) VALUES (?, ?, ?)')
+      .run('legacy', CONTRACT_T0, CONTRACT_T0)
+    legacy.close()
+    const first = openLocalStore(root, { clock })
+    const second = openLocalStore(root, { clock })
+    try {
+      expect((await second.getRepo('legacy'))!.tick).toBeUndefined()
+      await first.claimRepoLease('legacy', 'owner', 60000)
+      await first.beginRepoTick('legacy', 'owner')
+      expect((await second.getRepo('legacy'))!.tick!.open!.startedAt).toBe(CONTRACT_T0)
+      const { emptyTickReport } = await import('../../processes/dispatcher')
+      const {
+        queued,
+        janitorDiagnostics,
+        blockedDiagnostics,
+        ticketDiagnostics,
+        creationDiagnostics,
+        dependencyDiagnostics,
+        ...counters
+      } = emptyTickReport()
+      clock.advance(1000)
+      await first.finishRepoTick('legacy', 'owner', { outcome: 'completed', counters }, [])
+      expect((await second.getRepo('legacy'))!.tick!.finished!.completedAt).toBe(
+        clock().toISOString(),
+      )
+      expect(await second.getRepoEvents('legacy')).toEqual([])
+    } finally {
+      await first.close()
+      await second.close()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

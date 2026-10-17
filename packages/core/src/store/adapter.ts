@@ -1,3 +1,9 @@
+export {
+  validateTickFinish,
+  repoTickCompletionSchema,
+  repoTickObservationSchema,
+} from './repo-tick'
+export type { RepoTickCompletion, RepoTickObservation, RepoTickFinish } from './types'
 export { validateEventWrite } from '../events/catalog'
 export { humanActor } from '../events/envelope'
 export type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'

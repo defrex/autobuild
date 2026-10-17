@@ -706,6 +706,135 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('repository journal (workflow and control paper trail)', () => {
+      test('tick observations are fenced, bounded, atomic and detached snapshots', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const repo = 'tick-contract'
+          await store.ensureRepo(repo)
+          expect(await store.beginRepoTick(repo, 'owner')).toBeNull()
+          await store.claimRepoLease(repo, 'owner', 60_000)
+          const startedAt = await store.beginRepoTick(repo, 'owner')
+          expect(startedAt).toBe(CONTRACT_T0)
+          const failure = { outcome: 'failed' as const, error: 'failure' }
+          const events: RepositoryEventWrite[] = [
+            {
+              actor: DISPATCHER,
+              type: 'dispatcher.tick-started',
+              payload: { run: 'owner', startedAt: startedAt! },
+            },
+            {
+              actor: DISPATCHER,
+              type: 'dispatcher.tick-failed',
+              payload: { run: 'owner', error: 'failure' },
+            },
+          ]
+          const before = await store.getRepo(repo)
+          expect(
+            await store.finishRepoTick(repo, 'foreign', failure, [
+              { ...events[0]!, payload: { run: 'foreign' } },
+              { ...events[1]!, payload: { run: 'foreign', error: 'failure' } },
+            ]),
+          ).toBeNull()
+          expect(await store.getRepo(repo)).toEqual(before)
+          await expect(
+            store.finishRepoTick(repo, 'owner', failure, [
+              events[0]!,
+              { ...events[1]!, payload: {} },
+            ]),
+          ).rejects.toThrow()
+          expect(await store.getRepoEvents(repo)).toEqual([])
+          expect(await store.getRepo(repo)).toEqual(before)
+          clock.advance(1000)
+          const finished = await store.finishRepoTick(repo, 'owner', failure, events)
+          expect(finished!.events.map((e) => e.seq)).toEqual([1, 2])
+          expect(finished!.observation.finished).toMatchObject({
+            startedAt,
+            completedAt: clock().toISOString(),
+            ...failure,
+          })
+          finished!.observation.finished!.startedAt = 'mutated'
+          expect((await store.getRepo(repo))!.tick!.finished!.startedAt).toBe(startedAt!)
+          await store.beginRepoTick(repo, 'owner')
+          expect((await store.getRepo(repo))!.tick!.finished!.outcome).toBe('failed')
+          clock.advance(60_000)
+          const expired = await store.getRepo(repo)
+          expect(await store.beginRepoTick(repo, 'owner')).toBeNull()
+          expect(await store.finishRepoTick(repo, 'owner', failure, events)).toBeNull()
+          expect(await store.getRepo(repo)).toEqual(expired)
+          await store.releaseRepoLease(repo, 'owner')
+          expect((await store.getRepo(repo))!.tick!.finished!.startedAt).toBe(startedAt!)
+        })
+      })
+
+      test('restricted handles deny tick mutations and arbitrary finish batches append nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'tick-authority'
+          await store.ensureRepo(repo)
+          await store.createBuild(sampleBuildInput('tick-scope', { repo }))
+          const scoped = store.scopeBuild('tick-scope')
+          await expect(scoped.beginRepoTick(repo, 'owner')).rejects.toThrow()
+          const failure = { outcome: 'failed' as const, error: 'failed' }
+          await expect(scoped.finishRepoTick(repo, 'owner', failure, [])).rejects.toThrow()
+          const session = await store.createSession({ repo, operator: 'operator' })
+          await expect(
+            store.scopeSession(session.id).beginRepoTick(repo, 'owner'),
+          ).rejects.toThrow()
+          await expect(
+            store.scopeSession(session.id).finishRepoTick(repo, 'owner', failure, []),
+          ).rejects.toThrow()
+          await store.claimRepoLease(repo, 'owner', 60_000)
+          await store.beginRepoTick(repo, 'owner')
+          const before = await store.getRepo(repo)
+          await expect(
+            store.finishRepoTick(repo, 'owner', failure, [
+              { actor: DISPATCHER, type: 'dispatcher.tick-started', payload: { run: 'owner' } },
+              {
+                actor: humanActor('operator'),
+                type: 'dispatcher.intake-set',
+                payload: { enabled: false },
+              },
+            ]),
+          ).rejects.toThrow()
+          expect(await store.getRepoEvents(repo)).toEqual([])
+          expect(await store.getRepo(repo)).toEqual(before)
+        })
+      })
+
+      test('quiet finishes update completion without advancing the journal or heartbeat', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const repo = 'quiet-tick-contract'
+          await store.ensureRepo(repo)
+          await store.claimRepoLease(repo, 'owner', 60_000)
+          const { emptyTickReport } = await import('../processes/dispatcher')
+          const {
+            queued,
+            janitorDiagnostics,
+            blockedDiagnostics,
+            ticketDiagnostics,
+            creationDiagnostics,
+            dependencyDiagnostics,
+            ...counters
+          } = emptyTickReport()
+          for (let i = 0; i < 20; i++) {
+            await store.beginRepoTick(repo, 'owner')
+            clock.advance(1000)
+            const result = await store.finishRepoTick(
+              repo,
+              'owner',
+              { outcome: 'completed', counters },
+              [],
+            )
+            expect(result!.events).toEqual([])
+            expect((await store.getRepo(repo))!.tick!.finished!.completedAt).toBe(
+              clock().toISOString(),
+            )
+          }
+          expect(await store.getRepoHighWater(repo)).toBe(0)
+          expect(await store.getRepoEvents(repo)).toEqual([])
+          expect((await store.getRepo(repo))!.heartbeatAt).toBeUndefined()
+        })
+      })
       test('ensureRepo is idempotent and repo event seq is independent', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {

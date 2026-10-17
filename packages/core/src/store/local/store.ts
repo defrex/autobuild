@@ -5,6 +5,8 @@ import {
   type ReducerValueRequest,
   type ReducerValue,
 } from '../reducer-values'
+import { validateTickFinish } from '../repo-tick'
+import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from '../types'
 /**
  * The local BuildStore (SPEC §7.2.1): SQLite + blob directory beneath an
  * explicitly resolved local state root. Repository/default selection belongs
@@ -198,7 +200,8 @@ export const BOOTSTRAP_DDL = [
     lease_holder TEXT,
     lease_expires_at TEXT,
     lease_ttl_ms INTEGER,
-    heartbeat_at TEXT
+    heartbeat_at TEXT,
+    tick TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS repo_events (
     repo TEXT NOT NULL,
@@ -344,6 +347,11 @@ export class SqliteBuildStore implements BuildStore {
     // Stores created before `repo_origin` existed keep working: add the column
     // idempotently when a pre-existing table lacks it (the bootstrap DDL above
     // covers fresh stores). No migration framework — one guarded ALTER at open.
+    const repoColumns = this.sqlite.query("PRAGMA table_info('repo_streams')").all() as {
+      name: string
+    }[]
+    if (!repoColumns.some((column) => column.name === 'tick'))
+      this.sqlite.exec('ALTER TABLE repo_streams ADD COLUMN tick TEXT')
     const columns = this.sqlite.query("PRAGMA table_info('builds')").all() as Array<{
       name: string
     }>
@@ -442,6 +450,7 @@ export class SqliteBuildStore implements BuildStore {
 
   private toRepoRecord(row: RepoRow): RepositoryRecord {
     return {
+      ...(row.tick ? { tick: structuredClone(row.tick) } : {}),
       repo: row.repo,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -929,9 +938,12 @@ export class SqliteBuildStore implements BuildStore {
     return row ? this.toRepoRecord(row) : null
   }
 
-  private appendRepoInTx(repo: string, validated: RepositoryEventWrite): RepositoryEventEnvelope {
+  private appendRepoInTx(
+    repo: string,
+    validated: RepositoryEventWrite,
+    ts = this.now(),
+  ): RepositoryEventEnvelope {
     this.requireRepo(repo)
-    const ts = this.now()
     const row = this.db
       .select({ max: sql<number | null>`max(${repoEvents.seq})` })
       .from(repoEvents)
@@ -1513,6 +1525,63 @@ export class SqliteBuildStore implements BuildStore {
         })
         .run()
       return this.toTicketAssetMeta(latest)
+    })
+  }
+
+  async beginRepoTick(repo: string, holder: string): Promise<string | null> {
+    return this.writeTx(() => {
+      const row = this.requireRepo(repo)
+      if (
+        row.leaseHolder !== holder ||
+        !row.leaseExpiresAt ||
+        Date.parse(row.leaseExpiresAt) <= this.clock().getTime()
+      )
+        return null
+      const startedAt = this.now()
+      const tick: RepoTickObservation = {
+        run: holder,
+        open: { startedAt },
+        ...(row.tick?.finished ? { finished: row.tick.finished } : {}),
+      }
+      this.db
+        .update(repoStreams)
+        .set({ tick, updatedAt: startedAt })
+        .where(eq(repoStreams.repo, repo))
+        .run()
+      return startedAt
+    })
+  }
+
+  async finishRepoTick(
+    repo: string,
+    holder: string,
+    completion: RepoTickCompletion,
+    events: RepositoryEventWrite[],
+  ): Promise<RepoTickFinish | null> {
+    const validated = validateTickFinish(holder, completion, events)
+    return this.writeTx(() => {
+      const row = this.requireRepo(repo)
+      if (
+        row.leaseHolder !== holder ||
+        !row.leaseExpiresAt ||
+        Date.parse(row.leaseExpiresAt) <= this.clock().getTime()
+      )
+        return null
+      if (row.tick?.run !== holder || !row.tick.open) throw new Error('no open repository tick')
+      const completedAt = this.now()
+      const envelopes = validated.map((event) =>
+        this.appendRepoInTx(repo, event, completedAt),
+      ) as RepositoryEvent[]
+      const observation: RepoTickObservation = {
+        run: holder,
+        finished: { ...completion, run: holder, startedAt: row.tick.open.startedAt, completedAt },
+      }
+      this.db
+        .update(repoStreams)
+        .set({ tick: observation, updatedAt: completedAt })
+        .where(eq(repoStreams.repo, repo))
+        .run()
+      return { observation, events: envelopes }
     })
   }
 

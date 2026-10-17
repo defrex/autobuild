@@ -275,6 +275,12 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     claimRepoLease(repo: string, _holder: string, _ttlMs: number): Promise<boolean> {
       return Promise.reject(new SessionScopeError(scope, 'claimRepoLease', repo))
     },
+    beginRepoTick(repo: string) {
+      return Promise.reject(new SessionScopeError(scope, 'beginRepoTick', repo))
+    },
+    finishRepoTick(repo: string) {
+      return Promise.reject(new SessionScopeError(scope, 'finishRepoTick', repo))
+    },
     heartbeatRepo(repo: string, _holder: string): Promise<boolean> {
       return Promise.reject(new SessionScopeError(scope, 'heartbeatRepo', repo))
     },

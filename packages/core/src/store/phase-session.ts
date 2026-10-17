@@ -432,6 +432,14 @@ export function scopeLocalStoreToPhaseSession(
       own('claimRepoLease', 'repo', repo)
       return store.claimRepoLease(repo, holder, ttlMs)
     },
+    async beginRepoTick(repo: string) {
+      own('beginRepoTick', 'repo', repo)
+      throw new Error('phase sessions cannot begin repository ticks')
+    },
+    async finishRepoTick(repo: string) {
+      own('finishRepoTick', 'repo', repo)
+      throw new Error('phase sessions cannot finish repository ticks')
+    },
     async heartbeatRepo(repo: string, holder: string): Promise<boolean> {
       own('heartbeatRepo', 'repo', repo)
       return store.heartbeatRepo(repo, holder)

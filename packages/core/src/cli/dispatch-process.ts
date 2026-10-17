@@ -245,12 +245,21 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
         // Ready with no durable build to recover. Let an open tick reach its
         // normal boundary; all non-tick work is lease-backed/recoverable and a
         // child stuck there is safe to terminate.
-        const events = await deps.store.getRepoEvents(deps.repo)
+        let open = true
+        try {
+          const record = await deps.store.getRepo(deps.repo)
+          open =
+            record?.tick?.run === deps.run
+              ? record.tick.open !== undefined
+              : hasOpenTick(await deps.store.getRepoEvents(deps.repo), deps.run)
+        } catch {
+          // Unreadable telemetry cannot authorize an unsafe kill.
+        }
         // The child may have exited while the asynchronous journal read was in
         // flight. Re-check at the force boundary so evidence never claims a
         // SIGKILL that was not actually sent.
         if (child.exitCode !== null) return
-        if (hasOpenTick(events, deps.run)) {
+        if (open) {
           await child.exited
           return
         }

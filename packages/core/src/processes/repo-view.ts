@@ -1267,6 +1267,16 @@ export class RepoViewStore implements BuildStore {
   ): Promise<TicketAssetMeta | null> {
     return this.backing.removeTicketAsset(repo, ticketId, kind, name)
   }
+  beginRepoTick(repo: string, holder: string) {
+    return this.backing.beginRepoTick(repo, holder)
+  }
+  async finishRepoTick(...args: Parameters<BuildStore['finishRepoTick']>) {
+    const result = await this.backing.finishRepoTick(...args)
+    if (result && args[0] === this.repo) {
+      for (const event of result.events) await this.foldJournalAppend(event)
+    }
+    return result
+  }
   claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.backing.claimRepoLease(repo, holder, ttlMs)
   }

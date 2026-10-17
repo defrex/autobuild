@@ -7,6 +7,7 @@ import {
 import { phaseSchema } from '../ontology'
 import { z } from 'zod'
 import type { ValueCatalogEntry } from '../store/reducer-values'
+import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { executionNoProgressReducer } from '../processes/execution-no-progress'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budget'
@@ -74,6 +75,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   effectiveConfig: { reducer: effectiveConfigReducer, covers: [] },
   buildDelegation: { reducer: buildDelegationReducer, covers: [] },
   harvestDelegation: { reducer: harvestDelegationReducer, covers: [] },
+  dispatchFrontend: { reducer: dispatchFrontendReducer, covers: [] },
   executionNoProgress: { reducer: executionNoProgressReducer, covers: [] },
   summaryBoundary: { reducer: summaryBoundaryReducer, covers: ['summaryBoundary'] },
   summaryRequests: { reducer: summaryRequestsReducer, covers: ['pendingSummaryRequests'] },
@@ -158,6 +160,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
 
 /** Qualification concerns the existing finished contract, including absence. */
 const valueExclusions: Record<string, string> = {
+  dispatchFrontend: 'returns a list of raw repository journal events',
   journalView: 'returns a list of raw repository journal events',
   repositoryStateEvents: 'returns a list of raw repository journal events',
   session: 'consumes operator-session logs rather than build or repository events',
@@ -240,6 +243,8 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
 /** Event-array functions that are deliberately not reducers, each with the
  * concrete reason. */
 export const EXCLUDED: Record<string, string> = {
+  shouldPublishTick:
+    'Publication decision over a new report and actual start time plus the bounded recorded journal; no event-only reduction can decide whether an unrecorded tick has effects.',
   projectDispatcherLiveness:
     'combines mutable repository lease metadata and an explicit clock with correlated facts; cannot be restored from an event-only snapshot',
   decideNext: 'a decision function over config; returns a Decision, not a state',
