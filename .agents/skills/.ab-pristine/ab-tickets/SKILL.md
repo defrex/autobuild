@@ -132,6 +132,13 @@ bounces.
 **Don't hand-move anything out of `doing/`** — a build owns it. If you need to
 stop a build, that's `ab` (or a human), not `mv`.
 
+When a conversation queues work by moving it into `ready/` (or the configured
+ready state of any source), the agent that queued it becomes its operator by
+default, as the `ab-spec` skill describes under "After filing": load the
+`ab-operate` skill and shepherd those builds to completion unless the human
+says they will operate them, hands them to another agent, or the session
+cannot keep a long-running watch.
+
 ## Icebox
 
 `icebox/` is work deliberately deferred, groomed or not, that nothing

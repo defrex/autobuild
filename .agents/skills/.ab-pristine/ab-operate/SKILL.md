@@ -10,7 +10,9 @@ pointed at a repository to file tickets, watch builds, unblock them, answer
 operator questions, and drive work to merge. Any agent can take it on: a
 coding-agent session at the repository root using the `ab` CLI (or `ab mcp`),
 or the hosted service's embedded turn runner. There is no initialization
-step — deciding to orchestrate is enough.
+step — deciding to orchestrate is enough. By default, the agent that
+specified and queued work (the `ab-spec` and `ab-tickets` skills) takes the
+role for that work as soon as it is ready, unless the human opts out.
 
 The orchestrator is not a build phase: it never runs pipeline steps, never
 edits the repository, and never touches a build's checkout. Its reach is the
