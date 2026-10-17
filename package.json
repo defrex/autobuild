@@ -114,6 +114,7 @@
     "docs"
   ],
   "scripts": {
+    "ab": "bun bin/ab.ts",
     "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:web-dashboard": "bun packages/web-dashboard-capture/src/web-dashboard-capture.tsx",
