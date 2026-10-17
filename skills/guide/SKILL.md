@@ -770,7 +770,7 @@ three fresh executions. The guard is derived from durable facts, including on
 supervisor restart, and uses the ordinary watch, dashboard and operator API
 attention paths.
 
-For each repeat conflict, Autobuild compares the base merged by the latest
+For each repeat conflict, Autobuild compares the target base of the latest
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and

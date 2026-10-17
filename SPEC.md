@@ -359,7 +359,8 @@ is kernel-hard-coded. That is what keeps the system inspectable.
 `spec` is *not* a phase; it is satisfied at or before dispatch (§6). After
 `finalize`, the build enters a post-PR epilogue owned by the dispatcher's
 janitor duty (§15.7): a conflicted PR triggers the `reconcile` phase —
-agent-resolved merge of base into branch, full `verify:*` re-run — repeating
+kernel-prepared single-change replay onto a frozen refreshed base, with agent
+conflict resolution and the captured post-reconcile `verify:*` policy — repeating
 until merge or close.
 
 ## 6. The spec
