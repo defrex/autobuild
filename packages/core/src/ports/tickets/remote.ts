@@ -1,3 +1,4 @@
+import { normalizeTicket, refuseUnsupportedMetadata } from './tree'
 import { hostedRequestedIds } from './requested-id'
 import { TicketRevisionConflict } from './revision'
 import type {
@@ -86,7 +87,7 @@ export class HostedTicketSource implements TicketSource {
   }
 
   private project(ticket: Ticket): Ticket {
-    return { ...ticket, ref: { ...ticket.ref, source: this.name } }
+    return normalizeTicket({ ...ticket, ref: { ...ticket.ref, source: this.name } }, false)
   }
 
   private async request<T>(
@@ -166,6 +167,7 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
+    refuseUnsupportedMetadata(this, draft)
     return this.project(await this.request('create', { draft, options }, ticketWireSchema))
   }
 
@@ -174,10 +176,12 @@ export class HostedTicketSource implements TicketSource {
     expectedRevision: string,
     mutation: TicketMutation,
   ): Promise<void> {
+    if (mutation.kind === 'update') refuseUnsupportedMetadata(this, mutation.patch)
     await this.request('mutate-if-revision', { id, expectedRevision, mutation }, successWireSchema)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
+    refuseUnsupportedMetadata(this, patch)
     await this.request('update', { id, patch }, successWireSchema)
   }
 

@@ -283,7 +283,8 @@ One name, used everywhere. Every noun lives in exactly one layer.
 |---|---|
 | **Signal** | Raw input from the world — a Sentry issue, an observation |
 | **Proposal** | A synthesized candidate ticket sitting in Triage, awaiting grooming |
-| **Ticket** | A groomed, dispatchable unit of work in the TicketSource |
+| **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
+| **Node ticket** | A named integration point represented by a ticket of kind `node`; metadata only in this increment |
 | **Build** | One pipeline execution for one ticket; has a slug; the unit the operator sees |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
@@ -1867,6 +1868,43 @@ ordering, not provider behavior, is what makes filing crash-safe. Dispatch
 uses the key only to withhold unfinished Autobuild creates; its absence fails
 open for legacy/plugin tickets and introduces no new readiness gate.
 
+### 13.1 Node tickets and targets
+
+Tickets have `kind = "work"` by default, or `kind = "node"` for a named
+integration point. The optional `target` is a node ticket id in the same source;
+omission means the configured `baseBranch` root. Nodes may target other nodes.
+These fields currently describe intent only: dispatch, branches and landing
+behavior are unchanged in this increment. Blockers remain a separate graph.
+
+Use `ab ticket create "Integration" --body spec.md --kind node`, then
+`ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
+reset kind with `--kind work`. Omitted fields preserve existing values.
+`ab ticket show <id> [--json]` exposes both fields; `ab ticket tree [--json]`
+shows the configured root and every ticket, including completed work and empty
+nodes, nested by target with state. Siblings are sorted by id. Invalid external
+graphs and listing diagnostics are reported explicitly.
+
+Targets must exist and be nodes in the configured source. Self-targeting,
+ancestor cycles and demoting a node with targeting tickets are refused before
+any part of the requested update is written, regardless of ticket state.
+Clear or reparent its children before demotion. File frontmatter persists the
+fields; `ab ticket edit` displays them read-only. Change them through update.
+Kind and target participate in content revisions and revision-checked writes.
+File writes retain their existing best-effort, unlocked concurrency semantics.
+
+Linear uses the exact `node` issue label for kind and the parent relation for
+target, only when the parent carries that label. Ordinary grouping parents do
+not impose targets and survive unrelated updates. Explicit target clear clears
+the parent relation. Label replacements can demote nodes and receive the same
+guards; explicit kind and label instructions must agree about `node`. Label
+and parent connections are fully paginated. Linear still refuses guarded writes.
+
+Hosted sources and legacy plugins read as work with no target and refuse any
+explicit metadata write, including clears and mixed patches, with guidance to
+use a capable source. No hosted storage or protocol change is implied.
+
+
+
 ## 14. Operator UI
 
 The UI layer is defined by the seam, not any implementation: **subscribe to
@@ -2944,13 +2982,13 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-id, blockers, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
-File and Linear revisions fingerprint title, body, canonical label/blocker sets
+File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
 and state; reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also

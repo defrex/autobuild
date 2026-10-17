@@ -1,3 +1,4 @@
+import { compatibleTicketSource, normalizeTicket } from './tree'
 import {
   mutateTicketIfRevision,
   TicketRevisionConflict,
@@ -28,7 +29,7 @@ export function missingTicket(source: TicketSource, id: string): TicketOperation
 export async function requireTicket(source: TicketSource, id: string): Promise<Ticket> {
   const ticket = await source.get(id)
   if (ticket === null) throw missingTicket(source, id)
-  return ticket
+  return normalizeTicket(ticket, !!source.integrationTree)
 }
 
 export async function requirePostMutationTicket(
@@ -43,7 +44,7 @@ export async function requirePostMutationTicket(
       `ticket "${id}" disappeared from the configured ${source.name} ticket source after ${operation}`,
     )
   }
-  return ticket
+  return normalizeTicket(ticket, !!source.integrationTree)
 }
 
 export function ticketListCriteria(
@@ -79,6 +80,7 @@ export async function createTicket(
   input: TicketDraft & { state?: string },
   options: { blockerErrorPrefix?: string; blockerErrorSuffix?: string } = {},
 ): Promise<Ticket> {
+  source = compatibleTicketSource(source)
   const blockedBy = await knownBlockers(
     source,
     input.blockedBy ?? [],
@@ -86,6 +88,8 @@ export async function createTicket(
     options.blockerErrorSuffix ?? '',
   )
   const draft: TicketDraft = {
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.target !== undefined ? { target: input.target } : {}),
     title: input.title,
     body: input.body,
     ...(input.labels !== undefined ? { labels: [...input.labels] } : {}),
@@ -112,6 +116,7 @@ export async function updateTicket(
   readAfter = true,
   expectedRevision?: string,
 ): Promise<Ticket | null> {
+  source = compatibleTicketSource(source)
   try {
     if (expectedRevision !== undefined)
       await mutateTicketIfRevision(source, id, expectedRevision, { kind: 'update', patch })

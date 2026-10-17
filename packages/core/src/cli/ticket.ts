@@ -1,3 +1,8 @@
+import {
+  compatibleTicketSource,
+  projectTicketTree,
+  type TicketTreeEntry,
+} from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { exportTickets, importTickets } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
@@ -71,6 +76,8 @@ export interface TicketCommandOpts {
 }
 
 export interface TicketCreateOpts extends TicketCommandOpts {
+  kind?: import('../ports/types').TicketKind
+  target?: string | null
   title: string
   json?: boolean
   /** Path to the ticket body — the spec (docs/spec-standard.md). */
@@ -85,6 +92,8 @@ export interface TicketCreateOpts extends TicketCommandOpts {
 }
 
 export interface TicketUpdateOpts extends TicketCommandOpts {
+  kind?: import('../ports/types').TicketKind
+  target?: string | null
   id: string
   json?: boolean
   title?: string
@@ -163,6 +172,7 @@ export interface TicketStateCreateOpts extends TicketCommandOpts {
 }
 
 type TicketCommandName =
+  | 'tree'
   | 'export'
   | 'import'
   | 'states'
@@ -234,12 +244,16 @@ async function createTicketCommandSource(
   const factory = opts.sourceFactory ?? createTicketSource
   return {
     config,
-    source: await factory(
-      config.tickets,
-      config.tickets.source === 'hosted' ? { ...opts.env, AB_STORE: repoState.storeRef } : opts.env,
-      targetRepo,
-      repoState.localStateRoot,
-      plugins,
+    source: compatibleTicketSource(
+      await factory(
+        config.tickets,
+        config.tickets.source === 'hosted'
+          ? { ...opts.env, AB_STORE: repoState.storeRef }
+          : opts.env,
+        targetRepo,
+        repoState.localStateRoot,
+        plugins,
+      ),
     ),
   }
 }
@@ -284,6 +298,8 @@ function ticketDetail(ticket: Ticket, assets: TicketAssetSummary[] = []): string
   const lines = [
     `ticket ${ticket.ref.source}:${ticket.ref.id}`,
     `  title:   ${ticket.title}`,
+    `  kind:    ${ticket.kind ?? 'work'}`,
+    `  target:  ${ticket.target ?? '(root)'}`,
     `  state:   ${ticket.state ?? '(unknown)'}`,
     `  labels:  ${ticket.labels.join(', ') || '(none)'}`,
   ]
@@ -308,6 +324,8 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   const ticket = await createTicket(
     source,
     {
+      ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
+      ...(opts.target !== undefined ? { target: opts.target } : {}),
       title: opts.title,
       body,
       ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
@@ -336,6 +354,8 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
   const body = opts.bodyFile === undefined ? undefined : await readBody(opts.bodyFile)
   const { source } = await resolveTicketCommand(opts, 'update')
   const patch: TicketUpdate = {
+    ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
+    ...(opts.target !== undefined ? { target: opts.target } : {}),
     ...(opts.title !== undefined ? { title: opts.title } : {}),
     ...(body !== undefined ? { body } : {}),
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
@@ -724,9 +744,9 @@ export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<
 }
 
 const CREATE_USAGE =
-  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json] (§8.8)'
+  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--kind work|node] [--target <id> | --no-target] [--json] (§8.8)'
 const UPDATE_USAGE =
-  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json] (§8.8)'
+  'usage: ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json] (§8.8)'
 const BLOCK_USAGE =
   'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
 const UNBLOCK_USAGE =
@@ -746,6 +766,7 @@ const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>
 export const TICKET_USAGE = [
   'usage: ab ticket export <dir> [--store <ref>]',
   'usage: ab ticket import <dir> [--store <ref>]',
+  'usage: ab ticket tree [--json]',
   CREATE_USAGE,
   'usage: ab ticket edit <id> (§8.8)',
   UPDATE_USAGE,
@@ -800,7 +821,16 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'create': {
       const parsed = parseArgs(
         args,
-        { body: 'value', state: 'value', labels: 'value', 'blocked-by': 'value', json: 'boolean' },
+        {
+          kind: 'value',
+          target: 'value',
+          'no-target': 'boolean',
+          body: 'value',
+          state: 'value',
+          labels: 'value',
+          'blocked-by': 'value',
+          json: 'boolean',
+        },
         TICKET_USAGE,
       )
       const title = parsed.positionals.join(' ')
@@ -814,6 +844,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const blockedBy = stringFlag(parsed, 'blocked-by')
       await abTicketCreate({
         ...opts,
+        ...metadataFlags(parsed),
         title,
         bodyFile,
         ...(state !== undefined ? { state } : {}),
@@ -835,6 +866,9 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const parsed = parseArgs(
         args,
         {
+          kind: 'value',
+          target: 'value',
+          'no-target': 'boolean',
           title: 'value',
           body: 'value',
           labels: 'value',
@@ -844,7 +878,9 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         TICKET_USAGE,
       )
       const [id, ...extra] = parsed.positionals
-      const hasUpdate = ['title', 'body', 'labels'].some((flag) => parsed.flags.has(flag))
+      const hasUpdate = ['title', 'body', 'labels', 'kind', 'target', 'no-target'].some((flag) =>
+        parsed.flags.has(flag),
+      )
       if (id === undefined || id.trim() === '' || extra.length > 0 || !hasUpdate) {
         throw new Error(TICKET_USAGE)
       }
@@ -856,6 +892,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       }
       await abTicketUpdate({
         ...opts,
+        ...metadataFlags(parsed),
         id,
         expectedRevision: stringFlag(parsed, 'expected-revision'),
         ...(title !== undefined ? { title } : {}),
@@ -913,6 +950,33 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         json: parsed.flags.has('json'),
       })
+      return
+    }
+
+    case 'tree': {
+      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      if (parsed.positionals.length) throw new Error(TICKET_USAGE)
+      const { source, config } = await resolveTicketCommand(opts, 'tree')
+      if (!source.listAll)
+        throw new Error(
+          `${source.name} cannot enumerate all tickets; use a source with listAll support`,
+        )
+      const listing = await source.listAll()
+      for (const diagnostic of listing.diagnostics) opts.stderr(diagnostic)
+      const tree = projectTicketTree(listing.tickets, config.baseBranch)
+      if (parsed.flags.has('json')) opts.stdout(JSON.stringify(tree, null, 2))
+      else {
+        opts.stdout(tree.root)
+        const print = (entries: TicketTreeEntry[], depth: number): void => {
+          for (const entry of entries) {
+            opts.stdout(
+              `${'  '.repeat(depth)}${entry.ticket.ref.id} [${entry.ticket.kind}] (${entry.ticket.state ?? 'unknown'}) ${entry.ticket.title}`,
+            )
+            print(entry.children, depth + 1)
+          }
+        }
+        print(tree.children, 1)
+      }
       return
     }
 
@@ -1062,5 +1126,20 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
 
     default:
       throw new Error(TICKET_USAGE)
+  }
+}
+
+function metadataFlags(
+  parsed: ReturnType<typeof parseArgs>,
+): Pick<TicketUpdate, 'kind' | 'target'> {
+  const kind = stringFlag(parsed, 'kind')
+  const target = stringFlag(parsed, 'target')
+  if (kind !== undefined && kind !== 'work' && kind !== 'node')
+    throw new Error('--kind must be work or node')
+  if (target !== undefined && (!target.trim() || parsed.flags.has('no-target')))
+    throw new Error('--target requires a nonblank id and cannot be combined with --no-target')
+  return {
+    ...(kind !== undefined ? { kind } : {}),
+    ...(target !== undefined ? { target } : parsed.flags.has('no-target') ? { target: null } : {}),
   }
 }

@@ -2541,13 +2541,18 @@ describe('Dispatcher dependency gate', () => {
               issues: {
                 nodes: [
                   {
+                    team: { key: 'ENG' },
+                    parent: null,
                     id: 'uuid-1',
                     identifier: 'T-1',
                     title: 'Add rate limiting',
                     description: CONFORMING_BODY,
                     url: 'https://linear.app/issue/T-1',
                     state: { name: 'Ready', type: 'unstarted' },
-                    labels: { nodes: [{ name: 'autobuild' }] },
+                    labels: {
+                      nodes: [{ name: 'autobuild' }],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
                     inverseRelations: {
                       nodes: [
                         {

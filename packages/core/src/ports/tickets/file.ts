@@ -1,3 +1,4 @@
+import { validateTicketTree } from './tree'
 import { fileRequestedIds, validateFileTicketId } from './requested-id'
 import { FileTicketAssets } from './file-assets'
 /**
@@ -93,6 +94,7 @@ interface Located {
 
 export class FileTicketSource implements TicketSource {
   readonly name = 'file'
+  readonly integrationTree = true
   readonly requestedIds = fileRequestedIds
   readonly assets: FileTicketAssets
 
@@ -278,7 +280,10 @@ export class FileTicketSource implements TicketSource {
     const taken = new Set(located.map((f) => f.id))
     let n = 1
     while (taken.has(`file-${n}`)) n += 1
+    const canonicalTarget = await validateTicketTree(this, opts.requestedId, draft)
     const front: Frontmatter = {
+      ...(draft.kind !== undefined ? { kind: draft.kind } : {}),
+      ...(canonicalTarget != null ? { target: canonicalTarget } : {}),
       id: opts.requestedId ?? `file-${n}`,
       comments: [],
       title: draft.title,
@@ -307,6 +312,7 @@ export class FileTicketSource implements TicketSource {
         await this.requireForWrite(blocker, 'blocker')
       }
     }
+    const canonicalTarget = patch ? await validateTicketTree(this, id, patch) : undefined
     // Final locate/read immediately precedes the write. This is best effort,
     // matching unguarded file writes; it does not introduce filesystem locks.
     const loaded = await this.requireForWrite(id, 'revision-checked write')
@@ -318,6 +324,9 @@ export class FileTicketSource implements TicketSource {
     const front = { ...loaded.front }
     let body = loaded.body
     if (patch) {
+      if (patch.kind !== undefined) front.kind = patch.kind
+      if (canonicalTarget === null) delete front.target
+      else if (canonicalTarget !== undefined) front.target = canonicalTarget
       if (patch.title !== undefined) front.title = patch.title
       if (patch.labels !== undefined) front.labels = patch.labels
       if (patch.body !== undefined) body = patch.body
@@ -335,12 +344,16 @@ export class FileTicketSource implements TicketSource {
   async update(id: string, patch: TicketUpdate): Promise<void> {
     const validated = validateTicketUpdate(patch)
     await this.ensureLayout()
+    const canonicalTarget = await validateTicketTree(this, id, validated)
     const loaded = await this.requireForWrite(id, 'update')
     const front: Frontmatter = {
       ...loaded.front,
+      ...(validated.kind !== undefined ? { kind: validated.kind } : {}),
+      ...(canonicalTarget != null ? { target: canonicalTarget } : {}),
       ...(validated.title !== undefined ? { title: validated.title } : {}),
       ...(validated.labels !== undefined ? { labels: [...validated.labels] } : {}),
     }
+    if (canonicalTarget === null) delete front.target
     await this.rewriteAt(loaded.found, front, validated.body ?? loaded.body)
   }
 
@@ -619,7 +632,7 @@ export class FileTicketSource implements TicketSource {
     await rename(temp, found.path)
   }
 
-  private async listAll(): Promise<TicketListing> {
+  async listAll(): Promise<TicketListing> {
     const tickets: Ticket[] = []
     const diagnostics: string[] = []
     // Complete discovery first. Structural failures (including duplicate ids)
@@ -642,7 +655,11 @@ export class FileTicketSource implements TicketSource {
 
   private toTicket(front: Frontmatter, body: string, state: string): Ticket {
     return {
+      kind: front.kind ?? 'work',
+      ...(front.target !== undefined ? { target: front.target } : {}),
       revision: ticketRevision({
+        kind: front.kind,
+        target: front.target,
         title: front.title,
         body,
         labels: front.labels,

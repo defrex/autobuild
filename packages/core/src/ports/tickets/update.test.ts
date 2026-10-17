@@ -31,7 +31,7 @@ describe('ticket update validation', () => {
 
   test('current reachable failures retain specific diagnostics', () => {
     expect(() => validateTicketUpdate({})).toThrow(
-      /invalid ticket update — update must name at least one of title, body, or labels/,
+      /invalid ticket update — update must name at least one of title, body, labels, kind, or target/,
     )
     expect(() => validateTicketUpdate({ title: '   ' })).toThrow(
       /invalid ticket update — title: title must not be blank/,
@@ -43,4 +43,15 @@ describe('ticket update validation', () => {
       validateTicketUpdate({ title: 'kept', extra: true } as unknown as TicketUpdate),
     ).toThrow(/invalid ticket update — Unrecognized key: "extra"/)
   })
+})
+
+test('metadata-only updates retain null clears and validate kind and nonblank ids', () => {
+  expect(validateTicketUpdate({ kind: 'node' })).toEqual({ kind: 'node' })
+  expect(validateTicketUpdate({ target: null })).toEqual({ target: null })
+  expect(validateTicketUpdate({ kind: 'work', target: 'node-id' })).toEqual({
+    kind: 'work',
+    target: 'node-id',
+  })
+  expect(() => validateTicketUpdate({ target: '  ' })).toThrow('target must not be blank')
+  expect(() => validateTicketUpdate({ kind: 'other' } as unknown as TicketUpdate)).toThrow('kind')
 })

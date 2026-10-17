@@ -400,7 +400,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             store: opts.store,
             repo,
             backend: opts.ticketBackend,
-            operation: { kind: 'create', ...request },
+            operation: { ...request, kind: 'create', ticketKind: request.kind },
           }),
         )
       }

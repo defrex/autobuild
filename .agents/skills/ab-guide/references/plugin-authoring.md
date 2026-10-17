@@ -394,3 +394,20 @@ and is never supplied; factory environments also exclude `AB_TOKEN`. Launch
 credentials travel through the separate transient execution-auth argument, never
 through serialized execution identity. Existing plugins that forwarded
 `storeToken` must migrate to this callback and fail closed if it is unavailable.
+
+## Optional ticket tree capability
+
+Existing ticket-source factories remain compatible without new methods or fields.
+Raw `Ticket.kind` is optional for source compatibility; public projections normalize
+it to `work`. An adapter opts in with `integrationTree: true` and implements
+`listAll(): Promise<TicketListing>` over every state, independently of ready filters.
+It must persist `kind?: 'work' | 'node'` and `target?: string | null` on drafts
+and updates: omitted preserves/defaults, explicit work resets kind, null clears
+target. Read targets are source-local canonical ticket ids. Validate same-source
+existence, node kind, self/ancestor cycles, corrupt chains and demotion with any
+children before writing any mixed patch, including revision-checked writes.
+Expose kind/target in revisions. Exhaust provider pagination and propagate
+infrastructure failures. Do not opt in if the source cannot preserve these semantics.
+Legacy sources receive ordinary CRUD unchanged; metadata writes are refused by
+the compatibility facade before legacy methods run. Unsupported sources should
+also refuse metadata explicitly at their own direct write boundary.

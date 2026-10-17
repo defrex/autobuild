@@ -1,3 +1,4 @@
+import { compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
 import type { TicketRef } from '../ontology'
@@ -71,7 +72,7 @@ export async function openOperatorTickets(opts: {
   const context = opts.backend.contextFor
     ? await opts.backend.contextFor(opts.repo)
     : contextFor((await effectiveConfig(opts.store, opts.repo)).config, opts.repo)
-  return { context, source: await opts.backend.sourceFor(context) }
+  return { context, source: compatibleTicketSource(await opts.backend.sourceFor(context)) }
 }
 
 export async function listOperatorTickets(opts: {
@@ -190,6 +191,8 @@ export async function mutateOperatorTicket(opts: {
   operation:
     | {
         kind: 'create'
+        ticketKind?: import('../ports/types').TicketKind
+        target?: string | null
         title: string
         body: string
         labels?: string[]
@@ -205,7 +208,7 @@ export async function mutateOperatorTicket(opts: {
   if (operation.kind === 'update') await requireTicket(source, operation.id)
   const ticket =
     operation.kind === 'create'
-      ? await createTicket(source, operation)
+      ? await createTicket(source, { ...operation, kind: operation.ticketKind })
       : operation.kind === 'update'
         ? (await updateTicket(
             source,
