@@ -1,4 +1,4 @@
-import { readBuildFacts } from '../store/reduced-reads'
+import { readBuildFacts, readPhaseFailures } from '../store/reduced-reads'
 import type { IdSource } from '../ids'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { Forge, WorkspacePublication } from '../ports/types'
@@ -83,19 +83,14 @@ export async function settlePendingPublication(
         type: 'reconcile.contended',
         payload: { id: transaction.id, request: request.seq, actual: result.actual },
       })
-      const failures = (await readBuildFacts(deps.store, slug)).value.reconcileHistory.filter(
-        (e) =>
-          e.type === 'phase.failed' &&
-          e.payload.phase === 'reconcile' &&
-          e.payload.round === transaction.attempt,
-      ).length
+      const failures = await readPhaseFailures(deps.store, slug, 'reconcile', transaction.attempt)
       await deps.store.append(slug, {
         actor: KERNEL,
         type: 'phase.failed',
         payload: {
           phase: 'reconcile',
           round: transaction.attempt,
-          attempt: failures + 1,
+          attempt: failures.count + 1,
           willRetry: true,
           error: `reconcile publication lost its expected-head lease to ${result.actual ?? '(deleted)'}; replay again onto frozen base ${transaction.targetBase}`,
         },
