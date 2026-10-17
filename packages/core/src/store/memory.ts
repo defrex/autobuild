@@ -1,3 +1,4 @@
+import { assertPublicSnapshotReducer } from './snapshots'
 import {
   readReducerValue,
   resolveReducerValue,
@@ -736,7 +737,7 @@ export class MemoryBuildStore implements BuildStore {
             : this.repoState(scope.repo).events
           ).slice(since, through),
         ) as (AbEvent | RepositoryEvent)[],
-      put: (key, snapshot) => this.putReducerSnapshot(scope, key, snapshot),
+      put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
       read: async (key) => {
         const snapshot = this.snapshots.get(`${snapshotScopeKey(scope)}\u0000${key}`)
         return snapshot === undefined
@@ -767,6 +768,7 @@ export class MemoryBuildStore implements BuildStore {
     reducer: string,
     version: number,
   ): Promise<ReducerSnapshot | null> {
+    assertPublicSnapshotReducer(reducer)
     const tail = this.snapshotTail(scope)
     if (tail === undefined) return null
     const stored = this.snapshots.get(`${snapshotScopeKey(scope)}\u0000${reducer}`)
@@ -775,6 +777,15 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    assertPublicSnapshotReducer(reducer)
+    return this.putSnapshot(scope, reducer, snapshot)
+  }
+
+  private async putSnapshot(
     scope: SnapshotScope,
     reducer: string,
     snapshot: ReducerSnapshot,

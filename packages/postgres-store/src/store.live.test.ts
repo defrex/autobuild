@@ -698,7 +698,7 @@ if (testUrl)
         costs.events = 0
         await reader.getReducerValue(scope, request)
         expect(costs.events).toBe(0)
-        const originalPut = reader.putReducerSnapshot.bind(reader)
+        const originalPut = Reflect.get(reader, 'putSnapshot').bind(reader)
         let release!: () => void
         let entered!: () => void
         const started = new Promise<void>((resolve) => {
@@ -707,11 +707,19 @@ if (testUrl)
         const gate = new Promise<void>((resolve) => {
           release = resolve
         })
-        reader.putReducerSnapshot = async (target, name, snapshot) => {
-          entered()
-          await gate
-          return originalPut(target, name, snapshot)
-        }
+        Reflect.set(
+          reader,
+          'putSnapshot',
+          async (
+            target: import('@defrex/autobuild/store-adapter').SnapshotScope,
+            name: string,
+            snapshot: import('@defrex/autobuild/store-adapter').ReducerSnapshot,
+          ) => {
+            entered()
+            await gate
+            return originalPut(target, name, snapshot)
+          },
+        )
         if (scope.kind === 'build') await writer.append(scope.slug, sampleEventWrite())
         else
           await writer.appendRepo(scope.repo, {
@@ -732,7 +740,7 @@ if (testUrl)
         release()
         expect((await delayed).cursor).toBe(3002)
         expect(winner.cursor).toBe(3003)
-        reader.putReducerSnapshot = originalPut
+        Reflect.set(reader, 'putSnapshot', originalPut)
         expect(await reader.getReducerValue(scope, request)).toEqual(winner)
         await sql`UPDATE reducer_snapshots SET state='{"corrupt":true}'::jsonb WHERE reducer=${key}`
         const originalRun = Reflect.get(reader, 'run').bind(reader)

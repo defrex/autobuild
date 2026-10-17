@@ -385,13 +385,16 @@ export interface BuildStore {
    * journal's trailing events. Unknown repo rejects like `getRepoEvents`;
    * never an `ensureRepo` side effect. */
   getRepoHighWater(repo: string): Promise<number>
+  /** A named JSON answer reduced from the authoritative log. Checkpoints are
+   * maintained privately by the adapter and cannot be supplied by callers. */
+  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue>
   /** The stored reducer snapshot for a scope (a build log or a repository
    * journal), a cache beside the log and never an authority. `null` when
    * absent, when the stored version differs from `version`, when the stored
    * cursor is ahead of the scope's log tail, or when the scope is unknown (no
    * `ensureRepo` side effect, no rejection). A store without snapshot storage
-   * answers `null`. */
-  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue>
+   * answers `null`. Reserved `value.*` names reject: their checkpoints are
+   * internal to getReducerValue, not public snapshot resources. */
   getReducerSnapshot(
     scope: SnapshotScope,
     reducer: string,
@@ -403,7 +406,8 @@ export interface BuildStore {
    * past it), or when the cursor is equal and `version` is higher. Everything
    * else, and any cursor beyond the log tail, is a no-op. Atomic, so
    * concurrent writers cannot undo each other's progress. Resolves `true`
-   * when the row was written. */
+   * when the row was written. Reserved `value.*` names reject before storage
+   * access; only getReducerValue may write these checkpoints. */
   putReducerSnapshot(
     scope: SnapshotScope,
     reducer: string,

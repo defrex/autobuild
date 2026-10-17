@@ -1,3 +1,4 @@
+import { assertPublicSnapshotReducer } from '../snapshots'
 import {
   readReducerValue,
   resolveReducerValue,
@@ -1130,7 +1131,7 @@ export class SqliteBuildStore implements BuildStore {
           payload: JSON.parse(row.payload),
         })) as (AbEvent | RepositoryEvent)[]
       },
-      put: (key, snapshot) => this.putReducerSnapshot(scope, key, snapshot),
+      put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
       read: async (key) => {
         const row = this.sqlite
           .query(
@@ -1182,6 +1183,7 @@ export class SqliteBuildStore implements BuildStore {
     reducer: string,
     version: number,
   ): Promise<ReducerSnapshot | null> {
+    assertPublicSnapshotReducer(reducer)
     const tail = this.snapshotTail(scope)
     if (tail === undefined) return null
     const row = this.sqlite
@@ -1202,6 +1204,15 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    assertPublicSnapshotReducer(reducer)
+    return this.putSnapshot(scope, reducer, snapshot)
+  }
+
+  private async putSnapshot(
     scope: SnapshotScope,
     reducer: string,
     snapshot: ReducerSnapshot,

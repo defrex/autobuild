@@ -415,6 +415,14 @@ for supported clients, including the current dispatcher run's event tail. It is
 the compatibility exception to flat event-row reads; new callers should request
 named values. The current product no longer loads or writes raw-tail snapshots.
 
+The `value.*` snapshot namespace is reserved for the adapter's private value
+checkpoint hooks. Public snapshot GET and PUT requests for this prefix return
+`400 validation`, including requests made with delegated or administrator
+credentials. Adapter snapshot APIs reject the same names. Ordinary snapshot
+names retain their existing behavior. The value cache key format is versioned;
+checkpoints from the former publicly writable format are ignored and rebuilt
+from the log after upgrading.
+
 ### Reducer snapshots
 
 A reducer snapshot is one registered reducer's serialized state as of a log

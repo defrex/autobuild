@@ -1,3 +1,4 @@
+import { assertPublicSnapshotReducer } from '@defrex/autobuild/remote-store'
 import { reducerValueRequestSchema, resolveReducerValue } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import { randomBytes } from 'node:crypto'
@@ -922,6 +923,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     scope: SnapshotScope,
     reducer: string,
   ): Promise<Response> {
+    try {
+      assertPublicSnapshotReducer(reducer)
+    } catch (error) {
+      throw new RequestError(400, 'validation', (error as Error).message)
+    }
     if (!SNAPSHOT_REDUCER_NAME.test(reducer)) {
       throw new RequestError(400, 'validation', `invalid reducer name "${reducer}"`)
     }

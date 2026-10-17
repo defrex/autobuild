@@ -4,7 +4,11 @@ import type { AbEvent } from '../events/catalog'
 import type { RepositoryEvent } from '../events/repository'
 import { REDUCERS } from '../kernel/reducer-registry'
 import type { IncrementalReducer } from '../kernel/incremental'
-import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+import {
+  REDUCER_VALUE_SNAPSHOT_PREFIX,
+  type ReducerSnapshot,
+  type SnapshotScope,
+} from './snapshots'
 
 export const reducerValueRequestSchema = z
   .object({
@@ -60,7 +64,8 @@ export function resolveReducerValue(scope: SnapshotScope, input: ReducerValueReq
   const args = entry.args.parse(request.args ?? {})
   const reducer = entry.create(args)
   const identity = canonical({ scope, reducer: request.reducer, version: reducer.version, args })
-  const key = `value.${new Bun.CryptoHasher('sha256').update(identity).digest('hex').slice(0, 56)}`
+  // v2 ignores checkpoints from the former client-writable key format.
+  const key = `${REDUCER_VALUE_SNAPSHOT_PREFIX}v2.${new Bun.CryptoHasher('sha256').update(identity).digest('hex').slice(0, 54)}`
   return { name: request.reducer, reducer, identity, key, entry }
 }
 

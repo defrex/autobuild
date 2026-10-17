@@ -925,3 +925,105 @@ test('persisted lifecycle facts match full replay for historical anchors, duplic
   }
   await store.close()
 })
+
+test('delegated credentials cannot forge value checkpoints or extend an ended lifecycle', async () => {
+  const { resolveReducerValue } = await import('@defrex/autobuild/remote-store')
+  const f = await fixture()
+  const started = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: {
+      session: 'ended-phase',
+      role: 'implement',
+      phase: 'implement',
+      round: 1,
+      runner: 'test',
+    },
+  })
+  const issued = await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'ended-phase' })
+  expect(issued.status).toBe(200)
+  const phaseToken = (await issued.json()).token as string
+  const ended = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.ended',
+    payload: {
+      session: 'ended-phase',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'replacement', resumedFromSeq: started.seq },
+    },
+  })
+  const scope = { kind: 'build' as const, slug: 'one' }
+  const resolved = resolveReducerValue(scope, { reducer: 'buildDelegation' })
+  const legacyKey = `value.${new Bun.CryptoHasher('sha256').update(resolved.identity).digest('hex').slice(0, 56)}`
+  const forged = {
+    version: resolved.reducer.version,
+    cursor: ended.seq,
+    state: {
+      identity: resolved.identity,
+      acc: {
+        lastSeq: ended.seq,
+        sessions: {
+          'id:ended-phase': { starts: [started.seq], endings: [] },
+          'id:never-started': { starts: [started.seq], endings: [] },
+        },
+        terminals: [],
+      },
+    },
+  }
+  for (const token of [phaseToken, f.token, f.project.token])
+    for (const key of [resolved.key, legacyKey, 'value.arbitrary']) {
+      const path = `/builds/one/snapshots/${key}`
+      expect((await f.server.fetch(request(path, token, forged, 'PUT'))).status).toBe(400)
+      expect((await f.server.fetch(request(`${path}?version=1`, token))).status).toBe(400)
+    }
+  // Generic snapshots retain their historical API outside the reserved prefix.
+  expect(
+    (
+      await f.server.fetch(
+        request(
+          '/builds/one/snapshots/legacy-client',
+          phaseToken,
+          { version: 1, cursor: ended.seq, state: { ok: true } },
+          'PUT',
+        ),
+      )
+    ).status,
+  ).toBe(200)
+  expect(
+    (await f.server.fetch(request('/builds/one/snapshots/legacy-client?version=1', phaseToken)))
+      .status,
+  ).toBe(200)
+  expect(
+    (await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'never-started' })).status,
+  ).toBe(404)
+  // A checkpoint forged through the prior release must not survive an upgrade.
+  const snapshots = Reflect.get(f.store, 'snapshots') as Map<string, typeof forged>
+  snapshots.set(`build:one\u0000${legacyKey}`, forged)
+  snapshots.delete(`build:one\u0000${resolved.key}`)
+  f.advance(59999)
+  expect((await f.server.fetch(request('/builds/one', phaseToken))).status).toBe(200)
+  f.advance(1)
+  expect((await f.server.fetch(request('/builds/one', phaseToken))).status).toBe(401)
+  expect(
+    (await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 'never-started' })).status,
+  ).toBe(404)
+  const terminal = await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'build.aborted',
+    payload: {},
+  })
+  expect(
+    (
+      await f.server.fetch(
+        request(
+          `/builds/one/snapshots/${resolved.key}`,
+          f.token,
+          { ...forged, cursor: terminal.seq },
+          'PUT',
+        ),
+      )
+    ).status,
+  ).toBe(400)
+  f.advance(60000)
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(401)
+})

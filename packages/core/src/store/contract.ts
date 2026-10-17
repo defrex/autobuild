@@ -979,39 +979,41 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               if (answer.value && typeof answer.value === 'object')
                 Object.assign(answer.value, { poison: true })
               expect((await store.getReducerValue(scope, request)).value).toEqual(expected)
-              const snapshot = await store.getReducerSnapshot(
-                scope,
-                resolved.key,
-                resolved.reducer.version,
-              )
-              expect(snapshot?.cursor).toBe(events.at(-1)?.seq ?? 0)
             }
           }
         })
       })
-      test('repairs a malformed same-cursor row and unknown scopes create nothing', async () => {
+      test('public snapshots cannot supply value checkpoints and unknown scopes create nothing', async () => {
         await withStore(factory, undefined, async (store) => {
           const scope = { kind: 'build' as const, slug: 'value-repair' }
           await store.createBuild(sampleBuildInput(scope.slug))
           await store.append(scope.slug, sampleEventWrite('first'))
           const request = { reducer: 'build' }
           const resolved = resolveReducerValue(scope, request)
-          await store.putReducerSnapshot(scope, resolved.key, {
-            version: resolved.reducer.version,
-            cursor: 1,
-            state: { identity: resolved.identity, acc: { nested: 'corrupt' } },
-          })
+          await expect(
+            store.putReducerSnapshot(scope, resolved.key, {
+              version: resolved.reducer.version,
+              cursor: 1,
+              state: { identity: resolved.identity, acc: resolved.reducer.initial() },
+            }),
+          ).rejects.toThrow('reserved')
+          await expect(
+            store.getReducerSnapshot(scope, resolved.key, resolved.reducer.version),
+          ).rejects.toThrow('reserved')
+          // Block the whole namespace, including the former writable format.
+          for (const target of [scope, { kind: 'repo' as const, repo: 'value-repair' }]) {
+            await store.ensureRepo('value-repair')
+            await expect(
+              store.putReducerSnapshot(target, 'value.legacy', {
+                version: 1,
+                cursor: 0,
+                state: {},
+              }),
+            ).rejects.toThrow('reserved')
+          }
           const answer = await store.getReducerValue(scope, request)
           expect(answer.value).toEqual(
             JSON.parse(JSON.stringify(reduceBuild(await store.getEvents(scope.slug)))),
-          )
-          const repaired = await store.getReducerSnapshot(
-            scope,
-            resolved.key,
-            resolved.reducer.version,
-          )
-          expect((repaired!.state as { acc: unknown }).acc).toEqual(
-            resolved.reducer.advance(resolved.reducer.initial(), await store.getEvents(scope.slug)),
           )
           await expect(
             store.getReducerValue({ kind: 'build', slug: 'unknown' }, request),

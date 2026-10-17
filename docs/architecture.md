@@ -181,6 +181,9 @@ selector functions, and top-level optional results are explicitly excluded with
 reasons. Factory arguments are validated and participate in a bounded digest
 cache key. The persisted envelope also records the canonical scope, arguments,
 name and version, and nested accumulator shapes are validated before restore.
+The `value.*` namespace is reserved: public snapshot reads and writes reject it,
+and the engine persists through private adapter hooks. Versioned cache keys
+exclude checkpoints produced while the old namespace was publicly writable.
 `tools/reducer-value-shapes.ts` regenerates those structural validators from the
 declared accumulator types.
 

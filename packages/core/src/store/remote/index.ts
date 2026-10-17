@@ -52,3 +52,5 @@ export type {
 export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/service-facts'
 
 export { delegationFactKey } from '../../kernel/service-facts'
+
+export { assertPublicSnapshotReducer } from '../snapshots'

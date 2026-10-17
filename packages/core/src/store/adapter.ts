@@ -133,3 +133,5 @@ export type {
   ReducerValueStorage,
   ValueCacheRow,
 } from './reducer-values'
+
+export { assertPublicSnapshotReducer } from './snapshots'

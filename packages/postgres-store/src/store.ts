@@ -1,3 +1,4 @@
+import { assertPublicSnapshotReducer } from '@defrex/autobuild/store-adapter'
 import {
   readReducerValue,
   resolveReducerValue,
@@ -1068,7 +1069,7 @@ export class PostgresBuildStore implements BuildStore {
           payload: json(row.payload),
         })) as (AbEvent | RepositoryEvent)[]
       },
-      put: (key, snapshot) => this.putReducerSnapshot(scope, key, snapshot),
+      put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
       read: async (key) => {
         const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
         const rows: Row[] = await this.run(
@@ -1121,6 +1122,7 @@ export class PostgresBuildStore implements BuildStore {
     reducer: string,
     version: number,
   ): Promise<ReducerSnapshot | null> {
+    assertPublicSnapshotReducer(reducer)
     const key = scope.kind === 'build' ? scope.slug : scope.repo
     try {
       const rows: Row[] = await this.run(
@@ -1144,6 +1146,15 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    assertPublicSnapshotReducer(reducer)
+    return this.putSnapshot(scope, reducer, snapshot)
+  }
+
+  private async putSnapshot(
     scope: SnapshotScope,
     reducer: string,
     snapshot: ReducerSnapshot,
