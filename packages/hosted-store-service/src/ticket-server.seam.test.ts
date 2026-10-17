@@ -7,6 +7,7 @@ import {
   supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
+  RELEASE_LINE_PROTOCOLS,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
@@ -17,6 +18,18 @@ import {
   TICKET_REVISIONS_CAPABILITY,
 } from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
+
+/** Ticket shape/capability fixtures must identify each release with its actual
+ * wire protocol, independently of which line is currently installed. */
+function releasedClientProtocol(version: string): string {
+  const line = version.split('.').slice(0, 2).join('.')
+  if (line === AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')) {
+    return REMOTE_STORE_PROTOCOL_VERSION
+  }
+  const protocol = RELEASE_LINE_PROTOCOLS[line]
+  if (protocol === undefined) throw new Error(`missing protocol fixture for released line ${line}`)
+  return protocol
+}
 
 const secret = 'ticket-test-secret'
 const now = new Date('2026-01-01T00:00:00.000Z')
@@ -237,9 +250,7 @@ test.each([...new Set(['0.10.0', '0.11.0', '0.12.0', '0.12.1', AUTOBUILD_VERSION
           headers: {
             authorization: `Bearer ${operator}`,
             [AUTOBUILD_VERSION_HEADER]: version,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-              ? REMOTE_STORE_PROTOCOL_VERSION
-              : '3',
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: releasedClientProtocol(version),
             'content-type': 'application/json',
           },
           body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
@@ -379,9 +390,7 @@ test('comments require explicit capability independently of client version on ev
         const headers: Record<string, string> = {
           authorization: `Bearer ${operator}`,
           [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: version.startsWith('0.13.')
-            ? REMOTE_STORE_PROTOCOL_VERSION
-            : '3',
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: releasedClientProtocol(version),
           'content-type': 'application/json',
         }
         if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability
