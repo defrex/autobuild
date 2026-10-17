@@ -110,42 +110,55 @@ test('canonical aliases and foreign refs are validated', async () => {
   )
 })
 
-test('old plugins keep receivers and capabilities; metadata mixed writes never reach them', async () => {
-  const fake = new FakeTicketSource()
-  const ticket = await fake.create({ title: 'Old', body: 'spec' })
-  const legacy: TicketSource = {
-    name: fake.name,
-    get: async () => {
-      const { kind: _kind, target: _target, ...rest } = ticket
-      return rest
-    },
-    listReady: async () => ({ tickets: [ticket], diagnostics: [] }),
-    create: fake.create.bind(fake),
-    update: fake.update.bind(fake),
-    claim: fake.claim.bind(fake),
-    comment: fake.comment.bind(fake),
-    transition: fake.transition.bind(fake),
-    addBlocker: fake.addBlocker.bind(fake),
-    removeBlocker: fake.removeBlocker.bind(fake),
-    dependencyStates: fake.dependencyStates.bind(fake),
-    mutateIfRevision: fake.mutateIfRevision.bind(fake),
-  }
-  const source = compatibleTicketSource(legacy)
-  expect((await source.get(ticket.ref.id))!.kind).toBe('work')
-  for (const patch of [
-    { kind: 'work' as const },
-    { target: null },
-    { title: 'Lost', target: null },
-  ]) {
-    await expect(source.update(ticket.ref.id, patch)).rejects.toThrow('integrationTree')
-    await expect(
-      source.mutateIfRevision!(ticket.ref.id, ticket.revision, { kind: 'update', patch }),
-    ).rejects.toThrow('integrationTree')
-    await expect(source.create({ title: 'Lost', body: 'spec', ...patch })).rejects.toThrow(
-      'integrationTree',
-    )
-  }
-  expect(fake.updates).toHaveLength(0)
-  await source.update(ticket.ref.id, { title: 'New' })
-  expect((await fake.get(ticket.ref.id))!.title).toBe('New')
-})
+test.each([false, true])(
+  'legacy plugin compatibility (frozen=%s) preserves receivers and refuses metadata',
+  async (frozen) => {
+    const fake = new FakeTicketSource()
+    const ticket = await fake.create({ title: 'Old', body: 'spec' })
+    const legacy: TicketSource = {
+      name: fake.name,
+      async get() {
+        expect(this).toBe(legacy)
+        const { kind: _kind, target: _target, ...rest } = ticket
+        return rest
+      },
+      async listReady() {
+        expect(this).toBe(legacy)
+        return { tickets: [ticket], diagnostics: [] }
+      },
+      async listStates() {
+        expect(this).toBe(legacy)
+        return [{ name: 'Triage', tickets: 1 }]
+      },
+      create: fake.create.bind(fake),
+      update: fake.update.bind(fake),
+      claim: fake.claim.bind(fake),
+      comment: fake.comment.bind(fake),
+      transition: fake.transition.bind(fake),
+      addBlocker: fake.addBlocker.bind(fake),
+      removeBlocker: fake.removeBlocker.bind(fake),
+      dependencyStates: fake.dependencyStates.bind(fake),
+      mutateIfRevision: fake.mutateIfRevision.bind(fake),
+    }
+    const source = compatibleTicketSource(frozen ? Object.freeze(legacy) : legacy)
+    expect(await source.listReady({})).toMatchObject({ tickets: [{ kind: 'work' }] })
+    expect(await source.listStates!()).toEqual([{ name: 'Triage', tickets: 1 }])
+    expect((await source.get(ticket.ref.id))!.kind).toBe('work')
+    for (const patch of [
+      { kind: 'work' as const },
+      { target: null },
+      { title: 'Lost', target: null },
+    ]) {
+      await expect(source.update(ticket.ref.id, patch)).rejects.toThrow('integrationTree')
+      await expect(
+        source.mutateIfRevision!(ticket.ref.id, ticket.revision, { kind: 'update', patch }),
+      ).rejects.toThrow('integrationTree')
+      await expect(source.create({ title: 'Lost', body: 'spec', ...patch })).rejects.toThrow(
+        'integrationTree',
+      )
+    }
+    expect(fake.updates).toHaveLength(0)
+    await source.update(ticket.ref.id, { title: 'New' })
+    expect((await fake.get(ticket.ref.id))!.title).toBe('New')
+  },
+)

@@ -66,10 +66,12 @@ export async function validateTicketTree(
   return canonical
 }
 
-/** A proxy retains prototype methods, optional capabilities and their receivers. */
+/** Forward through an empty facade so frozen source properties do not constrain
+ * proxy results. Methods and accessors still receive the original source. */
 export function compatibleTicketSource(source: TicketSource): TicketSource {
-  return new Proxy(source, {
-    get(target, property) {
+  return new Proxy(Object.create(source) as TicketSource, {
+    get(_facade, property) {
+      const target = source
       const value = Reflect.get(target, property, target)
       if (typeof value !== 'function') return value
       if (property === 'get')

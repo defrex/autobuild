@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import type { TicketSource } from '../types'
 import type { PluginFactoryContext } from '../../plugins/manifest'
 import { PluginRegistry } from '../../plugins/registry'
 import { describeTicketSourceContract } from './contract'
@@ -143,7 +144,7 @@ describe('createTicketSource — file', () => {
 })
 
 function pluginRegistry(
-  factory: (context: PluginFactoryContext) => FakeTicketSource | Promise<FakeTicketSource>,
+  factory: (context: PluginFactoryContext) => TicketSource | Promise<TicketSource>,
   requiredEnv?: string[],
 ): PluginRegistry {
   const registry = new PluginRegistry()
@@ -237,6 +238,42 @@ describeTicketSourceContract('plugin-selected FakeTicketSource', async () => {
       REPO,
       undefined,
       registry,
+    ),
+    states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+    editableLabel: 'contract-editable',
+  }
+})
+
+describeTicketSourceContract('frozen object-literal plugin', async () => {
+  const fake = new FakeTicketSource([], { createState: 'Triage', doneState: 'Done' })
+  const plugin: TicketSource = Object.freeze({
+    name: fake.name,
+    requestedIds: fake.requestedIds,
+    async get(this: TicketSource, id: string) {
+      expect(this).toBe(plugin)
+      return fake.get(id)
+    },
+    async listReady(this: TicketSource, criteria: Parameters<TicketSource['listReady']>[0]) {
+      expect(this).toBe(plugin)
+      return fake.listReady(criteria)
+    },
+    create: fake.create.bind(fake),
+    update: fake.update.bind(fake),
+    claim: fake.claim.bind(fake),
+    comment: fake.comment.bind(fake),
+    transition: fake.transition.bind(fake),
+    addBlocker: fake.addBlocker.bind(fake),
+    removeBlocker: fake.removeBlocker.bind(fake),
+    dependencyStates: fake.dependencyStates.bind(fake),
+    mutateIfRevision: fake.mutateIfRevision.bind(fake),
+  })
+  return {
+    source: await createTicketSource(
+      { source: 'jira', readyState: 'Ready' },
+      {},
+      REPO,
+      undefined,
+      pluginRegistry(() => plugin),
     ),
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'contract-editable',
