@@ -193,7 +193,13 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Every JSON ticket read includes an opaque revision. update, move, block and',
       'unblock accept --expected-revision to refuse stale writes. Linear refuses checks.',
       'edit opens VISUAL or EDITOR, checks the opening revision, and preserves failed buffers.',
-      'create files a ticket and may establish initial blockers.',
+      `create files a ticket and may establish initial blockers.
+--kind work|node declares a ticket's kind; work is the default. --target <id>
+names a same-source node; --no-target clears it to the baseBranch root.
+Targets cannot form cycles, and nodes with targeting tickets cannot become work.
+tree shows all tickets nested by target, including completed work and empty nodes;
+--json returns {root, children} with recursive {ticket, children} entries.
+These fields describe intent; dispatch and landing behavior are unchanged.`,
       '--state overrides [tickets].createState (or the provider default) for that',
       'create only; it is passed through unchanged and validated by the source.',
       'update partially replaces editable fields: omitted fields survive, --labels',
@@ -203,7 +209,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '',
       'With no list filters, list uses the same ready criteria as dispatch. show one ticket, including its body/spec.',
       'Human output is the default. --json emits exactly one bare value: Ticket[]',
-      'for list and the complete resulting Ticket for every other subcommand; show',
+      'for list, the hierarchy for tree, and the resulting Ticket for ticket mutations; show',
       'adds an assets array (kind, name, revision, size, layout, fileCount).',
       '',
       'Ticket assets are files or folders (a design export, a reference screenshot, a',
