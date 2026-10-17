@@ -111,6 +111,7 @@ export class DashboardRefresh {
       return this.flight
     }
     this.cancel()
+    this.wake = false
     this.started = this.time.now()
     this.permit = this.generation
     const current = Promise.resolve()
@@ -138,7 +139,8 @@ export class DashboardRefresh {
     if (!this.active || this.suspended || !this.focused) return
     const interval = this.live || this.time.now() < this.deadline ? 500 : 5000
     // Slow/failing requests do not spin when their start deadline is overdue.
-    const delay = Math.max(50, this.started + interval - this.time.now())
+    const remaining = this.started + interval - this.time.now()
+    const delay = remaining > 0 ? remaining : 50
     this.timer = this.time.set(() => {
       this.timer = undefined
       void this.request()
