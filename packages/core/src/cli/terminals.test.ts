@@ -1,3 +1,5 @@
+import { prepareRestack } from '../kernel/reconcile-restack'
+import { gitRewrite } from '../ports/forge/git-rewrite'
 import { renderPrSummary } from './pr-summary'
 /**
  * Terminal-command tests (SPEC §8.4 D5, §8.5 D6, §8.6 D7): second-terminal
@@ -1559,244 +1561,100 @@ describe('ab done — finalize', () => {
 
 describe('ab done — reconcile', () => {
   let workspace: string
-
+  let deps: TestDeps
+  let oldHead: string
+  let target: string
   beforeEach(async () => {
     workspace = join(tmp, 'ws-reconcile')
     await initWorkspaceRepo(workspace)
-    await commitFile(workspace, 'feature.ts', 'branch work\n', 'feature work')
+    await runGit(['config', 'user.name', 'Test'], workspace)
+    await runGit(['config', 'user.email', 'test@example.invalid'], workspace)
+    await runGit(['config', 'commit.gpgsign', 'false'], workspace)
+    const base = await runGit(['rev-parse', 'HEAD'], workspace)
+    oldHead = await commitFile(workspace, 'feature.ts', 'branch work\n', 'feature work')
+    await runGit(['checkout', '-q', 'main'], workspace)
+    target = await commitFile(workspace, 'base.ts', 'upstream\n', 'base work')
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: 'Build change\n\nDescription\n',
+    })
     await store.append(BUILD, {
       actor: KERNEL,
       type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'sha-conflict' },
+      payload: { attempt: 1, baseSha: target },
     })
-  })
-
-  test('rejected when HEAD is not a merge commit', async () => {
-    const deps = makeDeps({
+    deps = makeDeps({
       store,
       env: makeEnv({ phase: 'reconcile', round: 1 }),
       workspacePath: workspace,
     })
-    const notes = await stash('rec.md', 'merged base\n')
-    await expect(done(deps, { notes })).rejects.toThrow(
-      /HEAD to be a merge commit \(2\+ parents\).*has 1 parent/s,
+    deps.forge.rewrite = gitRewrite(deps.exec, true)
+    await prepareRestack(
+      { ...deps, slug: BUILD },
+      { attempt: 1, branch: BRANCH, oldBase: base, targetBase: target, id: 'rewrite-1' },
     )
+  })
+  test('publishes one detached replay with archived evidence and a correlated completion', async () => {
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
+    const event = await done(deps, { notes: await stash('rec.md', 'Checked replay') })
+    expect(event.type).toBe('reconcile.completed')
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    expect(event.payload).toEqual({
+      headSha: head,
+      rewriteId: 'rewrite-1',
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    })
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(head)
+    expect(await runGit(['show', '-s', '--format=%P', head], workspace)).toBe(target)
+    expect(
+      await runGit(['rev-parse', `refs/autobuild/archive/${BUILD}/${oldHead}`], workspace),
+    ).toBe(oldHead)
     expect(deps.forge.pushes).toEqual([])
   })
-
-  test('remote reconcile requests exact merge publication without pushing or completing', async () => {
-    await runGit(['checkout', '-q', 'main'], workspace)
-    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
-    await runGit(['checkout', '-q', BRANCH], workspace)
-    await runGit(
-      [
-        '-c',
-        'user.email=ab@test.invalid',
-        '-c',
-        'user.name=ab-test',
-        '-c',
-        'commit.gpgsign=false',
-        'merge',
-        '--no-ff',
-        '-m',
-        'merge main into branch',
-        'main',
-      ],
-      workspace,
-    )
-    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
+  test('remote reconcile requests trusted guarded publication', async () => {
     await store.append(BUILD, {
       actor: KERNEL,
       type: 'workspace.provisioned',
       payload: {
         provider: 'vercel-sandbox',
         ref: 'sandbox-reconcile',
-        path: '/vercel/sandbox/workspace',
         branch: BRANCH,
-        base: { source: 'existing', sha: 'a'.repeat(40) },
+        base: { source: 'existing', sha: target },
       },
     })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'reconcile', round: 1 }),
-      workspacePath: workspace,
-    })
-    const event = await done(deps, { notes: await stash('remote-rec.md', 'merged base\n') })
-
+    const event = await done(deps, { notes: await stash('remote.md', 'Checked replay') })
     expect(event.type).toBe('publication.requested')
-    expect(event.payload).toEqual({
+    expect(event.payload).toMatchObject({
       operation: 'reconcile',
-      branch: BRANCH,
-      sha: mergeSha,
-      artifact: { kind: 'reconcile-notes', rev: 0 },
+      rewrite: { oldHead, targetBase: target, id: 'rewrite-1' },
     })
-    expect(deps.forge.pushes).toEqual([])
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
     expect(await eventTypes()).not.toContain('reconcile.completed')
   })
-
-  test('on a real merge commit: pushes (never force) and records the merge commit', async () => {
-    // Diverge main, then merge it into the branch — a genuine 2-parent HEAD.
-    await runGit(['checkout', '-q', 'main'], workspace)
-    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
-    await runGit(['checkout', '-q', BRANCH], workspace)
-    await runGit(
-      [
-        '-c',
-        'user.email=ab@test.invalid',
-        '-c',
-        'user.name=ab-test',
-        '-c',
-        'commit.gpgsign=false',
-        'merge',
-        '--no-ff',
-        '-m',
-        'merge main into branch',
-        'main',
-      ],
-      workspace,
+  test('rejects authored scratch before intent or branch publication', async () => {
+    await mkdir(join(workspace, '.ab'), { recursive: true })
+    await writeFile(join(workspace, '.ab', 'notes.md'), 'must not ship')
+    await runGit(['add', '-f', '.ab/notes.md'], workspace)
+    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit', '-q'], workspace)
+    await expect(done(deps, { notes: await stash('scratch.md', 'Checked') })).rejects.toThrow(
+      'publication rejected',
     )
-    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
-
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'reconcile', round: 1 }),
-      workspacePath: workspace,
-    })
-    const notes = await stash('rec.md', 'resolved conflicts against main\n')
-    const event = await done(deps, { notes })
-
-    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
-    expect(event.type).toBe('reconcile.completed')
-    expect(event.payload).toEqual({
-      mergeCommit: mergeSha,
-      artifact: { kind: 'reconcile-notes', rev: 0 },
-    })
-    const deposited = await store.getArtifact(BUILD, 'reconcile-notes')
-    expect(textContent(deposited!)).toBe('resolved conflicts against main\n')
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
+    expect(await eventTypes()).not.toContain('reconcile.publish-intended')
   })
-
-  test('rejects force-added reconcile notes in the merge commit before push or deposit', async () => {
-    await runGit(['checkout', '-q', 'main'], workspace)
-    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
-    await runGit(['checkout', '-q', BRANCH], workspace)
-    await runGit([...GIT_ID, 'merge', '--no-ff', '-m', 'merge main', 'main'], workspace)
-    await mkdir(join(workspace, '.ab'))
-    const notes = join(workspace, '.ab/reconcile-notes.md')
-    await writeFile(notes, 'must stay scratch\n')
-    await runGit(['add', '-f', '.ab/reconcile-notes.md'], workspace)
-    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit'], workspace)
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'reconcile', round: 1 }),
-      workspacePath: workspace,
-    })
-
-    await expect(done(deps, { notes })).rejects.toThrow(
-      /publication rejected[\s\S]*\.ab\/reconcile-notes\.md[\s\S]*retry completion/,
-    )
-    expect(deps.forge.pushes).toEqual([])
-    expect(await store.getArtifact(BUILD, 'reconcile-notes')).toBeNull()
-    expect(await eventTypes()).not.toContain('reconcile.completed')
-
-    await runGit(['rm', '--cached', '-q', '.ab/reconcile-notes.md'], workspace)
-    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit'], workspace)
-    await rm(join(workspace, '.ab'), { recursive: true })
-    const retryNotes = await stash('retry-reconcile-notes.md', 'safe notes\n')
-    const retried = await done(deps, { notes: retryNotes })
-    expect(retried.type).toBe('reconcile.completed')
-    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
-  })
-
-  test('detached merge HEAD publishes to the durable branch before completion', async () => {
-    const remote = join(tmp, 'reconcile-origin.git')
-    await initBareOrigin(workspace, remote)
-    const attachedTip = await runGit(['rev-parse', BRANCH], workspace)
-
-    await runGit(['checkout', '-q', 'main'], workspace)
-    await commitFile(workspace, 'base.ts', 'new base\n', 'advance base')
-    await runGit(['checkout', '-q', '--detach', attachedTip], workspace)
-    await runGit(
-      [
-        '-c',
-        'user.email=ab@test.invalid',
-        '-c',
-        'user.name=ab-test',
-        '-c',
-        'commit.gpgsign=false',
-        'merge',
-        '--no-ff',
-        '-m',
-        'merge main while detached',
-        'main',
-      ],
-      workspace,
-    )
-    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
-    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe('HEAD')
-    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(attachedTip)
-
-    const notes = await stash('detached-rec.md', 'detached merge completed\n')
-    const deps = {
-      ...makeDeps({
-        store,
-        env: makeEnv({ phase: 'reconcile', round: 1 }),
-        workspacePath: workspace,
-      }),
-      forge: new GitHubForge(),
+  test('publication refusal retains durable intent and notes for recovery', async () => {
+    deps.forge.rewrite.replace = async () => {
+      throw new Error('remote rejected reconciliation')
     }
-    const event = await done(deps, { notes })
-
-    expect(event.type).toBe('reconcile.completed')
-    expect(event.payload).toEqual({
-      mergeCommit: mergeSha,
-      artifact: { kind: 'reconcile-notes', rev: 0 },
-    })
-    expect(await remoteBranchHead(remote)).toBe(mergeSha)
-    expect(textContent((await store.getArtifact(BUILD, 'reconcile-notes'))!)).toBe(
-      'detached merge completed\n',
+    await expect(done(deps, { notes: await stash('refused.md', 'Checked') })).rejects.toThrow(
+      'remote rejected reconciliation',
     )
-  })
-
-  test('push failure leaves NO reconcile event and NO notes artifact', async () => {
-    await runGit(['checkout', '-q', 'main'], workspace)
-    await commitFile(workspace, 'base.ts', 'new base\n', 'advance base')
-    await runGit(['checkout', '-q', BRANCH], workspace)
-    await runGit(
-      [
-        '-c',
-        'user.email=ab@test.invalid',
-        '-c',
-        'user.name=ab-test',
-        '-c',
-        'commit.gpgsign=false',
-        'merge',
-        '--no-ff',
-        '-m',
-        'merge main into branch',
-        'main',
-      ],
-      workspace,
-    )
-    class ExplodingForge extends FakeForge {
-      override async pushBranch(): Promise<void> {
-        throw new Error('remote rejected reconciliation')
-      }
-    }
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'reconcile', round: 1 }),
-      workspacePath: workspace,
-      forge: new ExplodingForge(),
-    })
-    const notes = await stash('failed-rec.md', 'must not be deposited\n')
-
-    await expect(done(deps, { notes })).rejects.toThrow('remote rejected reconciliation')
+    expect(await eventTypes()).toContain('reconcile.publish-intended')
     expect(await eventTypes()).not.toContain('reconcile.completed')
-    expect(await store.getArtifact(BUILD, 'reconcile-notes')).toBeNull()
+    expect(await store.getArtifact(BUILD, 'reconcile-notes')).not.toBeNull()
   })
 })
-
-// ── ab verdict — vocabulary (§8.2, both directions) ──────────────────────────
 
 describe('ab verdict — vocabulary enforcement (§8.2)', () => {
   test('a review phase rejects pass, citing the exact rule and its own vocabulary', async () => {

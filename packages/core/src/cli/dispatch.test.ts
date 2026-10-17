@@ -1,3 +1,4 @@
+import { gitRewrite } from '../ports/forge/git-rewrite'
 /**
  * `ab dispatch` (src/cli/dispatch.ts): the operator entry into the outer loop.
  *
@@ -179,6 +180,15 @@ async function makeFixture(
   const ids = sequentialIds()
   const store = new MemoryBuildStore({ clock })
   const forge = new FakeForge()
+  const recordPush = forge.pushBranch.bind(forge)
+  forge.pushBranch = async (cwd, branch) => {
+    await recordPush(cwd, branch)
+    await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
+  }
+  forge.rewrite = gitRewrite(spawnExec, false)
+  await git(['config', 'user.name', 'ab-test'], checkout)
+  await git(['config', 'user.email', 'ab-test@example.invalid'], checkout)
+  await git(['config', 'commit.gpgsign', 'false'], checkout)
   const tickets = new FakeTicketSource(Array.isArray(ticket) ? ticket : [ticket])
   const workspaces = new GitWorktreeProvider({ root: join(tmp, 'worktrees') })
   const cliErrors: string[] = []
@@ -10993,7 +11003,7 @@ for (const selected of [false, true]) {
       '\n[verify.new]\nkind = "check"\ncommand = "test"\nalways = true\n'
     handlers.reconcile = async (cli) => {
       await cli.run(['context'])
-      await git([...GIT_ID, 'merge', '--no-edit', 'origin/main'], cli.ws)
+      // The kernel has already replayed the change on the captured base.
       await fx.store.append(slug!, {
         actor: humanActor('operator'),
         type: 'build.pause-requested',

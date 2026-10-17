@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 import type { AbEvent } from '../events/catalog'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 
@@ -8,10 +9,11 @@ export type PublicationRequest = Extract<AbEvent, { type: 'publication.requested
 type LedgerItem =
   | { t: 'request'; seq: number; event: PublicationRequest }
   | { t: 'lost'; seq: number; request: number }
+  | { t: 'cancelled'; seq: number; request: number }
   | { t: 'provisioned'; seq: number; ref: string }
   | { t: 'released'; seq: number; ref?: string | null }
   | { t: 'implement'; seq: number; round: number; base: string; head: string }
-  | { t: 'reconcile'; seq: number; mergeCommit: string }
+  | { t: 'reconcile'; seq: number; mergeCommit: string; rewriteId?: string }
   | { t: 'finalize'; seq: number; headSha: string }
   | { t: 'step'; seq: number; step: string; ok: boolean; headSha?: string }
   /** A maximal run of consecutive irrelevant events. Only its max seq
@@ -28,12 +30,14 @@ export interface PublicationLedger {
 }
 
 /** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 1
+export const PUBLICATION_STATE_REDUCER_VERSION = 4
 
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
     case 'publication.requested':
       return { t: 'request', seq: event.seq, event }
+    case 'reconcile.contended':
+      return { t: 'cancelled', seq: event.seq, request: event.payload.request }
     case 'publication.lost':
       return { t: 'lost', seq: event.seq, request: event.payload.request }
     case 'workspace.provisioned':
@@ -53,7 +57,12 @@ function compact(event: AbEvent): LedgerItem | undefined {
         head: event.payload.commits.head,
       }
     case 'reconcile.completed':
-      return { t: 'reconcile', seq: event.seq, mergeCommit: event.payload.mergeCommit }
+      return {
+        t: 'reconcile',
+        seq: event.seq,
+        mergeCommit: reconcileHead(event.payload),
+        ...('rewriteId' in event.payload ? { rewriteId: event.payload.rewriteId } : {}),
+      }
     case 'finalize.completed':
       return { t: 'finalize', seq: event.seq, headSha: event.payload.pr.headSha }
     case 'finalize.step-completed': {
@@ -83,7 +92,11 @@ function itemCompletes(item: LedgerItem, request: PublicationRequest): boolean {
       item.head === payload.sha
     )
   if (payload.operation === 'reconcile')
-    return item.t === 'reconcile' && item.mergeCommit === payload.sha
+    return (
+      item.t === 'reconcile' &&
+      item.mergeCommit === payload.sha &&
+      (payload.rewrite === undefined || item.rewriteId === payload.rewrite.id)
+    )
   if (payload.operation === 'finalize') return item.t === 'finalize' && item.headSha === payload.sha
   return (
     item.t === 'step' && item.step === payload.step && (!item.ok || item.headSha === payload.sha)
@@ -113,6 +126,7 @@ function viewOf(ledger: readonly LedgerItem[]): PublicationView {
     }
     return (
       requestCompleted(request) ||
+      ledger.some((item) => item.t === 'cancelled' && item.request === request.seq) ||
       ledger.some(
         (item) =>
           item.seq > request.seq &&
@@ -123,7 +137,12 @@ function viewOf(ledger: readonly LedgerItem[]): PublicationView {
   }
 
   const latestUncompletedRequest = (): PublicationRequest | undefined => {
-    const item = ledger.findLast((entry) => entry.t === 'request' && !requestCompleted(entry.event))
+    const item = ledger.findLast(
+      (entry) =>
+        entry.t === 'request' &&
+        !requestCompleted(entry.event) &&
+        !ledger.some((item) => item.t === 'cancelled' && item.request === entry.seq),
+    )
     return item?.t === 'request' ? item.event : undefined
   }
 

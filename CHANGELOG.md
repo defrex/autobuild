@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
+- [#636](https://github.com/defrex/autobuild/pull/636) — Reconcile builds by replaying one change onto the refreshed base
 - [#633](https://github.com/defrex/autobuild/pull/633) — Add node tickets and source-local integration targets
 - [#635](https://github.com/defrex/autobuild/pull/635) — Pause unfocused dashboard polling and relax idle refreshes
 - [#634](https://github.com/defrex/autobuild/pull/634) — Reduce idle dispatcher ticks to six store requests

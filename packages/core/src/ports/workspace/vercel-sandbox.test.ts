@@ -2282,6 +2282,57 @@ describe('VercelSandboxProvider', () => {
     ).toBe(false)
   })
 
+  test('trusted restack archives before exact leased replacement and restores network policy', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const old = 'c'.repeat(40)
+    const archive = `refs/autobuild/archive/remote-build/${old}`
+    const refs = new Map<string, string>([['refs/heads/ab/remote-build', old]])
+    const original = h.sandbox.runCommand.bind(h.sandbox)
+    h.sandbox.runCommand = async (params) => {
+      if (params.cmd !== 'git') return original(params)
+      h.sandbox.commands.push(params)
+      const args = params.args as string[]
+      let stdout = ''
+      if (args[0] === 'ls-remote') {
+        const ref = args.at(-1)!
+        const sha = refs.get(ref)
+        if (sha !== undefined) stdout = `${sha}\t${ref}\n`
+      } else if (args[0] === 'push') {
+        const [sha, ref] = args.at(-1)!.split(':')
+        refs.set(ref!, sha!)
+      } else if (args[0] === 'rev-parse') stdout = old
+      return { exitCode: 0, stdout: async () => stdout, stderr: async () => '' }
+    }
+    expect(
+      await h.provider.publication.rewrite!({
+        ref: workspace.ref,
+        sha: SHA,
+        branch: workspace.branch,
+        expected: old,
+        archives: [{ ref: archive, sha: old }],
+      }),
+    ).toEqual({ kind: 'published' })
+    const pushes = h.sandbox.commands.filter(
+      (command) => command.cmd === 'git' && (command.args as string[])[0] === 'push',
+    )
+    expect(pushes.map((command) => command.args)).toEqual([
+      ['push', `--force-with-lease=${archive}:`, 'origin', `${old}:${archive}`],
+      [
+        'push',
+        `--force-with-lease=refs/heads/ab/remote-build:${old}`,
+        'origin',
+        `${SHA}:refs/heads/ab/remote-build`,
+      ],
+    ])
+    expect(h.sandbox.policies).toHaveLength(2)
+    expect(JSON.stringify(h.sandbox.policies[1])).not.toContain('forge-secret')
+  })
+
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
     const h = harness()
     const workspace = await h.provider.provision({

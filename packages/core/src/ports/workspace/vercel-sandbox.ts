@@ -1,3 +1,4 @@
+import { gitRewrite } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
 import type { ExecutionLaunchAuth } from './build-execution'
 import { createHash } from 'node:crypto'
@@ -1231,6 +1232,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
     }
     this.publication = {
+      rewrite: (input: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]) =>
+        this.publish(input),
       isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
     }
@@ -2531,7 +2534,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return head === input.sha
   }
 
-  private async publish(input: { ref: string; sha: string; branch: string }): Promise<void> {
+  private async publish(
+    input: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0],
+  ): Promise<import('../types').RewriteResult>
+  private async publish(input: { ref: string; sha: string; branch: string }): Promise<void>
+  private async publish(input: {
+    ref: string
+    sha: string
+    branch: string
+    expected?: string
+    localExpected?: string
+    archives?: { ref: string; sha: string }[]
+  }): Promise<void | import('../types').RewriteResult> {
     if (this.active.has(input.ref) || this.uncertain.has(input.ref)) {
       throw new Error('publication is forbidden until sandbox execution teardown is confirmed')
     }
@@ -2554,7 +2568,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             match: {
               method: ['GET'],
               path: { exact: `${origin.path}/info/refs` },
-              queryString: [{ key: { exact: 'service' }, value: { exact: 'git-receive-pack' } }],
+              queryString: [
+                {
+                  key: { exact: 'service' },
+                  value:
+                    input.expected === undefined
+                      ? { exact: 'git-receive-pack' }
+                      : { regex: '^git-(receive|upload)-pack$' },
+                },
+              ],
             },
             transform: [
               {
@@ -2565,7 +2587,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             ],
           },
           {
-            match: { method: ['POST'], path: { exact: `${origin.path}/git-receive-pack` } },
+            match: {
+              method: ['POST'],
+              path:
+                input.expected === undefined
+                  ? { exact: `${origin.path}/git-receive-pack` }
+                  : {
+                      regex: `^${origin.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/git-(receive|upload)-pack$`,
+                    },
+            },
             transform: [
               {
                 headers: {
@@ -2579,6 +2609,33 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     try {
       await sandbox.update({ networkPolicy: publicationPolicy }, { signal: this.operationSignal() })
+      if (input.expected !== undefined) {
+        const capability = gitRewrite(async (cmd) => {
+          const result = await sandbox.runCommand({
+            cmd: cmd[0]!,
+            args: cmd.slice(1),
+            cwd: VERCEL_WORKSPACE_PATH,
+          })
+          if (result.exitCode === null)
+            throw new Error('trusted rewrite command has no exit status')
+          if (!('stdout' in result) || !('stderr' in result))
+            throw new Error('trusted rewrite requires command output capture')
+          return {
+            exitCode: result.exitCode,
+            stdout: await result.stdout!(),
+            stderr: await result.stderr!(),
+          }
+        }, false)
+        for (const archive of input.archives ?? [])
+          await capability.archive({ workspacePath: VERCEL_WORKSPACE_PATH, ...archive })
+        return await capability.replace({
+          workspacePath: VERCEL_WORKSPACE_PATH,
+          branch: input.branch,
+          expected: input.expected,
+          ...(input.localExpected !== undefined ? { localExpected: input.localExpected } : {}),
+          sha: input.sha,
+        })
+      }
       await commandOrThrow(sandbox, {
         cmd: 'git',
         args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
