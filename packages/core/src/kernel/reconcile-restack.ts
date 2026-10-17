@@ -34,6 +34,21 @@ export function requireRewrite(forge: Forge) {
   return forge.rewrite
 }
 
+/** Restore a sandbox-only change from durable bytes without remote write access. */
+async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
+  const artifact = await deps.store.getArtifact(deps.slug, `reconcile-change-${sha}`)
+  if (artifact === null) return false
+  const content = new TextDecoder().decode(artifact.content)
+  const quoted = `'${content.replaceAll("'", "'\\''")}'`
+  const result = await deps.exec(
+    ['sh', '-c', `printf %s ${quoted} | git hash-object -t commit -w --stdin`],
+    { cwd: deps.workspacePath },
+  )
+  if (result.exitCode !== 0 || result.stdout.trim() !== sha)
+    throw new Error(`durable replay object ${sha} failed integrity verification`)
+  return true
+}
+
 export async function archiveTips(deps: RestackDeps, extra: string[] = []) {
   const capability = requireRewrite(deps.forge)
   const facts = (await readBuildFacts(deps.store, deps.slug)).value
@@ -42,7 +57,10 @@ export async function archiveTips(deps: RestackDeps, extra: string[] = []) {
   for (const sha of tips) {
     const ref = `refs/autobuild/archive/${deps.slug}/${sha}`
     // Recovery can obtain evidence from an already published exact archive.
-    if ((await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0) {
+    if (
+      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0 &&
+      !(await restoreChange(deps, sha))
+    ) {
       if (deps.forge.name === 'local-git')
         throw new Error(`missing recorded Git object ${sha}; restore it before reconcile`)
       await git(deps, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref])
@@ -146,6 +164,13 @@ export async function prepareRestack(
   })
   const tree = await output(deps, ['rev-parse', `${oldHead}^{tree}`])
   const changeSha = await output(deps, ['commit-tree', tree, '-p', input.oldBase, '-m', message])
+  // Persist exact bytes before the event: a released remote sandbox may be the
+  // only Git database containing this temporary commit. Its tree and parent are
+  // retained inputs, so restoring the commit object reconstructs the same SHA.
+  await deps.store.putArtifact(deps.slug, {
+    kind: `reconcile-change-${changeSha}`,
+    content: (await git(deps, ['cat-file', 'commit', changeSha])).stdout,
+  })
   // Protect the commit before naming it in durable state.
   await git(deps, ['update-ref', `refs/autobuild/reconcile/${deps.slug}/${input.id}`, changeSha])
   const transaction: ReconcileTransaction = {
@@ -178,7 +203,10 @@ async function continuePreparation(
     transaction.targetBase,
     transaction.changeSha,
   ]) {
-    if ((await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0) {
+    if (
+      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0 &&
+      !(await restoreChange(deps, sha))
+    ) {
       if (deps.forge.name === 'local-git')
         throw new Error(
           `missing retained replay object ${sha}; restore the Git database before retrying`,

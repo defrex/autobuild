@@ -2377,6 +2377,12 @@ Missing third-party forge capabilities refuse actionably.
 
 `reconcile.prepared` records transaction identity, attempt, branch, old head,
 effective old base, target base and temporary single-change SHA before checkout.
+Before that fact is appended, the exact temporary commit bytes are deposited as a
+SHA-keyed BuildStore artifact. A replacement sandbox restores and verifies the
+same object from those bytes, retaining the original transaction and frozen base
+without requiring prepare-time remote write credentials. Retained trees and
+parents supply the rest of its object graph; trusted publication still archives
+the temporary commit before replacing the branch.
 `reconcile.replayed` records whether replay conflicted. Notes and the resolved
 head are deposited with `reconcile.publish-intended` before publication;
 `reconcile.rewritten` records old/new heads, old/new change SHAs, frozen base,

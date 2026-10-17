@@ -487,3 +487,141 @@ for (const local of [true, false]) {
     }
   })
 }
+
+for (const stage of ['prepared', 'conflicted'] as const) {
+  test(`replacement remote sandbox restores the exact ${stage} change and archives it before publication`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-replacement-'))
+    let cwd = join(root, 'first')
+    const remote = join(root, 'origin.git')
+    async function git(args: string[]) {
+      const result = await bunExec(['git', ...args], { cwd })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    async function configure() {
+      await git(['config', 'user.name', 'Test'])
+      await git(['config', 'user.email', 'test@example.invalid'])
+      await git(['config', 'commit.gpgsign', 'false'])
+    }
+    async function provision(store: Awaited<ReturnType<typeof seedStore>>, base: string) {
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'vercel-sandbox',
+          remote: true,
+          ref: cwd,
+          branch: BRANCH,
+          base: { source: 'remote', sha: base },
+        },
+      })
+    }
+    try {
+      const init = await bunExec(['git', 'init', '-q', '-b', 'main', cwd], { cwd: root })
+      expect(init.exitCode).toBe(0)
+      await configure()
+      await writeFile(join(cwd, 'shared'), 'base\n')
+      await git(['add', '.'])
+      await git(['commit', '-qm', 'base'])
+      const base = await git(['rev-parse', 'HEAD'])
+      await git(['checkout', '-qb', BRANCH])
+      await writeFile(join(cwd, 'shared'), 'build\n')
+      await git(['commit', '-qam', 'build'])
+      const old = await git(['rev-parse', 'HEAD'])
+      await git(['checkout', '-q', 'main'])
+      await writeFile(join(cwd, 'shared'), 'upstream\n')
+      await git(['commit', '-qam', 'upstream'])
+      const target = await git(['rev-parse', 'HEAD'])
+      await git(['init', '--bare', '-q', remote])
+      await git(['remote', 'add', 'origin', remote])
+      await git(['push', '-q', 'origin', 'main', BRANCH])
+      await git(['checkout', '-q', BRANCH])
+      const store = await seedStore()
+      await store.putArtifact(BUILD, { kind: 'pr-description', content: "Build's change\n" })
+      await provision(store, base)
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.started',
+        payload: { attempt: 1, baseSha: target },
+      })
+      let interrupt = stage === 'prepared'
+      const deps = () => ({
+        store,
+        slug: BUILD,
+        workspacePath: cwd,
+        exec: async (...args: Parameters<typeof bunExec>) => {
+          if (interrupt && args[0][1] === 'checkout' && args[0][2] === '--detach') {
+            interrupt = false
+            throw new Error('sandbox lost immediately after prepared')
+          }
+          return bunExec(...args)
+        },
+        forge: new GitHubForge({ exec: bunExec }),
+      })
+      const input = {
+        attempt: 1,
+        branch: BRANCH,
+        oldBase: base,
+        targetBase: target,
+        id: 'replacement',
+      }
+      if (stage === 'prepared')
+        await expect(prepareRestack(deps(), input)).rejects.toThrow(
+          'sandbox lost immediately after prepared',
+        )
+      else await prepareRestack(deps(), input)
+      const prepared = (await store.getEvents(BUILD)).findLast(
+        (e) => e.type === 'reconcile.prepared',
+      )
+      if (prepared?.type !== 'reconcile.prepared') throw new Error('missing prepared transaction')
+      const transaction = prepared.payload
+      if (stage === 'conflicted') expect(await git(['ls-files', '-u'])).not.toBe('')
+      expect(await git(['ls-remote', 'origin', `refs/autobuild/archive/${BUILD}/*`])).toBe('')
+      await store.append(BUILD, { actor: KERNEL, type: 'workspace.released', payload: {} })
+      await rm(cwd, { recursive: true, force: true })
+      cwd = join(root, 'replacement')
+      expect(
+        (
+          await bunExec(['git', 'clone', '-q', '--no-local', '--branch', BRANCH, remote, cwd], {
+            cwd: root,
+          })
+        ).exitCode,
+      ).toBe(0)
+      await configure()
+      await provision(store, base)
+      expect(
+        (await bunExec(['git', 'cat-file', '-e', transaction.changeSha], { cwd })).exitCode,
+      ).not.toBe(0)
+      expect(await prepareRestack(deps(), input)).toEqual(transaction)
+      expect(await git(['rev-parse', 'CHERRY_PICK_HEAD'])).toBe(transaction.changeSha)
+      expect(await git(['rev-parse', 'HEAD'])).toBe(target)
+      expect(await git(['rev-parse', BRANCH])).toBe(old)
+      await writeFile(join(cwd, 'shared'), 'resolved\n')
+      await git(['add', 'shared'])
+      await git(['cherry-pick', '--continue'])
+      const headSha = await git(['rev-parse', 'HEAD'])
+      const intent = {
+        ...transaction,
+        headSha,
+        conflicted: true,
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.publish-intended',
+        payload: intent,
+      })
+      expect(await publishRestack(deps(), intent)).toEqual({ kind: 'published' })
+      expect(
+        await git([
+          'ls-remote',
+          'origin',
+          `refs/autobuild/archive/${BUILD}/${transaction.changeSha}`,
+        ]),
+      ).toContain(transaction.changeSha)
+      expect(await git(['show', '-s', '--format=%P', headSha])).toBe(target)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+}
