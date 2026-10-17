@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { DISPATCHER } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { emptyTickReport } from './dispatcher'
@@ -33,7 +34,7 @@ const baseline: RepositoryEvent = {
   },
 }
 const decide = (value = report, events: RepositoryEvent[] = [baseline]) =>
-  shouldPublishTick(value, events, at)
+  shouldPublishTick(value, events, 'run', at)
 
 test('first sample, queue transitions and unchanged nonempty queues', () => {
   expect(decide(report, [])).toBe(true)
@@ -132,4 +133,26 @@ test('retry publication retains the earliest degradation deadline across cause c
     },
   }
   expect(decide(report, [baseline, generic, limited])).toBe(true)
+})
+
+test('restart publishes an unchanged nonempty queue for the new run before suppressing idle ticks', () => {
+  const previousRun: RepositoryEvent = {
+    ...baseline,
+    payload: { ...baseline.payload, run: 'previous', queued: 3 },
+  }
+  const events: RepositoryEvent[] = [
+    previousRun,
+    {
+      ...baseline,
+      seq: 2,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'previous', outcome: 'normal', exitCode: 0 },
+    },
+  ]
+  const queued = { ...report, queued: 3 }
+  expect(reduceDispatchStatus(events, 'run').queued).toBeUndefined()
+  expect(decide(queued, events)).toBe(true)
+  events.push({ ...baseline, seq: 3, payload: { ...baseline.payload, queued: 3 } })
+  expect(reduceDispatchStatus(events, 'run').queued).toBe(3)
+  expect(decide(queued, events)).toBe(false)
 })

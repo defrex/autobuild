@@ -2846,7 +2846,12 @@ class DispatchLoop {
       await this.appendStatus(completed)
     } else {
       const startedAt = this.tickStartedAt!
-      const publish = shouldPublishTick(merged, this.repoView.recordedJournal(), startedAt)
+      const publish = shouldPublishTick(
+        merged,
+        this.repoView.recordedJournal(),
+        this.runId,
+        startedAt,
+      )
       const events: RepositoryEventWrite[] = publish
         ? [
             {

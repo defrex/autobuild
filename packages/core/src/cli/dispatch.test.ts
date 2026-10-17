@@ -35,6 +35,7 @@ import type { UpgradeNoticeScheduler, UpgradeNoticeTimer } from './upgrade-notic
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { randomUuids, sequentialIds } from '../ids'
+import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { reduceHarvest } from '../kernel/harvest'
@@ -11072,7 +11073,7 @@ for (const queued of [false, true]) {
   test(`quiet watch keeps bounded journal with ${queued ? 'unchanged nonempty' : 'empty'} queue and fresh independent liveness`, async () => {
     const clock = manualClock()
     const fx = await makeFixture(
-      queued ? [readyTicket('queued-idle')] : [],
+      queued ? [1, 2, 3].map((id) => readyTicket(`queued-idle-${id}`)) : [],
       happyHandlers(),
       `ticketScanIntervalSeconds = 3600\n${DISPATCH_CONFIG_TOML}`,
       clock,
@@ -11081,6 +11082,21 @@ for (const queued of [false, true]) {
     let ticks = 0
     let baseline = 0
     try {
+      // Restart with a recorded sample from another run and the same queue.
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        kernelRunId: 'previous-quiet-run',
+        once: true,
+        intake: false,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+      })
+      expect(
+        reduceDispatchStatus(await fx.store.getRepoEvents(fx.origin), 'previous-quiet-run').queued,
+      ).toBe(queued ? 3 : 0)
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
@@ -11100,7 +11116,12 @@ for (const queued of [false, true]) {
           expect(dispatcher.state).toBe('held')
           expect(dispatcher.holder!.lastTickAt).toBe(clock().toISOString())
           expect(dispatcher.holder!.lastTickAgeMs).toBe(0)
-          expect(events.filter((e) => e.type === 'dispatcher.tick-completed')).toHaveLength(1)
+          expect(
+            events.filter(
+              (e) => e.type === 'dispatcher.tick-completed' && e.payload.run === 'quiet-regression',
+            ),
+          ).toHaveLength(1)
+          expect(reduceDispatchStatus(events, 'quiet-regression').queued).toBe(queued ? 3 : 0)
           if (++ticks === 30) stop.abort()
           clock.advance(1000)
         },

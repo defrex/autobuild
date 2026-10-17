@@ -6,6 +6,7 @@ import type { TickReport } from './dispatcher'
 export function shouldPublishTick(
   report: TickReport,
   events: readonly RepositoryEvent[],
+  run: string,
   startedAt: string,
 ): boolean {
   if (
@@ -15,7 +16,11 @@ export function shouldPublishTick(
     )
   )
     return true
-  const previous = events.findLast((e) => e.type === 'dispatcher.tick-completed')
+  // Queue and diagnostic readers reduce per run, so each run must publish
+  // its own baseline before quiet ticks can be suppressed.
+  const previous = events.findLast(
+    (e) => e.type === 'dispatcher.tick-completed' && e.payload.run === run,
+  )
   if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
     return true
   if (
@@ -29,7 +34,9 @@ export function shouldPublishTick(
   )
     return true
   const boundary = events.findLast(
-    (e) => e.type === 'dispatcher.tick-completed' || e.type === 'dispatcher.tick-failed',
+    (e) =>
+      (e.type === 'dispatcher.tick-completed' || e.type === 'dispatcher.tick-failed') &&
+      e.payload.run === run,
   )
   if (boundary?.type === 'dispatcher.tick-failed') return true
 
