@@ -83,6 +83,31 @@ for (const conflict of [false, true])
           payload: { branch: 'main', sha: target },
         })
         const forge = new LocalGitForge({ exec: bunExec })
+        let competingHead: string | undefined
+        if (!remote && !conflict) {
+          const capability = forge.rewrite!
+          Object.defineProperty(forge, 'rewrite', {
+            value: {
+              ...capability,
+              replace: async (input: Parameters<typeof capability.replace>[0]) => {
+                if (competingHead === undefined) {
+                  const tree = await git(['rev-parse', `${oldHead}^{tree}`])
+                  competingHead = await git([
+                    'commit-tree',
+                    tree,
+                    '-p',
+                    oldHead,
+                    '-m',
+                    'external descendant',
+                  ])
+                  await git(['update-ref', `refs/heads/${BRANCH}`, competingHead, oldHead])
+                }
+                return capability.replace(input)
+              },
+            },
+          })
+        }
+
         let sessions = 0
         const deps = {
           store: store.scopeBuild(BUILD),
@@ -170,6 +195,14 @@ for (const conflict of [false, true])
             BUILD,
           )
         expect(await runner.step()).toMatchObject({ kind: 'restack', trigger: 'verify-entry' })
+        if (!remote && !conflict) {
+          expect(await runner.step()).toMatchObject({ kind: 'restack', trigger: 'verify-entry' })
+          const recovered = (await readBuildFacts(store, BUILD)).value.log.restack.completed!
+          expect(recovered.id).toEndWith('-retry')
+          if (competingHead === undefined) throw new Error('contention was not injected')
+          expect(recovered.oldHead).toBe(competingHead)
+        }
+
         if (conflict)
           expect(await runner.step()).toMatchObject({ kind: 'run-phase', phase: 'reconcile' })
         if (remote) {

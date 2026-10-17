@@ -1310,7 +1310,12 @@ export class BuildRunner {
         }
         id = this.deps.ids('restack').replaceAll('_', '-')
       } else {
-        automatic = transaction
+        automatic = {
+          trigger: transaction.trigger,
+          cycle: transaction.cycle,
+          observation: transaction.observation,
+          message: transaction.message,
+        }
         targetBase = transaction.targetBase
         id = transaction.id
       }

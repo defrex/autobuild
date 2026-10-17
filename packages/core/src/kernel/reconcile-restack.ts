@@ -48,8 +48,10 @@ async function replayAppend(deps: RestackDeps, write: EventWrite) {
   delete payload.conflicted
   if (write.type === 'reconcile.replayed')
     payload.conflicted = (write.payload as EventPayload<'reconcile.replayed'>).conflicted
-  if (write.type !== 'reconcile.replayed' && write.type !== 'reconcile.contended')
-    Object.assign(payload, deps.automatic)
+  if (write.type !== 'reconcile.replayed' && write.type !== 'reconcile.contended') {
+    const { trigger, cycle, observation, message } = deps.automatic
+    Object.assign(payload, { trigger, cycle, observation, message })
+  }
   return deps.store.append(deps.slug, {
     ...write,
     type: write.type.replace('reconcile.', 'restack.'),
