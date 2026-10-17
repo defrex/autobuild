@@ -185,7 +185,13 @@ export function createTicketServer(options: TicketServerOptions): {
     const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
       if (ticket === null) return ticket
-      const { revision: _revision, comments: _comments, ...base } = ticket
+      const {
+        kind: _kind,
+        target: _target,
+        revision: _revision,
+        comments: _comments,
+        ...base
+      } = ticket
       // Capabilities are independent: released strict decoders receive neither field.
       const projected = {
         ...base,

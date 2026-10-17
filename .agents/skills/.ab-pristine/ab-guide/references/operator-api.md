@@ -121,8 +121,8 @@ JSON bodies are strict: unknown fields are rejected.
 | `POST …/bulk-control` | `{"action":"pause"\|"resume"}`. The hold fact, intake fact, then eligible build events are written in that order. |
 | `POST …/harvest/control` | `{"action":"toggle-gate"}` or `{"action":"run","run":"…"}`. A run action is bound to that concrete projected run. |
 | `POST …/tickets/states` | `{name,about?}` → `{state,created}`; requires attributed operator identity (`tickets.state.create` in MCP). Hosted duplicate names are refused case-insensitively. |
-| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[]}`; omitted state preserves the backend default. |
-| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, and complete-replacement `labels`. Body bytes are not normalized. |
+| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[],"kind"?:"work"|"node","target"?:"id"|null}`; omitted state preserves the backend default. |
+| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, complete-replacement `labels`, `kind` (`work` or `node`), and nullable `target` (null clears). Body bytes are not normalized. |
 | `POST …/tickets/{id}/move` | `{"state":"backend state name"}`. |
 | `POST …/tickets/{id}/block` | `{"blockerIds":["…"]}`. |
 | `POST …/tickets/{id}/unblock` | `{"blockerIds":["…"]}`. |
@@ -291,3 +291,8 @@ Hosted ticket tools resolve independent project ticket policy before legacy uplo
 configuration. Queue, detail, state discovery and mutations work before any build
 or dispatcher run; detail reports a null matching build. Ticket policy publication
 never creates synthetic build or repository history.
+
+Ticket results include kind (default work) and optional same-source node target.
+Metadata-only patches are accepted. Target validation and demotion guards apply
+to CLI, HTTP and MCP alike; unsupported sources refuse even explicit defaults
+or clears before changing other fields. Dispatch routing is unchanged.

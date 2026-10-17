@@ -117,6 +117,47 @@ export function describeTicketSourceContract(
   factory: TicketSourceContractFactory,
 ): void {
   describe(`TicketSource contract: ${name}`, () => {
+    test('optional integration tree metadata preserves graph invariants', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.integrationTree) return
+        expect(typeof source.listAll).toBe('function')
+        const node = await createTracked(harness, {
+          title: contractTicketTitle('node'),
+          body: CONTRACT_TICKET_BODY,
+          kind: 'node',
+        })
+        const child = await createTracked(harness, {
+          title: contractTicketTitle('child'),
+          body: CONTRACT_TICKET_BODY,
+          target: node.ref.id,
+        })
+        expect((await source.get(node.ref.id))?.kind).toBe('node')
+        expect((await source.get(child.ref.id))?.target).toBe(node.ref.id)
+        expect(
+          (await source.listAll!()).tickets.some((ticket) => ticket.ref.id === child.ref.id),
+        ).toBe(true)
+        await expect(
+          source.update(node.ref.id, { kind: 'work', title: 'Must not change' }),
+        ).rejects.toThrow()
+        expect((await source.get(node.ref.id))?.title).toBe(node.title)
+        await expect(source.update(node.ref.id, { target: node.ref.id })).rejects.toThrow()
+        const nested = await createTracked(harness, {
+          title: contractTicketTitle('nested node'),
+          body: CONTRACT_TICKET_BODY,
+          kind: 'node',
+          target: node.ref.id,
+        })
+        await source.update(child.ref.id, { target: nested.ref.id })
+        expect((await source.get(child.ref.id))?.target).toBe(nested.ref.id)
+        await expect(source.update(node.ref.id, { target: nested.ref.id })).rejects.toThrow()
+        await source.update(child.ref.id, { target: null })
+        await source.update(nested.ref.id, { target: null, kind: 'work' })
+        await source.update(node.ref.id, { kind: 'work' })
+        expect((await source.get(node.ref.id))?.kind).toBe('work')
+      })
+    })
+
     test('revisions cover mutable content and guarded writes fail closed', async () => {
       await withTicketSource(factory, async (harness) => {
         const source = harness.source

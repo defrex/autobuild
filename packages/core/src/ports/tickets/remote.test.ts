@@ -229,6 +229,7 @@ describe('HostedTicketSource (client half)', () => {
   test('the rest of the ticket shape survives the projection unchanged', async () => {
     const { source } = makeSource([{ body: TICKET }])
     expect(await source.get('ENG-42')).toEqual({
+      kind: 'work',
       revision: 'fixture',
       ref: {
         source: 'hosted',
@@ -373,4 +374,24 @@ test('hosted assets reuse the selected ticket URL, credential and injected fetch
     fetchFn: async () => Response.json({ error: 'denied', kind: 'auth' }, { status: 403 }),
   })
   await expect(failing.assets.listTicketAssets('repo', 'T')).rejects.toThrow('denied')
+})
+
+test('unsupported metadata writes, including defaults and clears, never reach the hosted protocol', async () => {
+  const { source, calls } = makeSource([])
+  for (const patch of [
+    { kind: 'node' as const },
+    { kind: 'work' as const },
+    { target: 'ENG-1' },
+    { target: null },
+    { title: 'Lost', target: null },
+  ]) {
+    await expect(source.create({ title: 'Title', body: 'Body', ...patch })).rejects.toThrow(
+      'integrationTree',
+    )
+    await expect(source.update('ENG-2', patch)).rejects.toThrow('integrationTree')
+    await expect(
+      source.mutateIfRevision('ENG-2', 'revision', { kind: 'update', patch }),
+    ).rejects.toThrow('integrationTree')
+  }
+  expect(calls).toHaveLength(0)
 })

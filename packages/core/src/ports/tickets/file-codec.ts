@@ -3,6 +3,11 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { z } from 'zod'
 
 const frontmatterSchema = z.strictObject({
+  kind: z.enum(['work', 'node']).optional(),
+  target: z
+    .string()
+    .refine((value) => value.trim().length > 0)
+    .optional(),
   comments: z
     .array(
       z.strictObject({ body: z.string(), createdAt: z.string(), author: z.string().optional() }),
@@ -74,6 +79,8 @@ export function parseTicketFile(path: string, raw: string): { front: Frontmatter
 
 export function serializeTicketFile(front: Frontmatter, body: string): string {
   const data: Record<string, unknown> = { id: front.id, title: front.title }
+  if (front.kind === 'node') data.kind = front.kind
+  if (front.target !== undefined) data.target = front.target
   if (front.labels.length > 0) data.labels = front.labels
   // Only when nonempty: a file that never declared blockers must round-trip
   // byte-identically rather than sprouting `blockedBy = []` on every write.

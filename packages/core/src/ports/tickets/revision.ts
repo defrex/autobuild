@@ -3,7 +3,7 @@ import type { Ticket, TicketMutation, TicketSource } from '../types'
 
 /** Content versions intentionally return to the same value after an exact revert. */
 export function ticketRevision(
-  ticket: Pick<Ticket, 'title' | 'body' | 'labels' | 'state' | 'blockedBy'> & {
+  ticket: Pick<Ticket, 'title' | 'body' | 'labels' | 'state' | 'blockedBy' | 'kind' | 'target'> & {
     comments?: Ticket['comments']
     attachments?: unknown
   },
@@ -11,6 +11,8 @@ export function ticketRevision(
   return createHash('sha256')
     .update(
       JSON.stringify([
+        ticket.kind ?? 'work',
+        ticket.target ?? null,
         ticket.title,
         ticket.body,
         [...new Set(ticket.labels)].sort(),

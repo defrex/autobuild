@@ -1,3 +1,4 @@
+import { validateTicketTree } from './tree'
 import { fileRequestedIds } from './requested-id'
 import { ticketRevision, checkTicketRevision } from './revision'
 /**
@@ -20,6 +21,8 @@ import { validateTicketUpdate } from './update'
 
 function cloneTicket(ticket: Ticket, doneState: string): Ticket {
   return {
+    kind: ticket.kind ?? 'work',
+    ...(ticket.target !== undefined ? { target: ticket.target } : {}),
     revision: ticketRevision(ticket),
     ref: { ...ticket.ref },
     ...(ticket.creationKey !== undefined ? { creationKey: ticket.creationKey } : {}),
@@ -35,6 +38,14 @@ function cloneTicket(ticket: Ticket, doneState: string): Ticket {
 export class FakeTicketSource implements TicketSource {
   readonly requestedIds = fileRequestedIds
   readonly name = 'fake'
+  readonly integrationTree = true
+
+  async listAll(): Promise<TicketListing> {
+    return {
+      tickets: [...this.tickets.values()].map((ticket) => cloneTicket(ticket, this.doneState)),
+      diagnostics: [],
+    }
+  }
 
   /** Journal of every projection sent outward (§13), in call order. */
   readonly comments: Array<{ id: string; body: string }> = []
@@ -139,7 +150,16 @@ export class FakeTicketSource implements TicketSource {
     }
     const id = opts.requestedId ?? `fake-${this.nextId++}`
     if (this.tickets.has(id)) throw new Error(`requested ticket id already occupied: ${id}`)
+    const canonicalTarget = await validateTicketTree(this, id, draft)
+    // Graph reads yield: recheck adoption and occupancy before the in-memory write.
+    if (opts.idempotencyKey !== undefined) {
+      const adopted = this.idempotency.get(opts.idempotencyKey)
+      if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'), this.doneState)
+    }
+    if (this.tickets.has(id)) throw new Error(`requested ticket id already occupied: ${id}`)
     const ticket: Ticket = {
+      kind: draft.kind ?? 'work',
+      ...(canonicalTarget != null ? { target: canonicalTarget } : {}),
       revision: 'pending',
       ref: { source: this.name, id, title: draft.title },
       ...(opts.idempotencyKey !== undefined ? { creationKey: opts.idempotencyKey } : {}),
@@ -164,7 +184,7 @@ export class FakeTicketSource implements TicketSource {
   async mutateIfRevision(id: string, expected: string, mutation: TicketMutation): Promise<void> {
     const ticket = this.require(id, 'revision-checked write')
     checkTicketRevision(cloneTicket(ticket, this.doneState), expected)
-    if (mutation.kind === 'update') await this.update(id, mutation.patch)
+    if (mutation.kind === 'update') await this.applyUpdate(id, mutation.patch, expected)
     else if (mutation.kind === 'transition') await this.transition(id, mutation.state)
     else {
       for (const blocker of mutation.ids) {
@@ -183,8 +203,17 @@ export class FakeTicketSource implements TicketSource {
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
+    await this.applyUpdate(id, patch)
+  }
+
+  private async applyUpdate(id: string, patch: TicketUpdate, expected?: string): Promise<void> {
     const validated = validateTicketUpdate(patch)
+    const canonicalTarget = await validateTicketTree(this, id, validated)
     const ticket = this.require(id, 'update')
+    if (expected !== undefined) checkTicketRevision(cloneTicket(ticket, this.doneState), expected)
+    if (validated.kind !== undefined) ticket.kind = validated.kind
+    if (canonicalTarget === null) delete ticket.target
+    else if (canonicalTarget !== undefined) ticket.target = canonicalTarget
 
     if (validated.title !== undefined) {
       ticket.title = validated.title
@@ -243,6 +272,8 @@ export class FakeTicketSource implements TicketSource {
 
 function cloneUpdate(patch: TicketUpdate): TicketUpdate {
   return {
+    ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+    ...(patch.target !== undefined ? { target: patch.target } : {}),
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.body !== undefined ? { body: patch.body } : {}),
     ...(patch.labels !== undefined ? { labels: [...patch.labels] } : {}),

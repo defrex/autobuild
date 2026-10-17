@@ -31,14 +31,19 @@ export async function editTicket(
   const ticket = await requireTicket(source, id)
   const front = {
     id,
+    kind: ticket.kind ?? 'work',
+    ...(ticket.target !== undefined ? { target: ticket.target } : {}),
     title: ticket.title,
     labels: [...ticket.labels],
     blockedBy: [...(ticket.blockedBy ?? [])],
     ...(ticket.creationKey !== undefined ? { idempotencyKey: ticket.creationKey } : {}),
   }
   // Reference comments remain part of the frontmatter, outside the editable keys.
-  const reference = `# Read-only reference\n# state = ${JSON.stringify(ticket.state ?? null)}\n# revision = ${JSON.stringify(ticket.revision)}\n`
-  const serialized = serializeTicketFile(front, ticket.body)
+  const reference = `# Read-only reference\n# target = ${JSON.stringify(ticket.target ?? null)} (root when null)\n# state = ${JSON.stringify(ticket.state ?? null)}\n# revision = ${JSON.stringify(ticket.revision)}\n`
+  const serialized = serializeTicketFile({ ...front, kind: 'work' }, ticket.body).replace(
+    '+++\n',
+    `+++\nkind = ${JSON.stringify(front.kind)}\n`,
+  )
   const original = serialized.replace('+++\n', `+++\n${reference}`)
   const directory = await mkdtemp(join(tmpdir(), 'ab-ticket-edit-'))
   const path = join(directory, 'ticket.md')
@@ -58,11 +63,13 @@ export async function editTicket(
       if (comments !== reference.trimEnd())
         throw new Error('read-only reference comments cannot change')
       if (
+        parsed.front.kind !== front.kind ||
+        parsed.front.target !== front.target ||
         parsed.front.id !== id ||
         parsed.front.idempotencyKey !== front.idempotencyKey ||
         JSON.stringify(parsed.front.blockedBy ?? []) !== JSON.stringify(front.blockedBy)
       )
-        throw new Error('id, idempotencyKey and blockedBy are read-only')
+        throw new Error('kind, target, id, idempotencyKey and blockedBy are read-only')
       const patch: TicketUpdate = {}
       if (parsed.front.title !== ticket.title) patch.title = parsed.front.title
       if (parsed.body !== ticket.body) patch.body = parsed.body

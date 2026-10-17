@@ -1,3 +1,4 @@
+import { validateTicketTree } from './tree'
 import { ticketRevision } from './revision'
 /**
  * Linear TicketSource (SPEC §3.2, §13): GraphQL over an injectable fetch, so
@@ -104,6 +105,13 @@ interface Connection<T> {
 }
 
 interface GqlIssue {
+  team?: { key: string }
+  parent?: {
+    id: string
+    identifier: string
+    team?: { key: string }
+    labels: { nodes: Array<{ name: string }>; pageInfo?: PageInfo }
+  } | null
   id?: string
   identifier: string
   title: string
@@ -205,8 +213,11 @@ interface LinearTeamInfo {
  * listings exhaust relations so they can safely report blocker completion. */
 export const LINEAR_RELATION_PAGE_SIZE = 250
 
+const METADATA_FIELDS =
+  'team { key } parent { id identifier team { key } labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } } }'
+
 const ISSUE_FIELDS =
-  'id identifier title description url state { name type } labels { nodes { name } } ' +
+  `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } } ` +
   `inverseRelations(first: ${LINEAR_RELATION_PAGE_SIZE}) { nodes { id type issue { id identifier } } }`
 
 // Linear computes complexity from requested bounds, not returned counts:
@@ -226,7 +237,7 @@ const relationFields = (ready: boolean) => (ready ? READY_RELATIONS : DEPENDENCY
 const dependencyFields = `id identifier state { type } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${DEPENDENCY_RELATIONS} } ${PAGE_INFO} }`
 const DEPENDENCY_QUERY = `query Dependencies($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after, includeArchived: true) { nodes { ${dependencyFields} } ${PAGE_INFO} } }`
 const DEPENDENCY_FALLBACK_QUERY = `query Dependency($id: String!) { issue(id: $id) { ${dependencyFields} } }`
-const READY_FIELDS = `id identifier title description url state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
+const READY_FIELDS = `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } ${PAGE_INFO} } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
 const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after) { nodes { ${READY_FIELDS} } ${PAGE_INFO} } }`
 
 /** Refuse partial success and cursor loops on every connection independently. */
@@ -239,7 +250,7 @@ function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | nul
   return cursor
 }
 
-const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`
+const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
@@ -256,6 +267,11 @@ const linearReservedIssueIdSchema = z.uuidv4()
 
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
+  readonly integrationTree = true
+
+  async listAll(): Promise<TicketListing> {
+    return this.listReady({})
+  }
 
   private readonly apiKey: string
   private readonly teamKey: string
@@ -359,6 +375,7 @@ export class LinearTicketSource implements TicketSource {
       )
       await this.completeRelations(data.issues.nodes, true)
       for (const issue of data.issues.nodes) {
+        await this.completeMetadata(issue)
         const relations = issue.inverseRelations!.nodes
         tickets.push({
           ...this.toTicket(issue),
@@ -376,6 +393,24 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async get(id: string): Promise<Ticket | null> {
+    return this.readTicket(id, false)
+  }
+
+  /** Metadata validation stays within the configured team without narrowing
+   * ordinary identifier/UUID reads, which can inspect workspace issues. */
+  private validateTree(id: string | undefined, patch: TicketDraft | TicketUpdate) {
+    return validateTicketTree(
+      {
+        name: this.name,
+        get: (ticketId) => this.readTicket(ticketId, true),
+        listAll: () => this.listAll(),
+      },
+      id,
+      patch,
+    )
+  }
+
+  private async readTicket(id: string, requireTeam: boolean): Promise<Ticket | null> {
     let data: { issue: GqlIssue | null }
     try {
       data = await this.gql<{ issue: GqlIssue | null }>('get', GET_DETAIL_QUERY, { id })
@@ -388,6 +423,13 @@ export class LinearTicketSource implements TicketSource {
     }
     if (!data.issue) return null
     const issue = data.issue
+    if (issue.id) {
+      this.issueIds.set(id, issue.id)
+      this.issueIds.set(issue.identifier, issue.id)
+    }
+    if (requireTeam && issue.team && issue.team.key !== this.teamKey)
+      throw new Error(`target ${id} is in a different source/team (${issue.team.key})`)
+    await this.completeMetadata(issue, false)
     // Detail reads exhaust labels and relations independently of dispatch bounds.
     const labels: Array<{ name: string }> = [...issue.labels.nodes]
     const labelSeen = new Set<string>()
@@ -491,9 +533,14 @@ export class LinearTicketSource implements TicketSource {
     if (reservedId !== undefined && !linearReservedIssueIdSchema.safeParse(reservedId).success) {
       throw new Error('linear create: idempotency key must be a UUID v4')
     }
+    const canonicalTarget =
+      draft.target == null && draft.kind === undefined
+        ? draft.target
+        : await this.validateTree(reservedId, draft)
+    const labels = this.effectiveLabels(draft.kind, draft.labels, [])
     const team = await this.getTeamInfo('create')
     const labelIds = await Promise.all(
-      (draft.labels ?? []).map((label) => this.ensureLabelId('create', label, team)),
+      (labels ?? []).map((label) => this.ensureLabelId('create', label, team)),
     )
     const input: Record<string, unknown> = {
       teamId: team.teamId,
@@ -512,6 +559,8 @@ export class LinearTicketSource implements TicketSource {
       }
       input.stateId = stateId
     }
+    if (canonicalTarget != null)
+      input.parentId = await this.resolveIssueId('create', canonicalTarget)
     if (reservedId !== undefined) input.id = reservedId
 
     let issue: GqlIssue | null = null
@@ -540,14 +589,34 @@ export class LinearTicketSource implements TicketSource {
       throw new Error(`linear create: issueCreate failed for "${draft.title}"`)
     }
 
+    await this.completeMetadata(issue)
     return this.completeCreateBlockers(issue, draft.blockedBy ?? [], reservedId !== undefined)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
     const validated = validateTicketUpdate(patch)
+    if (
+      validated.kind !== undefined ||
+      validated.target !== undefined ||
+      validated.labels !== undefined
+    ) {
+      const current = await this.readTicket(id, true)
+      if (!current) throw new Error(`linear update: unknown ticket ${id}`)
+      validated.labels = this.effectiveLabels(validated.kind, validated.labels, current.labels)
+      const effectiveKind = validated.labels?.includes('node')
+        ? 'node'
+        : validated.labels !== undefined
+          ? 'work'
+          : current.kind
+      if (validated.target !== undefined || (current.kind === 'node' && effectiveKind === 'work'))
+        validated.target = await this.validateTree(id, { ...validated, kind: effectiveKind })
+    }
     const issueId = await this.resolveIssueId('update', id)
     const input: Record<string, unknown> = {}
 
+    if (validated.target === null) input.parentId = null
+    else if (validated.target !== undefined)
+      input.parentId = await this.resolveIssueId('update', validated.target)
     if (validated.title !== undefined) input.title = validated.title
     if (validated.body !== undefined) input.description = validated.body
     if (validated.labels !== undefined) {
@@ -763,6 +832,45 @@ export class LinearTicketSource implements TicketSource {
         item.after = after
       })
     }
+  }
+
+  private effectiveLabels(
+    kind: TicketDraft['kind'],
+    labels: string[] | undefined,
+    existing: string[],
+  ): string[] | undefined {
+    if (kind !== undefined && kind !== 'work' && kind !== 'node')
+      throw new Error('kind must be work or node')
+    if (kind !== undefined && labels !== undefined && (kind === 'node') !== labels.includes('node'))
+      throw new Error('conflicting kind and node label instructions')
+    if (kind === undefined) return labels
+    const result = (labels ?? existing).filter((label) => label !== 'node')
+    if (kind === 'node') result.push('node')
+    return result
+  }
+
+  private async completeMetadata(issue: GqlIssue, ownLabels = true): Promise<void> {
+    const complete = async (owner: {
+      id?: string
+      identifier: string
+      labels: GqlIssue['labels']
+    }): Promise<void> => {
+      const seen = new Set<string>()
+      let after = nextCursor(owner.labels.pageInfo, seen)
+      const labels = [...owner.labels.nodes]
+      while (after !== null) {
+        const page: { issue: { labels: Connection<{ name: string }> } } = await this.gql(
+          'metadataLabels',
+          `query TicketLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 100, after: $after) { nodes { name } ${PAGE_INFO} } } }`,
+          { id: owner.id ?? owner.identifier, after },
+        )
+        labels.push(...page.issue.labels.nodes)
+        after = nextCursor(page.issue.labels.pageInfo, seen)
+      }
+      owner.labels = { nodes: labels }
+    }
+    if (ownLabels) await complete(issue)
+    if (issue.parent) await complete(issue.parent)
   }
 
   // ── Plumbing ───────────────────────────────────────────────────────────────
@@ -1074,8 +1182,20 @@ export class LinearTicketSource implements TicketSource {
 
   private toTicket(issue: GqlIssue): Ticket {
     const blockedBy = blockersOf(issue)
+    const kind = issue.labels.nodes.some((label) => label.name === 'node') ? 'node' : 'work'
+    // Only same-team issue/parent pairs contribute an edge to this source.
+    const target =
+      issue.team?.key === this.teamKey &&
+      issue.parent?.team?.key === this.teamKey &&
+      issue.parent.labels.nodes.some((label) => label.name === 'node')
+        ? issue.parent.identifier
+        : undefined
     return {
+      kind,
+      ...(target !== undefined ? { target } : {}),
       revision: ticketRevision({
+        kind,
+        target,
         title: issue.title,
         body: issue.description ?? '',
         labels: issue.labels.nodes.map((label) => label.name),

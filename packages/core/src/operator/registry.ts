@@ -326,7 +326,12 @@ const ticketsCreateInput = ticketCreateRequestSchema.extend({ repo: repoField })
 const ticketsUpdateInput = ticketUpdateRequestSchema
   .extend({ repo: repoField, id: ticketIdField })
   .refine(
-    (value) => value.title !== undefined || value.body !== undefined || value.labels !== undefined,
+    (value) =>
+      value.title !== undefined ||
+      value.body !== undefined ||
+      value.labels !== undefined ||
+      value.kind !== undefined ||
+      value.target !== undefined,
     'update must name at least one field',
   )
 
@@ -763,13 +768,15 @@ export const TOOLS: readonly ToolEntry[] = [
     '{ticket, blockers, build}: the created ticket and its (usually empty) dependency states.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsCreateInput>
-      const { repo, title, body, labels, state, blockedBy } = input
+      const { repo, title, body, labels, state, blockedBy, kind, target } = input
       return mutateOperatorTicket({
         store: ctx.store,
         repo,
         backend: ticketsOf(ctx),
         operation: {
           kind: 'create',
+          ...(kind !== undefined ? { ticketKind: kind } : {}),
+          ...(target !== undefined ? { target } : {}),
           title,
           body,
           ...(labels !== undefined ? { labels } : {}),
@@ -781,7 +788,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.update',
-    'Partially replace a ticket’s editable fields (title, body, labels); state is never changed here.',
+    'Partially replace a ticket’s editable fields (title, body, labels, kind, target); state is never changed here.',
     ticketsUpdateInput,
     '{ticket, blockers, build}: the updated ticket.',
     async (raw, ctx) => {
