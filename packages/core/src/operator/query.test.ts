@@ -874,7 +874,7 @@ command = "postgres"
     expect(snapshot.model.builds.find((build) => build.slug === 'merged')).toBeUndefined()
   })
 
-  test('one snapshot reads each row-rendering history once, the journal once, one digest, and writes nothing', async () => {
+  test('one snapshot reads persisted row facts, repository facts, one digest, and writes nothing', async () => {
     // More finished builds than rendered rows: seven `done` builds, one of
     // them carrying a pinned artifact that must NOT be fetched.
     const raw = await seedDashboardStore(4)
@@ -890,12 +890,11 @@ command = "postgres"
     const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
     expect(snapshot.model.builds.map((build) => build.slug)).toEqual(rowBuilds)
 
-    // Read bounds: one journal read, one listing, ONE digest read for the
-    // whole repo, full history reads only for row-rendering builds (each
-    // slug exactly once), and pinned-config reads only for the same builds
-    // (ACs 2–4, AUT-487).
+    // Fixed metadata reads plus one persisted repository projection and one
+    // persisted fact read per rendered build. Pinned-config reads stay gated
+    // to those same builds; actual SQL row costs are checked separately.
     expect(counting.counts.get('listBuilds')).toBe(1)
-    expect(counting.counts.get('getRepo')).toBe(1)
+    expect(counting.counts.get('getRepo')).toBe(2)
     expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
@@ -992,7 +991,7 @@ command = "postgres"
     // Full read budget for one getOperatorBuild call on a done build.
     expect(counting.counts.get('getBuild')).toBe(1)
     expect(counting.counts.get('getEvents') ?? 0).toBe(0)
-    expect(counting.counts.get('getRepo') ?? 0).toBe(0)
+    expect(counting.counts.get('getRepo') ?? 0).toBe(1)
     expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     for (const method of MUTATING_STORE_METHODS) {
