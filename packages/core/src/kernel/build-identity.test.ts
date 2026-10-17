@@ -77,3 +77,10 @@ test('full messages preserve trailer-like subjects, and empty subjects get a tra
   expect(empty).toBe('\n\nAutobuild-Build: example\n')
   expect(hasBuildTrailer(empty, 'example')).toBe(true)
 })
+
+test('multiple blank separators keep the original prefix and one canonical trailer', () => {
+  const normalized = withBuildTrailer('Subject\n\n\nAutobuild-Build: old\n', 'example')
+  expect(normalized).toBe('Subject\n\n\nAutobuild-Build: example\n')
+  expect(buildTrailers(normalized)).toEqual(['example'])
+  expect(withBuildTrailer(normalized, 'example')).toBe(normalized)
+})

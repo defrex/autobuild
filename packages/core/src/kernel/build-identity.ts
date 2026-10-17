@@ -20,7 +20,7 @@ function splitTrailers(
   allowStandalone = true,
 ): { prefix: string; trailers: Trailer[] } {
   const content = message.replace(/(?:\r?\n)+$/, '')
-  const boundaries = [...content.matchAll(/\r?\n[ \t]*\r?\n/g)]
+  const boundaries = [...content.matchAll(/\r?\n(?:[ \t]*\r?\n)+/g)]
   const boundary = boundaries.at(-1)
   const start = boundary === undefined ? 0 : boundary.index + boundary[0].length
   if (boundary === undefined && !allowStandalone) return { prefix: content, trailers: [] }
