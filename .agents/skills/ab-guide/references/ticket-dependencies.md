@@ -89,6 +89,8 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+Hosted sources support kind and target with project-scoped transactional validation.
+Existing tickets default to work with no target. Metadata changes increment the
+revision once; equivalent aliases and unchanged values do not. Node demotion
+checks all targeting tickets, including completed work. Legacy plugins without
+integrationTree support read as work with no target and refuse metadata writes.

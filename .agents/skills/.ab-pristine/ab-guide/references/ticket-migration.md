@@ -62,3 +62,11 @@ Legacy records without `comments` retain their Markdown comment append behavior;
 export never interprets Markdown headings as structured history. New file tickets
 use structured comments and preserve their body when a comment is added. There is
 no continuous sync, assignee migration, state history or build-history migration.
+
+Integration-tree `kind` and `target` are preserved in portable frontmatter.
+Import validates the complete target graph before changing the destination and
+refuses a destination that cannot preserve metadata. It creates or adopts every
+identity, establishes node kinds, then applies targets using the durable id map,
+just like blockers. Input order does not matter. Resuming also restores edges on
+adopted tickets; normal destination validation still guards existing graphs and
+node demotion. Older work-only exports remain valid.
