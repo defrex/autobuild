@@ -1,3 +1,4 @@
+import { compatibleTicketSource } from './tree'
 import { configuredStore } from '../../cli/configured-store'
 import { projectToken } from '../../cli/project-credentials'
 import { resolveRepoOrigin } from '../../cli/repo-state'
@@ -23,7 +24,7 @@ function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export async function createTicketSource(
+async function rawTicketSource(
   config: TicketsConfig,
   env: Record<string, string | undefined>,
   /** A relative [tickets].dir is relative to the repo, not this process's cwd. */
@@ -176,4 +177,10 @@ export async function createTicketSource(
       { cause: error },
     )
   }
+}
+
+export async function createTicketSource(
+  ...args: Parameters<typeof rawTicketSource>
+): Promise<TicketSource> {
+  return compatibleTicketSource(await rawTicketSource(...args))
 }

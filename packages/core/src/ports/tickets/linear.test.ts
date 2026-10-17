@@ -60,6 +60,15 @@ async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
  * `inverseRelations` included, so every canned issue looks like a real one. */
 function gqlIssue(over: Record<string, unknown> = {}) {
   return {
+    team: { key: 'ENG' },
+    parent: null as null | {
+      id: string
+      identifier: string
+      labels: {
+        nodes: { name: string }[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    },
     id: 'uuid-42',
     identifier: 'ENG-42',
     title: 'Rate-limit auth',
@@ -235,6 +244,7 @@ describe('LinearTicketSource', () => {
     expect(tickets).toEqual({
       tickets: [
         {
+          kind: 'work',
           revision: expect.any(String),
           ref: {
             source: 'linear',
@@ -736,7 +746,7 @@ describe('LinearTicketSource', () => {
           data: {
             issueCreate: {
               success: true,
-              issue: gqlIssue({ labels: { nodes: [{ name: 'urgent' }] } }),
+              issue: gqlIssue({ labels: connection([{ name: 'urgent' }]) }),
             },
           },
         },
@@ -1328,7 +1338,7 @@ describe('LinearTicketSource', () => {
 
   test('update sends one exact partial IssueUpdateInput and never state or assignee', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issue: gqlIssue() } } },
       TEAM_INFO_RESPONSE,
       { body: { data: { issueUpdate: { success: true } } } },
     ])
@@ -1355,7 +1365,7 @@ describe('LinearTicketSource', () => {
 
   test('a body-only update does not query team metadata or send unnamed fields', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issue: gqlIssue() } } },
       { body: { data: { issueUpdate: { success: true } } } },
     ])
 
@@ -1370,7 +1380,7 @@ describe('LinearTicketSource', () => {
 
   test('an explicit empty label replacement clears without a team lookup', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issue: gqlIssue() } } },
       { body: { data: { issueUpdate: { success: true } } } },
     ])
 
@@ -1385,7 +1395,7 @@ describe('LinearTicketSource', () => {
 
   test('update creates an unknown label and uses its returned id', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issue: gqlIssue() } } },
       TEAM_INFO_RESPONSE,
       {
         body: {
@@ -1422,7 +1432,10 @@ describe('LinearTicketSource', () => {
       }
       calls.push({ url, headers: init.headers, ...parsed })
       let data: unknown
-      if (parsed.query.includes('query ResolveIssue')) {
+      if (parsed.query.includes('query GetIssue')) {
+        const id = String(parsed.variables.id)
+        data = { issue: gqlIssue({ id: `uuid-${id}`, identifier: id }) }
+      } else if (parsed.query.includes('query ResolveIssue')) {
         const id = String(parsed.variables.id)
         data = { issue: { id: `uuid-${id}` } }
       } else if (parsed.query.includes('query TeamInfo')) {
@@ -2157,4 +2170,201 @@ test('unfiltered export includes archived issues and requested-id create rejects
     source.create({ title: 'X', body: 'Y' }, { requestedId: 'ENG-706' }),
   ).rejects.toThrow('requested ids')
   expect(calls).toHaveLength(1)
+})
+
+describe('Linear node metadata', () => {
+  function fixture() {
+    const issues = new Map<string, ReturnType<typeof gqlIssue>>()
+    const calls: RecordedCall[] = []
+    const node = gqlIssue({
+      id: 'uuid-node',
+      identifier: 'ENG-1',
+      team: { key: 'ENG' },
+      labels: connection([{ name: 'node' }, { name: 'bug' }]),
+      parent: null,
+    })
+    const child = gqlIssue({
+      id: 'uuid-child',
+      identifier: 'ENG-2',
+      team: { key: 'ENG' },
+      parent: { id: 'uuid-node', identifier: 'ENG-1', labels: connection([{ name: 'node' }]) },
+    })
+    issues.set('ENG-1', node)
+    issues.set('ENG-2', child)
+    const fetchFn: LinearFetch = async (url, init) => {
+      const parsed = JSON.parse(init.body)
+      calls.push({ url, headers: init.headers, ...parsed })
+      const { query, variables } = parsed
+      let data: unknown
+      const issue =
+        [...issues.values()].find(
+          (issue) => issue.identifier === variables.id || issue.id === variables.id,
+        ) ?? null
+      if (query.includes('query GetIssue')) data = { issue }
+      else if (query.includes('query ResolveIssue'))
+        data = { issue: issue ? { id: issue.id } : null }
+      else if (query.includes('query TeamInfo')) {
+        const team = structuredClone(TEAM_INFO_RESPONSE.body.data)
+        team.teams.nodes[0]!.labels.nodes.push({ id: 'lb-node', name: 'node' })
+        data = team
+      } else if (query.includes('query ListReady'))
+        data = { issues: connection([...issues.values()]) }
+      else if (query.includes('mutation UpdateIssue')) data = { issueUpdate: { success: true } }
+      else if (query.includes('mutation CreateIssue'))
+        data = {
+          issueCreate: {
+            success: true,
+            issue: gqlIssue({
+              identifier: 'ENG-3',
+              labels: connection([{ name: 'node' }]),
+              parent: child.parent,
+            }),
+          },
+        }
+      else throw new Error(`unexpected query ${query}`)
+      return { ok: true, status: 200, json: async () => structuredClone({ data }) }
+    }
+    return { source: makeSource(fetchFn), calls, issues, node, child }
+  }
+
+  test('maps node parents, preserves ordinary grouping, clears actual parent explicitly', async () => {
+    const { source, calls, issues } = fixture()
+    expect((await source.get('uuid-node'))!.kind).toBe('node')
+    expect((await source.get('ENG-2'))!.target).toBe('ENG-1')
+    issues.get('ENG-2')!.parent = {
+      id: 'group',
+      identifier: 'ENG-9',
+      labels: connection([{ name: 'group' }]),
+    }
+    expect((await source.get('ENG-2'))!.target).toBeUndefined()
+    await source.update('ENG-2', { title: 'Unrelated' })
+    expect(calls.at(-1)!.variables).toEqual({ id: 'uuid-child', input: { title: 'Unrelated' } })
+    await source.update('ENG-2', { target: null })
+    expect(calls.at(-1)!.variables).toEqual({ id: 'uuid-child', input: { parentId: null } })
+    expect(calls[0]!.query).toContain('parent { id identifier team { key } labels(first: 50)')
+  })
+
+  test('parent assignment uses canonical UUID and a single mixed mutation', async () => {
+    const { source, calls } = fixture()
+    await source.update('uuid-child', { title: 'New', target: 'uuid-node' })
+    const mutations = calls.filter((call) => call.query.startsWith('mutation'))
+    expect(mutations).toHaveLength(1)
+    expect(mutations[0]!.variables).toEqual({
+      id: 'uuid-child',
+      input: { title: 'New', parentId: 'uuid-node' },
+    })
+  })
+
+  test('node labels reconcile with existing labels; labels-only demotion refuses done children', async () => {
+    const { source, calls, child, issues } = fixture()
+    child.state = { name: 'Done', type: 'completed' }
+    await expect(source.update('ENG-1', { labels: ['bug'], title: 'Lost' })).rejects.toThrow(
+      'targets it',
+    )
+    await expect(source.update('ENG-1', { kind: 'work' })).rejects.toThrow('targets it')
+    await expect(source.update('ENG-1', { kind: 'work', labels: ['node'] })).rejects.toThrow(
+      'conflicting',
+    )
+    expect(calls.filter((call) => call.query.startsWith('mutation'))).toHaveLength(0)
+    expect(calls.find((call) => call.query.includes('query ListReady'))!.query).toContain(
+      'includeArchived: true',
+    )
+    issues.delete('ENG-2')
+    await source.update('ENG-1', { kind: 'work' })
+    expect(calls.at(-1)!.variables).toEqual({ id: 'uuid-node', input: { labelIds: ['lb-bug'] } })
+  })
+
+  test('refuses aliases, ancestor cycles, foreign team and missing/non-node targets without mutations', async () => {
+    const { source, calls, node, issues } = fixture()
+    await expect(source.update('ENG-1', { target: 'uuid-node' })).rejects.toThrow('cycle')
+    await expect(source.update('ENG-1', { target: 'ENG-2' })).rejects.toThrow('not a node')
+    await expect(source.update('ENG-2', { target: 'missing' })).rejects.toThrow('does not exist')
+    node.team = { key: 'OTHER' }
+    await expect(source.update('ENG-2', { target: 'ENG-1' })).rejects.toThrow(
+      'different source/team',
+    )
+    node.team = { key: 'ENG' }
+    node.parent = { id: 'uuid-node', identifier: 'ENG-1', labels: connection([{ name: 'node' }]) }
+    await expect(source.update('ENG-2', { target: 'ENG-1' })).rejects.toThrow('cyclic ancestor')
+    expect(issues.size).toBe(2)
+    expect(calls.filter((call) => call.query.startsWith('mutation'))).toHaveLength(0)
+  })
+
+  test('create validates target before mutations and sends parent in issueCreate', async () => {
+    const { source, calls } = fixture()
+    await expect(source.create({ title: 'New', body: 'spec', target: 'missing' })).rejects.toThrow(
+      'does not exist',
+    )
+    expect(calls.filter((call) => call.query.startsWith('mutation'))).toHaveLength(0)
+    const created = await source.create({
+      title: 'New',
+      body: 'spec',
+      kind: 'node',
+      target: 'ENG-1',
+    })
+    const mutation = calls.find((call) => call.query.includes('mutation CreateIssue'))!
+    expect(mutation.variables).toEqual({
+      input: {
+        title: 'New',
+        description: 'spec',
+        teamId: 'team-uuid',
+        labelIds: ['lb-node'],
+        parentId: 'uuid-node',
+      },
+    })
+    expect(created.kind).toBe('node')
+    expect(created.target).toBe('ENG-1')
+  })
+
+  test('all issues and issue/parent label continuations are exhausted', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: {
+            issues: connection(
+              [
+                gqlIssue({
+                  labels: connection([], true, 'own'),
+                  parent: {
+                    id: 'parent',
+                    identifier: 'ENG-1',
+                    labels: connection([], true, 'parent'),
+                  },
+                }),
+              ],
+              true,
+              'issues',
+            ),
+          },
+        },
+      },
+      { body: { data: { issue: { labels: connection([{ name: 'node' }]) } } } },
+      { body: { data: { issue: { labels: connection([{ name: 'node' }]) } } } },
+      {
+        body: {
+          data: {
+            issues: connection([
+              gqlIssue({
+                id: 'uuid-43',
+                identifier: 'ENG-43',
+                state: { name: 'Done', type: 'completed' },
+              }),
+            ]),
+          },
+        },
+      },
+    ])
+    const listing = await makeSource(fetchFn).listAll()
+    expect(listing.tickets.map((ticket) => [ticket.kind, ticket.target, ticket.state])).toEqual([
+      ['node', 'ENG-1', 'Ready'],
+      ['work', undefined, 'Done'],
+    ])
+    expect(calls[1]!.variables).toEqual({ id: 'uuid-42', after: 'own' })
+    expect(calls[2]!.variables).toEqual({ id: 'parent', after: 'parent' })
+    expect(calls[3]!.variables).toEqual({
+      first: 10,
+      after: 'issues',
+      filter: { team: { key: { eq: 'ENG' } } },
+    })
+  })
 })

@@ -120,3 +120,37 @@ test('editor commands safely quote generated paths with spaces and apostrophes',
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test.each(['kind', 'remove-kind', 'target', 'remove-target'])(
+  'editor refuses %s modification',
+  async (field) => {
+    const source = new FakeTicketSource()
+    const node = await source.create({ title: 'Node', body: 'spec', kind: 'node' })
+    const child = await source.create({ title: 'Child', body: 'spec', target: node.ref.id })
+    let kept = ''
+    try {
+      await expect(
+        editTicket(
+          source,
+          child.ref.id,
+          { EDITOR: 'editor' },
+          () => {},
+          async (_, path) => {
+            kept = path
+            let raw = await readFile(path, 'utf8')
+            if (field === 'kind') raw = raw.replace('kind = "work"', 'kind = "node"')
+            if (field === 'remove-kind') raw = raw.replace(/^kind = .*\n/m, '')
+            if (field === 'target')
+              raw = raw.replace(`target = "${node.ref.id}"`, 'target = "elsewhere"')
+            if (field === 'remove-target') raw = raw.replace(/^target = .*\n/m, '')
+            await writeFile(path, raw)
+            return 0
+          },
+        ),
+      ).rejects.toThrow('read-only')
+      expect(source.updates).toHaveLength(0)
+    } finally {
+      if (kept) await rm(dirname(kept), { recursive: true })
+    }
+  },
+)

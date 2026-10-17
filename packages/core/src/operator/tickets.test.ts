@@ -311,3 +311,42 @@ test('operator re-pin opens a configured native file source and snapshots its by
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('operator create and metadata-only patches preserve ticket kind, target and revision guards', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource()
+  const common = { store, repo, backend: backend(source) }
+  const node = await mutateOperatorTicket({
+    ...common,
+    operation: { kind: 'create', ticketKind: 'node', title: 'Node', body: 'spec' },
+  })
+  const child = await mutateOperatorTicket({
+    ...common,
+    operation: { kind: 'create', title: 'Child', body: 'spec', target: node.ticket.ref.id },
+  })
+  expect(node.ticket.kind).toBe('node')
+  expect(child.ticket.target).toBe(node.ticket.ref.id)
+  const cleared = await mutateOperatorTicket({
+    ...common,
+    operation: {
+      kind: 'update',
+      id: child.ticket.ref.id,
+      patch: { target: null },
+      expectedRevision: child.ticket.revision,
+    },
+  })
+  expect(cleared.ticket.target).toBeUndefined()
+  await expect(
+    mutateOperatorTicket({
+      ...common,
+      operation: {
+        kind: 'update',
+        id: child.ticket.ref.id,
+        patch: { kind: 'node' },
+        expectedRevision: child.ticket.revision,
+      },
+    }),
+  ).rejects.toThrow('changed')
+  const listed = await listOperatorTickets({ ...common, state: 'Triage' })
+  expect(listed.tickets.every((ticket) => ticket.kind !== undefined)).toBe(true)
+})

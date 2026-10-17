@@ -881,7 +881,7 @@ describe('abTicketShow', () => {
           return source
         },
       })
-      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...ticket, assets: [] })
+      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...ticket, kind: 'work', assets: [] })
       else
         expect(out.slice(-5)).toEqual([
           ticket.body,
@@ -926,6 +926,7 @@ describe('abTicketShow', () => {
     // The complete Ticket plus the ticket's current assets.
     expect(JSON.parse(out.join('\n'))).toEqual({
       ...ticket,
+      kind: 'work',
       revision: expect.any(String),
       assets: [],
     })
@@ -1601,3 +1602,58 @@ describe('ab ticket states / state create', () => {
 function cliOpts(targetRepo: string, out: string[] = []) {
   return { targetRepo, env: {}, stdout: (line: string) => out.push(line), stderr: () => {} }
 }
+
+describe('ticket metadata CLI', () => {
+  test('create, metadata-only update and tree JSON use the complete source', async () => {
+    await writeRepo(`baseBranch = "trunk"\n${FILE_TICKETS_TOML}`)
+    const body = join(tmp, 'spec.md')
+    await writeFile(body, 'spec')
+    const source = new FakeTicketSource()
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    await abTicket(['create', 'Node', '--body', body, '--kind', 'node', '--json'], opts)
+    const node = JSON.parse(out.pop()!)
+    expect(node.kind).toBe('node')
+    await abTicket(['create', 'Child', '--body', body, '--target', node.ref.id, '--json'], opts)
+    const child = JSON.parse(out.pop()!)
+    expect(child.target).toBe(node.ref.id)
+    await source.transition(child.ref.id, 'Done')
+    await abTicket(['tree', '--json'], opts)
+    const tree = JSON.parse(out.pop()!)
+    expect(tree.root).toBe('trunk')
+    expect(tree.children[0].children[0].ticket.state).toBe('Done')
+    await abTicket(['show', child.ref.id], opts)
+    expect(out.join('\n')).toContain(`target:  ${node.ref.id}`)
+    out.length = 0
+    await abTicket(['update', child.ref.id, '--no-target', '--json'], opts)
+    expect(JSON.parse(out.pop()!).target).toBeUndefined()
+    await abTicket(['update', node.ref.id, '--kind', 'work'], opts)
+    expect((await source.get(node.ref.id))!.kind).toBe('work')
+  })
+
+  test('invalid kind, blank ids and conflicting flags fail before writes', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const source = new FakeTicketSource()
+    const ticket = await source.create({ title: 'Work', body: 'spec' })
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: () => {},
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    for (const flags of [
+      ['--kind', 'other'],
+      ['--target', '  '],
+      ['--target', 'x', '--no-target'],
+    ])
+      await expect(abTicket(['update', ticket.ref.id, ...flags], opts)).rejects.toThrow()
+    expect(source.updates).toHaveLength(0)
+  })
+})

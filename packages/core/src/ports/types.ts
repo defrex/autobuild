@@ -57,7 +57,13 @@ export interface TicketComment {
   author?: string
 }
 
+export type TicketKind = 'work' | 'node'
+
 export interface Ticket {
+  /** Optional only for legacy plugin compatibility; public reads normalize to work. */
+  kind?: TicketKind
+  /** Canonical source-local node ticket id; absent means the baseBranch root. */
+  target?: string
   /** Opaque source version of title, body, labels, state and blockers. */
   revision: string
   /** Complete history oldest first when exposed by this read. Absent means
@@ -91,6 +97,8 @@ export interface TicketListing {
 }
 
 export interface TicketDraft {
+  kind?: TicketKind
+  target?: string | null
   title: string
   body: string
   /** Labels applied at creation. Names need not already exist in the source;
@@ -132,6 +140,8 @@ export interface TicketCreateOptions {
 /** Editable ticket fields. Omitted fields are preserved; state is deliberately
  * absent because `transition()` exclusively owns lifecycle changes. */
 export interface TicketUpdate {
+  kind?: TicketKind
+  target?: string | null
   /** Required when named: an update cannot clear the ticket's title. */
   title?: string
   /** Required when named: pre-build, this is the spec (§6.3). */
@@ -181,6 +191,11 @@ export type TicketMutation =
   | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
 
 export interface TicketSource {
+  /** Opt in only when kind/target persistence, graph validation and complete
+   * enumeration are supported at every write boundary, including guarded writes. */
+  readonly integrationTree?: boolean
+  /** Every lifecycle state, including archived/completed tickets; no ready gate. */
+  listAll?(): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */
   readonly requestedIds?: import('./tickets/requested-id').RequestedIdPolicy
   readonly assets?: TicketAssetStore

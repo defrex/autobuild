@@ -176,7 +176,8 @@ describe('createTicketSource — plugin', () => {
     const env = { JIRA_TOKEN: 'secret' }
     const source = await createTicketSource(config, env, './repo', undefined, registry)
 
-    expect(source).toBe(expected)
+    expect(source.name).toBe(expected.name)
+    expect(await source.listReady({})).toEqual(await expected.listReady({}))
     expect(contexts).toEqual([{ config, env, repoRoot: resolve('./repo') }])
   })
 
