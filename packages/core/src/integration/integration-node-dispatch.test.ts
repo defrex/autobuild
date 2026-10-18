@@ -216,7 +216,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
     expect(h.launched.at(-1)?.slug).toBe(owner.slug)
     await h.runLatest()
     expect(resolved).toBe(1)
-    await h.dispatcher.tick()
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
     const state = reduceBuild(await h.events(owner.slug))
     expect(state.nodeRestack?.active).toBeUndefined()
     expect(state.nodeRestack?.inventory?.builds).toContain(source.slug)

@@ -1840,6 +1840,8 @@ export class Dispatcher {
             !executionLeaseLive
           ) {
             await this.cascadeNode(record, state, report, launched, opts)
+            loaded = undefined
+            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
           }
           if (state.nodeOpened !== undefined && state.pr === undefined) {
             await this.pollEmptyNode(record, state)
