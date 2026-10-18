@@ -1,3 +1,5 @@
+export type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
+import type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { BuildStore } from '../store/types'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
@@ -505,6 +507,7 @@ export type LandingGateInspection =
   | { kind: 'unproven'; reason: string }
 
 export interface Forge {
+  inspectReadiness?(input: ForgeReadinessInput): Promise<ForgeReadinessCheck[]>
   /** Trusted kernel-only Git execution, with forge credentials scoped to its
    * origin. Never pass this capability or its environment to agent sessions. */
   readonly kernelExec?: import('./workspace/git-worktree').Exec
@@ -519,6 +522,9 @@ export interface Forge {
     number: number,
   ): Promise<{ base: string; head: string; headSha: string; open: boolean }>
 
+  /** Change only an existing open review's base, preserving its identity.
+   * Implementations acknowledge only a matching inspected base/head. */
+  retargetPr?(workspacePath: string, number: number, base: string): Promise<void>
   readonly rewrite?: ForgeRewrite
   /** Create once at sha; retries adopt only descendants of that opening commit. */
   createNodeBranch?(branch: string, sha: string): Promise<string>

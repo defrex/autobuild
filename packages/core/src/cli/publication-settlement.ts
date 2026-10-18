@@ -334,7 +334,7 @@ export async function settlePendingPublication(
     events,
     {
       branch: request.payload.branch,
-      baseBranch: created.payload.baseBranch,
+      baseBranch: events.state.baseBranch ?? created.payload.baseBranch,
       title,
       body: newline === -1 ? '' : text.slice(newline + 1).replace(/^\n+/, ''),
       mergeMessage: text,

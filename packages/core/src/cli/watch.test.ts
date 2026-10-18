@@ -2452,3 +2452,31 @@ test('repository discovery retains collecting integrations through later lifecyc
   expect(h.out.join('\n')).toContain('build.completed')
   expect(h.out.join('\n')).toContain('pr.opened')
 })
+
+test('forge failures reach default and repository watch with full remediation', async () => {
+  for (const repository of [false, true]) {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    const fixture_ = harness(store, {
+      onTick: async () => {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.forge-readiness-failed',
+          payload: {
+            run: 'r1',
+            forge: 'github',
+            rootBranch: 'main',
+            check: 'squash',
+            detail: 'Squash disabled',
+            remediation: 'Enable squash merging',
+          },
+        })
+      },
+    })
+    await abWatch({ ...fixture_.base, repository, timeout: '1' })
+    const records = fixture_.out.slice(0, -1).map((line) => JSON.parse(line))
+    expect(records).toHaveLength(1)
+    expect(records[0].event.payload.remediation).toBe('Enable squash merging')
+    expect(renderWatchLine(records[0].event, null)).toContain('Enable squash merging')
+  }
+})

@@ -1,3 +1,4 @@
+import { readinessChecks, type ForgeReadinessCheck } from './readiness'
 import { hasBuildTrailer, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
@@ -84,6 +85,13 @@ export type MergeSha = string | ((number: number) => string)
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
+  readiness: ForgeReadinessCheck[] = readinessChecks(
+    'pass',
+    'Fake forge permits repository operations.',
+  )
+  async inspectReadiness() {
+    return this.readiness
+  }
   readonly linearStackMerges: { number: number; head: string }[] = []
   async inspectMergeFreshness(_branch: string) {
     return { fenced: false, evidence: ['Fake freshness enforcement is not configured'] }
@@ -99,6 +107,13 @@ export class FakeForge implements Forge {
     this.linearStackMerges.push({ number, head })
     this.prs.set(number, { state: 'merged', sha, headSha: head })
     return sha
+  }
+  readonly retargeted: { number: number; base: string }[] = []
+  async retargetPr(workspacePath: string, number: number, base: string): Promise<void> {
+    const pr = await this.inspectLandingPr(workspacePath, number)
+    if (!pr.open) throw new Error(`PR #${number} is no longer open`)
+    this.opened[number - 1]!.base = base
+    this.retargeted.push({ number, base })
   }
   async inspectLandingPr(_workspacePath: string, number: number) {
     const pr = this.opened[number - 1]

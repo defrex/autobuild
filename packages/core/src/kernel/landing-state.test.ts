@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import { validateEventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
+import { evaluateLandingPolicy } from './landing-policy'
 import { buildReducer } from './reducer'
 import { landingAuthorized, nativeLandingApplied } from './landing-state'
 
@@ -47,6 +48,50 @@ const ack = (seq: number, commandSeq: number) =>
   })
 
 describe('durable landing state', () => {
+  test('accepted reparent revokes land and policy, preserves holds and evaluates the new destination', () => {
+    const moved = event(4, {
+      actor: DISPATCHER,
+      type: 'node.parent-accepted',
+      payload: {
+        id: 'move',
+        old: { target: null, branch: 'main' },
+        next: { target: { ticket: { source: 'file', id: 'Q' }, build: 'q' }, branch: 'ab-node/q' },
+        revision: 'r2',
+      },
+    })
+    const state = buildReducer.reduce([decided(), land(2), ack(3, 2), moved]).landing
+    expect(state?.command).toBeUndefined()
+    expect(state?.acknowledgedSeq).toBeUndefined()
+    expect(state?.decision).toBeUndefined()
+    expect(landingAuthorized(state)).toBe(false)
+    const held = buildReducer.reduce([decided(), hold(2), ack(3, 2), moved]).landing
+    expect(held?.command).toEqual({ kind: 'hold', seq: 2 })
+    expect(held?.acknowledgedSeq).toBe(2)
+    expect(landingAuthorized(held)).toBe(false)
+    const replacement = event(5, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        ...decision,
+        from: 'node',
+        into: { kind: 'node', ticket: 'Q' },
+        ...evaluateLandingPolicy(
+          [
+            { into: 'root', mode: 'consent' },
+            { into: 'Q', mode: 'auto' },
+          ],
+          { from: 'node', into: { kind: 'node', ticket: 'Q' }, labels: decision.labels },
+        ),
+      },
+    })
+    expect(
+      landingAuthorized(buildReducer.reduce([decided(), land(2), moved, replacement]).landing),
+    ).toBe(true)
+    expect(
+      landingAuthorized(buildReducer.reduce([decided(), hold(2), moved, replacement]).landing),
+    ).toBe(false)
+  })
+
   test('land survives replacement decisions; old native receipts cannot acknowledge new candidates', () => {
     const log = [
       decided(),

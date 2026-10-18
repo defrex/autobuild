@@ -287,3 +287,41 @@ test('yield evidence survives notices, isolates runs and clears on successful ad
     expect(previous.yieldedHolder).toBe(i < 4 ? 'first' : i === 4 ? 'second' : undefined)
   }
 })
+
+test('forge failures survive config and routine notices, incremental replay, and reset at run anchors', () => {
+  const failures = ['squash', 'rebase'].map((check, i) =>
+    event(i + 1, 'dispatcher.forge-readiness-failed', {
+      run: 'run-a',
+      forge: 'github',
+      rootBranch: 'main',
+      check,
+      detail: `${check} disabled`,
+      remediation: `Enable ${check}`,
+    } as RepositoryEvent['payload']),
+  )
+  const routine = event(3, 'dispatcher.config-reloaded', {
+    run: 'run-a',
+    restartRequired: [],
+    roleWarnings: [],
+    revision: 1,
+  } as RepositoryEvent['payload'])
+  const full = reduceDispatchStatus([...failures, routine], 'run-a')
+  expect(full.forgeReadinessFailures).toHaveLength(2)
+  expect(reduceDispatchStatus([routine], 'run-a', reduceDispatchStatus(failures, 'run-a'))).toEqual(
+    full,
+  )
+  expect(
+    reduceDispatchStatus(
+      [
+        event(4, 'dispatcher.run-started', {
+          run: 'run-a',
+          pid: 1,
+          effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 },
+          roleWarnings: [],
+        }),
+      ],
+      'run-a',
+      full,
+    ).forgeReadinessFailures,
+  ).toBeUndefined()
+})

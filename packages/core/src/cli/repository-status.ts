@@ -1,3 +1,4 @@
+import { forgeReadinessWarnings, reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 import {
   formatDispatcherIdentity,
@@ -18,6 +19,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  warningLines?: string[]
   dispatcher: DispatcherLiveness
   ticketSourceDegradation?: TicketSourceDegradation
   /** Live operator sandboxes (AUT-340); released environments are omitted. */
@@ -82,9 +84,15 @@ export function projectRepositoryStatus(
   }
   publications.reverse()
   const active = reduceTicketSourceHealth(events)
+  const latestRun = events.findLast((event) => event.type === 'dispatcher.run-started')
+  const warningLines =
+    latestRun?.type === 'dispatcher.run-started'
+      ? forgeReadinessWarnings(reduceDispatchStatus(events, latestRun.payload.run))
+      : []
   return {
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
+    ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...reduceDispatchSettings(events),
     sandboxes: sandboxStates(events)
@@ -105,8 +113,10 @@ export function repositoryStatusFromFacts(
   facts: RepositoryReadFacts,
   dispatcher: DispatcherLiveness,
 ): RepositoryStatus {
+  const warningLines = facts.status ? forgeReadinessWarnings(facts.status) : []
   return {
     repo,
+    ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...facts.settings,
     ...(facts.health === undefined ? {} : { ticketSourceDegradation: facts.health }),
@@ -141,6 +151,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `ticket source ${active.source}: ${active.cause} (${active.operation}) — ${active.message}${'resetAt' in active ? `; reset ${active.resetAt}` : ''}`,
         ]),
     `repository: ${status.repo}`,
+    ...(status.warningLines ?? []),
     `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
     ...(status.dispatcher.expiredHolder
       ? [`expired dispatcher: ${formatDispatcherIdentity(status.dispatcher.expiredHolder)}`]

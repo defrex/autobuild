@@ -542,6 +542,17 @@ receive-pack-free network policy, so even a failed publication-policy restore
 fails closed before setup or plugin code runs. Normal VM sessions never receive
 Forge credentials.
 
+**Forge readiness.** `ports/forge/readiness.ts` owns the portable check inventory,
+classification, plugin fallback, and formatting; `github-readiness.ts` performs
+read-only settings/policy inspection, keeping incomplete evidence unknown. Host
+init validation invokes the configured registry forge outside guest probes.
+Dispatch inspects after acquiring its repository lease and writes validated
+`dispatcher.forge-readiness-failed` facts once per run/check for known hard
+failures. `kernel/dispatch-status.ts` retains their typed collection across ticks
+and reloads; the independent frontend and operator query project the same warnings.
+`ab watch` follows these repository attention events for external orchestrators.
+See [setup](setup.md#forge-readiness) for requirements and access guidance.
+
 **Forge credentials.** `packages/core/src/ports/forge/github-transport.ts` owns the
 REST transport seam and credential resolution for the builtin GitHub forge:
 `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login read through
@@ -1152,6 +1163,35 @@ archives before expected-head publication. The dispatcher polls all open nodes,
 including empty nodes, and advances clean cascades without agent calls. Only the
 active conflicted item attaches a reconcile runner, using source-build artifacts
 materialized by the dispatcher into the integration owner's store scope.
+
+`kernel/node-parent.ts` coordinates lifecycle-aware target mutations for CLI
+and operator requests. It canonicalizes source aliases, checks the latest build
+generation and proposed/effective/pending ancestry, and reserves a durable
+`node.parent-requested` before provider mutation. Claimed work targets stay frozen;
+a changed target requires abort and re-dispatch before any mixed patch is written.
+The dispatcher reads node tickets independently of readiness and activates a
+confirmed, revalidated request with `node.parent-accepted`. Provider edits use
+the same validation; refusals are deduplicated by revision, target and reason.
+Uncertain writes recover by source readback rather than replaying a caller patch.
+Tracker observation errors are contained within that observation, preserving
+ordinary cascade and PR handling against durable ancestry. Already accepted moves
+complete their PR effects without another tracker read. Rejection comparisons use
+revision, target and reason fields so JSONB key ordering cannot defeat deduplication;
+`node.parent-rejection-cleared` removes a current refusal after correction while
+preserving its history.
+
+Accepted parent facts update node target/base projections while creation facts
+remain provenance. Pending requests and moves fence verification, child landing
+and source landing, and count against both parents' completeness. Existing writer
+reservations settle before activation. The existing replay transaction freezes the
+new destination and retains the old contribution boundary until completion, even
+for distinct parents at the same SHA. Afterwards the dispatcher retargets the same
+PR through the optional `Forge.retargetPr` capability, inspects its acknowledged
+base/head, records a receipt and completes the parent operation. GitHub uses the
+[documented PR update endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request)
+with a branch-name `base`. Publication and PR acknowledgement retry separately;
+terminal human PR changes keep their ordinary handling. Children retain the moved
+node's identity and branch, so the usual target observations cascade the move.
 
 In origin mode, node plumbing uses the forge's trusted `kernelExec` transport.
 The GitHub adapter supplies its token through subprocess-only Git configuration,

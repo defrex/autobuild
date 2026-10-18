@@ -1,3 +1,4 @@
+import { hardReadinessKeys } from '../ports/forge/readiness'
 /**
  * Repository-scoped event catalog. These events deliberately do not enter the
  * build event union: repository controls and harvest runs are not synthetic
@@ -406,6 +407,14 @@ export const dispatcherStatusEventPayloadSchemas = {
     run: dispatchRun.optional(),
     holder: z.string().min(1),
   }),
+  'dispatcher.forge-readiness-failed': z.strictObject({
+    run: dispatchRun,
+    forge: z.string().min(1),
+    rootBranch: z.string().min(1),
+    check: z.enum(hardReadinessKeys),
+    detail: z.string().min(1),
+    remediation: z.string().min(1),
+  }),
   'dispatcher.config-rejected': z.strictObject({ run: dispatchRun, error: z.string().min(1) }),
   'dispatcher.config-publication-failed': z.strictObject({
     run: dispatchRun,
@@ -546,6 +555,7 @@ export const REPOSITORY_ATTENTION_EVENTS = [
   'dispatcher.ticket-source-recovered',
   'dispatcher.tick-failed',
   'dispatcher.config-rejected',
+  'dispatcher.forge-readiness-failed',
   'dispatcher.harvest-runner-failed',
 ] as const satisfies readonly RepositoryEventType[]
 export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
@@ -624,6 +634,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.run-stopped': ['dispatcher'],
   'dispatcher.tick-yielded': ['dispatcher'],
   'dispatcher.config-rejected': ['dispatcher'],
+  'dispatcher.forge-readiness-failed': ['dispatcher'],
   'dispatcher.config-publication-failed': ['dispatcher'],
   'dispatcher.tick-started': ['dispatcher'],
   'dispatcher.tick-completed': ['dispatcher'],

@@ -130,7 +130,7 @@ async function assertCleanWorktree(deps: TerminalDeps): Promise<void> {
 }
 
 function baseBranchOf(events: CurrentBuildFacts): string {
-  if (events.created) return events.created.payload.baseBranch
+  if (events.state.baseBranch) return events.state.baseBranch
   throw new Error('this build has no build.created event — cannot resolve its baseBranch (§15.3)')
 }
 

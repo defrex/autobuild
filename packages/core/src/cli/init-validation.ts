@@ -1,3 +1,10 @@
+import { createForge } from '../ports/forge/create'
+import {
+  inspectForgeReadiness,
+  readinessChecks,
+  formatReadinessFailure,
+  type ForgeReadinessCheck,
+} from '../ports/forge/readiness'
 import { projectToken } from './project-credentials'
 import { resolveRepoOrigin } from './repo-state'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -384,6 +391,7 @@ export async function validateInitReadiness(opts: {
   runtimes?: RuntimeRegistry
   vercelFacade?: VercelSandboxFacade
   packageArchive?: () => Promise<Uint8Array>
+  createForge?: typeof createForge
   signal?: AbortSignal
 }): Promise<InitValidationReport> {
   const exec = opts.exec ?? spawnExec
@@ -430,10 +438,25 @@ export async function validateInitReadiness(opts: {
   )
   let caps: WorkspaceProviderCapabilities | undefined
   let assigneeLine: string | undefined
+  let forgeChecks: ForgeReadinessCheck[] = readinessChecks(
+    'unknown',
+    'Host forge construction unavailable; check adapter configuration and access.',
+  )
   try {
     // Ticket acquisition is a host responsibility for both workspace providers.
     // Exercise its read surface before allocating disposable infrastructure.
     const hostPlugins = await loadPlugins(config.plugins, repo, { packageRoot: repo })
+    try {
+      const forge = await (opts.createForge ?? createForge)({
+        name: config.forge,
+        registry: hostPlugins,
+        env: opts.env,
+        repoRoot: repo,
+      })
+      forgeChecks = await inspectForgeReadiness(forge, { rootBranch: config.baseBranch })
+    } catch {
+      /* Keep useful workspace readiness even if the forge is unavailable. */
+    }
     caps =
       hostPlugins.workspaceProviders.get(config.workspace.provider)?.capabilities ?? builtinCaps
     // Registry-aware declaration checks. The pre-registry preflight above could
@@ -624,6 +647,20 @@ export async function validateInitReadiness(opts: {
   }
 
   if (report === undefined) throw new Error('readiness validation produced no report')
+  report.checks.push(
+    ...forgeChecks.map(
+      (check): ReadinessCheck => ({
+        name: `forge-${check.check}`,
+        status:
+          check.status === 'fail' && check.requirement === 'recommendation'
+            ? 'warning'
+            : check.status,
+        detail: formatReadinessFailure(check),
+      }),
+    ),
+  )
+  if (forgeChecks.some((check) => check.requirement === 'hard' && check.status === 'fail'))
+    report.exitCode = 1
   const stdout = opts.stdout ?? (() => {})
   stdout(`Readiness: ${report.context} (${report.provider})`)
   stdout(`Store: ${state.storeRef}`)
@@ -642,11 +679,15 @@ export async function validateInitReadiness(opts: {
       `Disposable environment: ${report.workspace} (released${report.snapshotsDeleted === undefined ? '' : `; ${report.snapshotsDeleted} snapshot(s) deleted`})`,
     )
   for (const check of report.checks) {
-    const label = check.status === 'pass' ? 'PASS' : check.status === 'absent' ? 'ABSENT' : 'FAIL'
+    const label = check.status === 'warning' ? 'WARN' : check.status.toUpperCase()
     stdout(`  ${label} ${check.name}: ${redact(check.detail)}`)
   }
   return {
     ...report,
-    checks: report.checks.map((check) => ({ ...check, detail: redact(check.detail) })),
+    checks: report.checks.map((check) => ({
+      ...check,
+      name: redact(check.name),
+      detail: redact(check.detail),
+    })),
   }
 }

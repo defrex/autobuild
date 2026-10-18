@@ -55,7 +55,7 @@ export function sandboxForbiddenEnvMessage(name: string): string {
 
 export interface ReadinessCheck {
   name: string
-  status: 'pass' | 'fail' | 'absent'
+  status: 'pass' | 'fail' | 'absent' | 'warning' | 'unknown'
   detail: string
 }
 

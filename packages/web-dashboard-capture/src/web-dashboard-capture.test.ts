@@ -127,6 +127,13 @@ function models(): WebFixtureModels {
   return {
     happy,
     mixed,
+    forgeReadiness: {
+      ...mixed,
+      warningLines: [
+        'Forge squash: merging disabled. Allow squash merging.',
+        'Forge rebase: merging disabled. Allow rebase merging.',
+      ],
+    },
     integration: {
       ...happy,
       builds: [

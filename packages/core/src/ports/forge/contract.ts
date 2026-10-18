@@ -110,6 +110,34 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         }
       })
     })
+    test('optional retarget preserves review identity and acknowledges the new base idempotently', async () => {
+      await withForge(factory, undefined, async (h) => {
+        const forge = h.forge
+        if (
+          !forge.retargetPr ||
+          !forge.createNodeBranch ||
+          !forge.inspectLandingPr ||
+          !forge.remoteBranchSha
+        )
+          return
+        const { pr } = await pushAndOpen(h)
+        const branch = `ab-node/retarget-${crypto.randomUUID()}`
+        await forge.createNodeBranch(branch, await forge.remoteBranchSha(h.base))
+        try {
+          await forge.setAutoMerge(h.workspacePath, pr.number, false)
+          await forge.retargetPr(h.workspacePath, pr.number, branch)
+          await forge.retargetPr(h.workspacePath, pr.number, branch)
+          expect(await forge.inspectLandingPr(h.workspacePath, pr.number)).toMatchObject({
+            base: branch,
+            head: h.head,
+            open: true,
+          })
+        } finally {
+          await h.controls.closePr(pr.number)
+          await forge.deleteBranch?.(h.workspacePath, branch)
+        }
+      })
+    })
     test('optional rewrite snapshots the authoritative head and refuses a stale lease', async () => {
       await withForge(factory, undefined, async (harness) => {
         const capability = harness.forge.rewrite

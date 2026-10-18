@@ -115,3 +115,22 @@ test('failed integration checks park for repair rather than implementation', () 
   })
   expect(integrationNeedsRunner(state)).toBe(false)
 })
+
+test('a new cycle with identical SHAs cannot borrow historical verification', () => {
+  const state = prepared()
+  for (const step of config.verify.steps)
+    state.verify.results.push({
+      step,
+      seq: 2,
+      attempt: 1,
+      outcome: 'pass',
+      headSha: 'head',
+      baseSha: 'parent',
+      restackId: 'cycle',
+    })
+  expect(integrationNeedsRunner(state)).toBe(false)
+  state.integration!.cycles = [state.integration!.cycle!]
+  state.integration!.cycle = { ...state.integration!.cycle!, id: 'new-parent-cycle', seq: 3 }
+  expect(integrationNeedsRunner(state)).toBe(true)
+  expect(integrationVerified(state, config)).toBe(false)
+})

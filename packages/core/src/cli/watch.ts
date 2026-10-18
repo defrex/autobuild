@@ -1,3 +1,4 @@
+import { formatReadinessFailure } from '../ports/forge/readiness'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
 import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
@@ -440,6 +441,8 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `ticket source ${event.payload.source} recovered: ${event.payload.cause} (${event.payload.operation})`
     case 'dispatcher.tick-failed':
       return `dispatcher tick failed: ${singleLine(event.payload.error)}`
+    case 'dispatcher.forge-readiness-failed':
+      return singleLine(formatReadinessFailure(event.payload))
     case 'dispatcher.config-rejected':
       return `dispatcher config rejected: ${singleLine(event.payload.error)}`
     case 'dispatcher.harvest-runner-failed':

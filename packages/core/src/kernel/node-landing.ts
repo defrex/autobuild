@@ -75,6 +75,8 @@ export async function landIntoNode(
       state.prState === 'closed' ||
       state.prState === 'merged' ||
       state.pendingCommands.length ||
+      state.nodeRestack?.parentRequest ||
+      state.nodeRestack?.parentChange ||
       (state.integration?.intent && !state.integration.landing)
     )
       throw new Error('destination node no longer admits writes')
@@ -153,6 +155,7 @@ export async function landIntoNode(
         throw new Error('node landing requires exactly one canonical source identity')
       if (deps.stack) {
         const source = (await readBuildFacts(store, deps.slug)).value.state
+        if (source.nodeRestack?.parentRequest || source.nodeRestack?.parentChange) return undefined
         if (!source.integration?.intent) {
           const intended = await store.appendIfCurrent(deps.slug, source.lastSeq, {
             actor: KERNEL,

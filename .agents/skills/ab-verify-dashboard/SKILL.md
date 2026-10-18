@@ -51,6 +51,10 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:forge-readiness-wide:text .ab/dashboard-frames/forge-readiness-wide.txt --attach
+   ab artifact put dashboard-frame:forge-readiness-wide:png .ab/dashboard-frames/forge-readiness-wide.png --attach
+   ab artifact put dashboard-frame:forge-readiness-narrow:text .ab/dashboard-frames/forge-readiness-narrow.txt --attach
+   ab artifact put dashboard-frame:forge-readiness-narrow:png .ab/dashboard-frames/forge-readiness-narrow.png --attach
    ab artifact put dashboard-frame:headline-happy-wide:text .ab/dashboard-frames/headline-happy-wide.txt --attach
    ab artifact put dashboard-frame:headline-happy-wide:png .ab/dashboard-frames/headline-happy-wide.png --attach
    ab artifact put dashboard-frame:mixed-wide:text .ab/dashboard-frames/mixed-wide.txt --attach

@@ -148,3 +148,77 @@ test('completed restacks retain dropped owned identities rather than treating th
   expect(state.contributionBase).toBe('new-parent')
   expect(state.foreignAliases).toEqual({})
 })
+
+test('parent intent leaves the contribution boundary intact until replay and independent acknowledgements', () => {
+  const change = {
+    id: 'move',
+    old: { target: null, branch: 'old' },
+    next: { target: null, branch: 'main' },
+    revision: 'revision',
+  }
+  let state = nodeRestackReducer.reduce([
+    event('node.opened', { sha: 'initial' }),
+    event('node.parent-requested', change),
+  ])
+  expect(state.parentRequest).toEqual(change)
+  expect(state.parentChange).toBeUndefined()
+  state = nodeRestackReducer.advance(state, [event('node.parent-accepted', change)])
+  expect(state.parentRequest).toBeUndefined()
+  expect(state.parentChange).toEqual(change)
+  expect(state.contributionBase).toBe('initial')
+  state = nodeRestackReducer.advance(state, [
+    reservation,
+    prepared(0, 'new-parent'),
+    receipt(0, 'new-parent', 'prefix'),
+    prepared(1, 'prefix'),
+    receipt(1, 'prefix', 'head'),
+    event('node.publish-intended', { id: 'tx', head: 'head' }),
+    event('node.rewritten', { id: 'tx', previous: 'old-head', head: 'head' }),
+    event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
+  ])
+  expect(state.parentReplay).toBe('move')
+  expect(state.parentChange).toBeDefined()
+  state = nodeRestackReducer.advance(state, [
+    event('node.parent-pr-retargeted', { id: 'move', base: 'main' }),
+    event('node.parent-completed', { id: 'move' }),
+  ])
+  expect(state.parentPr).toBe('move')
+  expect(state.parentChange).toBeUndefined()
+})
+
+test('accepted parent alone changes effective node projections and clears same-SHA eligibility', async () => {
+  const { reduceBuild, buildReducer } = await import('./reducer')
+  const { baseBranchReducer } = await import('../processes/dispatcher-selectors')
+  const change = {
+    id: 'move',
+    old: { target: null, branch: 'old' },
+    next: { target: { ticket: { source: 'file', id: 'Q' }, build: 'q' }, branch: 'new' },
+    revision: 'r',
+  }
+  const before = [
+    event('build.created', {
+      kind: 'node',
+      baseBranch: 'old',
+      ticket: { source: 'file', id: 'A' },
+      repo: 'repo',
+    }),
+    event('node.opened', { sha: 'same-sha' }),
+    event('node.compared', { parentSha: 'same-sha', headSha: 'same-sha', ahead: 0 }),
+    event('node.parent-requested', change),
+  ]
+  expect(reduceBuild(before).baseBranch).toBe('old')
+  expect(baseBranchReducer.reduce(before)).toBe('old')
+  const after = [...before, event('node.parent-accepted', change)]
+  const state = reduceBuild(after)
+  expect(state.baseBranch).toBe('new')
+  expect(state.target?.build).toBe('q')
+  expect(state.nodeComparison).toBeUndefined()
+  expect(state.nodeRestack?.contributionBase).toBe('same-sha')
+  expect(baseBranchReducer.reduce(after)).toBe('new')
+  const prefix = buildReducer.advance(buildReducer.initial(), before)
+  expect(
+    buildReducer.finish(
+      buildReducer.advance(JSON.parse(JSON.stringify(prefix)), after.slice(before.length)),
+    ),
+  ).toEqual(state)
+})

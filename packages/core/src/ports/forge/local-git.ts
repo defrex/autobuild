@@ -1,3 +1,4 @@
+import { readinessChecks, type ForgeReadinessCheck } from './readiness'
 import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
@@ -43,6 +44,9 @@ function detail(error: unknown): string {
  * Git database. No method invokes a shell, remote command, network client, or
  * `gh`; every subprocess is an argv-form `git` command. */
 export class LocalGitForge implements Forge {
+  async inspectReadiness(): Promise<ForgeReadinessCheck[]> {
+    return readinessChecks('pass', 'Local Git has no hosted merge settings or protection policy.')
+  }
   get rewrite() {
     return gitRewrite(this.exec, true)
   }
@@ -385,6 +389,19 @@ export class LocalGitForge implements Forge {
     const checkout = await this.checkedOutBase(cwd, baseRef)
     if (checkout === undefined) return true
     return (await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)).ok
+  }
+
+  async retargetPr(workspacePath: string, number: number, base: string): Promise<void> {
+    await this.sha(`refs/heads/${base}`, workspacePath)
+    if ((await this.getPrState(workspacePath, number)).state !== 'open')
+      throw new Error(`PR #${number} is no longer open`)
+    await this.updateRecord(workspacePath, number, (current) => {
+      if (current.status !== 'open' || current.pendingLanding)
+        throw new Error(`PR #${number} is landing or terminal`)
+      return { ...current, base }
+    })
+    if ((await this.inspectLandingPr(workspacePath, number)).base !== base)
+      throw new Error(`PR #${number} base acknowledgement failed`)
   }
 
   async inspectLandingPr(workspacePath: string, number: number) {

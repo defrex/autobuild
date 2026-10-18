@@ -45,8 +45,7 @@ bypassed. Human forge merges remain an explicit escape hatch, recorded with
 whether the actual head was verified. The janitor completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Landing follows the ordered declarative policy described below. Reparenting
-is not provided.
+Landing follows the ordered declarative policy described below.
 Parent movement automatically restacks every open descendant node, including
 empty nodes, without clean-path agents. Node restacks replay ordered individual
 changes above their last completed contribution boundary, preserving source
@@ -75,6 +74,22 @@ reset kind with `--kind work`. Omitted fields preserve existing values.
 shows the configured root and every ticket, including completed work and empty
 nodes, nested by target with state. Siblings are sorted by id. Invalid external
 graphs and listing diagnostics are reported explicitly.
+
+Changing an open node target re-parents its branch and existing PR; `--no-target`
+moves it to the configured root. The dispatcher confirms source metadata, replays
+only node-owned contributions onto the new parent, then retargets the same review.
+Children follow through the ordinary cascade; conflicts use normal source-aware
+reconcile. Pending moves block verification and landing. Cycles, non-open parents,
+landing/closing nodes and unsupported forge retargeting are refused with a reason.
+Busy operations must settle first.
+
+Accepted node re-parenting revokes prior land consent through the recorded
+`node.parent-accepted` fact. Holds survive. Readiness evaluates landing policy
+against the new effective parent before another landing can proceed.
+
+Changing a claimed work target is refused before any combined patch is written: abort and re-dispatch instead. Direct provider edits
+are observed too; invalid edits leave effective ancestry unchanged with a durable
+diagnostic. Status shows effective ancestry; ticket tree shows source metadata.
 
 Targets must exist and be nodes in the configured source. Self-targeting,
 ancestor cycles and demoting a node with targeting tickets are refused before

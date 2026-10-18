@@ -13,6 +13,16 @@ export interface LandingState {
 
 export function advanceLanding(state: LandingState, event: AbEvent): void {
   switch (event.type) {
+    case 'node.parent-accepted':
+      // Acceptance durably revokes consent to the former destination. Holds
+      // remain in force; readiness must sample policy for the new parent.
+      if (state.command?.kind === 'land') {
+        delete state.command
+        delete state.acknowledgedSeq
+      }
+      delete state.decision
+      delete state.native
+      break
     case 'landing.decided':
       state.decision = { ...event.payload, seq: event.seq }
       break
