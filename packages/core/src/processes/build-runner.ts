@@ -916,13 +916,21 @@ export class BuildRunner {
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       for (;;) {
         await this.ensureLease()
+        await this.settleLocalReconcile()
         const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
         if (facts.publication.pending()) {
           const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
-          // Only controls that the engine can acknowledge may cross the
-          // publication boundary. Inert requests (for example resume while
-          // running) must not start another producer or rewrite transaction.
-          if (next.kind !== 'acknowledge' || (next.command !== 'pause' && next.command !== 'abort'))
+          // Inert controls cannot start more work under unsettled publication.
+          // A local paused resolver needs resume acknowledged before this
+          // runner can settle its publication; remote guests still park.
+          const localResume =
+            next.kind === 'acknowledge' &&
+            next.command === 'resume' &&
+            (facts.workspace === null || !isRemoteWorkspace(facts.workspace))
+          if (
+            next.kind !== 'acknowledge' ||
+            (next.command !== 'pause' && next.command !== 'abort' && !localResume)
+          )
             break
         }
         const decision = await this.step()

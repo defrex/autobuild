@@ -32,8 +32,13 @@ kind = "check"
 command = "test"
 `)
 for (const conflict of [false, true])
-  for (const remote of [false, true])
-    test(`automatic ${conflict ? 'conflicted' : 'clean'} ${remote ? 'trusted remote' : 'local'} restack gates verification and preserves evidence after waiting rewrites`, async () => {
+  for (const { remote, recovery } of [false, true].flatMap((remote) =>
+    (!remote && conflict ? ['none', 'contention', 'pause'] : ['none']).map((recovery) => ({
+      remote,
+      recovery,
+    })),
+  ))
+    test(`automatic ${conflict ? 'conflicted' : 'clean'} ${remote ? 'trusted remote' : 'local'} restack gates verification and preserves evidence after waiting rewrites (${recovery})`, async () => {
       const cwd = await mkdtemp(join(tmpdir(), 'ab-leaf-'))
       async function git(args: string[]) {
         const result = await bunExec(['git', ...args], { cwd })
@@ -51,6 +56,7 @@ for (const conflict of [false, true])
         await git(['config', 'user.name', 'Test'])
         await git(['config', 'user.email', 'test@example.invalid'])
         await git(['config', 'commit.gpgsign', 'false'])
+        await git(['config', 'rerere.enabled', 'false'])
         const base = await file('base', 'base\n')
         await git(['checkout', '-qb', BRANCH])
         await file('feature', 'first\n')
@@ -88,7 +94,7 @@ for (const conflict of [false, true])
         }
         const forge = new LocalGitForge({ exec: bunExec })
         let competingHead: string | undefined
-        if (!remote && !conflict) {
+        if (!remote && (!conflict || recovery === 'contention')) {
           const capability = forge.rewrite!
           Object.defineProperty(forge, 'rewrite', {
             value: {
@@ -147,6 +153,18 @@ for (const conflict of [false, true])
                       { notes },
                     )
                     expect(await git(['rev-parse', BRANCH])).toBe(branchBefore)
+                    if (recovery === 'pause') {
+                      await store.append(BUILD, {
+                        actor: humanActor('operator'),
+                        type: 'build.pause-requested',
+                        payload: {},
+                      })
+                      await store.append(BUILD, {
+                        actor: KERNEL,
+                        type: 'build.paused',
+                        payload: {},
+                      })
+                    }
                   } finally {
                     await rm(notes, { force: true })
                   }
@@ -209,6 +227,57 @@ for (const conflict of [false, true])
 
         if (conflict)
           expect(await runner.step()).toMatchObject({ kind: 'run-phase', phase: 'reconcile' })
+        if (recovery === 'contention') {
+          const contended = (await store.getEvents(BUILD)).find(
+            (e) => e.type === 'reconcile.contended',
+          )
+          expect(contended?.actor.kind).toBe('kernel')
+          expect(contended?.payload.actual).toBe(competingHead)
+          expect((await readBuildFacts(store, BUILD)).value.publication.pending()).toBe(false)
+          expect(await runner.step()).toMatchObject({ kind: 'run-phase', phase: 'reconcile' })
+          const prepared = (await store.getEvents(BUILD)).filter(
+            (e) => e.type === 'reconcile.prepared',
+          )
+          expect(prepared).toHaveLength(2)
+          expect(prepared.at(-1)?.payload.oldHead).toBe(competingHead)
+          expect(prepared.at(-1)?.payload.id).not.toBe(prepared[0]?.payload.id)
+          expect((await store.getEvents(BUILD)).filter((e) => e.type === 'phase.failed')).toEqual(
+            [],
+          )
+        }
+        if (recovery === 'pause') {
+          expect((await readBuildFacts(store, BUILD)).value.state.status).toBe('paused')
+          expect((await readBuildFacts(store, BUILD)).value.publication.pending()).toBe(true)
+          expect(await git(['rev-parse', BRANCH])).toBe(oldHead)
+          // Park again after publication so run() cannot enter finalize.
+          const append = store.append.bind(store)
+          store.append = async (slug, write) => {
+            const event = await append(slug, write)
+            if (write.type === 'reconcile.completed') {
+              await append(slug, {
+                actor: humanActor('operator'),
+                type: 'build.pause-requested',
+                payload: {},
+              })
+            }
+            return event
+          }
+          await store.append(BUILD, {
+            actor: humanActor('operator'),
+            type: 'build.resume-requested',
+            payload: {},
+          })
+          await runner.run()
+          store.append = append
+          expect((await readBuildFacts(store, BUILD)).value.publication.pending()).toBe(false)
+          expect((await readBuildFacts(store, BUILD)).value.state.status).toBe('paused')
+          await store.append(BUILD, {
+            actor: humanActor('operator'),
+            type: 'build.resume-requested',
+            payload: {},
+          })
+          expect(await runner.step()).toEqual({ kind: 'acknowledge', command: 'resume' })
+        }
         if (remote) {
           expect(await git(['rev-parse', BRANCH])).toBe(oldHead)
           const request = (
@@ -261,7 +330,10 @@ for (const conflict of [false, true])
             type: 'target.moved',
             payload: { branch: 'main', sha },
           })
-        expect(await runner.step()).toMatchObject({ kind: 'restack', trigger: 'awaiting-landing' })
+        expect(await runner.step()).toMatchObject({
+          kind: 'restack',
+          trigger: 'awaiting-landing',
+        })
         if (remote) await settle()
         const rewritten = await git(['rev-parse', BRANCH])
         expect(await git(['show', '-s', '--format=%P', rewritten])).toBe(newest)
@@ -271,7 +343,7 @@ for (const conflict of [false, true])
         expect(await runner.step()).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
         const events = await store.getEvents(BUILD)
         sessions += events.filter((e) => e.type === 'session.started').length
-        expect(sessions).toBe(conflict ? 1 : 0)
+        expect(sessions).toBe(recovery === 'contention' ? 2 : conflict ? 1 : 0)
         expect(events.filter((e) => e.type === 'restack.completed')).toHaveLength(2)
         expect(await git(['rev-parse', `refs/autobuild/archive/${BUILD}/${oldHead}`])).toBe(oldHead)
       } finally {

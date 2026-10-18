@@ -293,11 +293,17 @@ export async function prepareRestack(
     throw new Error(
       `local branch ${input.branch} has unknown work at ${localBranchHead}; preserve and reconcile it with the authoritative head before retrying`,
     )
+  const automatic =
+    input.restackId === undefined
+      ? undefined
+      : (await readBuildFacts(deps.store, deps.slug)).value.log.restack.active
+  const frozenMessage =
+    deps.automatic?.message ?? (automatic?.id === input.restackId ? automatic?.message : undefined)
   const description = await deps.store.getArtifact(deps.slug, 'pr-description')
-  if (description === null && deps.automatic === undefined)
+  if (description === null && frozenMessage === undefined)
     throw new Error('reconcile requires the deposited PR description')
   const message =
-    deps.automatic?.message ??
+    frozenMessage ??
     withBuildTrailer(new TextDecoder().decode(description!.content), deps.slug, {
       includesSubject: true,
     })
