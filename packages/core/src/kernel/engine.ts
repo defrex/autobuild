@@ -317,7 +317,6 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     return { kind: 'restack', trigger: log.restack.active.trigger, cycle: log.restack.active.cycle }
   }
   if (
-    log.restack.target !== undefined &&
     log.restack.gates[String(cycleBoundary)] === undefined &&
     (log.restack.finalizedAt ?? 0) < cycleBoundary &&
     !log.verifyStarted.some((v) => v.seq > cycleBoundary) &&

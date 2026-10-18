@@ -20,6 +20,7 @@ import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { decideNext, decideNextFromFacts, type Decision, type WaitReason } from './engine'
+import { leafTransaction } from './generators/leaf-restack-log'
 import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
@@ -105,6 +106,28 @@ function toLog(writes: EventWrite[]): AbEvent[] {
         payload: write.payload,
       }) as AbEvent,
   )
+  // Legacy transition fixtures begin after the entry restack has completed.
+  // Fresh entry is covered separately in leaf-restack-state.test.ts.
+  const boundary = log.findLast(
+    (e) =>
+      (e.type === 'code-review.verdict' && e.payload.verdict === 'approve') ||
+      e.type === 'reconcile.completed',
+  )
+  if (
+    boundary &&
+    !log.some(
+      (e) => e.seq > boundary.seq && (e.type === 'verify.started' || e.type === 'verify.completed'),
+    )
+  ) {
+    log.push({
+      build: BUILD,
+      seq: log.length + 1,
+      ts: clock().toISOString(),
+      actor: KERNEL,
+      type: 'restack.completed',
+      payload: { ...leafTransaction, cycle: boundary.seq, headSha: 'e'.repeat(40) },
+    })
+  }
   // Every engine fixture also holds the log index to the incremental contract.
   checkIncremental(logIndexReducer, log, { stepwise: false })
   return log
@@ -364,7 +387,7 @@ describe('decideNext: §15.6 happy path — prefix walk', () => {
     runPhase('implement', 1), // 12 observation.recorded
     runPhase('code-review', 1), // 13 implement.completed
     runPhase('code-review', 1), // 14 code-review.started
-    checkTypes, // 15 approve → verify, first step, cheap checks first
+    { kind: 'restack', trigger: 'verify-entry', cycle: 15 }, // approval gates verify entry
     checkTypes, // 16 verify.started types
     checkUnit, // 17 types passed
     checkUnit, // 18 verify.started unit

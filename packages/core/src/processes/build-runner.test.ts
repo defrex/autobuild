@@ -21,6 +21,7 @@ import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
+import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { reduceBuild } from '../kernel/reducer'
 import type { Finding } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -184,6 +185,7 @@ async function reviewVerdict(
         payload: { ...base, artifact: refOf(dep) },
       }),
     )
+    if (verdict === 'approve') await startHistoricalVerifyCycle(store)
   }
 }
 
@@ -664,6 +666,34 @@ async function seedPlanApproved(store: BuildStore, verifySteps?: string[]): Prom
   })
 }
 
+/** These legacy pipeline fixtures resume an already-started verify cycle.
+ * Fresh entry and automatic Git publication are exercised in leaf-restacking.test.ts. */
+async function completeFixtureRestack(store: BuildStore): Promise<void> {
+  const events = await store.getEvents(SLUG)
+  const boundary = events.findLast((e) => e.type === 'reconcile.completed')!
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'restack.completed',
+    payload: { ...leafTransaction, branch: BRANCH, cycle: boundary.seq, headSha: 'e'.repeat(40) },
+  })
+}
+
+async function startHistoricalVerifyCycle(store: BuildStore): Promise<void> {
+  const events = await store.getEvents(SLUG)
+  const attempt =
+    Math.max(
+      0,
+      ...events.flatMap((e) =>
+        e.type === 'verify.started' || e.type === 'verify.completed' ? [e.payload.attempt] : [],
+      ),
+    ) + 1
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'types', attempt },
+  })
+}
+
 async function seedCodeApproved(store: BuildStore): Promise<void> {
   await store.append(SLUG, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
   await store.append(SLUG, {
@@ -686,6 +716,7 @@ async function seedCodeApproved(store: BuildStore): Promise<void> {
       artifact: { kind: 'code-review', rev: 0 },
     },
   })
+  await startHistoricalVerifyCycle(store)
 }
 
 async function seedReadyForFinalizeStep(store: BuildStore): Promise<void> {
@@ -1386,6 +1417,7 @@ describe('step', () => {
     // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
     // already used attempt 1; reusing it would collide the reducer's
     // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
+    await completeFixtureRestack(h.store)
     expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
     expect(await h.br.step()).toEqual({
       kind: 'run-check',
@@ -1796,6 +1828,7 @@ describe('happy path (§15.6)', () => {
     'code-review.started',
     'session.started',
     'code-review.verdict',
+    'verify.started', // historical fixture's already-started cycle
     'session.ended',
     'verify.started',
     'verify.completed',
@@ -4157,40 +4190,52 @@ describe('phase-session budget', () => {
 })
 
 describe('remote publication terminal boundary', () => {
-  test('a producer publication request parks cleanly without a false phase failure', async () => {
-    const h = await makeHarness({
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        handlers.implement = async (ctx: ScriptContext) => {
-          await store.appendWithArtifacts(
-            SLUG,
-            [{ kind: 'implement-notes', content: 'remote implementation complete' }],
-            (deposited) => ({
-              actor: agentActor('implement', sessionOf(ctx)),
-              type: 'publication.requested',
-              payload: {
-                operation: 'implement',
-                branch: BRANCH,
-                sha: 'a'.repeat(40),
-                round: 1,
-                base: 'b'.repeat(40),
-                artifact: refOf(deposited),
-              },
-            }),
-          )
-          return defaultTurnResult('publication requested')
-        }
-        return handlers
-      },
-    })
+  test.each([false, true])(
+    'a producer publication parks with stale resume=%s',
+    async (staleResume) => {
+      const h = await makeHarness({
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          handlers.implement = async (ctx: ScriptContext) => {
+            await store.appendWithArtifacts(
+              SLUG,
+              [{ kind: 'implement-notes', content: 'remote implementation complete' }],
+              (deposited) => ({
+                actor: agentActor('implement', sessionOf(ctx)),
+                type: 'publication.requested',
+                payload: {
+                  operation: 'implement',
+                  branch: BRANCH,
+                  sha: 'a'.repeat(40),
+                  round: 1,
+                  base: 'b'.repeat(40),
+                  artifact: refOf(deposited),
+                },
+              }),
+            )
+            return defaultTurnResult('publication requested')
+          }
+          return handlers
+        },
+      })
 
-    await h.br.run()
+      if (staleResume) {
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.resume-requested',
+          payload: {},
+        })
+      }
+      await h.br.run()
+      // Reattaching with the same unsettled publication must also park.
+      await h.br.run()
 
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'publication.requested')).toHaveLength(1)
-    expect(ofType(events, 'phase.failed')).toEqual([])
-    expect(ofType(events, 'session.ended')).toHaveLength(3)
-  })
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'publication.requested')).toHaveLength(1)
+      expect(ofType(events, 'phase.failed')).toEqual([])
+      expect(ofType(events, 'session.ended')).toHaveLength(3)
+    },
+  )
 
   test('replacement ignores a request abandoned with the dead workspace and reruns its phase', async () => {
     let implementations = 0
@@ -4876,8 +4921,9 @@ paths = ["web/**"]
       verifyDiffs: [{ error: 'fatal: bad object fake-base-sha' }],
     })
     await seedApproved(h.store)
+    const starts = ofType(await h.store.getEvents(SLUG), 'verify.started').length
     await expect(h.br.step()).rejects.toThrow('fatal: bad object fake-base-sha')
-    expect(ofType(await h.store.getEvents(SLUG), 'verify.started')).toEqual([])
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.started')).toHaveLength(starts)
     expect(ofType(await h.store.getEvents(SLUG), 'verify.completed')).toEqual([])
   })
 
@@ -5440,10 +5486,11 @@ describe('coalesced summary boundaries', () => {
         })
         // Drive deterministic checks first; run() then verifies and handles the boundary.
         await h.br.attach()
-        await h.br.step() // progress check
         await h.br.step() // reconcile
+        await completeFixtureRestack(h.store)
         await h.br.step() // capture policy
         await h.br.step() // types
+        await h.br.step() // unit
         const previous = summaryBoundary(await h.store.getEvents(SLUG))!
         if (remote) {
           const request = await h.store.append(SLUG, {
@@ -5536,6 +5583,7 @@ describe('frozen post-reconcile verification policy', () => {
       payload: { baseSha: 'base-2' },
     })
     await h.br.step() // reconcile under original config
+    await completeFixtureRestack(h.store)
     current = disabled // next action sees the newly disabled policy
     h.store.faultAfterNext('verify.reconcile-policy-captured')
     await expect(h.br.step()).rejects.toThrow('injected crash')
@@ -5568,6 +5616,7 @@ describe('frozen post-reconcile verification policy', () => {
     })
     await h.br.step() // progress observation
     await h.br.step() // reconcile
+    await completeFixtureRestack(h.store)
     expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
     expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'types' })
   })
@@ -5588,6 +5637,7 @@ describe('frozen post-reconcile verification policy', () => {
       payload: { baseSha: 'base-2' },
     })
     await h.br.step()
+    await completeFixtureRestack(h.store)
     await h.br.step()
     expect(await h.br.step()).toMatchObject(
       !enabled

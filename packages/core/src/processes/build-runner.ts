@@ -914,17 +914,20 @@ export class BuildRunner {
       await this.settleLocalReconcile()
       if (await this.refreshSummary())
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-      const initialFacts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
-      if (initialFacts.publication.pending() && initialFacts.state.pendingCommands.length === 0) {
-        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-      }
       for (;;) {
         await this.ensureLease()
+        const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+        if (facts.publication.pending()) {
+          const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
+          // Only controls that the engine can acknowledge may cross the
+          // publication boundary. Inert requests (for example resume while
+          // running) must not start another producer or rewrite transaction.
+          if (next.kind !== 'acknowledge' || (next.command !== 'pause' && next.command !== 'abort'))
+            break
+        }
         const decision = await this.step()
         if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
-        const after = (await readBuildFacts(this.deps.store, this.deps.slug)).value
-        if (after.publication.pending() && after.state.pendingCommands.length === 0) break
       }
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } finally {

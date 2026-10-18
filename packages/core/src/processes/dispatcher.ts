@@ -1205,12 +1205,7 @@ export class Dispatcher {
     const facts = (await readBuildFacts(this.store, slug)).value
     if (facts.log.restack.target === undefined && facts.lastCreated !== undefined) {
       const branch = facts.lastCreated.payload.baseBranch
-      const sha = await this.baseSha(branch)
-      await this.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'target.moved',
-        payload: { branch, sha },
-      })
+      await this.observeTarget(slug, branch, undefined, report)
     }
     if (
       !(await ensureExecutionProgress(
@@ -1832,13 +1827,7 @@ export class Dispatcher {
         if (state.status !== 'aborted' && state.status !== 'queued') {
           const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
           if (branch !== undefined) {
-            const sha = await this.baseSha(branch)
-            if (log.restack.target?.sha !== sha) {
-              await this.store.append(record.slug, {
-                actor: DISPATCHER,
-                type: 'target.moved',
-                payload: { branch, sha },
-              })
+            if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
               loaded = undefined
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
             }
@@ -1860,6 +1849,29 @@ export class Dispatcher {
         report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
       }
     }
+  }
+
+  private async observeTarget(
+    slug: string,
+    branch: string,
+    previous: string | undefined,
+    report: TickReport,
+  ): Promise<boolean> {
+    let sha: string
+    try {
+      sha = await this.baseSha(branch)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      report.janitorDiagnostics.push(`build ${slug}: target observation failed — ${message}`)
+      return false
+    }
+    if (sha === previous) return false
+    await this.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch, sha },
+    })
+    return true
   }
 
   private forgeWorkspacePath(events: CurrentBuildFacts): string {

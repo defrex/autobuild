@@ -117,3 +117,11 @@ test('the entry gate precedes approved-plan exclusions', () => {
   })
   expect(decideNext(log, config)).toMatchObject({ kind: 'skip-verify', step: 'unit' })
 })
+
+test('verify entry requires restacking even before any target observation succeeds', () => {
+  expect(decideNext(leafRestackLog().slice(0, 6), config)).toEqual({
+    kind: 'restack',
+    trigger: 'verify-entry',
+    cycle: 6,
+  })
+})

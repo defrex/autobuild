@@ -239,6 +239,7 @@ async function seedBuild(
      * absent so unmodified seeds keep exercising the legacy fallback. */
     workspaceRemote?: boolean
     attached?: boolean
+    targetObserved?: boolean
     pr?: { number: number; url: string; headSha: string }
   } = {},
 ): Promise<string> {
@@ -279,11 +280,13 @@ async function seedBuild(
     type: 'spec.imported',
     payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
   })
-  await h.store.append(slug, {
-    actor: DISPATCHER,
-    type: 'target.moved',
-    payload: { branch: 'main', sha: BASE_SHA },
-  })
+  if (opts.targetObserved !== false) {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: BASE_SHA },
+    })
+  }
   if (opts.attached !== false) {
     await h.store.append(slug, {
       actor: KERNEL,
@@ -9296,4 +9299,45 @@ test('target observations persist during a live implementation session without t
   expect(h.forge.rewrites).toEqual([])
   expect(h.forge.remoteBranches.get(branch)).toBe(original)
   expect(h.launches).toEqual([])
+})
+
+test('failed target observation does not prevent merged PR settlement', async () => {
+  const h = harness({
+    exec: async () => ({ stdout: '', stderr: 'target unavailable', exitCode: 1 }),
+  })
+  const slug = await seedAwaitingPr(h)
+  h.forge.remoteBranchSha = async () => {
+    throw new Error('forge unavailable')
+  }
+  h.forge.setPrState(1, { state: 'merged', sha: 'landed' })
+  const report = await h.dispatcher.tick()
+  expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(true)
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('target observation failed')),
+  ).toBe(true)
+  expect(report.janitorFailed).toBe(0)
+})
+
+test('failed initial target observation does not spend dispatch budget and retries later', async () => {
+  let unavailable = true
+  const h = harness({
+    exec: async () =>
+      unavailable
+        ? { stdout: '', stderr: 'target unavailable', exitCode: 1 }
+        : { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 },
+  })
+  const slug = await seedBuild(h, { attached: false, targetObserved: false })
+  h.forge.remoteBranchSha = async () => {
+    throw new Error('forge unavailable')
+  }
+  const report = await h.dispatcher.tick()
+  expect(h.launches).toEqual([slug])
+  expect(report.dispatchFailed).toBe(0)
+  expect((await h.store.getEvents(slug)).filter((e) => e.type === 'dispatch.failed')).toEqual([])
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('target observation failed')),
+  ).toBe(true)
+  unavailable = false
+  await h.dispatcher.tick()
+  expect((await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')).toHaveLength(1)
 })

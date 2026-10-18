@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
 import { parseConfig } from '../config/load'
-import { KERNEL } from '../events/envelope'
+import { KERNEL, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { LocalGitForge } from '../ports/forge/local-git'
 import { bunExec } from '../ports/forge/github'
@@ -77,11 +77,15 @@ for (const conflict of [false, true])
               : event.payload
           await store.append(BUILD, { actor: event.actor, type: event.type, payload })
         }
-        await store.append(BUILD, {
-          actor: KERNEL,
-          type: 'target.moved',
-          payload: { branch: 'main', sha: target },
-        })
+        // A clean local entry has no prior observation: the runner must
+        // resolve the target itself before allowing verification.
+        if (remote || conflict) {
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch: 'main', sha: target },
+          })
+        }
         const forge = new LocalGitForge({ exec: bunExec })
         let competingHead: string | undefined
         if (!remote && !conflict) {
@@ -211,6 +215,19 @@ for (const conflict of [false, true])
             await readBuildFacts(store, BUILD)
           ).value.publication.latestUncompletedRequest()!
           expect(request.payload.operation).toBe(conflict ? 'reconcile' : 'restack')
+          await store.append(BUILD, {
+            actor: humanActor('operator'),
+            type: 'build.resume-requested',
+            payload: {},
+          })
+          const sessionStarts = (await store.getEvents(BUILD)).filter(
+            (e) => e.type === 'session.started',
+          ).length
+          await runner.run()
+          expect(
+            (await store.getEvents(BUILD)).filter((e) => e.type === 'session.started'),
+          ).toHaveLength(sessionStarts)
+          expect((await readBuildFacts(store, BUILD)).value.publication.pending()).toBe(true)
           await settle()
           await settle()
         }
