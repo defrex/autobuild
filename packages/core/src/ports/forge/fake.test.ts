@@ -22,11 +22,13 @@ const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
     gatePresence: opts.gated ? 'present' : 'absent',
   })
   forge.seedBranch(head, headSha)
+  const base = `contract-base-${crypto.randomUUID()}`
+  forge.seedBranch(base, `base-${crypto.randomUUID()}`)
   return {
     forge,
     workspacePath: `/fake/forge-contract/${crypto.randomUUID()}`,
     head,
-    base: `contract-base-${crypto.randomUUID()}`,
+    base,
     title: `Forge contract ${crypto.randomUUID()}`,
     body: 'Autobuild Forge contract fixture',
     controls: {

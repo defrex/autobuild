@@ -377,7 +377,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 7
+export const BUILD_REDUCER_VERSION = 9
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -489,6 +489,17 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     switch (event.type) {
       // Facts the projection does not need (workspace liveness is the
       // dispatcher's concern; finalize post-steps are failure-tolerant §5).
+      case 'node.parent-accepted':
+        if (acc.kind === 'node') {
+          acc.target = event.payload.next.target ?? undefined
+          acc.baseBranch = event.payload.next.branch
+          delete acc.nodeComparison
+          if (acc.integration) {
+            delete acc.integration.cycle
+            delete acc.integration.observation
+          }
+        }
+        break
       case 'node.opening':
         acc.nodeOpening = event.payload
         break

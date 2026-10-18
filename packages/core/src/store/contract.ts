@@ -1,3 +1,4 @@
+import { sameParentRejection } from '../kernel/node-restack-state'
 import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
@@ -287,6 +288,62 @@ function atT0(offsetMs: number): string {
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
     describe('builds', () => {
+      test('parent rejection deduplication survives persisted payload and snapshot key order', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const input = sampleBuildInput('parent-diagnostic')
+          await store.createBuild(input)
+          const rejection = {
+            revision: 'revision',
+            target: 'missing',
+            reason: 'target does not exist',
+          }
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.parent-rejected',
+            payload: rejection,
+          })
+          const previous = (await readBuildFacts(store, input.slug)).value.state.nodeRestack!
+            .parentRejection
+          expect(sameParentRejection(previous, rejection)).toBe(true)
+          const replayed = reduceBuild(await store.getEvents(input.slug)).nodeRestack!
+            .parentRejection
+          expect(sameParentRejection(replayed, rejection)).toBe(true)
+          // Also model a differently ordered transport even on adapters whose
+          // native serialization happens to retain insertion order.
+          expect(
+            sameParentRejection(
+              { reason: previous!.reason, target: previous!.target, revision: previous!.revision },
+              rejection,
+            ),
+          ).toBe(true)
+          const before = (await store.getEvents(input.slug)).length
+          if (!sameParentRejection(previous, rejection))
+            await store.append(input.slug, {
+              actor: DISPATCHER,
+              type: 'node.parent-rejected',
+              payload: rejection,
+            })
+          expect((await store.getEvents(input.slug)).length).toBe(before)
+          for (const changed of [
+            { ...rejection, revision: 'new' },
+            { ...rejection, target: null },
+            { ...rejection, reason: 'node closed' },
+          ])
+            expect(sameParentRejection(previous, changed)).toBe(false)
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.parent-rejection-cleared',
+            payload: { revision: 'corrected', target: null },
+          })
+          expect(
+            (await readBuildFacts(store, input.slug)).value.state.nodeRestack!.parentRejection,
+          ).toBeUndefined()
+          expect(
+            (await store.getEvents(input.slug)).filter((e) => e.type === 'node.parent-rejected'),
+          ).toHaveLength(1)
+        })
+      })
+
       test('integration facts replay through cached reads and digests without a runner', async () => {
         await withStore(factory, undefined, async (store) => {
           const input = sampleBuildInput('integration-node')

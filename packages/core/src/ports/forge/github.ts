@@ -1016,6 +1016,40 @@ export class GitHubForge implements Forge {
     return { fenced: false, evidence }
   }
 
+  async retargetPr(workspacePath: string, number: number, base: string): Promise<void> {
+    const before = await this.inspectLandingPr(workspacePath, number)
+    if (!before.open) throw new Error(`PR #${number} is no longer open`)
+    if (before.base === base) return
+    const { owner, name } = await this.requireCoordinates()
+    const response = await this.request(
+      'PATCH',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+      { body: { base } },
+    )
+    const pr = this.parse(
+      z.object({
+        number: z.number().int(),
+        state: z.string(),
+        merged: z.boolean(),
+        base: z.object({ ref: z.string() }),
+        head: z.object({ ref: z.string(), sha: z.string() }),
+      }),
+      response,
+      `retarget PR #${number}`,
+    )
+    if (
+      response.status !== 200 ||
+      pr.number !== number ||
+      pr.state !== 'open' ||
+      pr.merged ||
+      pr.base.ref !== base ||
+      pr.head.ref !== before.head ||
+      pr.head.sha !== before.headSha
+    )
+      throw new Error(`PR #${number} retarget acknowledgement disagrees with requested base/head`)
+    this.prStateCache.delete(`${owner}/${name}#${number}`)
+  }
+
   async inspectLandingPr(_workspacePath: string, number: number) {
     const { owner, name } = await this.requireCoordinates()
     const response = await this.request(

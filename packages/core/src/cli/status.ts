@@ -551,6 +551,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   if (d.nodeRestack) {
     const node = d.nodeRestack
+    const move = node.parentRequest ?? node.parentChange
+    if (move)
+      lines.push(
+        `  reparenting: ${move.old.target?.ticket.id ?? move.old.branch} → ${move.next.target?.ticket.id ?? move.next.branch}`,
+      )
+    if (node.parentRejection) lines.push(`  target change refused: ${node.parentRejection.reason}`)
     if (node.inventory) {
       lines.push(`  node head: ${node.inventory.head}`)
       lines.push(`  build changes: ${node.inventory.builds.join(', ') || 'none'}`)

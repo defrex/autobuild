@@ -2,7 +2,7 @@ import {
   integrationComplete,
   integrationFailed,
   integrationCurrent,
-  integrationHeadVerified,
+  integrationCycleVerified,
   integrationNeedsRunner,
 } from '../../kernel/integration-state'
 import type { RepositoryReadFacts } from '../../store/reduced-reads'
@@ -157,6 +157,7 @@ export interface DashboardBuild {
   kind?: 'integration' | 'work'
   target?: string
   integration?:
+    | 'reparenting'
     | 'opening'
     | 'empty'
     | 'collecting'
@@ -891,8 +892,7 @@ export function projectBuildFromFacts(
                 ? `integration incomplete${state.integration?.observation?.openChildren.length ? `: ${state.integration.observation.openChildren.join(', ')}` : ''}`
                 : integrationFailed(state)
                   ? 'verification failed; file a repair child targeting this node'
-                  : !state.integration?.cycle ||
-                      !integrationHeadVerified(state, state.integration.cycle.head)
+                  : !state.integration?.cycle || !integrationCycleVerified(state)
                     ? 'integration awaits verification'
                     : !(
                           state.autoMerge.requested &&
@@ -1236,6 +1236,7 @@ export function buildVocabulary(state: BuildState): {
   kind?: 'integration' | 'work'
   target?: string
   integration?:
+    | 'reparenting'
     | 'opening'
     | 'empty'
     | 'collecting'
@@ -1265,21 +1266,23 @@ export function buildVocabulary(state: BuildState): {
                   ? state.integration.landing.fenced
                     ? 'fenced landing'
                     : 'unfenced landing'
-                  : integrationFailed(state)
-                    ? 'verification failed'
-                    : integrationCurrent(state) && integrationComplete(state)
-                      ? !integrationHeadVerified(state, state.integration!.cycle!.head)
-                        ? 'verifying'
-                        : state.autoMerge.requested &&
-                            state.autoMerge.explicitCommandSeq !== undefined &&
-                            state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
-                          ? 'ready to land'
-                          : 'awaiting consent'
-                      : !state.nodeOpened
-                        ? 'opening'
-                        : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0
-                          ? 'empty'
-                          : 'collecting',
+                  : state.nodeRestack?.parentRequest || state.nodeRestack?.parentChange
+                    ? 'reparenting'
+                    : integrationFailed(state)
+                      ? 'verification failed'
+                      : integrationCurrent(state) && integrationComplete(state)
+                        ? !integrationCycleVerified(state)
+                          ? 'verifying'
+                          : state.autoMerge.requested &&
+                              state.autoMerge.explicitCommandSeq !== undefined &&
+                              state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
+                            ? 'ready to land'
+                            : 'awaiting consent'
+                        : !state.nodeOpened
+                          ? 'opening'
+                          : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0
+                            ? 'empty'
+                            : 'collecting',
         }
       : {}),
   }
