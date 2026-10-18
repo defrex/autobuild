@@ -6,6 +6,7 @@
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
+  changePresenceEventPayloadSchemas,
   ticketSourceHealthEventPayloadSchemas,
   dispatcherSettingEventPayloadSchemas,
   dispatcherStatusEventPayloadSchemas,
@@ -22,6 +23,7 @@ const RUN_STARTED = 'dispatcher.run-started'
  * setting types are enumerated because they share one schema group with the
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
+  ...Object.keys(changePresenceEventPayloadSchemas),
   ...Object.keys(ticketSourceHealthEventPayloadSchemas),
   ...Object.keys(harvestEventPayloadSchemas),
   ...Object.keys(orchestratorSandboxEventPayloadSchemas),

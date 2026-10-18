@@ -28,6 +28,7 @@ import { repoTickCompletionSchema, repoTickObservationSchema } from '../repo-tic
 import { reducerSnapshotWireSchema } from '../snapshots'
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
+import { eventPayloadSchemas } from '../../events/payloads'
 import { ticketRefSchema } from '../../ontology'
 import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
 
@@ -282,6 +283,9 @@ export const sessionDepositsResponseSchema = z.object({
 // the build's log carries no terminal fact, per the protocol's omission
 // convention for optional members.
 export const buildDigestWireSchema = z.object({
+  integrationAuditPending: z.literal(true).optional(),
+  mergedSha: z.string().min(1).optional(),
+  nodeContribution: eventPayloadSchemas['node.contribution-recorded'].optional(),
   kind: z.enum(['work', 'node']).optional(),
   nodeOpened: z.literal(true).optional(),
   prClosed: z.literal(true).optional(),

@@ -31,6 +31,7 @@ export const executionProgress = {
   'node.publish-intended': 'progress',
   'node.rewritten': 'progress',
   'node.writer-settled': 'progress',
+  'node.contribution-recorded': 'bookkeeping',
   'node.inventory': 'bookkeeping',
   'node.opened': 'progress',
   'node.compared': 'bookkeeping',

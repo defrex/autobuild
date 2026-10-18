@@ -510,21 +510,36 @@ creation operation and must not reset timestamps, events, artifacts, or lease
 state when the repository already exists. Event sequence numbering starts at 1
 for each repository independently of every build and other repository.
 
-A `BuildDigest` is the projection of one build's log onto its terminal fact
-and its `observation.recorded` occurrences:
+A `BuildDigest` projects terminal, observation, and compact landing evidence
+from one build's log:
 
 ```jsonc
 // BuildDigest
 {
+  "integrationAuditPending": true, // optional: kernel landing audit requested, not yet settled
   "slug": "ab-fix-login-3",
   "terminal": "done",               // optional: "done" | "aborted", omitted while the log has neither
   "observations": [                 // ascending-seq pairs for the log's observation.recorded events
     { "seq": 1, "ts": "2026-07-15T12:00:01.000Z" },
     { "seq": 4, "ts": "2026-07-15T12:00:04.000Z" }
   ],
-  "merged": "2026-07-15T12:00:06.000Z" // optional: ts of the log's latest pr.merged, omitted when none
+  "merged": "2026-07-15T12:00:06.000Z", // optional: ts of the log's latest pr.merged, omitted when none
+  "mergedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // optional: that merge's actual landing SHA
+  "nodeContribution": {              // optional: latest node.contribution-recorded payload
+    "landing": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "base": "cccccccccccccccccccccccccccccccccccccccc",
+    "identities": ["build:child"]
+  }
 }
 ```
+
+The optional `mergedSha` and `nodeContribution` fields let admission index
+confirmed landing evidence without fetching every historical build's full facts.
+A node contribution is usable only when its `landing` matches `mergedSha`;
+recording or recovering a contribution advances `readinessChangeSeq`. These
+members are additive: older peers can omit them, leaving presence unproven rather
+than substituting source completion. They do not change the protocol version.
 
 The digest is derived from the event log on every call — the server persists
 nothing and there is no refresh step. Protocol version `3` reshaped the
@@ -1295,3 +1310,8 @@ These operations never renew the lease. Repository records optionally expose
 `tick: {run, open?: {startedAt}, finished?: {run, startedAt, completedAt, ...completion}}`.
 They retain the previous completion while a new tick is open and after lease
 release. Build and session credentials cannot mutate repository ticks.
+
+The optional `integrationAuditPending` digest fact is introduced on the 0.14
+release line without changing protocol identity 4. It survives build completion
+and is cleared by audit settlement. Services omit it for historical 0.12/0.13
+clients, retaining their decoders and the supported three-line window.

@@ -12,7 +12,7 @@ import type { ReducerValueRequest, ReducerValue } from './reducer-values'
  * Every adapter must satisfy the contract suite in `store/contract.ts`.
  */
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
-import type { EventType } from '../events/payloads'
+import type { EventType, EventPayload } from '../events/payloads'
 import type {
   RepositoryEvent,
   RepositoryEventEnvelope,
@@ -106,10 +106,15 @@ export interface ArtifactMeta {
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
 export interface BuildDigest {
+  /** A kernel landing requested an audit and no audit settlement has followed. */
+  integrationAuditPending?: true
+  /** Compact confirmed landing evidence for admission; avoids full build reads. */
+  mergedSha?: string
+  nodeContribution?: EventPayload<'node.contribution-recorded'>
   kind?: 'work' | 'node'
   nodeOpened?: true
   prClosed?: true
-  /** Latest merge, completion or abort fact sequence. */
+  /** Latest landing, contribution, completion or abort fact sequence. */
   readinessChangeSeq?: number
   slug: string
   terminal?: 'done' | 'aborted'

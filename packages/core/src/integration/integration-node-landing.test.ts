@@ -213,6 +213,14 @@ test('an unfenced tree mismatch raises durable attention after completion and au
       slug: node.slug,
       id: 'audit-attention',
     }
+    expect(
+      (await h.store.getRepoBuildDigests(h.origin)).get(node.slug)?.integrationAuditPending,
+    ).toBe(true)
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.events(node.slug)).integration?.audit).toBeDefined()
+    expect(
+      (await h.store.getRepoBuildDigests(h.origin)).get(node.slug)?.integrationAuditPending,
+    ).toBeUndefined()
     await auditIntegrationLanding(deps)
     await auditIntegrationLanding(deps)
     const state = reduceBuild(await h.events(node.slug))

@@ -27,6 +27,7 @@ const localPrRecord = z.strictObject({
   openedHeadSha: objectId,
   status: z.enum(['open', 'closed', 'merged']),
   mergedSha: objectId.optional(),
+  mergedHeadSha: objectId.optional(),
   pendingLanding: pendingLanding.optional(),
   comments: z.array(z.string()),
 })
@@ -388,10 +389,15 @@ export class LocalGitForge implements Forge {
 
   async inspectLandingPr(workspacePath: string, number: number) {
     const { record } = await this.readRecord(workspacePath, number)
+    if (record.status === 'merged' && !record.mergedHeadSha)
+      throw new Error('historical local-git landing has no frozen source head')
     return {
       base: record.base,
       head: record.head,
-      headSha: await this.sha(`refs/heads/${record.head}`, workspacePath),
+      headSha:
+        record.status === 'merged'
+          ? (record.mergedHeadSha ?? record.openedHeadSha)
+          : await this.sha(`refs/heads/${record.head}`, workspacePath),
       open: record.status === 'open',
     }
   }
@@ -408,6 +414,7 @@ export class LocalGitForge implements Forge {
       (await this.isAncestor(workspacePath, record.pendingLanding.commitSha, baseSha))
     ) {
       const landingSha = record.pendingLanding.commitSha
+      const mergedHeadSha = record.pendingLanding.headSha
       // At the exact ref-move crash boundary, merged observation waits until
       // the checkout transition succeeds. A later descendant means another Git
       // operation already advanced the landed base, so there is no old checkout
@@ -421,6 +428,7 @@ export class LocalGitForge implements Forge {
       record = await this.updateRecord(workspacePath, number, (current) => ({
         ...current,
         status: 'merged',
+        mergedHeadSha,
         mergedSha: landingSha,
         pendingLanding: undefined,
       }))

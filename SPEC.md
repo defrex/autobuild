@@ -1895,6 +1895,26 @@ dependency-blocked ticket stays
 queued source work rather than becoming a blocked build: the runtime `blocked`
 status is for builds awaiting a human.
 
+In repositories with integration nodes, a blocker that has a build resolves only
+when its change identity is present in the dependent's sampled target head
+(the configured root branch when no target is set). Source completion or an
+aggregate source blocker flag cannot substitute for presence. Confirmed landing
+SHAs prove identity through Git reachability even without a build trailer;
+confirmed node landings transport their frozen whole contribution, including
+node-owned foreign changes and nested contributions. Inherited parent history
+is excluded. An empty completed node contributes nothing; missing or ambiguous
+completion evidence does not mean empty. The newest build generation is used,
+with ties diagnosed rather than falling back to older successful work.
+
+The existing cascade supplies ancestor changes to descendants. Sibling changes
+wait for their node to land in the common ancestor and cascade into the target;
+descendant changes wait for their node to land into the target ancestor. Same-node
+landings satisfy presence directly. Unknown evidence leaves source work queued,
+with diagnostics naming the blocker and destination. Blockers with no build,
+and repositories without nodes, retain source done-state resolution. Presence
+is checked only at claim, with the sampled destination revalidated before claim;
+later movement never interrupts an existing build.
+
 **Crash-safe filing.** Creation supports a state override (harvest targets
 Triage explicitly) and an idempotency key that must adopt the same ticket on
 retry across process restarts. Ticket projections may carry this stable
@@ -1944,7 +1964,11 @@ commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
 Authoritative enforced up-to-date protection records fenced landing; uncertainty
 records unfenced landing and triggers immutable landed-tree comparison. A mismatch
-raises operator attention and never rewrites the shared parent. Pending audits
+raises operator attention and never rewrites the shared parent.
+The repository build digest carries an additive optional pending-audit signal from
+`integration.landed` with an operation until `integration.audited` settles it.
+Settled nodes without that signal require no full build reads; completion does
+not suppress retries for an outstanding audit. Pending audits
 survive completion. Merge gates are never bypassed; unsupported transports defer.
 
 Human forge merges are an explicit escape hatch, even while incomplete, paused

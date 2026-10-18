@@ -338,6 +338,14 @@ export const eventPayloadSchemas = {
     outcome: z.enum(['completed', 'contended', 'abandoned']),
     actual: z.string().nullable().optional(),
   }),
+  'node.contribution-recorded': z.strictObject({
+    landing: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    head: z.string().min(1),
+    base: z.string().min(1),
+    identities: z.array(
+      z.string().regex(/^(?:build:[a-z0-9][a-z0-9-]*|foreign:[0-9a-f]{40}(?:[0-9a-f]{24})?)$/),
+    ),
+  }),
   'node.inventory': z.strictObject({
     head: z.string().min(1),
     builds: z.array(z.string()),

@@ -309,7 +309,21 @@ for (const version of frozenBaseline) {
       }),
     )
     storeWire.repositoryEventListSchema.parse(await call('/repos/repo/events?since=0'))
-    storeWire.buildDigestListSchema.parse(await call('/repos/repo/build-digests'))
+    await store.append('demo', {
+      actor: { kind: 'dispatcher' },
+      type: 'integration.landed',
+      payload: {
+        operation: 'audit-op',
+        head: 'head',
+        landed: 'landed',
+        provenance: 'kernel',
+        verified: true,
+        fenced: false,
+      },
+    })
+    const digests = await call('/repos/repo/build-digests')
+    expect(digests[0]).not.toHaveProperty('integrationAuditPending')
+    storeWire.buildDigestListSchema.parse(digests)
     const session = storeWire.sessionRecordWireSchema.parse(
       await call('/repos/repo/sessions', { repo: 'repo', operator: 'old' }),
     )

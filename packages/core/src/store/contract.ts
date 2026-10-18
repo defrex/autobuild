@@ -1,4 +1,4 @@
-import { readBuildFacts, readBuildSelector } from './reduced-reads'
+import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
@@ -485,6 +485,85 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('build digests (repo-scoped batch read, AUT-487)', () => {
+      test('compact admission evidence retains landing SHAs and recovered node contributions', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-presence'
+          const slug = 'dg-presence'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          const sha = 'a'.repeat(40)
+          const merged = await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'pr.merged',
+            payload: { sha, buildTrailerPresent: false },
+          })
+          expect((await store.getRepoBuildDigests(repo)).get(slug)).toMatchObject({
+            mergedSha: sha,
+            readinessChangeSeq: merged.seq,
+          })
+          const contribution = {
+            landing: sha,
+            head: 'b'.repeat(40),
+            base: 'c'.repeat(40),
+            identities: ['build:child'],
+          }
+          const recovered = await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'node.contribution-recorded',
+            payload: contribution,
+          })
+          const digest = (await store.getRepoBuildDigests(repo)).get(slug)!
+          expect(digest).toMatchObject({
+            mergedSha: sha,
+            nodeContribution: contribution,
+            readinessChangeSeq: recovered.seq,
+          })
+          digest.nodeContribution!.identities.push('build:mutated')
+          expect(
+            (await store.getRepoBuildDigests(repo)).get(slug)!.nodeContribution!.identities,
+          ).toEqual(['build:child'])
+        })
+      })
+
+      test('pending integration audits survive completion and clear on settlement', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/audit-digest'
+          const slug = 'audit-digest'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          const pending = async () =>
+            (await store.getRepoBuildDigests(repo)).get(slug)?.integrationAuditPending
+          expect(await pending()).toBeUndefined()
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'integration.landed',
+            payload: {
+              operation: 'landing-1',
+              head: 'head',
+              landed: 'landed',
+              provenance: 'kernel',
+              verified: true,
+              fenced: false,
+            },
+          })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          expect(await pending()).toBe(true)
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'integration.audited',
+            payload: {
+              operation: 'landing-1',
+              verifiedTree: 'tree',
+              landedTree: 'tree',
+              identities: [],
+            },
+          })
+          expect(await pending()).toBeUndefined()
+        })
+      })
+
       test('an unknown repo and a journal-less repo answer build-less maps without writes', async () => {
         await withStore(factory, undefined, async (store) => {
           expect(await store.getRepoBuildDigests('acme/never-seen')).toEqual(new Map())
@@ -777,6 +856,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             readinessChangeSeq: 6,
             terminal: 'done',
             merged: secondMergeTs,
+            mergedSha: 'abc222',
             observations: [
               { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
               { seq: 2, ts: (await store.getEvents('dg-paths'))[1]!.ts },
@@ -788,6 +868,46 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('repository journal (workflow and control paper trail)', () => {
+      test('change presence is retained and reduced across repository read boundaries', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'presence-contract'
+          await store.ensureRepo(repo)
+          const payload = {
+            destination: 'root:main',
+            branch: 'main',
+            head: 'a'.repeat(40),
+            evidence: 'landing-revision-1',
+            identities: ['build:blocker'],
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload,
+          })
+          expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
+            payload,
+          )
+          const later = {
+            ...payload,
+            evidence: 'landing-revision-2',
+            identities: ['build:blocker', 'build:second'],
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload: later,
+          })
+          expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
+            later,
+          )
+          expect(
+            (await store.getRepoStateEvents(repo)).filter(
+              (event) => event.type === 'change-presence.observed',
+            ),
+          ).toHaveLength(2)
+        })
+      })
+
       test('tick observations are fenced, bounded, atomic and detached snapshots', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {

@@ -826,7 +826,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (req.method !== 'GET') {
       return fail(404, 'not-found', `no route: ${req.method} /repos/:repo/build-digests`)
     }
-    return json(200, [...(await store.getRepoBuildDigests(repo)).values()])
+    const digests = [...(await store.getRepoBuildDigests(repo)).values()]
+    // Historical release lines predate the additive audit signal.
+    const currentLine = req.headers.get('x-autobuild-version')?.startsWith('0.14.')
+    return json(
+      200,
+      currentLine
+        ? digests
+        : digests.map(({ integrationAuditPending: _audit, ...digest }) => digest),
+    )
   }
 
   async function sessionRoute(req: Request, url: URL, id: string, rest: string): Promise<Response> {
