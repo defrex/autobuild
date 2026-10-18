@@ -1918,6 +1918,33 @@ Node verification, automatic landing, restacking and reparenting are not provide
 by this increment. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
+**Foreign merge safety for node replay.** A node contribution is enumerated
+oldest first along first-parent history above its durable previous contribution
+base (initially the opening SHA). Parent movement never makes inherited foreign
+commits into node-owned contributions. The boundary advances only on confirmed
+restack completion.
+
+Before replaying any contribution or publishing a replacement, preflight every
+merge against the frozen new parent's full reachable build identity set. For
+each merge, inspect the union reachable from every non-first parent but not the
+first parent, including nested side history. Flattening is allowed only when
+the merge itself has no terminal `Autobuild-Build` trailer and every side-history
+identity is already reachable through the sampled parent, regardless of commit
+SHA. The safe merge becomes one linear foreign change carrying its first-parent
+delta, including merge-resolution content and an empty result when necessary;
+its side identities remain inherited from the parent.
+
+A merge carrying its own identity is anomalous: the kernel never creates merges,
+and legacy reconcile merges were squashed at landing. It is refused regardless
+of side-history safety. Never strip, move or reinterpret its identity trailer.
+An absent upstream side identity, ambiguous or malformed identity, or an
+identity-bearing merge refuses the entire restack before replay or publication.
+Leave the public node branch untouched and escalate on the integration build,
+naming each offending merge and its missing or own build identities. The kernel
+never preserves merge topology or automatically decomposes a foreign merge.
+Refusal never promotes the contribution boundary; an authorized later retry
+samples the parent anew and repeats the proof.
+
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
 reset kind with `--kind work`. Omitted fields preserve existing values.

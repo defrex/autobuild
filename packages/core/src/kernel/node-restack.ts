@@ -117,7 +117,7 @@ export function assertSafeNodeReplay(input: NodeReplayInputs): void {
   const identified = input.merges.filter((merge) => merge.build !== undefined)
   if (identified.length > 0)
     throw new Error(
-      `foreign merge classification requires operator guidance: ${identified.map((merge) => `${merge.sha} carries Autobuild-Build: ${merge.build}`).join('; ')}`,
+      `node restack refused: identity-bearing merge is anomalous: ${identified.map((merge) => `${merge.sha} carries Autobuild-Build: ${merge.build}`).join('; ')}`,
     )
   const unsafe = input.merges.filter((merge) => merge.missing.length > 0)
   if (unsafe.length > 0)
@@ -194,8 +194,8 @@ export async function replayNodeChange(
     await git(deps, [...config, 'commit', '--allow-empty', '--no-edit'])
   }
   if (change.mainline !== undefined) {
-    // A foreign merge may itself carry an accidental source trailer; do not
-    // assert that its flattened content is a canonical source-build change.
+    // Preflight refuses identity-bearing merges. Validate again so neither
+    // replay nor conflict resolution can introduce or reinterpret an identity.
     const trailers = buildTrailers(await output(deps, ['show', '-s', '--format=%B', 'HEAD']))
     if (trailers.length > 0)
       throw new Error(
