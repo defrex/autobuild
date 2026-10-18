@@ -1,5 +1,9 @@
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
-import { landingAuthorized, sameLandingCandidate } from '../kernel/landing-state'
+import {
+  landingAuthorized,
+  nativeLandingApplied,
+  sameLandingCandidate,
+} from '../kernel/landing-state'
 import { landIntegrationRoot, auditIntegrationLanding } from '../kernel/integration-landing'
 import {
   observeIntegration,
@@ -2435,7 +2439,7 @@ export class Dispatcher {
       if (result.kind !== 'applied')
         throw new Error('Native landing cancellation unconfirmed; retrying')
       const current = (await store.buildFacts(record.slug)).state
-      if (current.landing?.native?.enabled !== false || current.landing.nativeEnablePending)
+      if (current.landing?.native?.enabled !== false)
         await store.append(record.slug, {
           actor: DISPATCHER,
           type: 'landing.native-applied',
@@ -2649,22 +2653,55 @@ export class Dispatcher {
       !nodeTarget &&
       prState.state === 'open' &&
       landingAuthorized(state.landing) &&
+      (!nativeLandingApplied(state.landing) || !!state.landing?.nativeEnablePending) &&
       commandSeq !== undefined &&
       (await canApply())
     ) {
       const decision = state.landing!.decision!
-      // Persist uncertainty before the external effect: a crash or error must
-      // never make an enable look like a confirmed disabled native state.
-      const enable = await store.append(record.slug, {
-        actor: DISPATCHER,
-        type: 'landing.native-enable-started',
-        payload: {},
-      })
-      const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
-        buildSlug: record.slug,
-        baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
-        canApply,
-      })
+      // The provider checks eligibility immediately before mutating. Inspection
+      // deferrals therefore leave no uncertainty facts on quiet polls.
+      let enableSeq = state.landing?.nativeEnablePending
+      const result = await forge
+        .setAutoMerge(workspacePath, pr.number, true, {
+          buildSlug: record.slug,
+          baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+          canApply: async () => {
+            if (!(await canApply())) return false
+            if (enableSeq === undefined)
+              enableSeq = (
+                await store.append(record.slug, {
+                  actor: DISPATCHER,
+                  type: 'landing.native-enable-started',
+                  payload: {},
+                })
+              ).seq
+            return true
+          },
+        })
+        .catch(async (error: unknown) => {
+          if (enableSeq !== undefined) {
+            const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+            if (cancelled.kind === 'applied')
+              await store.append(record.slug, {
+                actor: DISPATCHER,
+                type: 'landing.native-applied',
+                payload: { enabled: false, enableSeq },
+              })
+          }
+          throw error
+        })
+      // A provider may return a deferral after an uncertain mutation. Confirm
+      // cancellation before resolving that attempt; never infer disabled.
+      if (result.kind !== 'applied' && enableSeq !== undefined) {
+        const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+        if (cancelled.kind !== 'applied')
+          throw new Error('Native landing cancellation unconfirmed; retrying')
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'landing.native-applied',
+          payload: { enabled: false, enableSeq },
+        })
+      }
       if (result.kind === 'applied') {
         const latest = (await store.buildFacts(record.slug)).state
         if (await canApply()) {
@@ -2679,7 +2716,7 @@ export class Dispatcher {
               type: 'landing.native-applied',
               payload: {
                 enabled: true,
-                enableSeq: enable.seq,
+                ...(enableSeq !== undefined ? { enableSeq } : {}),
                 candidate: decision.candidate,
                 decisionSeq: decision.seq,
                 ...(latest.landing?.command ? { commandSeq: latest.landing.command.seq } : {}),
@@ -2693,7 +2730,7 @@ export class Dispatcher {
             await store.append(record.slug, {
               actor: DISPATCHER,
               type: 'landing.native-applied',
-              payload: { enabled: false, enableSeq: enable.seq },
+              payload: { enabled: false, ...(enableSeq !== undefined ? { enableSeq } : {}) },
             })
         }
       } else if (result.kind === 'deferred' && result.reason) {

@@ -57,6 +57,19 @@ describe('landing policy upgrade', () => {
       expect(await readFile(path, 'utf8')).toBe(result)
     },
   )
+  test('a never-created local journal migrates the old OFF default', async () => {
+    const targetRepo = await fixture()
+    expect(await migrateLandingPolicy({ targetRepo, exec: spawnExec })).toEqual({
+      changed: true,
+      legacyDefault: false,
+    })
+    expect(parseConfig(await readFile(join(targetRepo, 'autobuild.toml'), 'utf8')).landing).toEqual(
+      [
+        { from: 'leaf', mode: 'consent' },
+        { from: 'node', mode: 'consent' },
+      ],
+    )
+  })
   test('preserves explicit empty rules byte for byte without journal access', async () => {
     const text = `landing = [] # explicit fallback\n${source}`
     const targetRepo = await fixture(text)

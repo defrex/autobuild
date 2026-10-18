@@ -1823,6 +1823,18 @@ test('already finalized merge decision satisfies attention with --since and pres
       pr: { number: 9, url: 'https://example.com/pr/9', headSha: 'abc' },
     },
   })
+  await store.append('b1', {
+    actor: KERNEL,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'abc', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
   const since = encodeCursor({
     v: 1,
     store: `${REPO}/.autobuild`,

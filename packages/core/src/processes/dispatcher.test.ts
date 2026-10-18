@@ -3490,14 +3490,14 @@ describe('Dispatcher janitor', () => {
     expect(applied?.actor).toEqual(DISPATCHER)
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
 
-    // Acknowledged commands keep maintaining provider messages without another fact.
+    // An applied candidate stays quiet until its readiness or command changes.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.forge.autoMergeCalls).toHaveLength(3)
+    expect(h.forge.autoMergeCalls).toHaveLength(2)
     expect(
       (await h.store.getEvents(slug)).filter(
         (e) => e.type === 'landing.native-applied' && e.payload.enabled,
       ),
-    ).toHaveLength(2)
+    ).toHaveLength(1)
   })
 
   test('finalize and janitor racing at conditional append record one deferral observation', async () => {
@@ -8928,7 +8928,7 @@ describe('stable merged-build evidence and native maintenance', () => {
     }
     await h.dispatcher.tick()
     await h.dispatcher.tick()
-    expect(attempts).toBe(2)
+    expect(attempts).toBe(1)
     expect(h.forge.squashMergeCalls).toEqual([])
     expect(
       (await h.store.getEvents(slug)).filter(
@@ -8995,13 +8995,13 @@ test('native maintenance rechecks readiness without refreshing operator consent'
   }
   await h.dispatcher.tick()
   await h.dispatcher.tick()
-  expect(checks).toBe(3)
+  expect(checks).toBe(2)
   expect(pipelineReads).toBeGreaterThan(0)
   expect(
     (await h.store.getEvents(slug)).filter(
       (event) => event.type === 'landing.native-applied' && event.payload.enabled,
     ),
-  ).toHaveLength(2)
+  ).toHaveLength(1)
 })
 
 test('target observations persist during a live implementation session without touching the branch', async () => {
@@ -9351,8 +9351,94 @@ describe('declarative landing reconciliation', () => {
     const state = async () => reduceBuild(await h.store.getEvents(slug))
     return { ...h, slug, poll, state }
   }
+  test('quiet enabled and inspection-deferred polls append no facts', async () => {
+    for (const deferred of [false, true]) {
+      const h = await candidate('auto')
+      if (deferred)
+        h.forge.setAutoMergeDeferral(1, { code: 'unproven-gate-state', detail: 'unknown gate' })
+      await h.poll()
+      const before = await h.store.getEvents(h.slug)
+      const calls = h.forge.autoMergeCalls.length
+      for (let i = 0; i < 3; i++) await h.poll()
+      expect(await h.store.getEvents(h.slug)).toEqual(before)
+      if (!deferred) expect(h.forge.autoMergeCalls).toHaveLength(calls)
+      expect((await h.state()).landing?.nativeEnablePending).toBeUndefined()
+    }
+  })
+  test('unrelated cancellation preserves an indeterminate enable without repeating receipts', async () => {
+    const h = await candidate()
+    await h.poll()
+    const pending = await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'landing.native-enable-started',
+      payload: {},
+    })
+    await h.store.append(h.slug, {
+      actor: humanActor('operator'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    await h.poll()
+    expect((await h.state()).landing?.nativeEnablePending).toBe(pending.seq)
+    const events = await h.store.getEvents(h.slug)
+    await h.poll()
+    expect(await h.store.getEvents(h.slug)).toEqual(events)
+  })
+  test('restart settles a lost enable receipt using provider readback, then polls quietly', async () => {
+    const h = await candidate('auto')
+    await h.poll()
+    const pending = await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'landing.native-enable-started',
+      payload: {},
+    })
+    // Models a matching native request whose applied receipt was lost.
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+    await h.poll()
+    const state = await h.state()
+    expect(state.landing?.nativeEnablePending).toBeUndefined()
+    expect(state.landing?.native?.enableSeq).toBe(pending.seq)
+    const events = await h.store.getEvents(h.slug)
+    await h.poll()
+    expect(await h.store.getEvents(h.slug)).toEqual(events)
+  })
+  test.each(['deferred', 'error'] as const)(
+    'a %s mutation is cancelled and a later human landing over hold is informational',
+    async (outcome) => {
+      const h = await candidate('auto')
+      const set = h.forge.setAutoMerge.bind(h.forge)
+      h.forge.setAutoMerge = async (cwd, pr, enabled, options) => {
+        if (!enabled) return set(cwd, pr, false)
+        await options?.canApply?.()
+        if (outcome === 'error') throw new Error('native request failed')
+        return { kind: 'deferred' }
+      }
+      await h.poll()
+      expect((await h.state()).landing?.nativeEnablePending).toBeUndefined()
+      await h.store.append(h.slug, {
+        actor: humanActor('operator'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+      await h.poll()
+      const before = await h.store.getEvents(h.slug)
+      await h.poll()
+      await h.poll()
+      expect(await h.store.getEvents(h.slug)).toEqual(before)
+      h.forge.setPrState(1, { state: 'merged', sha: 'human' })
+      await h.poll()
+      expect((await h.state()).landing?.forgeMerge).toEqual({
+        classification: 'human',
+        overrodeHold: true,
+      })
+      expect(buildNeedsAttention(await h.store.getEvents(h.slug), await h.state())).toBe(false)
+    },
+  )
   test('policy auto authorizes a ready leaf; consent waits for land and hold revokes it', async () => {
     const auto = await candidate('auto')
+    expect(
+      mergeDecision(await auto.store.getEvents(auto.slug), new Date(0), await auto.state()),
+    ).toBeNull()
     expect((await auto.poll()).janitorFailed).toBe(0)
     expect(auto.forge.isAutoMergeEnabled(1)).toBe(true)
     expect((await auto.state()).landing?.decision?.rule).toEqual({

@@ -42,7 +42,7 @@ export interface BuildStreamSeed {
 }
 // Bump with either constituent's semantics or historical eligibility semantics.
 export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, BuildStreamSeed>({
-  version: 1 + buildReducer.version + currentDeferralObservationReducer.version,
+  version: 2 + buildReducer.version + currentDeferralObservationReducer.version,
   initial: () => ({
     build: buildReducer.initial(),
     deferral: currentDeferralObservationReducer.initial(),

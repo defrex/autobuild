@@ -275,11 +275,7 @@ const repositoryStatusInput = z.strictObject({ repo: repoField })
 
 const repositorySettingsInput = z.strictObject({
   repo: repoField,
-  setting: z
-    .enum(['intake'])
-    .describe(
-      '"intake" gates whether new tickets may be claimed; "auto-merge-default" is the claim-time auto-merge default for newly claimed builds.',
-    ),
+  setting: z.enum(['intake']).describe('"intake" gates whether new tickets may be claimed.'),
   enabled: z
     .boolean()
     .optional()

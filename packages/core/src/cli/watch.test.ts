@@ -2134,12 +2134,25 @@ test('old cursor reconstructs overdue episodes, but recovery in backlog suppress
 test('merge decisions dedupe per PR across consent changes and new cursor resumes', async () => {
   const store = makeStore()
   await seedRunningBuild(store, 'b1')
-  const finalize = () =>
-    store.append('b1', {
+  const finalize = async () => {
+    await store.append('b1', {
       actor: KERNEL,
       type: 'finalize.completed',
       payload: { pr: { number: 7, url: 'https://example.com/pr/7', headSha: 'abc' } },
     })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'landing.decided',
+      payload: {
+        candidate: { head: 'abc', parent: 'base', cycle: '1' },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+  }
   let ticks = 0
   const h = harness(store, {
     onTick: async () => {
@@ -2168,7 +2181,7 @@ test('merge decisions dedupe per PR across consent changes and new cursor resume
   await abWatch({ ...resume.base, slugs: ['b1'], since: first.cursor, timeout: '1' })
   expect(resume.out).toHaveLength(1)
   // A genuine old cursor at finalize infers the already consumed decision.
-  const old = encodeCursor({ v: 1, store: `${REPO}/.autobuild`, repo: REPO, streams: { b1: 2 } })
+  const old = encodeCursor({ v: 1, store: `${REPO}/.autobuild`, repo: REPO, streams: { b1: 3 } })
   const upgrade = harness(store)
   await abWatch({ ...upgrade.base, slugs: ['b1'], since: old, timeout: '1' })
   expect(upgrade.out).toHaveLength(1)
@@ -2346,6 +2359,18 @@ test('fresh watch baselines every historically eligible PR even when armed befor
         actor: KERNEL,
         type: 'finalize.completed',
         payload: { pr: { number: pr, url: `https://example.test/${pr}`, headSha: 'abc' } },
+      })
+      await store.append('baseline', {
+        actor: KERNEL,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'abc', parent: 'base', cycle: '1' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
       })
     }
     await store.append('baseline', {

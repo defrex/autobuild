@@ -355,7 +355,12 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
   )
     return null
   const deferral = currentAutoMergeDeferralFrom(ledger, state)
-  if (landingAuthorized(state.landing) && deferral === undefined) return null
+  if (
+    deferral === undefined &&
+    (landingAuthorized(state.landing) ||
+      (!state.landing?.decision && state.landing?.command?.kind !== 'hold'))
+  )
+    return null
   return {
     pr: state.pr,
     reason:

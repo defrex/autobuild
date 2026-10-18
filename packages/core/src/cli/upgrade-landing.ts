@@ -30,21 +30,30 @@ export async function migrateLandingPolicy(opts: {
   let enabled = false
   try {
     const paths = await resolveRepoState({ targetRepo: opts.targetRepo, exec: opts.exec })
-    if (!opts.openStore && !isRemoteStoreRef(paths.storeRef))
-      await access(join(paths.storeRef, 'autobuild.sqlite'))
-    const context = await openSessionlessStore({
-      ...opts,
-      env: { ...(opts.env ?? process.env), AB_STORE: undefined },
-    })
-    try {
-      const facts = await readRepositoryFacts(context.store, context.repo)
-      enabled = facts.value.autoMerge.latest?.enabled ?? false
-    } finally {
-      await context.store.close()
+    let journalAbsent = false
+    if (!opts.openStore && !isRemoteStoreRef(paths.storeRef)) {
+      try {
+        await access(join(paths.storeRef, 'autobuild.sqlite'))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        journalAbsent = true
+      }
+    }
+    if (!journalAbsent) {
+      const context = await openSessionlessStore({
+        ...opts,
+        env: { ...(opts.env ?? process.env), AB_STORE: undefined },
+      })
+      try {
+        const facts = await readRepositoryFacts(context.store, context.repo)
+        enabled = facts.value.autoMerge.latest?.enabled ?? false
+      } finally {
+        await context.store.close()
+      }
     }
   } catch (error) {
     throw new Error(
-      `Cannot read the target repository's legacy auto-merge journal; restore store access and retry ab upgrade: ${error instanceof Error ? error.message : String(error)}`,
+      `Cannot read the target repository's legacy auto-merge journal; restore store access and retry ab upgrade, or configure explicit [[landing]] rules (landing = [] selects the new defaults): ${error instanceof Error ? error.message : String(error)}`,
     )
   }
   const result = `${source.replace(/\n?$/, '\n')}\n# Migrated from the durable auto-merge default. First matching rule wins.\n[[landing]]\nfrom = "leaf"\nmode = "${enabled ? 'auto' : 'consent'}"\n\n[[landing]]\nfrom = "node"\nmode = "consent"\n`
