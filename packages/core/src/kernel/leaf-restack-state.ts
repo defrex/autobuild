@@ -4,6 +4,8 @@ import { defineReducer } from './incremental'
 
 export interface LeafRestackState {
   initialBase?: string
+  postStepAt?: number
+  completedAt?: number
   finalizedAt?: number
   target?: { seq: number; branch: string; sha: string }
   active?: EventPayload<'restack.prepared'>
@@ -26,6 +28,9 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
       case 'target.moved':
         state.target = { seq: event.seq, ...event.payload }
         break
+      case 'finalize.step-completed':
+        if (event.payload.ok && event.payload.headSha !== undefined) state.postStepAt = event.seq
+        break
       case 'restack.prepared':
         state.active = event.payload
         delete state.replay
@@ -45,6 +50,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         } else state.initialVerification = false
         break
       case 'restack.completed':
+        state.completedAt = event.seq
         state.completed = event.payload
         state.gates[String(event.payload.cycle)] = event.payload
         if (state.active?.id === event.payload.id) {
@@ -57,7 +63,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 1,
+  version: 2,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

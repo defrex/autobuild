@@ -473,7 +473,9 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // completes the build; the engine only ever runs reconcile here.
   if (
     log.restack.target !== undefined &&
-    log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase)
+    (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
+      (state.target !== undefined &&
+        (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
   ) {
     return { kind: 'restack', trigger: 'awaiting-landing', cycle: cycleBoundary }
   }

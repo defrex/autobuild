@@ -187,7 +187,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 2
+export const LOG_INDEX_REDUCER_VERSION = 3
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 

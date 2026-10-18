@@ -21,15 +21,8 @@ async function current(store: BuildStore, slug: string) {
   return (await readBuildFacts(store, slug)).value.state
 }
 async function authority(deps: NodeTransactionDeps) {
-  if (!(await deps.store.renewNodeWriter(deps.slug, deps.holder)) || !(await deps.canWrite()))
+  if (!(await deps.canWrite()) || !(await deps.store.renewNodeWriter(deps.slug, deps.holder)))
     throw new Error('node writer authority lost')
-}
-async function append(deps: NodeTransactionDeps, event: EventWrite) {
-  await authority(deps)
-  const state = await current(deps.store, deps.slug)
-  const written = await deps.store.appendIfCurrent(deps.slug, state.lastSeq, event)
-  if (!written) throw new Error('node writer log advanced; retry reserved operation')
-  return written
 }
 async function snapshotParent(deps: NodeTransactionDeps, base: string, destinationRef: string) {
   const input = { workspacePath: deps.workspacePath, base, destinationRef }
@@ -71,6 +64,14 @@ export async function runNodeTransaction(
   await authority(deps)
   const rewrite = requireRewrite(deps.forge)
   let state = await current(deps.store, deps.slug)
+  let revision = state.lastSeq
+  const append = async (event: EventWrite) => {
+    await authority(deps)
+    const written = await deps.store.appendIfCurrent(deps.slug, revision, event)
+    if (!written) throw new Error('node writer log advanced; retry reserved operation')
+    revision = written.seq
+    return written
+  }
   let node = state.nodeRestack
   if (!node?.active) {
     const oldBase = node?.contributionBase ?? state.nodeOpened?.sha
@@ -86,7 +87,7 @@ export async function runNodeTransaction(
       if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)
       if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
-        await append(deps, { actor: KERNEL, type: 'node.inventory', payload: inventory })
+        await append({ actor: KERNEL, type: 'node.inventory', payload: inventory })
       return 'idle'
     }
     const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent })
@@ -106,7 +107,7 @@ export async function runNodeTransaction(
       ref: `refs/autobuild/archive/${deps.slug}/${parent}`,
       sha: parent,
     })
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.writer-reserved',
       payload: {
@@ -134,7 +135,7 @@ export async function runNodeTransaction(
         answer.phase === 'reconcile' && answer.answeredSeq > (node!.reservedSeq ?? Infinity),
     )
   ) {
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.writer-settled',
       payload: { id: active.id, outcome: 'abandoned' },
@@ -162,14 +163,14 @@ export async function runNodeTransaction(
   if (node!.conflict) return 'conflict'
   for (let index = node!.items.length; index < active.changes.length; index++) {
     const base = node!.items.at(-1)?.head ?? active.parent
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.item-prepared',
       payload: { id: active.id, index, base },
     })
     const result = await replayNodeChange(deps, frozen, index, base)
     if (result.kind === 'conflict') {
-      await append(deps, {
+      await append({
         actor: KERNEL,
         type: 'node.item-conflicted',
         payload: { id: active.id, index, base },
@@ -177,7 +178,7 @@ export async function runNodeTransaction(
       return 'conflict'
     }
     if (result.kind === 'replayed') await retainReplay(deps, result.head, base)
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.item-replayed',
       payload: {
@@ -193,7 +194,7 @@ export async function runNodeTransaction(
   }
   const head = node!.items.at(-1)?.head ?? active.parent
   if (!node!.intent)
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.publish-intended',
       payload: { id: active.id, head },
@@ -206,24 +207,24 @@ export async function runNodeTransaction(
     sha: head,
   })
   if (result.kind === 'lease-mismatch' && !result.rewritten) {
-    await append(deps, {
+    await append({
       actor: KERNEL,
       type: 'node.writer-settled',
       payload: { id: active.id, outcome: 'contended', actual: result.actual },
     })
     return 'contended'
   }
-  await append(deps, {
+  await append({
     actor: KERNEL,
     type: 'node.rewritten',
     payload: { id: active.id, previous: active.expected, head },
   })
-  await append(deps, {
+  await append({
     actor: KERNEL,
     type: 'node.inventory',
     payload: await nodeInventory(deps, head, active.parent),
   })
-  await append(deps, {
+  await append({
     actor: KERNEL,
     type: 'node.writer-settled',
     payload: { id: active.id, outcome: 'completed' },

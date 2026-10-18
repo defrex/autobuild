@@ -580,6 +580,14 @@
           "type": "7",
           "optional": true
         },
+        "postStepAt": {
+          "type": "5",
+          "optional": true
+        },
+        "completedAt": {
+          "type": "5",
+          "optional": true
+        },
         "finalizedAt": {
           "type": "5",
           "optional": true

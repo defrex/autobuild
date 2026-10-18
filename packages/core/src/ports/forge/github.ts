@@ -208,6 +208,19 @@ const requiredCodeScanningRuleParameters = z
   .passthrough()
 const mergeQueueRuleParameters = z.object({}).passthrough()
 
+// Constraints on writes must not be bypassed by a privileged direct landing.
+const CONTROLLED_WRITE_RULE_TYPES = new Set([
+  'update',
+  'commit_message_pattern',
+  'commit_author_email_pattern',
+  'committer_email_pattern',
+  'branch_name_pattern',
+  'tag_name_pattern',
+  'file_path_restriction',
+  'max_file_path_length',
+  'file_extension_restriction',
+  'max_file_size',
+])
 const STRUCTURAL_RULE_TYPES = new Set([
   'creation',
   'update',
@@ -562,15 +575,21 @@ export class GitHubForge implements Forge {
         env: {
           ...opts.env,
           GIT_TERMINAL_PROMPT: '0',
-          GIT_CONFIG_COUNT: '4',
+          GIT_CONFIG_COUNT: '7',
           GIT_CONFIG_KEY_0: 'http.extraHeader',
           GIT_CONFIG_VALUE_0: '',
-          GIT_CONFIG_KEY_1: `http.${url}.extraHeader`,
-          GIT_CONFIG_VALUE_1: `Authorization: Basic ${encoded}`,
-          GIT_CONFIG_KEY_2: `http.${url}.git.extraHeader`,
-          GIT_CONFIG_VALUE_2: `Authorization: Basic ${encoded}`,
-          GIT_CONFIG_KEY_3: 'credential.helper',
+          GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader',
+          GIT_CONFIG_VALUE_1: '',
+          GIT_CONFIG_KEY_2: `http.${url}.extraHeader`,
+          GIT_CONFIG_VALUE_2: '',
+          GIT_CONFIG_KEY_3: `http.${url}.git.extraHeader`,
           GIT_CONFIG_VALUE_3: '',
+          GIT_CONFIG_KEY_4: `http.${url}.extraHeader`,
+          GIT_CONFIG_VALUE_4: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_5: `http.${url}.git.extraHeader`,
+          GIT_CONFIG_VALUE_5: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_6: 'credential.helper',
+          GIT_CONFIG_VALUE_6: '',
         },
       })
       return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
@@ -1054,7 +1073,10 @@ export class GitHubForge implements Forge {
       }
       rulesetGate =
         rulesetsHaveMergeGate(parsed) ||
-        (controlledLanding && parsed.some((rule) => rule.type === 'pull_request'))
+        (controlledLanding &&
+          parsed.some(
+            (rule) => rule.type === 'pull_request' || CONTROLLED_WRITE_RULE_TYPES.has(rule.type),
+          ))
     } catch (error) {
       if (
         rulesPagesRead === 0 &&

@@ -1905,6 +1905,18 @@ describe('GitHubForge.inspectLandingGate', () => {
   })
 
   for (const rule of [
+    ...[
+      'update',
+      'file_path_restriction',
+      'max_file_size',
+      'commit_message_pattern',
+      'commit_author_email_pattern',
+      'committer_email_pattern',
+      'branch_name_pattern',
+      'tag_name_pattern',
+      'max_file_path_length',
+      'file_extension_restriction',
+    ].map((type) => ({ type })),
     { type: 'merge_queue', parameters: {} },
     {
       type: 'pull_request',
@@ -2074,6 +2086,44 @@ test('node push acknowledgement observes a merged review and tolerates provider 
 })
 
 describe('trusted kernel Git credentials', () => {
+  test('clears inherited host and repository authorization headers without editing config', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const root = await mkdtemp(join(tmpdir(), 'kernel-headers-'))
+    const initialized = Bun.spawn(['git', 'init', '-q', root], { stdout: 'pipe', stderr: 'pipe' })
+    expect(await initialized.exited).toBe(0)
+    const config = join(root, '.git', 'config')
+    const before =
+      '[http "https://github.com/"]\nextraHeader = Authorization: Basic stale-host\n' +
+      '[http "https://github.com/acme/private"]\nextraHeader = Authorization: Basic stale-repo\n' +
+      '[http "https://github.com/acme/private.git"]\nextraHeader = Authorization: Basic stale-dotgit\n'
+    await Bun.write(config, before)
+    try {
+      const forge = new GitHubForge({ repository: 'acme/private', token: 'fresh-token' })
+      for (const url of [
+        'https://github.com/acme/private',
+        'https://github.com/acme/private.git',
+      ]) {
+        const result = await forge.kernelExec(
+          ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+          {
+            cwd: root,
+            env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+          },
+        )
+        expect(result.exitCode).toBe(0)
+        expect(
+          result.stdout.split('\n').filter((line) => line.startsWith('Authorization:')),
+        ).toEqual(['Authorization: Basic [redacted]'])
+        expect(result.stdout).not.toContain('stale-')
+      }
+      expect(await Bun.file(config).text()).toBe(before)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('real Git receives scoped ephemeral headers for normalized and .git origins', async () => {
     const { tmpdir } = await import('node:os')
     const forge = new GitHubForge({ repository: 'acme/private', token: 'kernel-secret' })
@@ -2110,15 +2160,21 @@ describe('trusted kernel Git credentials', () => {
         expect(argv).toEqual(cmd)
         expect(opts.env).toMatchObject({
           GIT_TERMINAL_PROMPT: '0',
-          GIT_CONFIG_COUNT: '4',
+          GIT_CONFIG_COUNT: '7',
           GIT_CONFIG_KEY_0: 'http.extraHeader',
           GIT_CONFIG_VALUE_0: '',
-          GIT_CONFIG_KEY_1: 'http.https://github.com/acme/private.extraHeader',
-          GIT_CONFIG_VALUE_1: `Authorization: Basic ${encoded}`,
-          GIT_CONFIG_KEY_2: 'http.https://github.com/acme/private.git.extraHeader',
-          GIT_CONFIG_VALUE_2: `Authorization: Basic ${encoded}`,
-          GIT_CONFIG_KEY_3: 'credential.helper',
+          GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader',
+          GIT_CONFIG_VALUE_1: '',
+          GIT_CONFIG_KEY_2: 'http.https://github.com/acme/private.extraHeader',
+          GIT_CONFIG_VALUE_2: '',
+          GIT_CONFIG_KEY_3: 'http.https://github.com/acme/private.git.extraHeader',
           GIT_CONFIG_VALUE_3: '',
+          GIT_CONFIG_KEY_4: 'http.https://github.com/acme/private.extraHeader',
+          GIT_CONFIG_VALUE_4: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_5: 'http.https://github.com/acme/private.git.extraHeader',
+          GIT_CONFIG_VALUE_5: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_6: 'credential.helper',
+          GIT_CONFIG_VALUE_6: '',
         })
         return { stdout: token, stderr: encoded, exitCode: 128 }
       },

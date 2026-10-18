@@ -1,4 +1,4 @@
-import { landIntoNode, settleClosedNode } from '../kernel/node-landing'
+import { landIntoNode, settleClosedNode, preflightNodeLanding } from '../kernel/node-landing'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -2341,22 +2341,34 @@ export class Dispatcher {
       record.branch
     ) {
       if (target?.branch && target.branch === state.baseBranch) {
-        const reason = await this.withKernelRepository((kernelPath) =>
-          landIntoNode({
-            store,
-            forge: this.kernelForge(),
-            exec: forge.kernelExec ?? this.deps.exec,
-            workspacePath: kernelPath,
-            slug: record.slug,
-            node: target.slug,
-            branch: record.branch!,
-            destination: target.branch!,
-            pr: pr.number,
-            holder: this.deps.ids('node-writer'),
-            id: this.deps.ids('node-landing').replaceAll('_', '-'),
-            eligible: canApply,
-          }),
-        )
+        if (!recoverLanding && !(await canApply())) return
+        const preflight = recoverLanding
+          ? undefined
+          : await preflightNodeLanding(
+              this.kernelForge(),
+              workspacePath,
+              pr.number,
+              record.branch,
+              target.branch,
+            )
+        const reason =
+          preflight ??
+          (await this.withKernelRepository((kernelPath) =>
+            landIntoNode({
+              store,
+              forge: this.kernelForge(),
+              exec: forge.kernelExec ?? this.deps.exec,
+              workspacePath: kernelPath,
+              slug: record.slug,
+              node: target.slug,
+              branch: record.branch!,
+              destination: target.branch!,
+              pr: pr.number,
+              holder: this.deps.ids('node-writer'),
+              id: this.deps.ids('node-landing').replaceAll('_', '-'),
+              eligible: canApply,
+            }),
+          ))
         if (reason && commandSeq !== undefined)
           await recordAutoMergeDeferralObservation(
             store,
@@ -2366,6 +2378,8 @@ export class Dispatcher {
             commandSeq,
             this.deps.ids('obs'),
           )
+        if ((await store.buildFacts(target.slug)).state.nodeRestack?.active?.source === record.slug)
+          return
         await store.refreshBuild(record.slug)
         state = (await store.buildFacts(record.slug)).state
         if (state.prState === 'merged') {
@@ -3314,6 +3328,7 @@ export class Dispatcher {
       const decision = await this.decideBuild(record.slug, state, facts.log, report)
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
+      if (state.kind === 'node' && decision.kind !== 'wait') continue // cascade owns node runner admission
       // Raw history, read at most once and only by a branch that acts on it.
       let loaded: CurrentBuildFacts | undefined
       const history = async (): Promise<CurrentBuildFacts> => {
@@ -3789,7 +3804,12 @@ export class Dispatcher {
   ): Promise<void> {
     const forge = this.kernelForge()
     const settled = (await readBuildFacts(this.store, record.slug)).value
-    if (settled.open !== null || settled.publication.pending()) return
+    if (
+      settled.publication.pending() ||
+      (settled.open !== null &&
+        (settled.open.commandId !== undefined || this.hasLiveExecutionLease(record)))
+    )
+      return
     if (
       state.pr &&
       (await forge.getPrState(this.deps.checkout ?? this.deps.repo, state.pr.number)).state !==
@@ -3830,8 +3850,25 @@ export class Dispatcher {
       claimed = await this.store.claimNodeWriter(record.slug, holder, 60_000)
       if (!claimed) return
       const latest = (await readBuildFacts(this.store, record.slug)).value
-      if (latest.open !== null || latest.publication.pending()) return
-      state = latest.state
+      if (latest.publication.pending()) return
+      if (latest.open !== null) {
+        const refreshed = await this.store.getBuild(record.slug)
+        if (
+          latest.open.commandId !== undefined ||
+          (refreshed && this.hasLiveExecutionLease(refreshed))
+        )
+          return
+        await this.store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: {
+            instance: latest.open.instance,
+            workspaceRef: latest.open.workspaceRef,
+            outcome: 'lost',
+          },
+        })
+      }
+      state = (await this.store.buildFacts(record.slug)).state
       // An ended execution may have died between an item's atomic receipt and
       // its phase/session acknowledgements. Reclaim only after supervision has
       // settled the complete execution, before any public stack rewrite.

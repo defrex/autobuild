@@ -20,6 +20,33 @@ export interface NodeLandingDeps {
   id: string
   eligible: () => Promise<boolean>
 }
+/** Cheap API-only proof, repeated under writer authority before publication. */
+export async function preflightNodeLanding(
+  forge: Forge,
+  workspacePath: string,
+  prNumber: number,
+  branch: string,
+  destination: string,
+): Promise<AutoMergeDeferralReason | undefined> {
+  const defer = (detail: string): AutoMergeDeferralReason => ({
+    code: 'unproven-gate-state',
+    detail,
+  })
+  if (!forge.rewrite || !forge.inspectLandingGate || !forge.inspectLandingPr)
+    return defer(
+      `Node landing requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
+    )
+  const pr = await forge.inspectLandingPr(workspacePath, prNumber)
+  if (!pr.open || pr.base !== destination || pr.head !== branch)
+    return defer('PR base/head disagrees with the frozen node target; human action required.')
+  const gate = await forge.inspectLandingGate(destination)
+  if (gate.kind !== 'proved-ungated')
+    return {
+      code: gate.kind === 'gated' ? 'gated-node-destination' : 'unproven-gate-state',
+      detail: `${gate.reason}. Native auto-merge is withheld to serialize node writes; human action required.`,
+    }
+  return undefined
+}
 /** A successful guarded destination write is the landing. Provider PR state
  * is reconciled best-effort after its durable receipt, never used as proof. */
 export async function landIntoNode(
@@ -36,8 +63,6 @@ export async function landIntoNode(
     )
   if (!(await store.claimNodeWriter(node, deps.holder, 60_000))) return undefined
   const authority = async () => {
-    if (!(await store.renewNodeWriter(node, deps.holder)))
-      throw new Error('node landing writer lease lost')
     const state = (await readBuildFacts(store, node)).value.state
     if (
       state.status === 'aborted' ||
@@ -49,18 +74,31 @@ export async function landIntoNode(
       state.pendingCommands.length
     )
       throw new Error('destination node no longer admits writes')
+    if (!(await store.renewNodeWriter(node, deps.holder)))
+      throw new Error('node landing writer lease lost')
     return state
   }
+  let revision: number
   const append = async (event: EventWrite) => {
-    const state = await authority()
-    if (!(await store.appendIfCurrent(node, state.lastSeq, event)))
-      throw new Error('node landing reservation advanced')
+    await authority()
+    const written = await store.appendIfCurrent(node, revision, event)
+    if (!written) throw new Error('node landing reservation advanced')
+    revision = written.seq
   }
   try {
     let state = await authority()
+    revision = state.lastSeq
     let active = state.nodeRestack?.active
     if (active && (active.operation !== 'landing' || active.source !== deps.slug)) return undefined
     if (!active) {
+      const preflight = await preflightNodeLanding(
+        forge,
+        workspacePath,
+        deps.pr,
+        deps.branch,
+        deps.destination,
+      )
+      if (preflight) return preflight
       const cancellation = await forge.setAutoMerge(workspacePath, deps.pr, false)
       if (cancellation.kind !== 'applied')
         return defer('Native auto-merge cancellation is unconfirmed; no node write admitted.')
@@ -88,12 +126,16 @@ export async function landIntoNode(
       if (parents.exitCode !== 0 || message.exitCode !== 0)
         throw new Error('cannot inspect canonical node landing')
       if (parents.stdout.trim() !== expected) {
-        await store.append(deps.slug, {
-          actor: KERNEL,
-          type: 'target.moved',
-          payload: { branch: deps.destination, sha: expected },
-        })
-        return undefined
+        const source = (await readBuildFacts(store, deps.slug)).value
+        if (source.log.restack.target?.sha !== expected)
+          await store.append(deps.slug, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch: deps.destination, sha: expected },
+          })
+        return defer(
+          'Leaf head is not one canonical change on the current node head; awaiting restack or human provenance review.',
+        )
       }
       if (JSON.stringify(buildTrailers(message.stdout)) !== JSON.stringify([deps.slug]))
         throw new Error('node landing requires exactly one canonical source identity')

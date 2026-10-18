@@ -35,6 +35,13 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
 function corpora(): unknown[][] {
   return [
     leafRestackLog(),
+    [
+      {
+        type: 'finalize.step-completed',
+        seq: 1,
+        payload: { step: 'post', ok: true, headSha: 'a'.repeat(40) },
+      },
+    ],
     nodeRestackLog(),
     [
       {
@@ -137,7 +144,7 @@ describe('reducer registry', () => {
         "build": 6,
         "buildDelegation": 1,
         "buildDigest": 5,
-        "buildReadFacts": 36,
+        "buildReadFacts": 37,
         "buildStreamSeed": 8,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
@@ -156,8 +163,8 @@ describe('reducer registry', () => {
         "infrastructureFailureReset": 1,
         "journalView": 4,
         "lastExecutionOutcome": 1,
-        "leafRestack": 1,
-        "logIndex": 2,
+        "leafRestack": 2,
+        "logIndex": 3,
         "nodeRestack": 2,
         "openBuildWorkspace": 1,
         "openExecution": 1,

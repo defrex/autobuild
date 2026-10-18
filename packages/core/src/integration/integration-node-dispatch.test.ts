@@ -165,6 +165,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
   let resolved = 0
   const h = await makeHarness({
     localGitForge: true,
+    configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 1'),
     handlers: {
       ...happyHandlers(),
       reconcile: async (cli) => {
@@ -206,6 +207,10 @@ test('node conflict runner resolves the source build with its own spec and plan'
       buildSlug: source.slug,
     })
     await h.dispatcher.tick()
+    h.tickets.add(readyTicket('BUSY', { title: 'Occupy the runner slot' }))
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const busy = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'BUSY')!
     await Bun.write(join(h.origin, 'rate-limit.txt'), 'new root behavior\n')
     await commitAll(h.origin, 'Root conflicts with source')
     await h.dispatcher.tick()
@@ -213,10 +218,42 @@ test('node conflict runner resolves the source build with its own spec and plan'
     expect(conflictState.nodeRestack?.conflict).toBeDefined()
     await h.dispatcher.tick()
     await h.dispatcher.drainProvisioning()
+    h.clock.advance(180_000)
+    await h.dispatcher.tick()
+    expect(h.launched.filter((entry) => entry.slug === owner.slug)).toHaveLength(0)
+    expect(ofType(await h.events(owner.slug), 'workspace.provisioned')).toHaveLength(0)
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: busy.slug,
+      action: { kind: 'abort' },
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
     expect(h.launched.at(-1)?.slug).toBe(owner.slug)
     await h.runLatest()
     expect(resolved).toBe(1)
+    // A dead local supervisor can leave execution.started after the resolver
+    // receipt; no provider command id exists to settle it out of process.
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { DISPATCHER } = await import('../events/envelope')
+    const facts = (await readBuildFacts(h.store, owner.slug)).value
+    await h.store.append(owner.slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        instance: 'crashed-local',
+        provider: 'git-worktree',
+        workspaceRef: facts.workspace!.ref,
+      },
+    })
+    h.clock.advance(120_000)
     expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+    expect((await readBuildFacts(h.store, owner.slug)).value.open).toBeNull()
+    expect(ofType(await h.events(owner.slug), 'execution.ended').at(-1)?.payload.outcome).toBe(
+      'lost',
+    )
     const state = reduceBuild(await h.events(owner.slug))
     expect(state.nodeRestack?.active).toBeUndefined()
     expect(state.nodeRestack?.inventory?.builds).toContain(source.slug)
@@ -486,10 +523,10 @@ for (const checkout of ['scratch', 'absent'] as const) {
         exec: async (cmd, opts) => {
           // Fail every credential-less host transport attempt, including
           // clone, fetch, archive push, readback and destination CAS.
-          expect(opts.env?.GIT_CONFIG_VALUE_1).toBe(
+          expect(opts.env?.GIT_CONFIG_VALUE_4).toBe(
             `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
           )
-          expect(opts.env?.GIT_CONFIG_KEY_1).toBe(`http.${origin}.extraHeader`)
+          expect(opts.env?.GIT_CONFIG_KEY_4).toBe(`http.${origin}.extraHeader`)
           expect(cmd.join(' ')).not.toContain(token)
           activity.push(cmd[1]!)
           if (cmd[1] === 'clone') {
@@ -576,6 +613,17 @@ for (const checkout of ['scratch', 'absent'] as const) {
       })
       await h.runLatest()
       const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const writerFacts = ofType(await h.events(node.slug), 'node.writer-reserved').length
+      const beforeDeferral = activity.length
+      const ungated = h.forgeAdapter.inspectLandingGate!.bind(h.forgeAdapter)
+      for (const kind of ['gated', 'unproven'] as const) {
+        h.forgeAdapter.inspectLandingGate = async () => ({ kind, reason: 'Repository policy' })
+        for (let i = 0; i < 3; i++)
+          expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      }
+      expect(activity).toHaveLength(beforeDeferral)
+      expect(ofType(await h.events(node.slug), 'node.writer-reserved')).toHaveLength(writerFacts)
+      h.forgeAdapter.inspectLandingGate = ungated
       expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
       expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
       expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
@@ -583,6 +631,112 @@ for (const checkout of ['scratch', 'absent'] as const) {
       expect(ofType(await h.events(node.slug), 'node.writer-settled').at(-1)?.payload.outcome).toBe(
         'completed',
       )
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
+
+test('node-target finalize commits are collapsed before guarded landing', async () => {
+  const { git } = await import('./harness')
+  const { humanActor } = await import('../events/envelope')
+  const configToml = `${CONFIG_TOML.replace(
+    'test = "test -f ok.marker"',
+    'test = "test -f ok.marker"\npost = "touch post.marker && git add post.marker && git commit -m post"',
+  )}\n[finalize]\nsteps = ["post"]\n[finalize.post]\nkind = "check"\ncommand = "post"\n`
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Finalize destination' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Finalize child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const records = await h.store.listBuilds()
+    const node = records.find((record) => record.ticket?.id === 'NODE')!
+    const child = records.find((record) => record.ticket?.id === 'CHILD')!
+    await h.store.append(child.slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.runLatest()
+    const postStep = ofType(await h.events(child.slug), 'finalize.step-completed')[0]?.payload
+    expect(postStep?.ok && postStep.headSha).toBeTruthy()
+    const canonical = await git(['rev-parse', child.branch!], h.origin)
+    const parent = await git(['rev-parse', `${child.branch}^`], h.origin)
+    expect(parent).toBe(await git(['rev-parse', node.branch!], h.origin))
+    expect(await git(['show', `${child.branch}:post.marker`], h.origin)).toBe('')
+    const observations = ofType(await h.events(child.slug), 'target.moved').length
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+    expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+    expect(ofType(await h.events(child.slug), 'target.moved')).toHaveLength(observations)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+for (const providerState of ['merged', 'closed'] as const) {
+  test(`node landing settles its reservation before completing a ${providerState} leaf inside writer TTL`, async () => {
+    const { git } = await import('./harness')
+    const { humanActor } = await import('../events/envelope')
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Crash destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Crash leaf' }), target: 'NODE' },
+      ],
+    })
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const node = records.find((record) => record.ticket?.id === 'NODE')!
+      const child = records.find((record) => record.ticket?.id === 'CHILD')!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const append = h.store.appendIfCurrent.bind(h.store)
+      let crash = true
+      h.store.appendIfCurrent = async (...args) => {
+        if (args[0] === node.slug && args[2].type === 'node.rewritten' && crash) {
+          crash = false
+          throw new Error('dispatcher dies after push')
+        }
+        return append(...args)
+      }
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      // The crashed process's writer lease has not expired on restart.
+      expect(await h.store.claimNodeWriter(node.slug, 'dead-dispatcher', 60_000)).toBe(true)
+      const childPr = reduceBuild(await h.events(child.slug)).pr!.number
+      const getPr = h.forgeAdapter.getPrState.bind(h.forgeAdapter)
+      h.forgeAdapter.getPrState = async (cwd, number) =>
+        number === childPr
+          ? providerState === 'merged'
+            ? { state: 'merged', sha: canonical }
+            : { state: 'closed' }
+          : getPr(cwd, number)
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).status).not.toBe('done')
+      expect(reduceBuild(await h.events(node.slug)).nodeRestack?.active?.source).toBe(child.slug)
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(node.slug)).nodeRestack?.active).toBeUndefined()
+      expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
+      expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
     } finally {
       await h.cleanup()
     }

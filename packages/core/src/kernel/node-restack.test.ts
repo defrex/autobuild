@@ -462,3 +462,84 @@ test('batched history preserves rejection of malformed and ambiguous terminal id
     `ambiguous build identity on ${ambiguous}`,
   )
 })
+
+for (const race of ['lease-takeover', 'revision-change'] as const) {
+  test(`node reservation rejects a stale decision after ${race}`, async () => {
+    const { MemoryBuildStore } = await import('../store/memory')
+    const { DISPATCHER } = await import('../events/envelope')
+    const { gitRewrite } = await import('../ports/forge/git-rewrite')
+    const { FakeForge } = await import('../ports/forge/fake')
+    const { runNodeTransaction } = await import('./node-restack-transaction')
+    const { sampleBuildInput } = await import('../store/contract')
+    const { manualClock } = await import('../testing/fixed')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { deps, git, commit, base } = await fixture()
+    await git('checkout', '-b', 'ab-node/a')
+    const oldHead = await commit('node')
+    await git('checkout', 'main')
+    const parent = await commit('parent')
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.createBuild(sampleBuildInput('a'))
+    await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.claimNodeWriter('a', 'old-holder', 60_000)
+    const rewrite = gitRewrite(deps.exec, true)
+    let ready = false
+    const archive = rewrite.archive.bind(rewrite)
+    rewrite.archive = async (input) => {
+      await archive(input)
+      if (input.sha === parent) ready = true
+    }
+    const forge: import('../ports/types').Forge = new FakeForge()
+    Object.defineProperty(forge, 'rewrite', { value: rewrite })
+    forge.snapshotBase = async () => parent
+    const tx = {
+      ...deps,
+      store,
+      slug: 'a',
+      forge,
+      holder: 'old-holder',
+      canWrite: async () => {
+        if (ready) {
+          ready = false
+          if (race === 'lease-takeover') {
+            clock.advance(60_001)
+            expect(await store.claimNodeWriter('a', 'new-holder', 60_000)).toBe(true)
+            await store.append('a', {
+              actor: DISPATCHER,
+              type: 'node.writer-reserved',
+              payload: {
+                id: 'winner',
+                operation: 'restack',
+                expected: oldHead,
+                parent,
+                oldBase: base,
+                archive: `refs/autobuild/archive/a/${oldHead}`,
+                changes: [],
+                merges: [],
+                upstreamBuilds: [],
+              },
+            })
+          } else {
+            await store.append('a', {
+              actor: DISPATCHER,
+              type: 'node.inventory',
+              payload: { head: oldHead, builds: [], foreign: [oldHead] },
+            })
+          }
+        }
+        return true
+      },
+    }
+    await expect(
+      runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'stale' }),
+    ).rejects.toThrow(race === 'lease-takeover' ? 'authority lost' : 'log advanced')
+    const facts = (await readBuildFacts(store, 'a')).value
+    expect(facts.state.nodeRestack?.active?.id).toBe(
+      race === 'lease-takeover' ? 'winner' : undefined,
+    )
+    expect(
+      (await store.getEvents('a')).filter((event) => event.type === 'node.writer-reserved'),
+    ).toHaveLength(race === 'lease-takeover' ? 1 : 0)
+  })
+}
