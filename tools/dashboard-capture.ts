@@ -399,6 +399,8 @@ export interface DashboardCaptureResult {
 export interface DashboardCaptureOptions {
   /** Product workspace. Generated evidence is always confined to its .ab/. */
   workspacePath?: string
+  /** Keep the existing web integration fixture independent of terminal queue evidence. */
+  consentQueueFixtures?: boolean
 }
 
 function captureHandlers(): SkillHandlers {
@@ -428,7 +430,7 @@ function captureHandlers(): SkillHandlers {
   return handlers
 }
 
-async function prepareIntegrationScenario(): Promise<E2eHarness> {
+async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: happyHandlers(),
     configToml: CAPTURE_CONFIG_TOML,
@@ -499,6 +501,7 @@ async function prepareIntegrationScenario(): Promise<E2eHarness> {
     if (label === 'aborted')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
   }
+  if (!consentQueueFixtures) return harness
   for (const [index, label] of [
     'ready-leaf',
     'ready-node',
@@ -1454,7 +1457,9 @@ export async function captureDashboardFrames(
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
   const mixedHarness = await prepareScenario()
-  const integrationHarness = await prepareIntegrationScenario()
+  const integrationHarness = await prepareIntegrationScenario(
+    options.consentQueueFixtures !== false,
+  )
   let happy: HappyScenario
   try {
     happy = await prepareHappyScenario()
@@ -1466,7 +1471,16 @@ export async function captureDashboardFrames(
 
   try {
     const frames: CapturedDashboardFrame[] = []
-    for (const spec of FRAME_SPECS) {
+    for (const frameSpec of FRAME_SPECS) {
+      const spec =
+        frameSpec.scenario === 'integration' && options.consentQueueFixtures === false
+          ? {
+              ...frameSpec,
+              selection: undefined,
+              rows: 44,
+              requires: ['integration', 'target', 'empty', 'NODE-3'],
+            }
+          : frameSpec
       const harness =
         spec.scenario === 'happy'
           ? happy.harness

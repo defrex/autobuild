@@ -1014,7 +1014,10 @@ function frameModel(
 export async function harnessModels(): Promise<WebFixtureModels> {
   const workspace = await mkdtemp(join(tmpdir(), 'ab-web-capture-'))
   try {
-    const capture = await captureDashboardFrames({ workspacePath: workspace })
+    const capture = await captureDashboardFrames({
+      workspacePath: workspace,
+      consentQueueFixtures: false,
+    })
     return {
       forgeReadiness: frameModel(capture, 'forge-readiness-wide'),
       happy: frameModel(capture, 'headline-happy-wide'),
@@ -1072,7 +1075,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     "- [ ] Answer frames: the open detail's Actions section shows a red `!` blocker line, a focused one-row optional-guidance field, then only `SUBMIT` and `CANCEL`; no `RESUME`, `ABORT`, auto-merge, or detail accessible names for that row. Empty submission is identified as retry; the narrow frame remains unclipped. The full answer composer stays further down the detail.",
     '- [ ] Abort frame (after leaving answer mode with CANCEL): the Actions section shows a red `! abort <slug>? Enter confirms, Esc cancels` line and `CONFIRM ABORT` / `CANCEL` ghost controls, with no answer field and no ordinary action words.',
     '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
-    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles, auto-merge indicators, and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
+    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds a red `!` notice beneath the heading and nothing in the masthead.',
     '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes. `consent-named-wide.png` shows the bold registered client name with the raw client id beside it and the requested scopes; `consent-unnamed-narrow.png` falls back to the raw client id alone; `consent-missing-code-wide.png` shows the missing-authorization-code notice with no form and no button; `consent-route-narrow.png` is rendered through the route page wrapper and shows the unnamed-client copy, the requested scopes, and one ink-outline `Authorize client` primary button with no notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
