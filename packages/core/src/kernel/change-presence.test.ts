@@ -146,3 +146,42 @@ test('head-keyed proof is strictly validated and survives a fresh durable reduct
       }),
     ).toThrow()
 })
+
+test('rewritten node trailers recursively transport leaf contributions into presence and ownership', async () => {
+  const { deps, git, commit, base } = await fixture()
+  const original = await commit('original node landing\n\nAutobuild-Build: node-beta')
+  await git('checkout', '--detach', base)
+  const parent = await commit('unrelated root movement')
+  const rewritten = await commit('replayed node landing\n\nAutobuild-Build: node-beta')
+  const landings = [
+    { slug: 'node-beta', sha: original, contribution: ['build:node-inner' as const] },
+    {
+      slug: 'node-inner',
+      sha: 'a'.repeat(40),
+      contribution: ['build:leaf-one' as const, 'build:leaf-two' as const],
+    },
+  ]
+  expect((await git('rev-list', rewritten)).split('\n')).not.toContain(original)
+  for (const identities of [
+    await observePresence(deps, rewritten, landings),
+    await ownedContribution(deps, parent, rewritten, landings, new Map()),
+  ]) {
+    expect(identities).toContain('build:leaf-one')
+    expect(identities).toContain('build:leaf-two')
+  }
+})
+
+test('a rewritten trailerless landing resolves its build through the confirmed foreign alias', async () => {
+  const { deps, git, commit, base } = await fixture()
+  const original = await commit('trailerless work landing')
+  await git('checkout', '--detach', base)
+  const parent = await commit('root moved')
+  const rewritten = await commit('trailerless work replay')
+  const aliases = new Map([[rewritten, original]])
+  const landings = [{ slug: 'leaf', sha: original }]
+  expect(await observePresence(deps, rewritten, landings, aliases)).toContain('build:leaf')
+  expect(await ownedContribution(deps, parent, rewritten, landings, aliases)).toContain(
+    'build:leaf',
+  )
+  expect(await observePresence(deps, rewritten, landings)).not.toContain('build:leaf')
+})

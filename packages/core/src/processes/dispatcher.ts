@@ -2072,6 +2072,7 @@ export class Dispatcher {
                   record,
                   this.forgeWorkspacePath(events),
                   result.sha,
+                  reduced.kind,
                 ),
               }
             : { actor: DISPATCHER, type: 'pr.closed', payload: {} },
@@ -2210,8 +2211,10 @@ export class Dispatcher {
     record: BuildRecord,
     workspacePath: string,
     sha: string,
+    kind?: 'work' | 'node',
   ): Promise<{ sha: string; buildTrailerPresent?: boolean }> {
-    await this.recoverNodeContributions(await this.repoBuildDigests(), { slug: record.slug, sha })
+    if (kind === 'node')
+      await this.recoverNodeContributions(await this.repoBuildDigests(), { slug: record.slug, sha })
     const read = this.deps.forge.readCommitMessage
     if (read === undefined) return { sha }
     try {
@@ -2504,7 +2507,7 @@ export class Dispatcher {
           await store.append(record.slug, {
             actor: DISPATCHER,
             type: 'pr.merged',
-            payload: await this.mergeEvidence(record, workspacePath, prState.sha),
+            payload: await this.mergeEvidence(record, workspacePath, prState.sha, state.kind),
           } satisfies EventWrite<'pr.merged'>)
         }
         await this.releaseWorkspace(record.slug, events)
@@ -3554,15 +3557,25 @@ export class Dispatcher {
     const hasNodes =
       treeEntries.some(({ digest }) => digest.kind === 'node') ||
       ready.some((ticket) => ticket.kind === 'node')
-    if (hasNodes) await this.recoverNodeContributions(treeEntries)
-    const presence = hasNodes ? await presenceInputs(this.store, treeEntries) : undefined
-    const builtTickets = presence
+    let presence: PresenceInputs | undefined
+    const builtTickets = hasNodes
       ? new Set(
-          presence.entries.flatMap(({ record }) =>
+          treeEntries.flatMap(({ record }) =>
             record.ticket ? [JSON.stringify([record.ticket.source, record.ticket.id])] : [],
           ),
         )
       : undefined
+    const needsPresence = (candidate: Ticket) =>
+      (candidate.blockedBy ?? []).some((id) => {
+        const build = blockerBuild(treeEntries, candidate.ref.source, id)
+        return (
+          id !== candidate.ref.id &&
+          build !== undefined &&
+          typeof build !== 'string' &&
+          build.digest.terminal !== 'aborted' &&
+          (build.digest.kind !== 'node' || build.digest.mergedSha !== undefined)
+        )
+      })
     const destinationHeads = new Map<
       string,
       { branch: string; destination: string; head: string; identities: string[] }
@@ -3583,14 +3596,38 @@ export class Dispatcher {
       }
       preflightTargets.set(ticket.ref.id, JSON.stringify(target))
       if (this.outOfBudget(opts)) return
-      if ((!presence && ticket.blockersResolved === true) || (ticket.blockedBy ?? []).length === 0)
+      if ((!hasNodes && ticket.blockersResolved === true) || (ticket.blockedBy ?? []).length === 0)
         continue
       let verdict: DependencyVerdict
       try {
         if (!(await this.loadDependencyGraph(ticket, nodes, opts, builtTickets))) return
-        verdict = presence
-          ? await this.presenceVerdict(ticket, target, nodes, presence, destinationHeads)
-          : analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
+        if (hasNodes) {
+          if (!presence && needsPresence(ticket)) {
+            await this.recoverNodeContributions(treeEntries)
+            const entries = await this.repoBuildDigests()
+            const destinations = ready
+              .filter(
+                (candidate) =>
+                  needsPresence(candidate) &&
+                  !withheld.has(candidate.ref.id) &&
+                  candidate.target !== undefined,
+              )
+              .flatMap((candidate) => {
+                const node = blockerBuild(entries, candidate.ref.source, candidate.target!)
+                return node && typeof node !== 'string' && node.digest.kind === 'node'
+                  ? [node.record.slug]
+                  : []
+              })
+            presence = await presenceInputs(this.store, entries, destinations)
+          }
+          const inputs = presence ?? {
+            entries: treeEntries,
+            states: new Map(),
+            aliases: new Map(),
+            landings: [],
+          }
+          verdict = await this.presenceVerdict(ticket, target, nodes, inputs, destinationHeads)
+        } else verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
       } catch (error) {
         if (error instanceof TicketSourceRateLimitError) {
           await this.sourceFailure(error, 'dependency-check')
@@ -3627,14 +3664,14 @@ export class Dispatcher {
         report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
         continue
       }
-      if (presence && preflightTargets.get(ticket.ref.id) !== JSON.stringify(target)) {
+      if (hasNodes && preflightTargets.get(ticket.ref.id) !== JSON.stringify(target)) {
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(
           `ticket ${ticket.ref.id}: target changed after dependency preflight`,
         )
         continue
       }
-      if (presence) {
+      if (hasNodes) {
         const branch = target?.branch ?? config.baseBranch
         const destination = target?.target.build ?? `root:${branch}`
         const observed = destinationHeads.get(destination)
@@ -4173,15 +4210,17 @@ export class Dispatcher {
         digest.kind === 'node' && (digest.merged || record.slug === merging?.slug),
     )
     if (candidates.length === 0) return
-    const inputs = await presenceInputs(this.store, entries)
-    const pending = candidates.filter(({ record }) => {
-      const state = inputs.states.get(record.slug)!
-      return (
-        state.nodeRestack?.contribution?.landing !==
-        (record.slug === merging?.slug ? merging.sha : state.mergedSha)
-      )
-    })
+    const pending = candidates.filter(
+      ({ record, digest }) =>
+        digest.nodeContribution?.landing !==
+        (record.slug === merging?.slug ? merging.sha : digest.mergedSha),
+    )
     if (pending.length === 0) return
+    const inputs = await presenceInputs(
+      this.store,
+      entries,
+      pending.map(({ record }) => record.slug),
+    )
     try {
       await this.withKernelRepository(async (path) => {
         const forge = this.kernelForge()
@@ -4189,9 +4228,10 @@ export class Dispatcher {
         const visiting = new Set<string>()
         const recover = async (slug: string): Promise<void> => {
           if (visiting.has(slug)) throw new Error('cyclic node contribution evidence')
+          const entry = entries.find(({ record }) => record.slug === slug)!
+          const landing = slug === merging?.slug ? merging.sha : entry.digest.mergedSha
+          if (!landing || entry.digest.nodeContribution?.landing === landing) return
           const state = inputs.states.get(slug)!
-          const landing = slug === merging?.slug ? merging.sha : state.mergedSha
-          if (!landing || state.nodeRestack?.contribution?.landing === landing) return
           if (!state.pr || !forge.inspectLandingPr)
             throw new Error('cannot establish landed node source head')
           visiting.add(slug)
@@ -4221,8 +4261,8 @@ export class Dispatcher {
           // frozen; a squash can erase every original child SHA.
           for (const child of candidates) {
             if (child.record.slug === slug) continue
-            const childState = inputs.states.get(child.record.slug)!
-            if (childState.target?.build === slug && childState.mergedSha)
+            const childState = inputs.states.get(child.record.slug)
+            if (childState?.target?.build === slug && childState.mergedSha)
               await recover(child.record.slug)
           }
           const currentIdentities = await ownedContribution(
@@ -4252,6 +4292,7 @@ export class Dispatcher {
           })
           state.nodeRestack ??= { items: [] }
           state.nodeRestack.contribution = payload
+          entry.digest.nodeContribution = payload
           inputs.landings.push({ slug, sha: landing, contribution: identities })
           visiting.delete(slug)
         }
@@ -4307,13 +4348,11 @@ export class Dispatcher {
       }
       if (build.digest.kind !== 'node') required.set(id, [`build:${build.record.slug}`])
       else {
-        const state = inputs.states.get(build.record.slug)!
-        const contribution = state.nodeRestack?.contribution
+        const contribution = build.digest.nodeContribution
         if (
-          state.prState === 'merged' &&
-          state.status !== 'aborted' &&
+          !build.digest.prClosed &&
           contribution &&
-          contribution.landing === state.mergedSha
+          contribution.landing === build.digest.mergedSha
         )
           required.set(id, contribution.identities as ChangeIdentity[])
         else {
@@ -4336,7 +4375,12 @@ export class Dispatcher {
           throw new Error('forge cannot snapshot destination presence')
         const head = await forge.remoteBranchSha(branch)
         const evidence = JSON.stringify(
-          [...inputs.states].map(([slug, state]) => [slug, state.lastSeq]).sort(),
+          [
+            ...inputs.entries
+              .filter(({ digest }) => digest.mergedSha || digest.nodeContribution)
+              .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq]),
+            ...[...inputs.states].map(([slug, state]) => [slug, state.lastSeq]),
+          ].sort(),
         )
         const cached = this.store.repositoryFacts().presence[destination]
         if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)

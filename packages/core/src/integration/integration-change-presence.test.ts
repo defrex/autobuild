@@ -2,8 +2,20 @@ import { expect, test } from 'bun:test'
 import { makeHarness, happyHandlers, readyTicket, writeFileIn } from './harness'
 import { reduceBuild } from '../kernel/reducer'
 
-for (const route of ['same', 'ancestor', 'sibling', 'descendant', 'root', 'node-root'] as const) {
-  test(`real Git blocker presence: ${route}`, async () => {
+for (const scenario of [
+  'same',
+  'ancestor',
+  'sibling',
+  'descendant',
+  'root',
+  'node-root',
+  'sibling-restack',
+  'descendant-restack',
+  'root-restack',
+] as const) {
+  test(`real Git blocker presence: ${scenario}`, async () => {
+    const restacked = scenario.endsWith('-restack')
+    const route = scenario.replace(/-restack$/, '')
     const blockerTarget = route === 'ancestor' ? 'A' : 'B'
     const dependentTarget =
       route === 'same'
@@ -42,7 +54,7 @@ for (const route of ['same', 'ancestor', 'sibling', 'descendant', 'root', 'node-
       const blocker = (await record('BLOCK'))!
       expect(blocker).toBeDefined()
       await h.runLatest()
-      await h.tickets.transition('DEP', 'Ready')
+      if (!restacked) await h.tickets.transition('DEP', 'Ready')
       await h.dispatcher.tick()
       expect(await record('DEP')).toBeUndefined()
       const state = reduceBuild(await h.events(blocker.slug))
@@ -73,7 +85,9 @@ for (const route of ['same', 'ancestor', 'sibling', 'descendant', 'root', 'node-
         const betaState = reduceBuild(await h.events(beta.slug))
         expect(betaState.pr).toBeDefined()
         const betaHead = await h.forgeAdapter.remoteBranchSha!(beta.branch!)
-        await h.forgeAdapter.squashMerge(h.origin, betaState.pr!.number, betaHead)
+        await h.forgeAdapter.squashMerge(h.origin, betaState.pr!.number, betaHead, {
+          buildSlug: beta.slug,
+        })
         if (route === 'node-root') {
           const { git } = await import('./harness')
           const tree = await git(['rev-parse', `${betaHead}^{tree}`], h.origin)
@@ -88,6 +102,20 @@ for (const route of ['same', 'ancestor', 'sibling', 'descendant', 'root', 'node-
           expect(contribution?.identities).not.toContain(`foreign:${moved}`)
           expect(contribution?.identities).toContain(`build:${(await record('SECOND'))!.slug}`)
         }
+      }
+      if (restacked) {
+        await h.dispatcher.tick()
+        const { git } = await import('./harness')
+        await git(['commit', '--allow-empty', '-m', 'unrelated root advancement'], h.origin)
+        for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+        const beta = (await record('B'))!
+        const alpha = (await record('A'))!
+        const landing = reduceBuild(await h.events(beta.slug)).mergedSha!
+        const alphaHead = await h.forgeAdapter.remoteBranchSha!(alpha.branch!)
+        expect((await git(['rev-list', alphaHead], h.origin)).split('\n')).not.toContain(landing)
+        expect(await record('DEP')).toBeUndefined()
+        await h.tickets.transition('DEP', 'Ready')
+        h.clock.advance(60_000)
       }
       if (route === 'root' || route === 'node-root') {
         await h.dispatcher.tick()
@@ -201,3 +229,159 @@ for (const trailerFlag of [undefined, false]) {
     }
   })
 }
+
+for (const blocked of [false, true]) {
+  test(`admission reads no full historical build facts with settled nodes (blocked=${blocked})`, async () => {
+    const { git } = await import('./harness')
+    const { DISPATCHER } = await import('../events/envelope')
+    const reads: string[] = []
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        {
+          ...readyTicket('DEP', { title: 'Ready work' }),
+          ...(blocked ? { blockedBy: ['H-0'] } : {}),
+        },
+        readyTicket('H-0', { state: 'Done' }),
+      ],
+      storeAdapter: async (backing) => ({
+        storeRef: 'memory',
+        store: new Proxy(backing, {
+          get(target, key) {
+            if (key === 'getReducerValue')
+              return async (...args: Parameters<typeof backing.getReducerValue>) => {
+                if (args[0].kind === 'build' && args[1].reducer === 'buildReadFacts')
+                  reads.push(args[0].slug)
+                return target.getReducerValue(...args)
+              }
+            const value = Reflect.get(target, key, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        }),
+      }),
+    })
+    try {
+      const sha = await git(['rev-parse', 'HEAD'], h.origin)
+      for (let i = 0; i < 50; i++) {
+        const slug = `historical-${i}`
+        const ticket = { source: 'fake', id: `H-${i}` }
+        await h.store.createBuild({
+          slug,
+          repo: h.origin,
+          ticket,
+          created: {
+            actor: DISPATCHER,
+            type: 'build.created',
+            payload: {
+              ticket,
+              repo: h.origin,
+              baseBranch: 'main',
+              ...(i === 49 ? { kind: 'node' as const } : {}),
+            },
+          },
+        })
+        if (i === 49)
+          await h.store.append(slug, {
+            actor: DISPATCHER,
+            type: 'node.contribution-recorded',
+            payload: { landing: sha, head: sha, base: sha, identities: [] },
+          })
+        await h.store.append(slug, { actor: DISPATCHER, type: 'pr.merged', payload: { sha } })
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+      }
+      reads.length = 0
+      await h.dispatcher.tick()
+      expect(h.tickets.claims).toContain('DEP')
+      expect(reads.filter((slug) => slug.startsWith('historical-'))).toEqual([])
+      await h.runLatest()
+      const work = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'DEP')!
+      const state = reduceBuild(await h.events(work.slug))
+      await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, state.pr!.headSha)
+      reads.length = 0
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(reads.filter((slug) => slug.startsWith('historical-'))).toEqual([])
+    } finally {
+      await h.cleanup()
+    }
+  })
+}
+
+test('a trailerless work landing survives node replay and subsequent squash transport to root', async () => {
+  const { git } = await import('./harness')
+  const { DISPATCHER } = await import('../events/envelope')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Node with foreign landing' }), kind: 'node' },
+      readyTicket('BLOCK', { state: 'Done' }),
+      {
+        ...readyTicket('DEP', { title: 'Node dependent', state: 'In Progress' }),
+        target: 'NODE',
+        blockedBy: ['BLOCK'],
+      },
+      {
+        ...readyTicket('ROOT', { title: 'Root dependent', state: 'In Progress' }),
+        blockedBy: ['BLOCK'],
+      },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+    const base = await h.forgeAdapter.remoteBranchSha!(node.branch!)
+    const tree = await git(['rev-parse', `${base}^{tree}`], h.origin)
+    const landing = await git(
+      ['commit-tree', tree, '-p', base, '-m', 'external trailerless landing'],
+      h.origin,
+    )
+    await git(['update-ref', `refs/heads/${node.branch}`, landing], h.origin)
+    const ticket = (await h.tickets.get('BLOCK'))!.ref
+    await h.store.createBuild({
+      slug: 'trailerless-work',
+      repo: h.origin,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: h.origin, baseBranch: node.branch! },
+      },
+    })
+    await h.store.append('trailerless-work', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: landing, buildTrailerPresent: false },
+    })
+    await h.store.append('trailerless-work', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    await git(['commit', '--allow-empty', '-m', 'root moved before admission'], h.origin)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const head = await h.forgeAdapter.remoteBranchSha!(node.branch!)
+    expect((await git(['rev-list', head], h.origin)).split('\n')).not.toContain(landing)
+    expect(reduceBuild(await h.events(node.slug)).nodeRestack?.foreignAliases?.[head]).toBe(landing)
+    await h.tickets.transition('DEP', 'Ready')
+    await h.tickets.transition('ROOT', 'Ready')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toContain('DEP')
+    expect(h.tickets.claims).not.toContain('ROOT')
+    const state = reduceBuild(await h.events(node.slug))
+    await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, head)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    expect(reduceBuild(await h.events(node.slug)).nodeRestack?.contribution?.identities).toContain(
+      'build:trailerless-work',
+    )
+    expect(h.tickets.claims).toContain('ROOT')
+  } finally {
+    await h.cleanup()
+  }
+})

@@ -491,6 +491,7 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$.hosted[]: number",
     "$.kind: undefined",
     "$.merged: string",
+    "$.mergedSha: undefined",
     "$.nodeOpened: boolean",
     "$.observations: array",
     "$.observations[].seq: number",

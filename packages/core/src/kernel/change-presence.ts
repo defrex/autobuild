@@ -53,6 +53,40 @@ export interface LandingEvidence {
   /** A node landing transports its completed owned contribution. */
   contribution?: ChangeIdentity[]
 }
+/** Stable identities and confirmed foreign replay aliases survive node rewrites.
+ * Expand transported contributions transitively, including older manifests
+ * that retained a nested node identity rather than its leaf identities. */
+function expandLandings(
+  identities: ChangeIdentity[],
+  proofs: ChangeIdentity[],
+  landings: LandingEvidence[],
+): ChangeIdentity[] {
+  const byIdentity = new Map<ChangeIdentity, LandingEvidence[]>()
+  for (const landing of landings) {
+    for (const key of [`build:${landing.slug}`, `foreign:${landing.sha}`] as ChangeIdentity[]) {
+      const proofs = byIdentity.get(key) ?? []
+      proofs.push(landing)
+      byIdentity.set(key, proofs)
+    }
+  }
+  const result = new Set(identities)
+  const visited = new Set<ChangeIdentity>()
+  const pending = [...identities, ...proofs]
+  while (pending.length) {
+    const identity = pending.pop()!
+    if (visited.has(identity)) continue
+    visited.add(identity)
+    for (const landing of byIdentity.get(identity) ?? []) {
+      const transported = landing.contribution ?? [`build:${landing.slug}` as const]
+      for (const item of transported) {
+        result.add(item)
+        pending.push(item)
+      }
+    }
+  }
+  return normalizeIdentities(result)
+}
+
 /** Exact Git ancestry plus confirmed landing facts handles trailerless squash
  * commits. No optimistic writer intent or source lifecycle is consulted. */
 export async function observePresence(
@@ -62,7 +96,7 @@ export async function observePresence(
   aliases = new Map<string, string>(),
 ): Promise<ChangeIdentity[]> {
   const commits = await history(git, [head])
-  const reachable = new Set(commits.map((commit) => commit.sha))
+  const proofs: ChangeIdentity[] = []
   const result: ChangeIdentity[] = []
   const relevantForeign = new Set(
     landings
@@ -72,13 +106,10 @@ export async function observePresence(
   for (const commit of commits) {
     for (const build of buildTrailers(commit.message)) result.push(`build:${build}`)
     const foreign: ChangeIdentity = `foreign:${originalForeign(commit.sha, aliases)}`
+    proofs.push(foreign, `foreign:${commit.sha}`)
     if (aliases.has(commit.sha) || relevantForeign.has(foreign)) result.push(foreign)
   }
-  for (const landing of landings) {
-    if (!reachable.has(landing.sha)) continue
-    result.push(...(landing.contribution ?? [`build:${landing.slug}` as const]))
-  }
-  return normalizeIdentities(result)
+  return expandLandings(result, proofs, landings)
 }
 
 /** Reconstruct a historical node contribution only from its retained source
@@ -95,19 +126,16 @@ export async function ownedContribution(
   })
   if (check.exitCode !== 0) throw new Error('cannot establish node contribution boundary')
   const commits = await history(git, [`${base}..${head}`], ['--first-parent'])
-  const owned = new Set(commits.map((commit) => commit.sha))
+  const proofs: ChangeIdentity[] = []
   const result: ChangeIdentity[] = []
   for (const commit of commits) {
     const trailers = buildTrailers(commit.message)
     if (trailers.length > 1) throw new Error('ambiguous node contribution identity')
     if (trailers.length === 1) result.push(`build:${trailers[0]!}`)
     else result.push(`foreign:${originalForeign(commit.sha, aliases)}`)
+    proofs.push(`foreign:${commit.sha}`, `foreign:${originalForeign(commit.sha, aliases)}`)
   }
-  for (const landing of landings) {
-    if (!owned.has(landing.sha)) continue
-    result.push(...(landing.contribution ?? [`build:${landing.slug}` as const]))
-  }
-  return normalizeIdentities(result)
+  return expandLandings(result, proofs, landings)
 }
 
 export interface PresenceInputs {
@@ -116,34 +144,36 @@ export interface PresenceInputs {
   aliases: Map<string, string>
   landings: LandingEvidence[]
 }
-/** One repository batch, never a full-log read per dependent. */
+/** Read full state only for the destinations whose histories are inspected.
+ * Confirmed landing/contribution evidence comes from the batched digest read. */
 export async function presenceInputs(
   store: { buildFacts(slug: string): Promise<CurrentBuildFacts> },
   entries: PresenceBuild[],
+  destinations: Iterable<string> = [],
 ): Promise<PresenceInputs> {
   const states = new Map<string, BuildState>()
   const aliases = new Map<string, string>()
-  for (const entry of entries) {
-    if (entry.digest.kind !== 'node' && !entry.digest.merged) continue
-    const state = (await store.buildFacts(entry.record.slug)).state
-    states.set(entry.record.slug, state)
-    if (entry.digest.kind === 'node')
-      for (const [sha, original] of Object.entries(state.nodeRestack?.foreignAliases ?? {}))
-        aliases.set(sha, original)
+  const pending = [...destinations]
+  while (pending.length) {
+    const slug = pending.pop()!
+    if (states.has(slug)) continue
+    const state = (await store.buildFacts(slug)).state
+    states.set(slug, state)
+    for (const [sha, original] of Object.entries(state.nodeRestack?.foreignAliases ?? {}))
+      aliases.set(sha, original)
+    if (state.target) pending.push(state.target.build)
   }
   const landings: LandingEvidence[] = []
-  for (const [slug, state] of states) {
-    if (state.mergedSha && state.prState === 'merged' && state.status !== 'aborted') {
-      if (state.kind === 'node') {
-        const contribution = state.nodeRestack?.contribution
-        if (contribution?.landing === state.mergedSha)
-          landings.push({
-            slug,
-            sha: state.mergedSha,
-            contribution: contribution.identities as ChangeIdentity[],
-          })
-      } else landings.push({ slug, sha: state.mergedSha })
-    }
+  for (const { record, digest } of entries) {
+    if (!digest.mergedSha || digest.terminal === 'aborted' || digest.prClosed) continue
+    if (digest.kind === 'node') {
+      if (digest.nodeContribution?.landing === digest.mergedSha)
+        landings.push({
+          slug: record.slug,
+          sha: digest.mergedSha,
+          contribution: digest.nodeContribution.identities as ChangeIdentity[],
+        })
+    } else landings.push({ slug: record.slug, sha: digest.mergedSha })
   }
   return { entries, states, aliases, landings }
 }

@@ -16118,6 +16118,14 @@
     "1153": {
       "kind": "object",
       "props": {
+        "mergedSha": {
+          "type": "13",
+          "optional": true
+        },
+        "nodeContribution": {
+          "type": "7",
+          "optional": true
+        },
         "kind": {
           "type": "460",
           "optional": true
@@ -16194,6 +16202,14 @@
         },
         "terminal": {
           "type": "472",
+          "optional": true
+        },
+        "mergedSha": {
+          "type": "13",
+          "optional": true
+        },
+        "nodeContribution": {
+          "type": "7",
           "optional": true
         },
         "nodeOpened": {
