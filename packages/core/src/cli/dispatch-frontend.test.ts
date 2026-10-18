@@ -1,3 +1,4 @@
+import { FakeTicketSource } from '../ports/tickets/fake'
 import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
@@ -1519,6 +1520,7 @@ interface SessionViewHarness {
 async function seedSessionViewHarness(
   overrides: {
     clock?: () => Date
+    ticketSource?: () => Promise<import('../ports/types').TicketSource>
     /** Wrap the store (for a slow or pruned readStream). */
     refreshScheduler?: import('./dashboard/refresh').RefreshScheduler
     wrapStore?: (store: MemoryBuildStore) => BuildStore
@@ -1584,6 +1586,7 @@ async function seedSessionViewHarness(
     repo,
     storeRef: 'memory',
     store: overrides.wrapStore ? overrides.wrapStore(store) : store,
+    ticketSource: overrides.ticketSource,
     ...(overrides.clock !== undefined ? { clock: overrides.clock } : {}),
     ...(overrides.refreshScheduler !== undefined
       ? { refreshScheduler: overrides.refreshScheduler }
@@ -1636,6 +1639,82 @@ async function seedSessionViewHarness(
     },
   }
 }
+
+test('land key records consent for a ready node using a fresh ticket-source read', async () => {
+  let reads = 0
+  const tickets = new FakeTicketSource()
+  const h = await seedSessionViewHarness({
+    ticketSource: async () => {
+      reads++
+      return tickets
+    },
+  })
+  try {
+    await waitFor(() => h.output().includes('watched'), 'initial frame')
+    await h.store.append(h.slug, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session: 's_watch',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'test', resumedFromSeq: 0 },
+      },
+    })
+    await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: '/session-view-repo',
+        ticket: { source: 'fake', id: 'AUT-WATCH' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: 'parent' },
+    })
+    await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+    })
+    await h.store.append(h.slug, {
+      actor: KERNEL,
+      type: 'integration.prepared',
+      payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+    })
+    await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+    })
+    await h.store.append(h.slug, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+        from: 'node',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    const controller = h.frontend as unknown as { renderOnce(): Promise<void> }
+    await controller.renderOnce()
+    h.press({ type: 'down' })
+    h.press({ type: 'text', text: 'l' })
+    await waitFor(
+      async () => (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
+      'node land request',
+    )
+    expect(reads).toBeGreaterThan(0)
+  } finally {
+    await h.finish()
+  }
+})
 
 test('Enter on a session with a stream opens the read-only session view; every control key is inert', async () => {
   const h = await seedSessionViewHarness({ rows: 24 })

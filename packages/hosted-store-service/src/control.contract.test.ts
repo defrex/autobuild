@@ -1,6 +1,8 @@
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { abBuildControl } from '@defrex/autobuild/testing'
+import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
+import type { TicketSource } from '@defrex/autobuild/plugin-sdk'
 import type { BuildControlAction } from '@defrex/autobuild/operator'
 import { abBulkControl } from '@defrex/autobuild/testing'
 import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
@@ -45,7 +47,7 @@ function fetchFor(server: { fetch(req: Request): Promise<Response> }): typeof fe
     )) as typeof fetch
 }
 
-function api(store: BuildStore): OperatorApiClient {
+function api(store: BuildStore, ticketBackend?: OperatorTicketBackend): OperatorApiClient {
   return new OperatorApiClient({
     url: 'http://operator.test',
     token: mintToken(SECRET, {
@@ -57,6 +59,7 @@ function api(store: BuildStore): OperatorApiClient {
       createOperatorServer({
         projects: testProjects([REPO]),
         store,
+        ticketBackend,
         secret: SECRET,
         clock,
       }),
@@ -240,6 +243,71 @@ describe('operator behavioral parity contract', () => {
       )
     })
   }
+
+  test('HTTP land rechecks ready node completeness through the configured ticket backend', async () => {
+    const store = await makeStore({ active: false, ticket: true, ticketSource: 'fake' })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        ticket: { source: 'fake', id: 'AUT-1' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await store.append(SLUG, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'parent' } })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'integration.prepared',
+      payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+        from: 'node',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    let reads = 0
+    const backend: OperatorTicketBackend = {
+      contextFor: async (repo) => ({
+        repo,
+        teamKey: 'test',
+        tickets: { source: 'file', readyState: 'ready' },
+      }),
+      sourceFor: () =>
+        ({
+          name: 'fake',
+          integrationTree: true,
+          listAll: async () => {
+            reads++
+            return { tickets: [], diagnostics: [] }
+          },
+        }) as unknown as TicketSource,
+      statesFor: () => [],
+    }
+    await api(store, backend).controlBuild(REPO, SLUG, { action: 'land' })
+    expect(reads).toBeGreaterThan(0)
+    expect(
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested'),
+    ).toHaveLength(1)
+  })
 
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {
     const stores = [await makeStore(), await makeStore()]

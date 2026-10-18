@@ -56,6 +56,8 @@ import {
   type DispatchChildOptions,
 } from './dispatch-process'
 
+import type { TicketSource } from '../ports/types'
+
 const PAINT_MS = 250
 const ABORTABLE_STATUSES = new Set(['queued', 'running', 'collecting', 'paused', 'blocked'])
 
@@ -91,6 +93,7 @@ export interface DispatchFrontendOptions {
   checkout?: string
   storeRef: string
   store: BuildStore
+  ticketSource?: () => Promise<TicketSource>
   env: Record<string, string | undefined>
   terminal: TerminalOut
   input: TerminalInput
@@ -688,6 +691,7 @@ export class DispatchFrontend {
   ): Promise<void> {
     const result = await controlBuild({
       store: this.opts.store,
+      ticketSource: this.opts.ticketSource,
       repo: this.opts.repo,
       slug,
       env: this.opts.env,

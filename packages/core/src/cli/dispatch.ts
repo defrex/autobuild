@@ -1,3 +1,4 @@
+import { openTicketSource } from './ticket'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import { DashboardRefresh, interactionRead, presentationReader } from './dashboard/refresh'
 import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
@@ -4179,7 +4180,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
 
   // Interactive production dispatch is two programs. Resolve/open only the
   // Store in the terminal owner; config, plugins, adapters, runners, and ticket
-  // I/O are constructed exclusively by the supervised private child. Injected
+  // I/O are constructed by the supervised private child. Explicit node-land
+  // actions lazily open the ticket source to recheck completeness. Injected
   // wiring remains the direct test/embedding seam, and every plain/non-TTY
   // invocation stays on the byte-compatible in-process kernel path below.
   if (
@@ -4203,6 +4205,19 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         checkout: state.checkout,
         storeRef: opened.storeRef,
         store: opened.store,
+        ticketSource: async () =>
+          (
+            await openTicketSource(
+              {
+                targetRepo: state.checkout,
+                exec: resolvedOpts.exec,
+                env: resolvedOpts.env,
+                storeRef: opened.storeRef,
+                stdout: resolvedOpts.stdout,
+              },
+              'ab land',
+            )
+          ).source,
         env: resolvedOpts.env,
         terminal: resolvedOpts.terminal,
         input: resolvedOpts.input,

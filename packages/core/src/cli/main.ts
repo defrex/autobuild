@@ -332,7 +332,7 @@ async function runBuildControl(
             stdout: deps.stdout,
             ...(storeRef !== undefined ? { storeRef } : {}),
           },
-          'ab auto-merge',
+          `ab ${action.kind}`,
         )
       ).source,
     targetRepo: deps.workspacePath,

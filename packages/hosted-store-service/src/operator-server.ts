@@ -25,6 +25,7 @@ import {
   bulkControlRepository,
   BulkWalkError,
   controlBuild,
+  openOperatorTickets,
   controlHarvestRun,
   effectiveStatus,
   getHarvestStatus,
@@ -689,7 +690,22 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             : request.action === 'resume'
               ? { kind: 'dashboard-resume' }
               : { kind: request.action }
-        return json(200, await controlBuild({ store: opts.store, repo, slug, user, action }))
+        return json(
+          200,
+          await controlBuild({
+            store: opts.store,
+            repo,
+            slug,
+            user,
+            action,
+            ticketSource: async () => {
+              if (!opts.ticketBackend) throw new Error('ticket source unavailable')
+              return (
+                await openOperatorTickets({ store: opts.store, repo, backend: opts.ticketBackend })
+              ).source
+            },
+          }),
+        )
       }
       if (req.method === 'POST' && rest[2] === 'answer' && rest.length === 3) {
         const request = await body(req, answerRequestSchema)

@@ -92,6 +92,7 @@ export type {
   OperatorTicketQueue,
 } from './tickets'
 export {
+  openOperatorTickets,
   prepareOperatorTicketAssets,
   listOperatorTicketStates,
   createOperatorTicketState,
