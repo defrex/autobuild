@@ -1,3 +1,4 @@
+import { readinessChecks, type ForgeReadinessCheck } from './readiness'
 import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
@@ -43,6 +44,9 @@ function detail(error: unknown): string {
  * Git database. No method invokes a shell, remote command, network client, or
  * `gh`; every subprocess is an argv-form `git` command. */
 export class LocalGitForge implements Forge {
+  async inspectReadiness(): Promise<ForgeReadinessCheck[]> {
+    return readinessChecks('pass', 'Local Git has no hosted merge settings or protection policy.')
+  }
   get rewrite() {
     return gitRewrite(this.exec, true)
   }

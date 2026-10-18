@@ -797,3 +797,31 @@ test('source degradation requires strict cause-specific reset evidence', () => {
     validateRepositoryEventWrite({ ...write, payload: { ...generic, cause: 'ready-scan-failed' } }),
   ).not.toThrow()
 })
+
+test('forge readiness notices only accept hard check keys and dispatcher authors', () => {
+  const notice = {
+    actor: DISPATCHER,
+    type: 'dispatcher.forge-readiness-failed' as const,
+    payload: {
+      run: 'r1',
+      forge: 'github',
+      rootBranch: 'main',
+      check: 'squash',
+      detail: 'disabled',
+      remediation: 'Enable squash merging',
+    },
+  }
+  expect(validateRepositoryEventWrite(notice)).toEqual(notice)
+  for (const field of ['run', 'check', 'remediation']) {
+    const payload = { ...notice.payload } as Record<string, unknown>
+    delete payload[field]
+    expect(() => validateRepositoryEventWrite({ ...notice, payload })).toThrow()
+  }
+  expect(() =>
+    validateRepositoryEventWrite({
+      ...notice,
+      payload: { ...notice.payload, check: 'linear-history' },
+    }),
+  ).toThrow()
+  expect(() => validateRepositoryEventWrite({ ...notice, actor: humanActor('user') })).toThrow()
+})

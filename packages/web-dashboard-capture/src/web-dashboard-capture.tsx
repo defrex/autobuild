@@ -81,6 +81,18 @@ export interface WebFrameSpec {
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
   {
+    id: 'builds-forge-readiness-wide',
+    width: 1440,
+    height: 1400,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
+  },
+  {
+    id: 'builds-forge-readiness-narrow',
+    width: 390,
+    height: 1800,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
+  },
+  {
     id: 'integration-wide',
     width: 1440,
     height: 1000,
@@ -367,6 +379,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
 ]
 
 export interface WebFixtureModels {
+  forgeReadiness?: DashboardModel
   /** The `headline-happy-wide` scenario: five running builds, a merged PR, a running harvest. */
   happy: DashboardModel
   /** The `mixed-wide` scenario: blocked, pausing, queued-and-held builds under a repository pause. */
@@ -548,6 +561,11 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
 
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
   switch (spec.id) {
+    case 'builds-forge-readiness-wide':
+    case 'builds-forge-readiness-narrow': {
+      const model = models.forgeReadiness ?? models.mixed
+      return shell(builds(model), { model })
+    }
     case 'integration-wide':
       return shell(builds(models.integration), { model: models.integration })
     case 'builds-loading-wide':
@@ -995,6 +1013,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
   try {
     const capture = await captureDashboardFrames({ workspacePath: workspace })
     return {
+      forgeReadiness: frameModel(capture, 'forge-readiness-wide'),
       happy: frameModel(capture, 'headline-happy-wide'),
       mixed: frameModel(capture, 'mixed-wide'),
       integration: frameModel(capture, 'integration-wide'),

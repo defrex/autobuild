@@ -1,3 +1,4 @@
+import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
 import {
   readBuildFacts,
@@ -392,6 +393,7 @@ async function dashboardFromView(
   })
   const warningLines = [
     ...status.roleWarnings,
+    ...forgeReadinessWarnings(status),
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
   ]
   const model = buildDashboardFromProjected(

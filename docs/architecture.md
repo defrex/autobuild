@@ -542,6 +542,17 @@ receive-pack-free network policy, so even a failed publication-policy restore
 fails closed before setup or plugin code runs. Normal VM sessions never receive
 Forge credentials.
 
+**Forge readiness.** `ports/forge/readiness.ts` owns the portable check inventory,
+classification, plugin fallback, and formatting; `github-readiness.ts` performs
+read-only settings/policy inspection, keeping incomplete evidence unknown. Host
+init validation invokes the configured registry forge outside guest probes.
+Dispatch inspects after acquiring its repository lease and writes validated
+`dispatcher.forge-readiness-failed` facts once per run/check for known hard
+failures. `kernel/dispatch-status.ts` retains their typed collection across ticks
+and reloads; the independent frontend and operator query project the same warnings.
+`ab watch` follows these repository attention events for external orchestrators.
+See [setup](setup.md#forge-readiness) for requirements and access guidance.
+
 **Forge credentials.** `packages/core/src/ports/forge/github-transport.ts` owns the
 REST transport seam and credential resolution for the builtin GitHub forge:
 `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login read through

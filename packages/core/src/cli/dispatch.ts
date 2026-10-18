@@ -1,3 +1,9 @@
+import {
+  inspectForgeReadiness,
+  formatForgeReadiness,
+  hardReadinessKeys,
+} from '../ports/forge/readiness'
+import { createReadinessRedactor } from './init-readiness-shared'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import { DashboardRefresh, interactionRead, presentationReader } from './dashboard/refresh'
 import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
@@ -699,6 +705,10 @@ class DispatchLoop {
    * process. Rendered ABOVE the transient warning line and never overwritten by
    * it: `setWarning` replaces the transient slot outright, so sharing it would
    * let the first tick's janitor notice erase a startup diagnostic for good. */
+  private forgeWarnings: string[] = []
+  private forgeInspected = false
+  private forgePublicationFailed = false
+  private readonly startupRootBranch: string
   private configWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
@@ -761,6 +771,7 @@ class DispatchLoop {
     view?: RepoViewStore,
   ) {
     const config = liveConfig.current().config
+    this.startupRootBranch = config.baseBranch
     // Minted exactly once per invocation: `wiring.ids` is `randomIds()` and a
     // fresh id per access would split the journal run from the lease holder.
     // abDispatch always passes `runId`, so the fallback only covers direct
@@ -1127,6 +1138,7 @@ class DispatchLoop {
         await this.recordTickYielded()
         return emptyTickReport()
       }
+      await this.reportForgeReadiness()
       const startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
       if (startedAt === null) {
         this.superseded = true
@@ -1211,6 +1223,7 @@ class DispatchLoop {
     // no dependence on emission order relative to `startRendering()`.
     const warningLines = [
       ...this.configWarnings,
+      ...this.forgeWarnings,
       ...(this.warningLine !== undefined ? [this.warningLine] : []),
     ]
     let effective: DashboardModel = {
@@ -3442,6 +3455,49 @@ class DispatchLoop {
    * stderr writes each one, the dashboard wraps them into its warning region.
    * No surface gets a digest, a cap, or a truncated tail.
    */
+  private async reportForgeReadiness(): Promise<void> {
+    if (this.forgeInspected) return
+    const checks = await inspectForgeReadiness(this.wiring.forge, {
+      rootBranch: this.startupRootBranch,
+    })
+    const redact = createReadinessRedactor(this.opts.env)
+    const status = this.repoView.repositoryFacts().status
+    const recorded = new Set(
+      status?.run === this.runId
+        ? status.forgeReadinessFailures?.map((failure) => failure.check)
+        : [],
+    )
+    for (const check of checks) {
+      if (check.status === 'fail' && check.requirement === 'hard') {
+        const key = hardReadinessKeys.find((key) => key === check.check)!
+        if (!recorded.has(key)) {
+          this.forgePublicationFailed = true
+          await this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.forge-readiness-failed',
+            payload: {
+              run: this.runId,
+              forge: redact(this.currentConfig().config.forge),
+              rootBranch: redact(this.startupRootBranch),
+              check: key,
+              detail: redact(check.detail),
+              remediation: redact(check.remediation),
+            },
+          })
+          this.forgePublicationFailed = false
+          recorded.add(key)
+        }
+      }
+      if (check.status !== 'pass') {
+        const line = redact(formatForgeReadiness(check))
+        this.forgeWarnings.push(line)
+        if (!this.dashboard) this.opts.stderr(line)
+      }
+    }
+    this.forgeInspected = true
+    this.syncModelControls()
+  }
+
   private reportRoleDiagnostics(): void {
     const lines = roleKeyWarnings(this.currentConfig().config)
     if (this.dashboard) {
@@ -3986,6 +4042,7 @@ class DispatchLoop {
           this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
+          if (this.forgePublicationFailed) throw error
           const message = error instanceof Error ? error.message : String(error)
           await this.publishTickFailure(error)
           this.warn(`tick failed: ${message}`)

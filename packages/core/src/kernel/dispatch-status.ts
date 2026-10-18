@@ -1,3 +1,5 @@
+import { formatReadinessFailure } from '../ports/forge/readiness'
+import type { RepositoryEventPayload } from '../events/repository'
 import type { RepositoryEvent } from '../events/repository'
 import type { ArtifactRef } from '../ontology'
 import type { IncrementalReducer } from './incremental'
@@ -14,6 +16,7 @@ export interface DispatchStatus {
   creationWithheld?: number
   yieldedHolder?: string
   availableUpgrade?: string
+  forgeReadinessFailures?: RepositoryEventPayload<'dispatcher.forge-readiness-failed'>[]
   roleWarnings: string[]
   diagnostics: string[]
   /** Latest notice of warning/failure severity, retained independently from routine notices. */
@@ -49,6 +52,9 @@ export function reduceDispatchStatus(
         }
       : {
           ...previous,
+          ...(previous.forgeReadinessFailures
+            ? { forgeReadinessFailures: [...previous.forgeReadinessFailures] }
+            : {}),
           roleWarnings: [...previous.roleWarnings],
           diagnostics: [...previous.diagnostics],
         }
@@ -63,6 +69,7 @@ export function reduceDispatchStatus(
         state.health = 'running'
         state.effectiveConfig = event.payload.effectiveConfig
         state.roleWarnings = [...event.payload.roleWarnings]
+        state.forgeReadinessFailures = undefined
         state.notice = undefined
         state.warningNotice = undefined
         break
@@ -78,6 +85,11 @@ export function reduceDispatchStatus(
             ? `autobuild.toml reload requires dispatch restart for: ${event.payload.restartRequired.join(', ')}`
             : 'autobuild.toml reloaded'
         if (event.payload.restartRequired.length > 0) state.warningNotice = state.notice
+        break
+      case 'dispatcher.forge-readiness-failed':
+        state.forgeReadinessFailures ??= []
+        if (!state.forgeReadinessFailures.some((failure) => failure.check === event.payload.check))
+          state.forgeReadinessFailures.push({ ...event.payload })
         break
       case 'dispatcher.config-rejected':
         state.notice = errorNotice('config reload rejected', event.payload.error)
@@ -151,7 +163,7 @@ export function reduceDispatchStatus(
 
 /** Bump when `DispatchStatus`'s shape or fold semantics change (it is its own
  * accumulator: `lastSeq` makes the fold skip already-seen events). */
-export const DISPATCH_STATUS_REDUCER_VERSION = 2
+export const DISPATCH_STATUS_REDUCER_VERSION = 3
 
 /** The incremental form of `reduceDispatchStatus` for one run. The run is a
  * parameter, so this is a factory. */
@@ -169,4 +181,8 @@ export function dispatchStatusReducer(
     }),
     reduce: (events) => reduceDispatchStatus(events, run),
   }
+}
+
+export function forgeReadinessWarnings(status: Readonly<DispatchStatus>): string[] {
+  return (status.forgeReadinessFailures ?? []).map(formatReadinessFailure)
 }

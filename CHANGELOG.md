@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#645](https://github.com/defrex/autobuild/pull/645) — Check forge readiness before builds encounter incompatible settings
 - [#644](https://github.com/defrex/autobuild/pull/644) — Allow open integration nodes to move to a new parent
 - [#643](https://github.com/defrex/autobuild/pull/643) — Verify complete integration nodes and land guarded linear stacks
 - [#642](https://github.com/defrex/autobuild/pull/642) — Gate blockers on change presence in the dependent's target
