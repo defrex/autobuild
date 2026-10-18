@@ -86,6 +86,10 @@ describe('shipped skill self-containment', () => {
       'spec-standard.md',
       'remote-store-protocol.md',
       'ticket-dependencies.md',
+      'integration-tree.md',
+      'landing-policy.md',
+      'restacking.md',
+      'migration-1.0.md',
     ]) {
       const installed = guide!.files.find((file) => file.path === `references/${name}`)
       expect(installed, `missing ab-guide/references/${name}`).toBeDefined()

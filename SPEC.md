@@ -297,7 +297,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
 | **Node ticket** | A named integration point represented by a ticket of kind `node`; its integration build owns a branch collecting child work |
 | **Build** | One ticket execution with a slug; either a work pipeline or an integration branch lifecycle; the unit the operator sees |
-| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and awaits explicit landing consent |
+| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and lands under ordered policy (node consent by default) |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
@@ -337,7 +337,9 @@ the bare phase names throughout.
 ## 5. Pipeline grammar
 
 Work builds retain the fixed grammar below. Integration builds instead follow
-`spec → branch opening → collecting → complete → verify:* → consent → land`.
+`spec → branch opening → collecting → complete → verify:* → authorization → land → close`.
+Authorization follows ordered landing policy: nodes default to explicit consent,
+while an auto rule authorizes a complete, verified candidate without a command.
 They never enter plan, implement, code-review or finalize. A node conflict uses
 source-aware reconcile. Idle collecting nodes own no execution resources;
 verification temporarily uses ordinary execution capacity. Empty nodes have no PR.
@@ -1950,7 +1952,7 @@ Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
 
 Claims targeting an open node freeze its build identity and branch as their base.
-Their PR, auto-merge and reconcile all use that frozen base, even after source
+Their PR, landing and reconcile all use that frozen base, even after source
 metadata changes. Missing, unopened, landed, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
@@ -2339,8 +2341,10 @@ rejection is `EventValidationError`.
    The immutable build slug in the landed commit's terminal Git trailer
    `Autobuild-Build: <slug>` identifies the build's change across such rewrites
    (RFC 0001 §5). Branch presence is determined by exact parsed trailer values
-   in reachable history, not recorded SHA ancestry. This does not introduce
-   restacking, rewrite events, or archive refs.
+   in reachable history, not recorded SHA ancestry. Kernel-owned single-change
+   replay, durable rewrite facts and immutable forge archive refs preserve
+   historical SHAs (§15.7); the original no-rebase rationale does not prohibit
+   this archived replay standard.
 5. **Append-only; corrections are new events.**
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
@@ -2659,7 +2663,10 @@ ticket*, never a reopened build.
 
 **Merge standard: one change per build, replay at reconcile.**
 
-- **PR → main: squash merge.** Main stays linear, one commit per build.
+- **Root-target leaf PR → configured root: squash merge.** One commit per
+  leaf build keeps the root linear. Node-target children and nodes landing into
+  local-git roots use guarded fast-forwards; GitHub root nodes use guarded PR
+  rebase merge with fencing/audit provenance (§13.1), preserving contributions.
 - **Conflicted build → refreshed base: restack.** The kernel collapses the
   contribution relative to its effective diff base into one commit with the
   original head's exact tree, then replays that change onto the freshly captured
@@ -2672,7 +2679,12 @@ repeated conflict loops; replaying one net change resolves the conflict once.
 Rewrites used to sever event-recorded SHAs; immutable archives and durable
 rewrite facts retain them. Ordinary per-WIP-commit rebase remains inappropriate.
 Existing historical merge reconciliations retain their original replay/display
-semantics and supply the promoted contribution base for a later restack.
+semantics and supply the promoted contribution base for a later restack. Resumed
+builds use current engine routing at newly reached replay and landing boundaries;
+there is no claim-version guarantee that in-flight builds finish under the old
+merge standard. Execution configuration remains pinned, while landing policy
+is live dispatcher configuration. Operators requiring old execution behavior
+should drain work before upgrading rather than run mixed-version writers.
 
 Before branch replacement the kernel publishes Git tips named by retained
 history and rewrite facts, plus both heads and the temporary change, under immutable non-branch refs
@@ -2729,7 +2741,7 @@ trusted rewrite/archive capability only after execution teardown. Contention is
 recorded durably and uses the existing runner-failure bound, without spending
 unchanged-base no-progress budget before completion.
 
-**Stable landed identity.** A root-target kernel landing remains one squash commit and
+**Stable landed identity.** A root-target leaf kernel landing remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
 identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
 Implementation commits and deposited PR descriptions are unchanged. The janitor
@@ -2821,9 +2833,9 @@ record a possible stale-enable landing as contrary to policy and raise operator
 attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
 
-**Merge gates are never bypassed.** Landing authorization is
-durable consent to merge, not a bypass. Whenever the base branch has any real
-merge-blocking gate, consent is applied as GitHub-native auto-merge, so the
+**Merge gates are never bypassed.** Landing authorization comes from recorded
+policy or explicit consent. For root-target leaves, whenever the base branch has
+any real merge-blocking gate, authorization is applied as GitHub-native auto-merge, so the
 forge's own checks decide when the PR lands. Only when the forge
 authoritatively reports no gate may the janitor perform a normal,
 head-guarded squash itself — never admin, force, or rebase — and only after
@@ -2861,8 +2873,9 @@ one follow-up while the PR is open, and a later `reconcile.completed` or
 `finalize.completed` supersedes it — the projection shows nothing until the
 gate re-examines consent and records a fresh one. A repository
 with native auto-merge disabled is left open for a human; Autobuild never
-changes the setting. The local-git forge has no external gate or native
-setting: consent produces the same inspected-head guarded squash candidate,
+changes the setting. For root-target leaves, the local-git forge has no external
+gate or native setting: authorization produces the same inspected-head guarded
+squash candidate,
 mergeability is recomputed against the current local base, and the exact
 `pr-description` becomes the single-parent squash commit message. Its author and
 committer are Git's ordinary resolved repository identity, exactly as for a plain
@@ -2880,7 +2893,7 @@ base ref. A poll after a crash retries that same old-to-landed transition withou
 rolling back the ref or overwriting operator work; the PR remains open and
 retryable until checkout repair succeeds. No merge is ever assumed: a build
 reaches `merged` only when a later poll observes the landing and any required
-checkout synchronization. Without consent, the local branch and PR record
+checkout synchronization. Without authorization, the local branch and PR record
 remain open for inspection with ordinary Git.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's

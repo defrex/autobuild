@@ -468,6 +468,9 @@ A readiness decision retains the complete matched rule and index (or an explicit
 default), source kind, destination and sampled labels. Later policy edits do not
 rewrite this provenance. Landing policy belongs to the live dispatcher config;
 it is excluded from pinned pipeline settings and integration verification inputs.
+See [worked landing configurations and forge requirements](landing-policy.md),
+[operating controls](#landing-policy), and
+[migration from 0.x](migration-1.0.md).
 
 ## `[pr]`
 
@@ -1267,6 +1270,25 @@ invariants, not additional configuration fields.
 
 ## `[tickets]`
 
+### Ticket kind and target metadata
+
+`kind` and `target` are fields on individual tickets, not `[tickets]` TOML keys.
+`kind` defaults to `work`; `node` creates a finite integration point. Omitted
+`target` means the configured `baseBranch` root. A target must be a same-source
+node ticket id. `ab ticket update <id> --target <node-id>` changes it;
+`--no-target` clears it and `--kind work` resets kind. Omitted update fields
+preserve values. Claimed work targets cannot change: abort and re-dispatch.
+Open nodes can reparent under the guarded protocol, revoking land consent.
+
+File tickets persist the fields in frontmatter; hosted tickets store them with
+project-scoped transactional validation. Linear maps kind to the exact `node`
+label and target to a parent carrying that label. Ordinary grouping parents do
+not impose targets; explicit clear removes the parent relation. Node demotion
+with targeting children and cycles are refused regardless of child state.
+See [integration trees](integration-tree.md) for admission, lifecycle and commands.
+
+### Source configuration
+
 To move an existing project between sources, follow the
 [ticket migration procedure](ticket-migration.md).
 
@@ -1671,8 +1693,10 @@ configuration. The setup prompt instead asks the agent to review and improve
 the existing config.
 
 Re-running init still maintains the `.autobuild/` ignore rule and skill
-installation. `ab upgrade` does not migrate or rewrite `autobuild.toml`; by
-default it first updates a recognized Bun installation — from the npm registry
+installation. `ab upgrade` migrates an absent landing policy from the target
+repository journal; explicit landing arrays are preserved. See
+[migration from 0.x](migration-1.0.md). By default it first updates a recognized
+Bun installation — from the npm registry
 for a registry install, or from GitHub Releases for a `github:` install — and
 then merges vendored skills from that distribution. For a local install, Bun may update the
 *owning* project's Autobuild dependency in `package.json` and `bun.lock`; this
@@ -1729,7 +1753,7 @@ either retirement.
 
 ## Durable settings outside TOML
 
-Four repository-wide operator choices intentionally live as facts in the
+Three repository-wide operator choices intentionally live as facts in the
 BuildStore repository journal, not in `autobuild.toml`. They are latest-write
 wins, survive process restarts, and are sampled by every dispatcher on its
 poll. Editing TOML cannot change them.
@@ -1742,8 +1766,9 @@ poll. Editing TOML cannot change them.
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
 Omitting both writes nothing and reuses the durable value. Per-build
-pause/resume and auto-merge controls are separate facts and do not alter these
-repository defaults. Pause all and resume all write two facts each — the
+pause/resume and landing controls are separate facts and do not alter these
+repository settings; landing authorization follows `[[landing]]`. Pause all and
+resume all write two facts each — the
 repository pause first, then intake — so a partial failure still leaves the
 repository at least as quiesced as asked; `ab pause --all` reports on stderr
 which of them landed when a walk stops partway. The current release has no TOML
@@ -1781,8 +1806,10 @@ set or copy them into `.env`; the runner stamps them for each session.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
 credentials or network access: it keeps durable PR records under private Git
-refs, leaves each build at `refs/heads/ab/<slug>`, and squash-merges locally only
-after auto-merge consent. The squash author and committer come from the
+refs, leaves each work build at `refs/heads/ab/<slug>`, and lands root leaves by
+squash under the recorded landing authorization. Node landings use guarded
+fast-forwards; see [landing methods](landing-policy.md#landing-methods).
+The squash author and committer come from the
 repository's ordinary Git identity, as resolved for a plain `git commit`; the
 landing is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
 resolve that identity, the PR remains open and `ab build status <slug>` names
@@ -1942,27 +1969,16 @@ through serialized execution identity. Existing plugins that forwarded
 
 ## Landing policy
 
-Ordered `[[landing]]` rules in `autobuild.toml` decide authorization. Each rule
-requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
-<node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
-`label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
-match anything. With no match, leaves use auto and nodes require consent.
-The target is the immutable destination frozen at claim, not a ticket's current
-parent. Labels are sampled from a successful source-ticket read at readiness;
-unavailable ticket data defers the decision instead of supplying empty labels.
-
-A leaf becomes ready after verification and finalize on a current base; a node
-must be complete and verified at its exact head and parent. `landing.decided`
-records that candidate, the sampled labels, resulting mode, and the full matched
-rule and index (or explicit default). Editing configuration cannot change this
-recorded decision. A replacement candidate gets a new decision once ready.
-Policy is live dispatcher configuration, outside the pinned execution pipeline.
+The [`[[landing]]` table](#landing) defines ordered authorization rules and
+readiness provenance. See [landing policy](landing-policy.md) for examples,
+merge methods and forge capability requirements.
 
 `ab hold <slug>` durably suppresses landing and revokes previous consent, even
 before readiness. `ab land <slug>` requires readiness, clears hold, and consents
-to this build/node landing into its frozen destination. Consent survives head
+to this build/node landing into its effective destination. Consent survives head
 replacement, restacking, verification and re-finalization until another hold or
-completion. It is consent to the landing, not approval of an immutable diff.
+completion. Accepted node reparenting revokes consent; holds survive.
+It is consent to the landing, not approval of an immutable diff.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while land acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available

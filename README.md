@@ -55,14 +55,16 @@ in your tracker. From then on, that skill is how work goes in.
 
 ## How it works
 
-### Every ticket runs the pipeline
+Finite [integration trees](docs/integration-tree.md) collect related work before landing it under your chosen policy.
+
+### Work tickets run the pipeline
 
 ```text
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize
       epilogue: (pr.conflicted → reconcile → verify:*)* → merged or closed
 ```
 
-Each ticket moves through deterministic phases inside its own build-runner.
+Each work ticket moves through deterministic phases inside its own build-runner.
 Every phase is a fresh agent session, with artifacts knitting them together.
 
 1. **spec** — the dispatcher claims a ready ticket, establishes the final
