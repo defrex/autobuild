@@ -41,14 +41,14 @@ async function git(deps: NodeGit, args: string[], allowFailure = false) {
 async function output(deps: NodeGit, args: string[]) {
   return (await git(deps, args)).stdout.trim()
 }
-interface HistoryCommit {
+export interface HistoryCommit {
   sha: string
   parents: string[]
   message: string
 }
 /** Git commit messages cannot contain NUL. Read metadata in one process per
  * history/range, including merge parents, rather than spawning per commit. */
-async function history(
+export async function history(
   deps: NodeGit,
   revisions: string[],
   options: string[] = [],

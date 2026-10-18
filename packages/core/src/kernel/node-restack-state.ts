@@ -5,6 +5,10 @@ import { defineReducer } from './incremental'
 /** Reservations outlive writer leases and disposable replay workspaces. A new
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
+  contributionBoundaries?: Record<string, string>
+  droppedIdentities?: string[]
+  foreignAliases?: Record<string, string>
+  contribution?: EventPayload<'node.contribution-recorded'>
   observedParent?: EventPayload<'target.moved'>
   reservedSeq?: number
   contributionBase?: string
@@ -84,6 +88,11 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           event.payload.previous !== state.active?.expected
         )
           throw new Error('node rewrite does not match its publication intent')
+        state.contributionBoundaries ??= {}
+        state.contributionBoundaries[event.payload.head] =
+          state.active.operation === 'restack'
+            ? state.active.parent
+            : (state.contributionBase ?? state.active.oldBase)
         state.rewritten = event.payload
         break
       case 'node.writer-settled':
@@ -91,7 +100,23 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           throw new Error('unknown node writer reservation')
         if (event.payload.outcome === 'completed') {
           if (!state.rewritten) throw new Error('node completion requires a confirmed rewrite')
-          if (state.active.operation === 'restack') state.contributionBase = state.active.parent
+          if (state.active.operation === 'restack') {
+            state.foreignAliases ??= {}
+            const dropped = new Set(state.droppedIdentities ?? [])
+            for (const item of state.items) {
+              const change = state.active.changes[item.index]
+              if (change && item.dropped)
+                dropped.add(
+                  change.build === undefined
+                    ? `foreign:${state.foreignAliases[change.sha] ?? change.sha}`
+                    : `build:${change.build}`,
+                )
+              if (change && change.build === undefined && !item.dropped)
+                state.foreignAliases[item.head] = state.foreignAliases[change.sha] ?? change.sha
+            }
+            state.droppedIdentities = [...dropped].sort()
+            state.contributionBase = state.active.parent
+          }
         }
         delete state.active
         delete state.prepared
@@ -100,14 +125,21 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         delete state.rewritten
         state.items = []
         break
+      case 'node.contribution-recorded':
+        state.contribution = event.payload
+        break
       case 'node.inventory':
+        if (state.contributionBase !== undefined) {
+          state.contributionBoundaries ??= {}
+          state.contributionBoundaries[event.payload.head] = state.contributionBase
+        }
         state.inventory = event.payload
         break
     }
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 2,
+  version: 3,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

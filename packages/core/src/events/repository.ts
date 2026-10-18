@@ -505,7 +505,26 @@ export const ticketSourceHealthEventPayloadSchemas = {
   }),
 } as const
 
+/** Head-bound admission evidence. Historical observations remain append-only. */
+export const changePresenceEventPayloadSchemas = {
+  'change-presence.observed': z.strictObject({
+    branch: z.string().min(1),
+    destination: z.string().min(1),
+    head: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    evidence: z.string().min(1),
+    identities: z
+      .array(
+        z.string().regex(/^(?:build:[a-z0-9][a-z0-9-]*|foreign:[0-9a-f]{40}(?:[0-9a-f]{24})?)$/),
+      )
+      .refine(
+        (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
+        'identities must be sorted and unique',
+      ),
+  }),
+} as const
+
 export const repositoryEventPayloadSchemas = {
+  ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
   ...harvestEventPayloadSchemas,
   ...orchestratorSandboxEventPayloadSchemas,
@@ -565,6 +584,7 @@ export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
 export const HARVEST_EVENT_TYPES = Object.keys(harvestEventPayloadSchemas) as HarvestEventType[]
 
 const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
+  'change-presence.observed': ['dispatcher', 'kernel'],
   'harvest.pause-requested': ['human'],
   'harvest.resume-requested': ['human'],
   'harvest.paused': ['kernel'],

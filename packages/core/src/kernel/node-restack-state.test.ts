@@ -56,10 +56,13 @@ test('arbitrary replay prefixes survive serialization and completion alone promo
     event('node.rewritten', { id: 'tx', previous: 'old-head', head: 'resolved' }),
   ])
   expect(state.contributionBase).toBe('initial')
+  expect(state.foreignAliases).toBeUndefined()
   state = nodeRestackReducer.advance(state, [
     event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
   ])
   expect(state.contributionBase).toBe('new-parent')
+  expect(state.foreignAliases).toEqual({ resolved: 'foreign' })
+  expect(state.contributionBoundaries?.resolved).toBe('new-parent')
   expect(state.active).toBeUndefined()
 })
 
@@ -127,4 +130,21 @@ test('duplicate receipts do not corrupt a later prepared item', () => {
   const before = structuredClone(state)
   state = nodeRestackReducer.advance(state, [receipt(0, 'new-parent', 'prefix')])
   expect(state).toEqual(before)
+})
+
+test('completed restacks retain dropped owned identities rather than treating them as inherited history', () => {
+  const state = nodeRestackReducer.advance(nodeRestackReducer.initial(), [
+    event('node.opened', { sha: 'old-parent' }),
+    reservation,
+    prepared(0, 'new-parent'),
+    receipt(0, 'new-parent', 'new-parent', true),
+    prepared(1, 'new-parent'),
+    receipt(1, 'new-parent', 'new-parent', true),
+    event('node.publish-intended', { id: 'tx', head: 'new-parent' }),
+    event('node.rewritten', { id: 'tx', previous: 'old-head', head: 'new-parent' }),
+    event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
+  ])
+  expect(state.droppedIdentities).toEqual(['build:one', 'foreign:foreign'])
+  expect(state.contributionBase).toBe('new-parent')
+  expect(state.foreignAliases).toEqual({})
 })

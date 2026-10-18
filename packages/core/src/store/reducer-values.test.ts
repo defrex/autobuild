@@ -101,7 +101,14 @@ describe('named reducer values', () => {
           const resolved = resolveReducerValue(scope, request)
           const expectedInput =
             name === 'buildDigest'
-              ? events.map((event) => ({ ...event, ...event.payload }))
+              ? events.map((event) => ({
+                  ...event,
+                  ...event.payload,
+                  ...(event.type === 'pr.merged' ? { mergedSha: event.payload.sha } : {}),
+                  ...(event.type === 'node.contribution-recorded'
+                    ? { nodeContribution: event.payload }
+                    : {}),
+                }))
               : events
           const expected = json(resolved.reducer.reduce(expectedInput))
           const cold = await readReducerValue(scope, request, h.storage)
