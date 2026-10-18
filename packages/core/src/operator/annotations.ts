@@ -26,6 +26,18 @@ export interface ToolAnnotationsTableEntry {
 
 /** The exact version-one tool names; the registry's closed table must match. */
 export const OPERATOR_TOOL_ANNOTATIONS = {
+  'landings.list': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
+  'tickets.tree': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
   'builds.list': {
     readOnlyHint: true,
     destructiveHint: false,

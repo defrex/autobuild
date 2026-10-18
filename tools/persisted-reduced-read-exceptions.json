@@ -653,5 +653,21 @@
   "packages/core/src/kernel/reducer.ts::foldBuild::advanceNodeRestack": {
     "reason": "Incrementally folds the same single incoming event into the nested node transaction accumulator; no current-state replay or store read.",
     "kind": "reduction"
+  },
+  "packages/core/src/cli/attention.ts::consentReady::finish": {
+    "kind": "reduction",
+    "reason": "Presentation over the persisted stream seed; finishing its retained accumulator performs no history read."
+  },
+  "packages/core/src/cli/wait.ts::stateSatisfies::reduce": {
+    "kind": "reduction",
+    "reason": "Pure caller-supplied event-array reference overload; production wait passes the persisted stream restack facts."
+  },
+  "packages/core/src/cli/watch.ts::abWatch/checkConsent::finish": {
+    "kind": "reduction",
+    "reason": "Presentation over the retained stream prefix, seeded by persisted reduced reads and advanced in event order."
+  },
+  "packages/core/src/cli/status.ts::detail::indexLog": {
+    "kind": "reduction",
+    "reason": "Pure event-array reference overload for status projection; store-backed callers pass persisted log facts."
   }
 }

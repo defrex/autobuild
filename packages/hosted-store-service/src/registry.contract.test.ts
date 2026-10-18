@@ -924,6 +924,8 @@ describe('agent tool registry contract', () => {
     const reads = TOOLS.filter((tool) => tool.approval === 'never').map((tool) => tool.name)
     const readInputs: Record<string, unknown> = {
       'builds.list': { repo },
+      'landings.list': { repo },
+      'tickets.tree': { repo },
       'builds.get': { repo, slug: 'demo' },
       'builds.events': { repo, slug: 'demo', cursor: 0 },
       'builds.artifact': { repo, slug: 'demo', kind: 'notes' },

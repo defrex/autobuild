@@ -1,10 +1,7 @@
+import { readTicketTree } from '../operator/tickets'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { createForge } from '../ports/forge/create'
-import {
-  compatibleTicketSource,
-  projectTicketTree,
-  type TicketTreeEntry,
-} from '../ports/tickets/tree'
+import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { exportTickets, importTickets } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
@@ -981,13 +978,8 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
       if (parsed.positionals.length) throw new Error(TICKET_USAGE)
       const { source, config } = await resolveTicketCommand(opts, 'tree')
-      if (!source.listAll)
-        throw new Error(
-          `${source.name} cannot enumerate all tickets; use a source with listAll support`,
-        )
-      const listing = await source.listAll()
-      for (const diagnostic of listing.diagnostics) opts.stderr(diagnostic)
-      const tree = projectTicketTree(listing.tickets, config.baseBranch)
+      const tree = await readTicketTree(source, config.baseBranch)
+      for (const diagnostic of tree.diagnostics) opts.stderr(diagnostic)
       if (parsed.flags.has('json')) opts.stdout(JSON.stringify(tree, null, 2))
       else {
         opts.stdout(tree.root)

@@ -126,3 +126,16 @@ describe('dashboard row selection', () => {
     expect(sameSelection(harvest(), build('harvest'))).toBe(false)
   })
 })
+
+test('queue priority preserves slug selection when consent exits or entries reorder', () => {
+  const rows = (consent: boolean) =>
+    dashboardSelections({
+      builds: [
+        { slug: 'a', tree: { consent: false } },
+        { slug: 'b', tree: { consent } },
+      ] as import('./model').DashboardBuild[],
+    })
+  expect(rows(true)).toEqual([global(), build('b'), build('a')])
+  expect(reconcileSelection(rows(true), rows(false), build('b'))).toEqual(build('b'))
+  expect(reconcileSelection(rows(true), [global(), build('a')], build('b'))).toEqual(build('a'))
+})
