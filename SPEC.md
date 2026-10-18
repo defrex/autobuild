@@ -476,7 +476,8 @@ roles:
 
 ```
 builds       id/slug, ticket ref, repo, branch, status (derived), created/updated,
-             lease + heartbeat (mutable liveness columns — §15.2.6, never events)
+             runner lease + heartbeat; independent node writer lease
+             (mutable liveness columns — §15.2.6, never events)
 events       build_id, seq, timestamp, actor, type, payload (JSON)   — append-only
 artifacts    build_id, kind, revision, blobRef, metadata
 repo_streams repo, created/updated, lease + heartbeat, bounded tick observation
@@ -697,6 +698,14 @@ concurrent processors; the event stream remains authoritative, with no
 snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
 ordinary event validation, unknown builds reject, and a comparison miss leaves
 the log and build timestamps untouched.
+Node branch writers use separate `claimNodeWriter`, `renewNodeWriter`, and
+`releaseNodeWriter` operations. Claim permits an absent, expired, or same-holder
+lease; renewal requires the same unexpired holder, and release is holder-checked.
+The memory, SQLite, Postgres, and HTTP stores enforce the same contract. These
+leases neither grant nor renew runner authority. Delegated execution credentials
+cannot acquire node writer authority. The active operation remains a durable
+build-stream reservation across expiry, not mutable lease data.
+
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
 and read methods, plus a repository lease. Ticket assets (§7.1) add
 `putTicketAsset`, `getTicketAsset` (latest live revision, or an explicit
@@ -2319,6 +2328,16 @@ history. `node.compared {parentSha, headSha, ahead}` retains a changed observati
 only positive ahead counts permit creating a PR. `pr.opened {pr}` records its
 identity without a fabricated finalize completion. All four facts are
 dispatcher-authored. Existing merged/closed PR, abort and completion facts close admission.
+
+Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
+`node.item-conflicted`, `node.item-replayed`, `node.publish-intended`,
+`node.rewritten`, `node.writer-settled`, and `node.inventory` (§6 integration
+cascade). It retains the previous contribution boundary, latest parent
+observation, complete replay prefix, active source item and merge proofs.
+A rewrite receipt alone never promotes the boundary; only completed settlement
+does. CLI status exposes pending/active work, reachable build identities and
+node-owned foreign changes. A node stays `collecting` while its narrow reconcile
+runner is attached; it does not acquire a leaf pipeline.
 
 `status ∈ queued | running | collecting | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
