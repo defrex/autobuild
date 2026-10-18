@@ -374,14 +374,14 @@ describe('openProductionSessionStore', () => {
         type: 'finalize.completed',
       })
       expect(forge.opened).toHaveLength(1)
-      expect(forge.autoMergeCalls).toHaveLength(1)
+      expect(forge.autoMergeCalls).toHaveLength(0)
     } finally {
       await store.close()
     }
 
     const events = await seed.getEvents('finalize-build')
     expect(events.map((event) => event.type)).toContain('finalize.completed')
-    expect(events).toContainEqual(
+    expect(events).not.toContainEqual(
       expect.objectContaining({
         actor: KERNEL,
         type: 'pr.auto-merge-enabled',

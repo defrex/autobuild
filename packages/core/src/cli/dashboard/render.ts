@@ -309,7 +309,6 @@ function renderBuild(
   widths: Widths,
   selected: boolean,
   selecting: boolean,
-  defaultAutoMerge: boolean,
 ): string[] {
   const { color, width, now } = opts
 
@@ -333,9 +332,8 @@ function renderBuild(
   // the frame's right edge (AC 3, AC 5).
   const rightTokens: string[] = []
   // The state is ALWAYS drawn — including `off` — so consent is never conveyed
-  // by the absence of a token alone. `off` turns red while the repository
-  // default reads ON: the default-on/build-off mismatch an operator must see
-  // without opening the detail view.
+  // by the absence of a token alone. Legacy repository defaults have no
+  // effect on a landing or its presentation.
   {
     const autoColor: ColorName =
       build.autoMerge === 'enabled'
@@ -344,9 +342,7 @@ function renderBuild(
           ? 'cyan'
           : build.autoMerge === 'cancelling'
             ? 'yellow'
-            : defaultAutoMerge
-              ? 'red'
-              : 'dim'
+            : 'dim'
     if (build.kind !== 'integration')
       rightTokens.push(
         paint(
@@ -1524,7 +1520,6 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
             widths,
             sameSelection(selection, model.selection),
             selecting,
-            model.defaultAutoMerge,
           ),
         },
       ]

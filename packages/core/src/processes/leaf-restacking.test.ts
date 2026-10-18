@@ -314,10 +314,17 @@ for (const conflict of [false, true])
           headSha: canonical,
           outcome: 'pass',
         })
+        const pr = await forge.openPr({
+          workspacePath: cwd,
+          head: BRANCH,
+          base: 'main',
+          title: 'Verified contribution',
+          body: 'Restack fixture',
+        })
         await store.append(BUILD, {
           actor: KERNEL,
           type: 'finalize.completed',
-          payload: { pr: { number: 1, url: 'local', headSha: canonical } },
+          payload: { pr },
         })
         // Several target moves collapse into one transaction on the newest snapshot.
         await git(['checkout', '-q', 'main'])

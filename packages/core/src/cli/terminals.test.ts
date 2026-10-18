@@ -1192,7 +1192,7 @@ describe('ab done — finalize', () => {
     expect(comment).toContain('<code>visual:second@0</code>')
   })
 
-  test('a pre-PR auto-merge request on gated CLEAN is applied natively and acknowledged', async () => {
+  test('finalize leaves a gated native application to the ready-candidate dispatcher', async () => {
     class GatedCleanForge extends FakeForge {
       override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
         const pr = await super.openPr(opts)
@@ -1200,7 +1200,7 @@ describe('ab done — finalize', () => {
         return pr
       }
     }
-    const request = await store.append(BUILD, {
+    await store.append(BUILD, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
       payload: {},
@@ -1218,21 +1218,10 @@ describe('ab done — finalize', () => {
 
     await done(deps)
 
-    expect(deps.forge.autoMergeCalls).toEqual([
-      {
-        workspacePath: workspace,
-        number: 1,
-        enabled: true,
-        changed: true,
-      },
-    ])
-    expect(deps.forge.buildSlugs.get(1)).toBe(BUILD)
+    expect(deps.forge.autoMergeCalls).toEqual([])
     const events = await store.getEvents(BUILD)
-    const applied = events.find((event) => event.type === 'pr.auto-merge-enabled')
-    expect(applied?.actor).toEqual(KERNEL)
-    expect(applied?.payload).toEqual({ commandSeq: request.seq })
-    expect(events.map((event) => event.type)).toContain('finalize.completed')
-    expect(events.map((event) => event.type)).toContain('pr.auto-merge-enabled')
+    expect(events.some((event) => event.type === 'pr.auto-merge-enabled')).toBe(false)
+    expect(events.some((event) => event.type === 'finalize.completed')).toBe(true)
   })
 
   test('proved ungated CLEAN finalizes successfully but leaves intent pending for the janitor', async () => {
@@ -1268,14 +1257,7 @@ describe('ab done — finalize', () => {
 
     expect(event.type).toBe('finalize.completed')
     expect(forge.squashMergeCalls).toEqual([])
-    expect(forge.autoMergeCalls).toEqual([
-      {
-        workspacePath: workspace,
-        number: 1,
-        enabled: true,
-        changed: false,
-      },
-    ])
+    expect(forge.autoMergeCalls).toEqual([])
     const types = (await store.getEvents(BUILD)).map((entry) => entry.type)
     expect(types).not.toContain('pr.auto-merge-enabled')
     expect(types).not.toContain('escalation.raised')
@@ -1308,7 +1290,7 @@ describe('ab done — finalize', () => {
     expect(forge.squashMergeCalls).toEqual([])
   })
 
-  test('re-reads intent after openPr, so a command landing during finalize is not missed', async () => {
+  test('a withdrawal arriving during finalize is retained without a native write', async () => {
     const request = await store.append(BUILD, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
@@ -1339,17 +1321,16 @@ describe('ab done — finalize', () => {
       }),
     )
 
-    expect(forge.autoMergeCalls).toHaveLength(1)
-    expect(forge.autoMergeCalls[0]).toMatchObject({ enabled: false })
+    expect(forge.autoMergeCalls).toEqual([])
     const events = await store.getEvents(BUILD)
     const cancellation = events.find((event) => event.type === 'build.auto-merge-cancelled')
     const applied = events.find((event) => event.type === 'pr.auto-merge-disabled')
     expect(cancellation?.seq).toBeGreaterThan(request.seq)
     expect(cancellation).toBeDefined()
-    expect(applied?.payload).toEqual({ commandSeq: cancellation!.seq })
+    expect(applied).toBeUndefined()
   })
 
-  test('a reason-bearing auto-merge refusal completes finalize and records one kernel follow-up', async () => {
+  test('finalize completes before dispatcher-owned native gate diagnostics', async () => {
     class DisabledAutoMergeForge extends FakeForge {
       override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
         const pr = await super.openPr(opts)
@@ -1357,7 +1338,7 @@ describe('ab done — finalize', () => {
         return pr
       }
     }
-    const command = await store.append(BUILD, {
+    await store.append(BUILD, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
       payload: {},
@@ -1380,12 +1361,7 @@ describe('ab done — finalize', () => {
     expect(events.some((entry) => entry.type === 'pr.auto-merge-enabled')).toBe(false)
     expect(events.some((entry) => entry.type === 'escalation.raised')).toBe(false)
     const observations = events.filter((entry) => entry.type === 'observation.recorded')
-    expect(observations).toHaveLength(1)
-    expect(observations[0]?.actor).toEqual(KERNEL)
-    expect(observations[0]?.payload.summary).toContain('Auto-merge gate')
-    expect(observations[0]?.payload.summary).toContain('repository-level auto-merge is disabled')
-    expect(observations[0]?.payload.summary).not.toContain('PR creation')
-    expect(observations[0]?.payload.refs).toEqual([`auto-merge-gate:pr:1:command:${command.seq}`])
+    expect(observations).toHaveLength(0)
   })
 
   test('finalize honors a pre-existing matching auto-merge deferral marker', async () => {

@@ -1835,8 +1835,7 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
   test('a parked merge step names the missing consent — and requested/enabled do not', () => {
     const bare = project(toLog(throughPr))
     expect(stepFor(bare, 'merge')?.reason).toBe(
-      'no auto-merge consent has been requested — request it with m on the build row ' +
-        'or `ab auto-merge auth-rate-limit on`',
+      'Landing awaits consent — use l on the build row or ab land auth-rate-limit; use ab hold auth-rate-limit to withdraw consent',
     )
     const consented = project(toLog([...throughPr, ev('build.auto-merge-requested', {})]))
     expect(stepFor(consented, 'merge')?.reason).toBeUndefined()

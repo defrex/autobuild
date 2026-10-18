@@ -198,13 +198,33 @@ describe('operator behavioral parity contract', () => {
       request: { action: 'abort' },
     },
     {
-      name: 'auto merge on',
-      seed: async () => {},
+      name: 'land',
+      seed: async (store) => {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'finalize.completed',
+          payload: {
+            pr: { number: 1, url: 'https://forge/1', headSha: 'head' },
+          },
+        })
+        await store.append(SLUG, {
+          actor: DISPATCHER,
+          type: 'landing.decided',
+          payload: {
+            candidate: { head: 'head', parent: 'base', cycle: '1' },
+            from: 'leaf',
+            into: { kind: 'root' },
+            labels: [],
+            mode: 'consent',
+            rule: { default: true },
+          },
+        })
+      },
       direct: { kind: 'land' },
       request: { action: 'land' },
     },
     {
-      name: 'auto merge off',
+      name: 'hold',
       seed: async () => {},
       direct: { kind: 'hold' },
       request: { action: 'hold' },
@@ -417,25 +437,6 @@ describe('operator behavioral parity contract', () => {
         throughApi
           ? api(store).toggleIntake(REPO)
           : toggleRepositorySetting({ store, repo: REPO, user: USER, setting: 'intake' }),
-      async (store: MemoryBuildStore, throughApi: boolean) =>
-        throughApi
-          ? api(store).setAutoMergeDefault(REPO, true)
-          : setRepositorySetting({
-              store,
-              repo: REPO,
-              user: USER,
-              setting: 'auto-merge-default',
-              enabled: true,
-            }),
-      async (store: MemoryBuildStore, throughApi: boolean) =>
-        throughApi
-          ? api(store).toggleAutoMergeDefault(REPO)
-          : toggleRepositorySetting({
-              store,
-              repo: REPO,
-              user: USER,
-              setting: 'auto-merge-default',
-            }),
       async (store: MemoryBuildStore, throughApi: boolean) => {
         if (throughApi) {
           await api(store).toggleHarvest(REPO)
@@ -457,45 +458,25 @@ describe('operator behavioral parity contract', () => {
     }
   })
 
-  test('a run-bearing default write is exact; a run-less one stays bare', async () => {
+  test('retired default controls reject without writing', async () => {
     const store = await makeStore()
-    await setRepositorySetting({
-      store,
-      repo: REPO,
-      user: USER,
-      setting: 'auto-merge-default',
-      enabled: true,
-      run: 'run-1',
+    await expect(
+      setRepositorySetting({
+        store,
+        repo: REPO,
+        user: USER,
+        setting: 'auto-merge-default',
+        enabled: true,
+      }),
+    ).rejects.toThrow('retired')
+    await expect(
+      toggleRepositorySetting({ store, repo: REPO, user: USER, setting: 'auto-merge-default' }),
+    ).rejects.toThrow('retired')
+    await expect(api(store).setAutoMergeDefault(REPO, true)).rejects.toMatchObject({
+      status: 409,
+      message: 'Auto-merge default is retired; configure [[landing]] rules in autobuild.toml',
     })
-    await toggleRepositorySetting({
-      store,
-      repo: REPO,
-      user: USER,
-      setting: 'auto-merge-default',
-      run: 'run-2',
-    })
-    expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true, run: 'run-1' },
-      },
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: false, run: 'run-2' },
-      },
-    ])
-    // The operator API (which carries no run) keeps writing the bare payload.
-    const apiStore = await makeStore()
-    await api(apiStore).setAutoMergeDefault(REPO, true)
-    expect(repoWrites(await apiStore.getRepoEvents(REPO), 0)).toEqual([
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true },
-      },
-    ])
+    expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([])
   })
 
   for (const direction of ['pause', 'resume'] as const) {

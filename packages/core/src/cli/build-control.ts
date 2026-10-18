@@ -492,7 +492,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         const facts = (await readBuildFacts(opts.store, opts.slug)).value
         const current = facts.state
         activeState(opts.slug, current)
-        if (discardInFlight(current)) throw discardPending(opts.slug)
+        if (opts.action.kind === 'land' && discardInFlight(current)) throw discardPending(opts.slug)
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
           if (

@@ -80,6 +80,12 @@ describe('durable landing state', () => {
   })
 
   test('legacy explicit commands map to consent/hold; default seeds never grant consent', () => {
+    const historical = event(1, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    expect(landingAuthorized(buildReducer.reduce([historical]).landing)).toBe(true)
     const log = [
       decided(),
       event(2, {

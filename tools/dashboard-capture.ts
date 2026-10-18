@@ -134,7 +134,6 @@ const SESSION_CLOSED_PARTS: readonly StreamPart[] = [
 
 const HAPPY_EVIDENCE = [
   'intake ON',
-  'auto merge ON',
   'harvest ON',
   'active 5/6',
   'AUT-131',
@@ -1140,6 +1139,14 @@ async function capturePaint(
           : []
       const presented = {
         ...model,
+        // Runtime commits include generated fixture bytes; keep their visible
+        // provenance stable just like the scripted clock and repository name.
+        builds: model.builds.map((build) => ({
+          ...build,
+          ...(build.pipelineSource
+            ? { pipelineSource: { ...build.pipelineSource, commit: 'capture-source' } }
+            : {}),
+        })),
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
         ...(spec.scenario === 'happy'
@@ -1290,7 +1297,7 @@ export async function captureDashboardFrames(
         ]),
         '',
         '## Headline visual verdict',
-        '- [ ] `headline-happy-wide.png` shows intake, auto merge, and harvest enabled.',
+        '- [ ] `headline-happy-wide.png` shows intake and harvest enabled, with selected landing controls.',
         '- [ ] Harvest is running with scan complete and synthesize underway.',
         '- [ ] Five plausible builds span plan, implement, code-review, verify, and merged.',
         '- [ ] A review round count above one is visible.',

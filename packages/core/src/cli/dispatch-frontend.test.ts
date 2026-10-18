@@ -344,7 +344,7 @@ test('frontend input and captured controls remain responsive while the kernel is
   input!({ type: 'text', text: 'i' })
   await intakeEntered.promise
   input!({ type: 'text', text: 'p' })
-  input!({ type: 'text', text: 'm' })
+  input!({ type: 'text', text: 'o' })
   input!({ type: 'text', text: 'h' })
   input!({ type: 'down' })
   input!({ type: 'enter' })
@@ -389,12 +389,7 @@ test('frontend input and captured controls remain responsive while the kernel is
       (event) => event.type === 'dispatcher.pause-set' && event.payload.enabled === true,
     ),
   ).toBe(true)
-  expect(
-    repoEvents.some(
-      (event) =>
-        event.type === 'dispatcher.auto-merge-default-set' && event.payload.enabled === true,
-    ),
-  ).toBe(true)
+  expect(repoEvents.some((event) => event.type === 'dispatcher.auto-merge-default-set')).toBe(false)
   expect(repoEvents.some((event) => event.type === 'harvest.pause-requested')).toBe(true)
 
   // Resume and countermand the Harvest gate while the child is still gated.

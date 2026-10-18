@@ -2746,15 +2746,15 @@ consent does not. A stale enable completing after cancellation is repaired by
 poll reconciliation. This is an explicitly bounded failure model: native merge
 is used only behind a merge-blocking gate, and checks on a replacement head must
 take far longer than one poll interval, allowing cancellation before they pass.
-There is no durable native-effect reservation protocol. An undesired forge landing is classified from the kernel's last durable native
-application state, without changing provider contracts. A confirmed disabled
+There is no durable native-effect reservation protocol. An undesired forge
+landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
 state with no enable in flight or indeterminate means a deliberate human forge
 landing, which supplies consent. Record whether it overrode a hold: an unheld
 human landing needs no operator attention; overriding a hold is informational.
 If native auto-merge was armed, or an enable was in flight or indeterminate,
 record a possible stale-enable landing as contrary to policy and raise operator
-attention. Autobuild never rewrites the target to undo either outcome. Merge gates and the
-serialized node-writer publication rules remain authoritative.
+attention. Autobuild never rewrites the target to undo either outcome. Merge
+gates and the serialized node-writer publication rules remain authoritative.
 
 **Merge gates are never bypassed.** Landing authorization is
 durable consent to merge, not a bypass. Whenever the base branch has any real

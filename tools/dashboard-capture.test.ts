@@ -159,7 +159,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   }
   const headline = first.result.frames.find((frame) => frame.id === 'headline-happy-wide')!.text
   expect(headline).toContain('intake ON')
-  expect(headline).toContain('auto merge ON')
+  expect(headline).not.toContain('auto merge ON')
   expect(headline).toContain('harvest ON')
   expect(headline).toContain('active 5/6')
   expect(headline).toMatch(/Harvest\s+3 observations\s+RUNNING/)

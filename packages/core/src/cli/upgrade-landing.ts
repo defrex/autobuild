@@ -1,3 +1,4 @@
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { resolveRepoState, isRemoteStoreRef } from './repo-state'
 import { readFile, rename, writeFile, rm, access } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -36,11 +37,8 @@ export async function migrateLandingPolicy(opts: {
       env: { ...(opts.env ?? process.env), AB_STORE: undefined },
     })
     try {
-      const journal = (await context.store.getRepo(context.repo))
-        ? await context.store.getRepoStateEvents(context.repo)
-        : []
-      const fact = journal.findLast((event) => event.type === 'dispatcher.auto-merge-default-set')
-      enabled = fact?.type === 'dispatcher.auto-merge-default-set' && fact.payload.enabled
+      const facts = await readRepositoryFacts(context.store, context.repo)
+      enabled = facts.value.autoMerge.latest?.enabled ?? false
     } finally {
       await context.store.close()
     }

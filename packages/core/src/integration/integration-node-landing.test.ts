@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { makeHarness, happyHandlers, readyTicket, git, commitAll } from './harness'
+import { makeHarness, happyHandlers, readyTicket, git, commitAll, CONFIG_TOML } from './harness'
 import { controlBuild } from '../cli/build-control'
 import { reduceBuild } from '../kernel/reducer'
 import { observeIntegration } from '../kernel/integration-completeness'
@@ -20,6 +20,7 @@ async function addStack(h: Awaited<ReturnType<typeof makeHarness>>, branch: stri
 test('nested node landing preserves both child commits and parent lands the stack without wrappers', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
@@ -36,6 +37,7 @@ test('nested node landing preserves both child commits and parent lands the stac
     await h.runLatest()
     const state = reduceBuild(await h.events(b.slug))
     expect(integrationHeadVerified(state, state.integration!.cycle!.head)).toBe(true)
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,
@@ -49,6 +51,7 @@ test('nested node landing preserves both child commits and parent lands the stac
     }
     expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
     await h.runLatest()
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,
@@ -75,6 +78,7 @@ test('nested node landing preserves both child commits and parent lands the stac
 test('native terminal states, partial listings and reopening govern completeness', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('NODE', { title: 'Release integration' }), kind: 'node' },
@@ -97,7 +101,7 @@ test('native terminal states, partial listings and reopening govern completeness
         action: { kind: 'land' },
         ticketSource: async () => h.tickets,
       }),
-    ).rejects.toThrow('no landed changes')
+    ).rejects.toThrow('Landing is not ready')
     await h.tickets.transition('TRIAGE', 'Ready')
     expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([
       'TRIAGE',
@@ -116,6 +120,7 @@ test('native terminal states, partial listings and reopening govern completeness
 test('a verification-blocked node admits a repair child and verifies the repaired head', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [{ ...readyTicket('NODE', { title: 'Repairable integration' }), kind: 'node' }],
   })
@@ -136,6 +141,7 @@ test('a verification-blocked node admits a repair child and verifies the repaire
     await h.runLatest()
     const repair = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'REPAIR')!
     expect(repair).toBeDefined()
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,

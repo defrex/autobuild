@@ -37,9 +37,7 @@ export function mergeDecisionFromFacts(
 
 export function buildNeedsAttention(events: AbEvent[], state: BuildState): boolean {
   return (
-    state.landing?.forgeMerge?.classification === 'possible-stale-enable' ||
-    (state.openEscalations?.length ?? 0) > 0 ||
-    mergeDecision(events, new Date(0), state) !== null
+    (state.openEscalations?.length ?? 0) > 0 || mergeDecision(events, new Date(0), state) !== null
   )
 }
 

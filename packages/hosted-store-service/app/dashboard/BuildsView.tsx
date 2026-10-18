@@ -732,7 +732,7 @@ function BuildDetail({
           </span>
         )}
         <span>
-          <span className="k">auto merge </span>
+          <span className="k">landing </span>
           {build.landing?.command?.kind === 'hold'
             ? 'held'
             : (build.landing?.decision?.mode ?? 'not ready')}

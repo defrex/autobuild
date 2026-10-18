@@ -304,8 +304,8 @@ test('rendered build controls follow previews and direct controls name their tar
   expect(row).toContain(`aria-label="Open details for ${slug}"`)
   expect(row).toContain('aria-expanded="false"')
   expect(row).toContain(`aria-controls="detail-${slug}"`)
-  expect(row).toContain(`aria-label="Auto merge off for ${slug}"`)
-  expect(row).toContain('aria-pressed="false"')
+  expect(row).not.toContain(`aria-label="Auto merge off for ${slug}"`)
+  expect(row).toContain('aria-pressed="true"')
   expect(row).not.toContain('role="toolbar"')
   for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
     expect(row).not.toContain(`aria-label="${label} ${slug}"`)
@@ -382,9 +382,7 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).toMatch(
       /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
     )
-    expect(html).toMatch(
-      /<button type="button" class="word am" data-am="off" disabled="" aria-label="Auto merge off for plan-blocked-dashboard"/,
-    )
+    expect(html).not.toContain('class="word am"')
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
     for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
       expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
@@ -477,13 +475,11 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
   if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
-  const reason = 'no auto-merge consent has been requested'
+  const reason = 'Landing awaits consent'
   // Both surfaces, same words: the row register and the open detail register.
   expect(evidenceText(html).split(reason)).toHaveLength(3)
-  expect(evidenceText(html)).toContain('`ab auto-merge complete-dashboard-evidence on`')
-  // The observed mismatch is visible in the row markup, not just the words:
-  // default ON with the build's consent off marks the token.
-  expect(html).toContain('data-mismatch')
+  expect(evidenceText(html)).toContain('ab land complete-dashboard-evidence')
+  expect(html).not.toContain('data-mismatch')
 })
 
 test('the named consent frame renders the real page with its registered client', async () => {

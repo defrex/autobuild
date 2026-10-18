@@ -1928,3 +1928,33 @@ test('collecting is an accepted wait status condition', () => {
     { text: 'collecting', cond: { kind: 'status', status: 'collecting' } },
   ])
 })
+
+test.each(['human', 'possible-stale-enable'] as const)(
+  'terminal forge landing attention follows durable classification: %s',
+  async (classification) => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://example/pr/1', headSha: 'head' } },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'landing.forge-merged',
+      payload: { classification, overrodeHold: true },
+    })
+    await store.append('b1', { actor: DISPATCHER, type: 'pr.merged', payload: { sha: 'landed' } })
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    const h = harness(store, { forValues: ['attention'] })
+    expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '2' })).toBe(
+      classification === 'human' ? 2 : 0,
+    )
+    if (classification !== 'human')
+      expect(h.out.join('\n')).toContain('possible stale native enable')
+  },
+)

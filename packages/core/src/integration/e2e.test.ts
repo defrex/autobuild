@@ -253,6 +253,9 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(await git(['log', '--format=%s'], ws)).toBe('Add rate limiting\ninitial')
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
 
+  await h.dispatcher.tick()
+  expect(reduceBuild(await h.events(SLUG)).landing?.decision?.mode).toBe('auto')
+  expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
   // Janitor epilogue (§15.7, D1): merged → release → complete → ticket Done.
   h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
   const tick2 = await h.dispatcher.tick()
@@ -268,6 +271,9 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const final = await h.events(SLUG)
   expect(typesOf(final)).toEqual([
     ...HAPPY_PREFIX,
+    'landing.decided',
+    'landing.native-enable-started',
+    'landing.native-applied',
     'pr.merged',
     'workspace.released',
     'build.completed',
@@ -844,20 +850,23 @@ test('gated CLEAN auto-merge requested before finalize remains GitHub-native', a
   })
   const parked = await h.runLatest()
   expect(parked.prState).toBe('open')
-  expect(h.forge.autoMergeCalls).toHaveLength(1)
-  expect(h.forge.autoMergeCalls[0]).toMatchObject({
+  await h.dispatcher.tick()
+  expect(h.forge.autoMergeCalls.filter((call) => call.enabled)).toHaveLength(1)
+  expect(h.forge.autoMergeCalls.at(-1)).toMatchObject({
     number: 1,
     enabled: true,
     changed: true,
   })
-  expect(h.forge.autoMergeCalls[0]!.workspacePath).toContain(
+  expect(h.forge.autoMergeCalls.at(-1)!.workspacePath).toContain(
     `/worktrees/${BRANCH.replace('/', '-')}`,
   )
   expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
 
-  const applied = ofType(await h.events(SLUG), 'pr.auto-merge-enabled')[0]!
-  expect(applied.actor).toEqual({ kind: 'kernel' })
-  expect(applied.payload).toEqual({ commandSeq: command.seq })
+  const applied = ofType(await h.events(SLUG), 'landing.native-applied').find(
+    (event) => event.payload.enabled,
+  )!
+  expect(applied.actor).toEqual({ kind: 'dispatcher' })
+  expect(applied.payload).toMatchObject({ enabled: true, commandSeq: command.seq })
 
   // Native auto-merge never produces completion facts directly. GitHub's
   // result is observed through the ordinary janitor path on the next poll.
@@ -1031,6 +1040,7 @@ test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, a
   expect(h.cliErrors).toEqual([])
   expect(parked.prState).toBe('open')
   expect(parked.autoMerge.applied).toBeUndefined()
+  await h.dispatcher.tick()
   let events = await h.events(SLUG)
   expect(typesOf(events)).toContain('finalize.completed')
   expect(typesOf(events)).not.toContain('escalation.raised')
@@ -1059,7 +1069,9 @@ test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, a
   h.forge.setGatePresence(1, 'present')
   await h.dispatcher.tick()
   expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
-  expect(ofType(await h.events(SLUG), 'pr.auto-merge-enabled')).toHaveLength(1)
+  expect(
+    ofType(await h.events(SLUG), 'landing.native-applied').filter((event) => event.payload.enabled),
+  ).toHaveLength(1)
   h.forge.setPrState(1, { state: 'merged', sha: 'native-after-recovery' })
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   expect(reduceBuild(await h.events(SLUG)).outcome).toBe('merged')

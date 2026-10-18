@@ -341,6 +341,11 @@ export async function recordAutoMergeDeferralObservation(
 
 /** Clock-independent merge attention shared by persisted seeds and CLI output. */
 export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedger) {
+  if (state.pr && state.landing?.forgeMerge?.classification === 'possible-stale-enable')
+    return {
+      pr: state.pr,
+      reason: 'Landing contrary to policy: possible stale native enable; inspect the target',
+    }
   if (
     !state.finalizeCompletedSeq ||
     !state.pr ||

@@ -366,6 +366,8 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
 
 export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
   if (state.landing?.decision || state.landing?.command) {
+    if (state.landing.command?.kind === 'hold' && !state.pr && !state.landing.native?.enabled)
+      return 'off'
     if (state.landing.command?.kind === 'hold')
       return state.landing.acknowledgedSeq === state.landing.command.seq ? 'off' : 'cancelling'
     if (landingAuthorized(state.landing))

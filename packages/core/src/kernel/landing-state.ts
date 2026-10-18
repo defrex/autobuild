@@ -30,6 +30,11 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
     case 'pr.auto-merge-disabled':
       // Historical provider acknowledgements remain applied-state evidence.
       state.native = { enabled: event.type === 'pr.auto-merge-enabled', seq: event.seq }
+      if (
+        event.type === 'pr.auto-merge-disabled' &&
+        event.payload.commandSeq === state.command?.seq
+      )
+        state.acknowledgedSeq = event.payload.commandSeq
       break
     case 'landing.native-enable-started':
       state.nativeEnablePending = event.seq
@@ -51,13 +56,15 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
         seq: event.seq,
         legacy: true,
       }
-      state.acknowledgedSeq = event.seq
+      if (event.type === 'build.auto-merge-requested') state.acknowledgedSeq = event.seq
       break
   }
 }
 
 export function landingAuthorized(landing: LandingState | undefined): boolean {
-  if (!landing?.decision || landing.command?.kind === 'hold') return false
+  if (landing?.command?.kind === 'hold') return false
+  if (landing?.command?.legacy && landing.command.kind === 'land') return true
+  if (!landing?.decision) return false
   return landing.command?.kind === 'land' || landing.decision.mode === 'auto'
 }
 

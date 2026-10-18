@@ -373,7 +373,7 @@ describe('settlePendingPublication', () => {
       }),
     ])
     expect(h.forge.prAttachmentUploads).toHaveLength(1)
-    expect(h.forge.autoMergeCalls).toHaveLength(1)
+    expect(h.forge.autoMergeCalls).toHaveLength(0)
     expect(h.forge.comments).toHaveLength(0)
     expect(
       renderPrSummary(
