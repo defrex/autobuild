@@ -640,6 +640,12 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       async () => (await buildEvents(b1Slug)).some((event) => event.type === 'finalize.completed'),
       'guest B1 finalize.completed',
     )
+    // Finalize is durable before runner teardown finishes. Settlement must
+    // observe an exited guest, rather than race its remaining cleanup.
+    const b1Runs = [...guestRuns.values()].filter((run) => run.slug === b1Slug)
+    expect(b1Runs).toHaveLength(1)
+    await Promise.all(b1Runs.map((run) => run.done))
+    expect(b1Runs[0]!.error).toBeUndefined()
     const executionsBeforeSettle = (await buildEvents(b1Slug)).filter(
       (event) => event.type === 'execution.started',
     ).length
