@@ -11565,3 +11565,136 @@ for (const failingRead of ['listBuilds', 'getReducerValue'] as const) {
     }
   })
 }
+
+test('startup forge hard failures are durable once per run, redacted, and do not gate dispatch', async () => {
+  const { readinessChecks } = await import('../ports/forge/readiness')
+  const fx = await makeFixture([], {})
+  try {
+    fx.forge.readiness = readinessChecks('fail', 'disabled secret-token')
+    let calls = 0
+    fx.forge.inspectReadiness = async () => {
+      calls++
+      return fx.forge.readiness
+    }
+    for (let i = 0; i < 2; i++)
+      await abDispatch({
+        targetRepo: fx.checkout,
+        exec: spawnExec,
+        env: { GITHUB_TOKEN: 'secret-token' },
+        once: true,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        wire: fx.wire,
+      })
+    expect(calls).toBe(2)
+    const events = (await fx.store.getRepoEvents(fx.origin)).filter(
+      (event) => event.type === 'dispatcher.forge-readiness-failed',
+    )
+    expect(events).toHaveLength(10)
+    expect(new Set(events.map((event) => event.payload.run)).size).toBe(2)
+    expect(JSON.stringify(events)).not.toContain('secret-token')
+    expect(
+      events.every((event) => !['linear-history', 'root-freshness'].includes(event.payload.check)),
+    ).toBe(true)
+    expect(fx.err.join('\n')).toContain('WARN Forge linear-history')
+  } finally {
+    await fx.cleanup()
+  }
+})
+
+test('lease losers never inspect forge readiness', async () => {
+  const fx = await makeFixture([], {})
+  try {
+    let calls = 0
+    fx.forge.inspectReadiness = async () => {
+      calls++
+      return fx.forge.readiness
+    }
+    await fx.store.ensureRepo(fx.origin)
+    await fx.store.claimRepoLease(fx.origin, 'other-holder', 60_000)
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      once: true,
+      stdout: () => {},
+      stderr: () => {},
+      wire: fx.wire,
+    })
+    expect(calls).toBe(0)
+    expect(
+      (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.forge-readiness-failed',
+      ),
+    ).toHaveLength(0)
+  } finally {
+    await fx.cleanup()
+  }
+})
+test('startup journal failures fail dispatch instead of claiming forge notices were delivered', async () => {
+  const { readinessChecks } = await import('../ports/forge/readiness')
+  const fx = await makeFixture([], {})
+  try {
+    fx.forge.readiness = readinessChecks('fail', 'Disabled')
+    const append = fx.store.appendRepo.bind(fx.store)
+    fx.store.appendRepo = async (repo, event) => {
+      if (event.type === 'dispatcher.forge-readiness-failed')
+        throw new Error('readiness journal unavailable')
+      return append(repo, event)
+    }
+    await expect(
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        once: true,
+        stdout: () => {},
+        stderr: () => {},
+        wire: fx.wire,
+      }),
+    ).rejects.toThrow('readiness journal unavailable')
+    const events = await fx.store.getRepoEvents(fx.origin)
+    expect(events.some((event) => event.type === 'dispatcher.tick-started')).toBe(false)
+    expect(
+      events.some(
+        (event) => event.type === 'dispatcher.run-stopped' && event.payload.outcome === 'abnormal',
+      ),
+    ).toBe(true)
+  } finally {
+    await fx.cleanup()
+  }
+})
+test('multiple watch ticks and refreshes inspect and publish each hard requirement only once', async () => {
+  const { readinessChecks } = await import('../ports/forge/readiness')
+  const fx = await makeFixture([], {})
+  try {
+    fx.forge.readiness = readinessChecks('fail', 'Disabled')
+    let calls = 0
+    fx.forge.inspectReadiness = async () => {
+      calls++
+      return fx.forge.readiness
+    }
+    const controller = new AbortController()
+    let ticks = 0
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      signal: controller.signal,
+      stdout: () => {},
+      stderr: () => {},
+      wire: fx.wire,
+      sleep: async () => {
+        if (++ticks >= 3) controller.abort()
+      },
+    })
+    expect(calls).toBe(1)
+    expect(
+      (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.forge-readiness-failed',
+      ),
+    ).toHaveLength(5)
+  } finally {
+    await fx.cleanup()
+  }
+})

@@ -49,6 +49,7 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
   switch (event.type) {
     case 'harvest.escalated':
     case 'harvest.recovery-exhausted':
+    case 'dispatcher.forge-readiness-failed':
     case 'dispatcher.config-rejected':
       return true
     case 'dispatcher.config-reloaded':

@@ -1,3 +1,4 @@
+import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
   DashboardRefresh,
@@ -373,6 +374,7 @@ export class DispatchFrontend {
     const previous = this.model === undefined ? [] : dashboardSelections(this.model)
     const warningLines = [
       ...status.roleWarnings,
+      ...forgeReadinessWarnings(status),
       ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
     ]
     const projected = buildDashboardFromProjected(

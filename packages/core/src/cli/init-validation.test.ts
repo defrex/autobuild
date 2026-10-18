@@ -2338,3 +2338,36 @@ readyState = "ready"
     expect(lines).toContain('config={"guest":"acme-guest"}')
   })
 })
+
+test('host forge checks propagate root, distinguish warnings/unknown, fail hard requirements, and redact', async () => {
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { readinessChecks } = await import('../ports/forge/readiness')
+  const { repo } = await committedLocalRepo('ab-forge-readiness-')
+  for (const hard of [false, true]) {
+    const forge = new FakeForge()
+    forge.readiness = readinessChecks('unknown', 'token-secret inspection incomplete')
+    forge.readiness[5]!.status = 'fail'
+    if (hard) forge.readiness[0]!.status = 'fail'
+    let calls = 0
+    forge.inspectReadiness = async () => {
+      calls++
+      return forge.readiness
+    }
+    const output: string[] = []
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env: { GITHUB_TOKEN: 'token-secret' },
+      runtimes: usableRuntime,
+      stdout: (line) => output.push(line),
+      createForge: async (opts) => {
+        expect(opts.repoRoot).toBe(repo)
+        return forge
+      },
+    })
+    expect(calls).toBe(1)
+    expect(report.exitCode).toBe(hard ? 1 : 0)
+    expect(output.join('\n')).toContain('WARN forge-linear-history')
+    expect(output.join('\n')).toContain('UNKNOWN forge-rebase')
+    expect(JSON.stringify(report)).not.toContain('token-secret')
+  }
+})

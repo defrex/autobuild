@@ -1,3 +1,5 @@
+import { inspectGitHubReadiness } from './github-readiness'
+import type { ForgeReadinessInput } from './readiness'
 import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import { NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
@@ -922,6 +924,11 @@ export class GitHubForge implements Forge {
     )
     return result.sha
   }
+  async inspectReadiness(input: ForgeReadinessInput) {
+    const { owner, name } = await this.requireCoordinates()
+    return inspectGitHubReadiness({ request: this.request.bind(this), owner, name, input })
+  }
+
   async inspectMergeFreshness(branch: string): Promise<{ fenced: boolean; evidence: string[] }> {
     const evidence: string[] = []
     try {

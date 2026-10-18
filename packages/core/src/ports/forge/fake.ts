@@ -1,3 +1,4 @@
+import { readinessChecks, type ForgeReadinessCheck } from './readiness'
 import { hasBuildTrailer, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
@@ -84,6 +85,13 @@ export type MergeSha = string | ((number: number) => string)
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
+  readiness: ForgeReadinessCheck[] = readinessChecks(
+    'pass',
+    'Fake forge permits repository operations.',
+  )
+  async inspectReadiness() {
+    return this.readiness
+  }
   readonly linearStackMerges: { number: number; head: string }[] = []
   async inspectMergeFreshness(_branch: string) {
     return { fenced: false, evidence: ['Fake freshness enforcement is not configured'] }

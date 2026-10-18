@@ -1092,3 +1092,35 @@ test('operator build detail exposes dispatcher execution-no-progress escalation'
   expect(result.dashboardRow).toMatchObject({ status: 'blocked', blockers: [question] })
   expect(JSON.stringify(result)).toContain(question)
 })
+
+test('operator dashboard recovers every forge failure from the journal after routine notices', async () => {
+  const store = new MemoryBuildStore({ clock })
+  await publishRun(store, 'new', config(1, 5))
+  for (const check of ['squash', 'rebase'] as const)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.forge-readiness-failed',
+      payload: {
+        run: 'new',
+        forge: 'github',
+        rootBranch: 'main',
+        check,
+        detail: `${check} disabled`,
+        remediation: `Enable ${check}`,
+      },
+    })
+  await store.appendRepo(REPO, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.operator-reported',
+    payload: { run: 'new', level: 'info', message: 'routine notice' },
+  })
+  const result = await getOperatorDashboard({ store, repo: REPO, clock })
+  const json = JSON.stringify(result)
+  expect(json).toContain('Enable squash')
+  expect(json).toContain('Enable rebase')
+  const { buildRegistry } = await import('./registry')
+  const registry = buildRegistry({ store, clock })
+  const response = await registry.call('repository.status', { repo: REPO })
+  expect(JSON.stringify(response)).toContain('Enable squash')
+  expect(JSON.stringify(response)).toContain('Enable rebase')
+})

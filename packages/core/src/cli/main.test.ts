@@ -4,7 +4,7 @@
  * (context → observe → done) over fakes, asserting the final event sequence.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -2005,6 +2005,10 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
 
   test('a valid --store value preserves one-shot dispatch flag ordering', async () => {
     await writeDispatchConfig()
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      `forge = "local-git"\n${await readFile(join(tmp, 'autobuild.toml'), 'utf8')}`,
+    )
     const cases = [
       ['--store', join(tmp, 'store-first'), '--once', '--plain', '--interval', '0.001'],
       ['--once', '--plain', '--interval', '0.001', '--store', join(tmp, 'store-last')],

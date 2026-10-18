@@ -170,6 +170,17 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
       }),
       () => ({ type: 'dispatcher.tick-failed', payload: { run, error: 'e' } }),
       () => ({ type: 'dispatcher.tick-started', payload: { run } }),
+      () => ({
+        type: 'dispatcher.forge-readiness-failed',
+        payload: {
+          run,
+          forge: 'github',
+          rootBranch: 'main',
+          check: 'squash',
+          detail: 'Squash merging disabled',
+          remediation: 'Enable squash merging',
+        },
+      }),
       () => ({ type: 'dispatcher.config-rejected', payload: { run, error: 'bad' } }),
       () => ({
         type: 'dispatcher.operator-reported',

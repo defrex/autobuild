@@ -162,6 +162,21 @@ test('once renders one durable snapshot without starting interactive presentatio
             },
           }),
         )
+        .then(async () => {
+          for (const check of ['squash', 'rebase'] as const)
+            await store.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.forge-readiness-failed',
+              payload: {
+                run,
+                forge: 'github',
+                rootBranch: 'main',
+                check,
+                detail: `${check} disabled`,
+                remediation: `Enable ${check}`,
+              },
+            })
+        })
         .then(() =>
           store.appendRepo(repo, {
             actor: DISPATCHER,
@@ -199,7 +214,12 @@ test('once renders one durable snapshot without starting interactive presentatio
   expect(snapshot.queued).toBe(3)
   expect(snapshot.active).toEqual({ current: 1, limit: 4 })
   expect(snapshot.observations.limit).toBe(9)
-  expect(snapshot.warningLines).toEqual(['durable role warning', 'tick failed: durable failure'])
+  expect(snapshot.warningLines).toEqual([
+    'durable role warning',
+    'Forge squash: squash disabled Enable squash',
+    'Forge rebase: rebase disabled Enable rebase',
+    'tick failed: durable failure',
+  ])
   expect(snapshot.warningLines).not.toContain('routine janitor diagnostic')
   expect(snapshot.warningLines).not.toContain('routine dispatcher notice')
 })
