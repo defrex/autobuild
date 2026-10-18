@@ -11,6 +11,7 @@
  * blobs, never code (D3: code travels through the Forge; events carry SHAs).
  */
 import { z } from 'zod'
+import { landingRuleSchema } from '../config/landing'
 import {
   artifactRefSchema,
   buildOutcomeSchema,
@@ -56,6 +57,26 @@ export const leafRestackSchema = reconcileTransactionSchema.omit({ attempt: true
 const archiveEntry = z.strictObject({
   ref: z.string().startsWith('refs/autobuild/archive/'),
   sha: gitOid,
+})
+
+export const landingCandidateSchema = z.strictObject({
+  head: z.string().min(1),
+  parent: z.string().min(1),
+  cycle: z.string().min(1),
+})
+const landingDecision = z.strictObject({
+  candidate: landingCandidateSchema,
+  from: z.enum(['leaf', 'node']),
+  into: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('root') }),
+    z.strictObject({ kind: z.literal('node'), ticket: z.string().min(1) }),
+  ]),
+  labels: z.array(z.string()),
+  mode: z.enum(['auto', 'consent']),
+  rule: z.union([
+    z.strictObject({ index: z.number().int().nonnegative(), snapshot: landingRuleSchema }),
+    z.strictObject({ default: z.literal(true) }),
+  ]),
 })
 
 const empty = z.strictObject({})
@@ -364,15 +385,21 @@ export const eventPayloadSchemas = {
     parent: z.string().min(1),
     config: z.string().min(1),
   }),
-  'integration.landing-intended': z.strictObject({
-    id: z.string().min(1),
-    cycle: z.string().min(1),
-    head: z.string().min(1),
-    parent: z.string().min(1),
-    commandSeq: z.number().int().positive(),
-    fenced: z.boolean(),
-    evidence: z.array(z.string()),
-  }),
+  'integration.landing-intended': z
+    .strictObject({
+      id: z.string().min(1),
+      cycle: z.string().min(1),
+      head: z.string().min(1),
+      parent: z.string().min(1),
+      commandSeq: z.number().int().positive().optional(),
+      decisionSeq: z.number().int().positive().optional(),
+      fenced: z.boolean(),
+      evidence: z.array(z.string()),
+    })
+    .refine(
+      (value) => value.commandSeq !== undefined || value.decisionSeq !== undefined,
+      'landing intent requires decisionSeq or legacy commandSeq',
+    ),
   'integration.landed': z.strictObject({
     operation: z.string().optional(),
     head: z.string().min(1),
@@ -592,6 +619,17 @@ export const eventPayloadSchemas = {
   'build.resume-requested': reasonOnly,
   'build.abort-requested': reasonOnly,
   'build.discard-requested': empty,
+  'landing.decided': landingDecision,
+  'build.hold-requested': empty,
+  'build.land-requested': z.strictObject({ decisionSeq: z.number().int().positive() }),
+  'landing.command-acknowledged': z.strictObject({ commandSeq: z.number().int().positive() }),
+  'landing.native-applied': z.strictObject({
+    enabled: z.boolean(),
+    candidate: landingCandidateSchema.optional(),
+    decisionSeq: z.number().int().positive().optional(),
+    commandSeq: z.number().int().positive().optional(),
+    operation: z.string().min(1).optional(),
+  }),
   'build.auto-merge-requested': autoMergeCommand,
   'build.auto-merge-cancelled': autoMergeCommand,
   'build.auto-merge-default-observed': autoMergeDefaultObserved,

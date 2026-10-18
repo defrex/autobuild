@@ -9,6 +9,11 @@ import type { RepoViewStore } from './repo-view'
 
 /** Every new event must explicitly choose whether it advances build work. */
 export const executionProgress = {
+  'landing.decided': 'progress',
+  'build.hold-requested': 'progress',
+  'build.land-requested': 'progress',
+  'landing.command-acknowledged': 'progress',
+  'landing.native-applied': 'progress',
   'target.moved': 'bookkeeping',
   'restack.prepared': 'progress',
   'restack.replayed': 'progress',
@@ -118,7 +123,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 3,
+  version: 4,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {
