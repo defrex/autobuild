@@ -284,8 +284,9 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Signal** | Raw input from the world — a Sentry issue, an observation |
 | **Proposal** | A synthesized candidate ticket sitting in Triage, awaiting grooming |
 | **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
-| **Node ticket** | A named integration point represented by a ticket of kind `node`; metadata only in this increment |
-| **Build** | One pipeline execution for one ticket; has a slug; the unit the operator sees |
+| **Node ticket** | A named integration point represented by a ticket of kind `node`; its integration build owns a branch collecting child work |
+| **Build** | One ticket execution with a slug; either a work pipeline or an integration branch lifecycle; the unit the operator sees |
+| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work and awaits human landing |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
@@ -323,6 +324,11 @@ extension skills use their own names, such as `/verify-app-e2e`. This spec uses
 the bare phase names throughout.
 
 ## 5. Pipeline grammar
+
+Work builds retain the fixed grammar below. Integration builds instead follow
+`spec → branch opening → collecting → human merge/close or abort`. They never
+enter agent phases, verify, finalize or reconcile and never auto-merge. The
+dispatcher owns branch opening and collection; empty nodes have no PR.
 
 ```
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize (+ finalize:*)
@@ -1891,8 +1897,26 @@ open for legacy/plugin tickets and introduces no new readiness gate.
 Tickets have `kind = "work"` by default, or `kind = "node"` for a named
 integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
-These fields currently describe intent only: dispatch, branches and landing
-behavior are unchanged in this increment. Blockers remain a separate graph.
+A ready node ticket opens an integration build on `ab-node/<slug>`, cut
+from its parent's sampled head. Opening intent and acknowledgement are durable;
+the branch is open to targeting tickets immediately, without a PR. Integration
+builds use no workspace, runner, lease, or dispatch capacity while collecting.
+An empty node has no PR and reports `integration`, `target`, and `empty`.
+Once it holds commits its current parent lacks, the dispatcher opens or adopts
+its PR. No placeholder commit is created; parent-only advancement is still empty.
+
+Claims targeting an open node freeze its build identity and branch as their base.
+Their PR, auto-merge and reconcile all use that frozen base, even after source
+metadata changes. Missing, unopened, landed, closed or aborted targets remain
+queued with a diagnostic. The newest generation wins; a closed generation never
+falls back to an older open one. Blockers remain a separate graph.
+
+Humans land node PRs. The janitor records landing and completes the node ticket.
+Closing without merge or aborting closes admission and returns the ticket to
+triage; children already claimed retain their frozen base. Nested nodes work.
+Node verification, automatic landing, restacking and reparenting are not provided
+by this increment. A forge plugin needs node branch creation, comparison and
+head-read capabilities to admit node tickets.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
@@ -1917,9 +1941,11 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+Hosted sources support kind and target with project-scoped transactional validation.
+Existing tickets default to work with no target. Metadata changes increment the
+revision once; equivalent aliases and unchanged values do not. Node demotion
+checks all targeting tickets, including completed work. Legacy plugins without
+integrationTree support read as work with no target and refuse metadata writes.
 
 
 
@@ -1979,6 +2005,30 @@ suspension restores owned terminal modes and raw input before stopping; resume
 reenables them, assumes focus, and refreshes immediately. Teardown disables focus
 reporting even when no frame painted, with synchronous process restoration for
 catchable faults. Plain, non-TTY, and once runs never enable focus reporting.
+
+Interactive frames first read `BuildStore.getRepoChangePosition(repo)`, a canonical
+unsigned decimal string used only for invalidation. Unknown repositories return
+`"0"` without creating state. Each repository's durable position advances in the
+same transaction as build creation, build/repository event insertion (including
+artifact-backed and tick writes), or a stored dispatcher lease holder transition.
+Other repositories, failed writes, denied claims, same-holder renewals, heartbeats,
+and passive expiry do not advance it. It is separate from journal sequence cursors.
+Unchanged positions reuse the complete presentation snapshot; a focused ordinary
+refresh then makes exactly one store request. Discovery uses required exact-repo
+`listBuildsForRepo(repo)`, never a global listing. Initial hydration, position or
+configuration changes, and at most ten seconds between full reads refresh the
+snapshot, including mutable lease/stream/artifact/ticket enrichment. Failed or
+cancelled reads do not acknowledge the sampled position. Open session feeds poll
+independently; kernel ticks and watch/wait retain their existing reads.
+
+SQLite installs an additive counter table and transactional triggers on open.
+PostgreSQL installs the corresponding additive table/functions/triggers through
+explicit migration before deploying the new service; the core schema version
+and checksum stay unchanged. Existing data starts at zero, with no replay or
+backfill, and migration reruns preserve counters. Hosted reads use one GET
+`/repos/:repo/change-position` returning only `{ position: string }`, and
+`/repos/:repo/builds` returns scoped build records. Both routes authorize the
+repository before reading and support repositories with builds but no journal.
 
 Durable operator settings (intake, the repository-wide pause, the auto-merge
 default, the harvest gate) are repository-journal facts: they survive restarts,
@@ -2196,7 +2246,20 @@ chain survives `policy.stallRounds` rounds.
 
 ### 15.5 Derived state (the reducer)
 
-`status ∈ queued | running | paused | blocked | done | aborted`, plus
+A nonterminal integration with `node.opened` derives `collecting` (below paused
+and blocked in precedence); it requires no attached runner. Empty/holding changes
+comes from `node.compared`, independently of admission openness. Integration
+identity and target are immutable claim-time facts in `build.created`;
+historical absence means work/root. The resolved `baseBranch` stays frozen.
+
+`node.opening {branch, parent, sha}` is the dispatcher's durable mutation intent.
+`node.opened {sha}` acknowledges creation or adoption without resetting advanced
+history. `node.compared {parentSha, headSha, ahead}` retains a changed observation;
+only positive ahead counts permit creating a PR. `pr.opened {pr}` records its
+identity without a fabricated finalize completion. All four facts are
+dispatcher-authored. Existing merged/closed PR, abort and completion facts close admission.
+
+`status ∈ queued | running | collecting | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
 lastEvent}`. `blocked` ≡ an `escalation.raised` without a matching
 `escalation.answered`, matched by id. `reviewRoundCeilings` projects valid

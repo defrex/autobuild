@@ -72,6 +72,35 @@ export class LocalGitForge implements Forge {
     return result.stdout.trim()
   }
 
+  async createNodeBranch(branch: string, sha: string): Promise<string> {
+    if (!this.repoRoot) throw new Error('local-git node branches require repoRoot')
+    const ref = `refs/heads/${branch}`
+    await this.assertRef(ref, this.repoRoot)
+    const existing = await this.command(['rev-parse', '--verify', ref], this.repoRoot, true)
+    if (existing.exitCode === 0) {
+      const contains = await this.command(
+        ['merge-base', '--is-ancestor', sha, ref],
+        this.repoRoot,
+        true,
+      )
+      if (contains.exitCode !== 0) throw new Error(`node branch collision: ${branch}`)
+      return existing.stdout.trim()
+    }
+    await this.command(['update-ref', ref, sha, ''], this.repoRoot)
+    return sha
+  }
+
+  async compareBranches(parent: string, head: string) {
+    if (!this.repoRoot) throw new Error('local-git node comparison requires repoRoot')
+    const parentSha = await this.remoteBranchSha(parent)
+    const headSha = await this.remoteBranchSha(head)
+    const count = await this.command(
+      ['rev-list', '--count', `${parentSha}..${headSha}`],
+      this.repoRoot,
+    )
+    return { parentSha, headSha, ahead: Number(count.stdout.trim()) }
+  }
+
   /** File bytes from the served repository. Ref omitted → the checkout's HEAD.
    * Throws when the path does not exist at that ref. */
   async readFile(path: string, ref?: string): Promise<string> {
@@ -264,7 +293,8 @@ export class LocalGitForge implements Forge {
     for (;;) {
       const records = await this.records(opts.workspacePath)
       const adopted = records.find(
-        (record) => record.status === 'open' && record.head === opts.head,
+        (record) =>
+          record.status === 'open' && record.head === opts.head && record.base === opts.base,
       )
       if (adopted !== undefined) {
         return { number: adopted.number, url: headRef, headSha }

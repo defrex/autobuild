@@ -138,6 +138,8 @@ describe('local build-session scope', () => {
     const repositoryCalls: Array<() => unknown | Promise<unknown>> = [
       () => store.ensureRepo(REPO),
       () => store.getRepo(REPO),
+      () => store.getRepoChangePosition(REPO),
+      () => store.listBuildsForRepo(REPO),
       () => store.appendRepo(REPO, harvestStartedWrite()),
       () => store.appendRepoWithArtifacts(REPO, [], () => harvestStartedWrite()),
       () => store.getRepoEvents(REPO),
@@ -254,6 +256,8 @@ describe('local Harvest-session scope', () => {
 
     const foreignRepoCalls: Array<() => unknown | Promise<unknown>> = [
       () => store.getRepo(OTHER_REPO),
+      () => store.getRepoChangePosition(OTHER_REPO),
+      () => store.listBuildsForRepo(OTHER_REPO),
       () => store.appendRepo(OTHER_REPO, harvestStartedWrite()),
       () => store.appendRepoWithArtifacts(OTHER_REPO, [], () => harvestStartedWrite()),
       () => store.getRepoEvents(OTHER_REPO),

@@ -1,11 +1,16 @@
 import { MemoryBlobStore, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
-import { openPostgresBuildStore } from '../store'
+import { SQL } from 'bun'
+import { PostgresBuildStore } from '../store'
 
 async function main(): Promise<void> {
   const [url, mode, resource, countText] = process.argv.slice(2)
   if (!url || !mode || !resource) throw new Error('missing worker arguments')
   const count = Number(countText ?? '1')
-  const store = await openPostgresBuildStore(url, new MemoryBlobStore())
+  // The parent already migrated the schema. Each sequential worker needs only
+  // one connection, even while several independent processes race writes.
+  const store = new PostgresBuildStore(new SQL(url, { max: 1 }), {
+    blobs: new MemoryBlobStore(),
+  })
   try {
     if (mode === 'build') {
       for (let index = 0; index < count; index++) {

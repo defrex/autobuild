@@ -2378,3 +2378,20 @@ test('invocation standby is forwarded independently and omitted for holders', ()
   expect(buildDashboardFromProjected([], header)).not.toHaveProperty('standby')
   expect(buildDashboardFromProjected([], { ...header, standby: 'peer' }).standby).toBe('peer')
 })
+
+test.each([0, 1])('node without a PR uses one shared integration term (ahead=%s)', (ahead) => {
+  const log = toLog([
+    ev('build.created', {
+      ticket: { source: 'fake', id: 'NODE' },
+      repo: RECORD.repo,
+      baseBranch: 'main',
+      kind: 'node',
+    }),
+    ev('node.opened', { sha: 'opening' }),
+    ev('node.compared', { parentSha: 'parent', headSha: 'node', ahead }),
+  ])
+  const row = projectBuild(RECORD, reduceBuild(log), CONFIG, log)!
+  expect(row.integration).toBe(ahead === 0 ? 'empty' : 'collecting')
+  expect(row.steps.find((s) => s.label === row.integration)).toBeDefined()
+  if (ahead > 0) expect(row.steps.find((s) => s.label === 'empty')).toBeUndefined()
+})

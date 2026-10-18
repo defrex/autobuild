@@ -1,3 +1,4 @@
+import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildFacts } from '../processes/repo-view'
@@ -94,6 +95,9 @@ export interface LeaseInfo {
 }
 
 export interface BuildSummary {
+  kind?: 'integration' | 'work'
+  target?: string
+  integration?: 'opening' | 'empty' | 'collecting'
   slug: string
   ticket?: TicketRef
   /** The reducer's effective status (§15.5) — never mixed with lease health. */
@@ -228,6 +232,7 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
   const attempt = active?.attempt
   return {
     slug: record.slug,
+    ...buildVocabulary(state),
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
     ...(record.ticket !== undefined ? { ticket: record.ticket } : {}),
@@ -501,13 +506,15 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
     rows.push([
       summary.slug,
       summary.status,
-      phaseCell(summary),
+      summary.kind === 'integration'
+        ? `integration ${summary.integration ?? ''}`
+        : phaseCell(summary),
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
         ? '—'
         : relativeTime(summary.progress.heartbeatAt, now),
       `${progressAge}${isDiverged(summary.progress, now) ? ' diverged' : ''}`,
-      ticketCell(summary),
+      `${ticketCell(summary)}${summary.target ? ` target ${summary.target}` : ''}`,
       prCell(summary),
     ])
   }
@@ -522,6 +529,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(`  ticket:   ${d.ticket.id}${title}`)
     if (d.ticket.url !== undefined) lines.push(`  ticket url: ${d.ticket.url}`)
   }
+  if (d.target)
+    lines.push(
+      `  ${d.kind ?? 'work'} · target ${d.target}${d.integration ? ` · ${d.integration}` : ''}`,
+    )
   lines.push(`  status:   ${d.status}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
   if (d.reviewRoundCeilings !== undefined) {
@@ -727,10 +738,11 @@ export interface StatusOpts {
 }
 
 /** Statuses a bare `ab builds` shows: the ones an operator can still act on. */
-const ACTIVE_STATUSES: BuildStatus[] = ['running', 'paused', 'blocked']
+const ACTIVE_STATUSES: BuildStatus[] = ['running', 'collecting', 'paused', 'blocked']
 
 export function statusFilter(all?: boolean, queued?: boolean): BuildStatus[] {
-  if (all === true) return ['queued', 'running', 'paused', 'blocked', 'done', 'aborted']
+  if (all === true)
+    return ['queued', 'running', 'collecting', 'paused', 'blocked', 'done', 'aborted']
   return queued === true ? [...ACTIVE_STATUSES, 'queued'] : ACTIVE_STATUSES
 }
 

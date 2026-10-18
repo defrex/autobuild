@@ -1087,3 +1087,60 @@ test('populated pre-telemetry SQLite repositories upgrade and share quiet comple
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('repository counter survives reopen, concurrent handles, SQL rollback and large integers', async () => {
+  const root = await freshRoot()
+  const first = openLocalStore(root)
+  const second = openLocalStore(root)
+  try {
+    await first.createBuild({ slug: 'counter', repo: 'repo' })
+    expect(await second.getRepoChangePosition('repo')).toBe('1')
+    await second.append('counter', sampleEventWrite())
+    expect(await first.getRepoChangePosition('repo')).toBe('2')
+    // Exercise the existing database write paths directly: triggers own updates.
+    const sqlite = (first as unknown as { sqlite: Database }).sqlite
+    sqlite.exec("UPDATE repo_change_positions SET position = 9007199254740993 WHERE repo = 'repo'")
+    expect(await second.getRepoChangePosition('repo')).toBe('9007199254740993')
+    expect(() =>
+      sqlite.transaction(() => {
+        sqlite.exec(
+          "INSERT INTO builds(slug, repo, created_at, updated_at) VALUES ('rolled-back', 'repo', 'now', 'now')",
+        )
+        throw new Error('rollback')
+      })(),
+    ).toThrow('rollback')
+    expect(await first.getRepoChangePosition('repo')).toBe('9007199254740993')
+    await second.close()
+    const reopened = openLocalStore(root)
+    try {
+      expect(await reopened.getRepoChangePosition('repo')).toBe('9007199254740993')
+    } finally {
+      await reopened.close()
+    }
+  } finally {
+    await first.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('opening a pre-counter database installs additive triggers without replay', async () => {
+  const root = await freshRoot()
+  const old = openLocalStore(root)
+  await old.createBuild({ slug: 'before-upgrade', repo: 'repo' })
+  const sqlite = (old as unknown as { sqlite: Database }).sqlite
+  sqlite.exec(`DROP TRIGGER builds_repo_change;
+    DROP TRIGGER events_repo_change;
+    DROP TRIGGER repo_events_repo_change;
+    DROP TRIGGER repo_holder_change;
+    DROP TABLE repo_change_positions;`)
+  await old.close()
+  const upgraded = openLocalStore(root)
+  try {
+    expect(await upgraded.getRepoChangePosition('repo')).toBe('0')
+    await upgraded.append('before-upgrade', sampleEventWrite())
+    expect(await upgraded.getRepoChangePosition('repo')).toBe('1')
+  } finally {
+    await upgraded.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})

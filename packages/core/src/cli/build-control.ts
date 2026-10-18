@@ -18,7 +18,7 @@ import { samplePinnedAssets } from '../store/ticket-assets'
 import type { BuildStore } from '../store/types'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
-const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'paused', 'blocked']
+const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'collecting', 'paused', 'blocked']
 
 /** Retry carries no phase guidance, but the event schema still requires a
  * nonempty audit answer. The reducer/materializer route on `resolution`, so
@@ -274,6 +274,8 @@ async function appendConsentCommand(
   while (true) {
     const state = (await readBuildFacts(store, slug)).value.state
     activeState(slug, state)
+    if (state.kind === 'node')
+      throw new Error('integration builds require human landing; auto-merge is unavailable')
     const command =
       action === 'toggle-auto-merge'
         ? state.autoMerge.requested

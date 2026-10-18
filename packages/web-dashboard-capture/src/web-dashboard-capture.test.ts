@@ -125,7 +125,23 @@ function models(): WebFixtureModels {
       }),
     ],
   }
-  return { happy, mixed }
+  return {
+    happy,
+    mixed,
+    integration: {
+      ...happy,
+      builds: [
+        build({
+          slug: 'integration-empty',
+          ticketId: 'NODE-3',
+          status: 'collecting',
+          kind: 'integration',
+          target: 'main',
+          integration: 'empty',
+        }),
+      ],
+    },
+  }
 }
 
 test('every web frame renders its required evidence and none of the forbidden', async () => {

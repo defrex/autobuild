@@ -313,6 +313,7 @@ export class MemoryBuildStore implements BuildStore {
       )
     }
     this.builds.set(input.slug, state)
+    this.advanceRepo(input.repo)
     return this.snapshot(state)
   }
 
@@ -321,8 +322,27 @@ export class MemoryBuildStore implements BuildStore {
     return state ? this.snapshot(state) : null
   }
 
+  private readonly repoPositions = new Map<string, bigint>()
+
+  private advanceRepo(repo: string): void {
+    this.repoPositions.set(repo, (this.repoPositions.get(repo) ?? 0n) + 1n)
+  }
+
+  async getRepoChangePosition(repo: string): Promise<string> {
+    return (this.repoPositions.get(repo) ?? 0n).toString()
+  }
+
+  async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+    return [...this.builds.values()]
+      .filter((state) => state.record.repo === repo)
+      .map((state) => this.snapshot(state))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
+  }
+
   async listBuilds(): Promise<BuildRecord[]> {
-    return [...this.builds.values()].map((state) => this.snapshot(state))
+    return [...this.builds.values()]
+      .map((state) => this.snapshot(state))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
@@ -341,6 +361,7 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.advanceRepo(state.record.repo)
     state.record.updatedAt = envelope.ts
     return envelope
   }
@@ -367,6 +388,7 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.advanceRepo(state.record.repo)
     state.record.updatedAt = envelope.ts
     return envelope
   }
@@ -435,6 +457,7 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.advanceRepo(state.record.repo)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
@@ -597,6 +620,7 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
     } as RepositoryEventEnvelope<T>
     state.events.push(structuredClone(envelope) as RepositoryEvent)
+    this.advanceRepo(repo)
     state.record.updatedAt = envelope.ts
     return envelope
   }
@@ -661,6 +685,7 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
     } as RepositoryEventEnvelope<T>
     state.events.push(structuredClone(envelope) as RepositoryEvent)
+    this.advanceRepo(repo)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
@@ -982,6 +1007,7 @@ export class MemoryBuildStore implements BuildStore {
       },
     }
     state.events.push(...structuredClone(envelopes))
+    for (const _event of envelopes) this.advanceRepo(repo)
     state.record.updatedAt = completedAt
     return structuredClone({ observation: state.tick, events: envelopes })
   }
@@ -992,6 +1018,7 @@ export class MemoryBuildStore implements BuildStore {
     if (state.lease && state.lease.holder !== holder && state.lease.expiresAt > now) {
       return false
     }
+    if (state.lease?.holder !== holder) this.advanceRepo(repo)
     state.lease = { holder, expiresAt: now + ttlMs, ttlMs }
     state.record.updatedAt = new Date(now).toISOString()
     return true
@@ -1011,6 +1038,7 @@ export class MemoryBuildStore implements BuildStore {
   async releaseRepoLease(repo: string, holder: string): Promise<void> {
     const state = this.repoState(repo)
     if (state.lease?.holder === holder) {
+      this.advanceRepo(repo)
       state.lease = undefined
       state.record.updatedAt = this.now()
     }

@@ -292,6 +292,14 @@ export class PostgresBuildStore implements BuildStore {
     return this.listBuildRecords()
   }
 
+  async getRepoChangePosition(repo: string): Promise<string> {
+    return this.run(async (q) => {
+      const rows: Row[] =
+        await q`SELECT position::text AS position FROM repo_change_positions WHERE repo = ${repo}`
+      return rows[0] ? String(rows[0].position) : '0'
+    })
+  }
+
   async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
     return this.listBuildRecords(repo)
   }

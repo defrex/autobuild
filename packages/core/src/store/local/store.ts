@@ -145,6 +145,24 @@ import {
  */
 // Exported for the schema-parity test, which pins this DDL against the
 // drizzle schema; schema.ts stays the source of truth, this is its inlined form.
+export const REPO_CHANGE_DDL = `
+CREATE TABLE IF NOT EXISTS repo_change_positions (repo TEXT PRIMARY KEY, position INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS builds_repo_created_slug ON builds(repo, created_at, slug);
+CREATE TRIGGER IF NOT EXISTS builds_repo_change AFTER INSERT ON builds
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+CREATE TRIGGER IF NOT EXISTS repo_events_repo_change AFTER INSERT ON repo_events
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+CREATE TRIGGER IF NOT EXISTS events_repo_change AFTER INSERT ON events
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES ((SELECT repo FROM builds WHERE slug = NEW.build), 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+CREATE TRIGGER IF NOT EXISTS repo_holder_change AFTER UPDATE OF lease_holder ON repo_streams
+ WHEN OLD.lease_holder IS NOT NEW.lease_holder
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+`
+
 export const BOOTSTRAP_DDL = [
   // Reducer snapshots: additive and idempotent, so databases that predate the
   // table gain it on open.
@@ -292,6 +310,7 @@ export const BOOTSTRAP_DDL = [
     parts TEXT NOT NULL,
     PRIMARY KEY (stream, seq)
   )`,
+  REPO_CHANGE_DDL,
 ] as const
 
 type BuildRow = typeof builds.$inferSelect
@@ -506,8 +525,31 @@ export class SqliteBuildStore implements BuildStore {
     return row ? this.toRecord(row) : null
   }
 
+  async getRepoChangePosition(repo: string): Promise<string> {
+    const row = this.sqlite
+      .query<{ position: string }, [string]>(
+        'SELECT CAST(position AS TEXT) AS position FROM repo_change_positions WHERE repo = ?',
+      )
+      .get(repo)
+    return row?.position ?? '0'
+  }
+
+  async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+    return this.db
+      .select()
+      .from(builds)
+      .where(eq(builds.repo, repo))
+      .orderBy(asc(builds.createdAt), asc(builds.slug))
+      .all()
+      .map((row) => this.toRecord(row))
+  }
+
   async listBuilds(): Promise<BuildRecord[]> {
-    const rows = this.db.select().from(builds).orderBy(asc(builds.createdAt)).all()
+    const rows = this.db
+      .select()
+      .from(builds)
+      .orderBy(asc(builds.createdAt), asc(builds.slug))
+      .all()
     return rows.map((row) => this.toRecord(row))
   }
 

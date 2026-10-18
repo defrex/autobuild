@@ -28,6 +28,8 @@ import {
   mutateTicketIfRevision,
   hostedTicketPolicySchema,
   type HostedTicketPolicy,
+  TICKET_TREE_HEADER,
+  TICKET_TREE_CAPABILITY,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
   type HostedTicketContext,
@@ -195,6 +197,12 @@ export function createTicketServer(options: TicketServerOptions): {
       // Capabilities are independent: released strict decoders receive neither field.
       const projected = {
         ...base,
+        ...(req.headers.get(TICKET_TREE_HEADER) === TICKET_TREE_CAPABILITY
+          ? {
+              kind: ticket.kind ?? 'work',
+              ...(ticket.target === undefined ? {} : { target: ticket.target }),
+            }
+          : {}),
         ...(req.headers.get(TICKET_REVISIONS_HEADER) === TICKET_REVISIONS_CAPABILITY
           ? { revision: ticket.revision }
           : {}),
@@ -435,6 +443,17 @@ export function createTicketServer(options: TicketServerOptions): {
         ) {
           return failure(400, 'validation', message)
         }
+        // Tree refusals are caller mistakes, including the transaction-local
+        // PostgreSQL wording and the shared TicketSource validator wording.
+        const treeValidationFailure =
+          /^(?:kind must be work or node|target must not be blank)$/.test(message) ||
+          /^target .+ (?:is not a node|would create a cycle(?: \(or has a cyclic ancestor chain\))?|does not exist in the configured .+ source|is in a different source)$/.test(
+            message,
+          ) ||
+          /^cannot (?:demote node: ticket .+ targets it|change node .+ to work: ticket .+ targets it)$/.test(
+            message,
+          )
+        if (treeValidationFailure) return failure(400, 'validation', message)
         const notFound = /unknown (?:ticket|issue)|not found/i.test(message)
         // These are intentional domain feedback from TicketSource implementations.
         // Their historical standalone mapping remains unchanged.

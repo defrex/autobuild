@@ -124,6 +124,10 @@ export const repositoryEventEnvelopeWireSchema = z.object({
 export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSchema)
 
 /** `GET repos/:repo/high-water`: the journal's greatest assigned seq. */
+export const repoChangePositionSchema = z.object({
+  position: z.string().regex(/^(0|[1-9][0-9]*)$/),
+})
+
 export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })
 
 /** `GET builds|repos/:id/snapshots/:reducer?version=N`: the snapshot or `null`. */
@@ -278,6 +282,9 @@ export const sessionDepositsResponseSchema = z.object({
 // the build's log carries no terminal fact, per the protocol's omission
 // convention for optional members.
 export const buildDigestWireSchema = z.object({
+  kind: z.enum(['work', 'node']).optional(),
+  nodeOpened: z.literal(true).optional(),
+  prClosed: z.literal(true).optional(),
   slug: z.string().min(1),
   terminal: z.enum(['done', 'aborted']).optional(),
   observations: z.array(

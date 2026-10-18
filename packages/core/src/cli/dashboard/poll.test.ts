@@ -28,7 +28,7 @@ class CountingReader implements DashboardBuildReader {
 
   constructor(private readonly store: MemoryBuildStore) {}
 
-  async listBuilds(): Promise<BuildRecord[]> {
+  async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
     this.listCalls += 1
     this.activeLists += 1
     this.maxActiveLists = Math.max(this.maxActiveLists, this.activeLists)
@@ -36,7 +36,9 @@ class CountingReader implements DashboardBuildReader {
       // Make concurrent callers overlap here if the cache does not serialize
       // refreshes itself.
       await Promise.resolve()
-      return (await this.store.listBuilds()).filter((record) => !this.hidden.has(record.slug))
+      return (await this.store.listBuildsForRepo(repo)).filter(
+        (record) => !this.hidden.has(record.slug),
+      )
     } finally {
       this.activeLists -= 1
     }
@@ -494,13 +496,30 @@ test('a canonical ticket identity change refreshes a cached row without changing
   await addRunning(store, 'aliased')
   let id = 'ticket-legacy'
   const reader = new CountingReader(store)
-  const list = reader.listBuilds.bind(reader)
-  reader.listBuilds = async () =>
-    (await list()).map((record) => ({ ...record, ticket: { source: 'hosted', id } }))
+  const list = reader.listBuildsForRepo.bind(reader)
+  reader.listBuildsForRepo = async (repo) =>
+    (await list(repo)).map((record) => ({ ...record, ticket: { source: 'hosted', id } }))
   const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
   expect(row(await cache.refresh(), 'aliased')?.ticketId).toBe('ticket-legacy')
   const events = await store.getEvents('aliased')
   id = 'ENG-1'
   expect(row(await cache.refresh(), 'aliased')?.ticketId).toBe('ENG-1')
   expect(await store.getEvents('aliased')).toEqual(events)
+})
+
+test('full enrichment refresh sees standalone artifacts at an unchanged repository position', async () => {
+  const store = new MemoryBuildStore()
+  await addRunning(store, 'metadata')
+  const cache = new DashboardBuildPollCache(new CountingReader(store), REPO, CONFIG)
+  const first = await cache.refresh()
+  const position = await store.getRepoChangePosition(REPO)
+  expect(row(first, 'metadata')?.effectiveConfigRev).toBeUndefined()
+  await store.putArtifact('metadata', {
+    kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+    content: effectiveBuildConfigContent(CONFIG),
+    metadata: { revision: 42 },
+  })
+  expect(await store.getRepoChangePosition(REPO)).toBe(position)
+  expect(row(await cache.refresh(), 'metadata')?.effectiveConfigRev).toBeUndefined()
+  expect(row(await cache.refresh(CONFIG, 0, true), 'metadata')?.effectiveConfigRev).toBe(42)
 })

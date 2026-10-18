@@ -746,8 +746,22 @@ inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its
 one-hour `diverged` predicate is presentation-only: reducer status, engine
 routing, and lease health remain independent. `packages/core/src/cli/dashboard/model.ts` is
 the event-derived build-row projection; `poll.ts` reprojects rows for event or
-effective-config changes and reuses them across heartbeat/lease-only renewals
-while retaining the cached log and reduction.
+effective-config changes and bounded enrichment refreshes while retaining the
+cached log and reduction. `repository-poll.ts` serializes the complete presentation
+snapshot in both terminal paths. It samples `getRepoChangePosition` before reads,
+acknowledges it only after complete admitted reads, and reuses unchanged snapshots
+for up to ten seconds. Scoped discovery uses `listBuildsForRepo`; unchanged focused
+frames make one counter request. Session feeds remain independent.
+
+The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
+increment `repo_change_positions` transactionally through triggers on build,
+build-event, repository-event insertion and null-safe repository lease holder
+changes. Reads return decimal text (unknown repos: `"0"`) without journal creation.
+The hosted counter route returns only that position; scoped build discovery has
+its own repository-authorized route before the journal-existence gate. PostgreSQL
+counter DDL is additive, outside the guarded core schema/checksum, and must be
+explicitly migrated before the service rollout. Existing writers use the same
+triggers; rerunning migration preserves positions without replaying old events.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
@@ -1070,6 +1084,24 @@ normalization, capability refusal, graph validation and the pure tree projection
 File/fake/Linear adapters validate metadata at write boundaries; `operations.ts`
 and CLI/operator source opening wrap injected or plugin sources with the same
 compatibility facade. Metadata is excluded from hosted persistence/protocols.
+
+
+### Integration node dispatch
+
+The product dispatcher owns the workspace-free node lifecycle:
+spec → node.opening → node.opened → collecting → human landing/close or abort.
+The ordinary work pipeline is unchanged. `build.created` freezes kind, target
+ticket/build identity and resolved parent in `baseBranch`. Integration facts
+are projected by the shared reducer and digests, including collecting/empty
+state. Admission resolves same-source targets through repository read facts;
+integration identities remain active for deduplication but consume no work slot.
+
+Optional Forge node branch creation and comparison capabilities let GitHub
+operate without a checkout and local-git operate directly on its shared refs.
+Opening intent retains the sampled SHA across retries; adoption requires that
+commit in the existing branch's history. Comparison uses reachability, so an
+advanced parent never makes an empty node nonempty. The janitor opens PRs lazily
+and reuses terminal cleanup without leaf reconcile or auto-merge.
 
 ### Leaf and reconcile restacking
 

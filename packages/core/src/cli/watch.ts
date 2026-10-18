@@ -85,7 +85,13 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
 const REPO_STREAM_KEY = '#repo'
 
 /** Statuses a build can still leave; the others are terminal (§15.5). */
-const NONTERMINAL_STATUSES: readonly BuildStatus[] = ['queued', 'running', 'paused', 'blocked']
+const NONTERMINAL_STATUSES: readonly BuildStatus[] = [
+  'queued',
+  'running',
+  'collecting',
+  'paused',
+  'blocked',
+]
 const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 
 // ── The default filter: the attention set ────────────────────────────────────

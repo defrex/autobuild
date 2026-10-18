@@ -1289,11 +1289,17 @@ describe('renderers', () => {
 
 describe('statusFilter', () => {
   test('defaults to the actionable statuses', () => {
-    expect(statusFilter()).toEqual(['running', 'paused', 'blocked'])
+    expect(statusFilter()).toEqual(['running', 'collecting', 'paused', 'blocked'])
   })
 
   test('--queued adds queued', () => {
-    expect(statusFilter(false, true)).toEqual(['running', 'paused', 'blocked', 'queued'])
+    expect(statusFilter(false, true)).toEqual([
+      'running',
+      'collecting',
+      'paused',
+      'blocked',
+      'queued',
+    ])
   })
 
   test('--all is every status and subsumes --queued', () => {

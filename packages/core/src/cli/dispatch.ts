@@ -1,3 +1,4 @@
+import { RepositoryPollCache } from './dashboard/repository-poll'
 import { DashboardRefresh, interactionRead, presentationReader } from './dashboard/refresh'
 import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
 import type { BuildState } from '../kernel/reducer'
@@ -3500,24 +3501,39 @@ class DispatchLoop {
     return this.readFrame()
   }
 
+  private readonly repositoryPoll = new RepositoryPollCache<{
+    buildSnapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>
+    repositoryEvents: Awaited<ReturnType<typeof readRepositoryFacts>>['value']
+  }>()
+
   private async readFrame(): Promise<void> {
     if (this.opts.once !== true && this.refresh !== undefined && !this.refresh.admitted) return
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined) return
     const configSnapshot = this.currentConfig()
-    const buildSnapshot = await this.dashboardBuilds.refresh(
-      configSnapshot.config,
-      configSnapshot.revision,
-    )
-    // Bounded read (AUT-489, AUT-545): every repository consumer of this frame —
-    // projectRepositoryHarvest (reduceHarvest plus the harvest-only raw scans in
-    // projectHarvestRun/escalationAttentionDismissed) and reduceDispatchSettings —
-    // reduces durable types only, so the AUT-489 subset is replay-equivalent with
-    // no anchor dependence (anchor analysis recorded; the frontend seed needed one
-    // only because reduceDispatchStatus folds here too — it does not here).
-    // Missing journal record stays a read-only empty journal (AUT-524).
-    const repositoryEvents = (await readRepositoryFacts(this.presentationStore, this.repoIdentity))
-      .value
+    const snapshot = await this.repositoryPoll.refresh({
+      position: () => this.presentationStore.getRepoChangePosition(this.repoIdentity),
+      now: () => this.wiring.clock().getTime(),
+      revision: configSnapshot.revision,
+      enabled: this.opts.once !== true,
+      valid: (frame) => this.dashboardBuilds.isCurrent(frame.buildSnapshot),
+      admitted: () =>
+        this.opts.once === true || this.refresh === undefined || this.refresh.admitted,
+      nextPollMs: this.refresh?.intervalMs ?? 0,
+      read: async ({ fullEnrichment }) => {
+        const buildSnapshot = await this.dashboardBuilds.refresh(
+          configSnapshot.config,
+          configSnapshot.revision,
+          fullEnrichment,
+        )
+        const repositoryEvents = (
+          await readRepositoryFacts(this.presentationStore, this.repoIdentity)
+        ).value
+        return { buildSnapshot, repositoryEvents }
+      },
+    })
+    if (snapshot === undefined) return
+    const { buildSnapshot, repositoryEvents } = snapshot
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
@@ -3548,7 +3564,7 @@ class DispatchLoop {
       const state = buildSnapshot.states.get(this.abortConfirmation.slug)
       if (
         state === undefined ||
-        !['queued', 'running', 'paused', 'blocked'].includes(state.status) ||
+        !['queued', 'running', 'collecting', 'paused', 'blocked'].includes(state.status) ||
         state.pendingCommands.some((command) => command.command === 'abort')
       ) {
         // Another process may have durably requested the abort while this
@@ -3564,7 +3580,7 @@ class DispatchLoop {
         repo: this.repoIdentity,
         queued: this.queuedCount,
         activeCount: [...buildSnapshot.states.values()].filter(
-          (state) => state.status !== 'done' && state.status !== 'aborted',
+          (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,

@@ -1,4 +1,4 @@
-import { normalizeTicket, refuseUnsupportedMetadata } from './tree'
+import { normalizeTicket } from './tree'
 import { hostedRequestedIds } from './requested-id'
 import { TicketRevisionConflict } from './revision'
 import type {
@@ -15,6 +15,8 @@ import { RemoteBuildStore, AuthError } from '../../store/remote/client'
 import { errorBodySchema } from '../../store/remote/protocol'
 import {
   claimWireSchema,
+  TICKET_TREE_HEADER,
+  TICKET_TREE_CAPABILITY,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
   hostedTicketPolicySchema,
@@ -50,6 +52,7 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
 /** Full TicketSource client for a hosted Autobuild service. */
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
+  readonly integrationTree = true
   readonly requestedIds: ReturnType<typeof hostedRequestedIds>
   readonly assets: import('../types').TicketAssetStore
   private readonly base: string
@@ -87,7 +90,7 @@ export class HostedTicketSource implements TicketSource {
   }
 
   private project(ticket: Ticket): Ticket {
-    return normalizeTicket({ ...ticket, ref: { ...ticket.ref, source: this.name } }, false)
+    return normalizeTicket({ ...ticket, ref: { ...ticket.ref, source: this.name } })
   }
 
   private async request<T>(
@@ -98,6 +101,7 @@ export class HostedTicketSource implements TicketSource {
     const response = await this.fetchFn(`${this.base}/tickets/${operation}`, {
       method: 'POST',
       headers: {
+        [TICKET_TREE_HEADER]: TICKET_TREE_CAPABILITY,
         'content-type': 'application/json',
         [TICKET_COMMENTS_HEADER]: TICKET_COMMENTS_CAPABILITY,
         authorization: `Bearer ${this.token}`,
@@ -141,6 +145,10 @@ export class HostedTicketSource implements TicketSource {
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
   }
 
+  listAll(): Promise<TicketListing> {
+    return this.listReady({})
+  }
+
   async listStates() {
     return this.request('states', {}, ticketStatesWireSchema)
   }
@@ -167,7 +175,6 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
-    refuseUnsupportedMetadata(this, draft)
     return this.project(await this.request('create', { draft, options }, ticketWireSchema))
   }
 
@@ -176,12 +183,10 @@ export class HostedTicketSource implements TicketSource {
     expectedRevision: string,
     mutation: TicketMutation,
   ): Promise<void> {
-    if (mutation.kind === 'update') refuseUnsupportedMetadata(this, mutation.patch)
     await this.request('mutate-if-revision', { id, expectedRevision, mutation }, successWireSchema)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
-    refuseUnsupportedMetadata(this, patch)
     await this.request('update', { id, patch }, successWireSchema)
   }
 

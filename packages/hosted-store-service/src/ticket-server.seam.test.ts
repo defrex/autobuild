@@ -499,3 +499,37 @@ test('runner and phase grants can discover states but cannot create them', async
     expect(mutations).toBe(0)
   }
 })
+
+test('tree, revision and comment response capabilities are independent', async () => {
+  const { source, server } = harness()
+  const parent = await source.create({ title: 'Parent', body: 'Body', kind: 'node' })
+  const child = await source.create({
+    title: 'Child',
+    body: 'Body',
+    kind: 'node',
+    target: parent.ref.id,
+  })
+  for (let mask = 0; mask < 8; mask++) {
+    const response = await server.fetch(
+      new Request('https://tickets.example/tickets/get', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          ...(mask & 1 ? { 'x-autobuild-ticket-tree': '1' } : {}),
+          ...(mask & 2 ? { 'x-autobuild-ticket-revisions': '1' } : {}),
+          ...(mask & 4 ? { 'x-autobuild-ticket-comments': '1' } : {}),
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: child.ref.id } }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    const value = (await response.json()) as Record<string, unknown>
+    expect('kind' in value).toBe(!!(mask & 1))
+    expect('target' in value).toBe(!!(mask & 1))
+    expect('revision' in value).toBe(!!(mask & 2))
+    if (mask & 1) expect(value).toMatchObject({ kind: 'node', target: parent.ref.id })
+  }
+})

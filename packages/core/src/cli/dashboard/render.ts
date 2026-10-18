@@ -261,6 +261,7 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
 const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status'], ColorName> = {
   queued: 'cyan',
   running: 'green',
+  collecting: 'cyan',
   pausing: 'yellow',
   paused: 'yellow',
   resuming: 'cyan',
@@ -346,7 +347,8 @@ function renderBuild(
             : defaultAutoMerge
               ? 'red'
               : 'dim'
-    rightTokens.push(paint(`auto merge ${build.autoMerge}`, autoColor, color))
+    if (build.kind !== 'integration')
+      rightTokens.push(paint(`auto merge ${build.autoMerge}`, autoColor, color))
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // A repository hold changes no build lifecycle state. Keep QUEUED literal
@@ -365,6 +367,13 @@ function renderBuild(
   // The slug is the sole flexible segment; narrow frames truncate it before
   // the right-pinned lifecycle status.
   const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
+  if (build.target)
+    lines.push(
+      truncate(
+        `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
+        width,
+      ),
+    )
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) lines.push(truncate(`  ${ceiling}`, width))
 
@@ -649,7 +658,11 @@ function detailBody(
   const { color, width } = opts
   const body: string[] = []
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
-  body.push(`  auto merge ${build.autoMerge}`)
+  if (build.target)
+    body.push(
+      `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
+    )
+  if (build.kind !== 'integration') body.push(`  auto merge ${build.autoMerge}`)
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)

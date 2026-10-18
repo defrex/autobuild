@@ -77,6 +77,7 @@ import {
 export type EffectiveStatus =
   | 'queued'
   | 'running'
+  | 'collecting'
   | 'pausing'
   | 'paused'
   | 'resuming'
@@ -146,6 +147,9 @@ export interface DashboardHarvest {
 }
 
 export interface DashboardBuild {
+  kind?: 'integration' | 'work'
+  target?: string
+  integration?: 'opening' | 'empty' | 'collecting'
   slug: string
   status: EffectiveStatus
   /** True when the build is BOTH paused and blocked: blocked wins the status
@@ -330,6 +334,7 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
   return (
     status === 'queued' ||
     status === 'running' ||
+    status === 'collecting' ||
     status === 'pausing' ||
     status === 'paused' ||
     status === 'resuming' ||
@@ -497,7 +502,7 @@ export function projectBuildFromFacts(
         ? 'running work stopped; abort cleanup pending or in progress'
         : undefined
 
-  if (status === 'queued') {
+  if (status === 'queued' && state.kind !== 'node') {
     const created = dashboard.created
     const workspace = dashboard.workspaceProvisioned
     const released = dashboard.workspaceReleased
@@ -530,6 +535,7 @@ export function projectBuildFromFacts(
                 : 'runner attachment pending'
     return {
       slug: record.slug,
+      ...buildVocabulary(state),
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -544,6 +550,7 @@ export function projectBuildFromFacts(
   if (abortProgress !== undefined) {
     return {
       slug: record.slug,
+      ...buildVocabulary(state),
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -850,10 +857,22 @@ export function projectBuildFromFacts(
 
   return {
     slug: record.slug,
+    ...buildVocabulary(state),
     status,
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
-    steps,
+    steps:
+      state.kind === 'node'
+        ? [
+            step('spec', state.specRev !== undefined, false),
+            step('open', state.nodeOpened !== undefined, state.nodeOpened === undefined),
+            step(buildVocabulary(state).integration!, false, state.nodeOpened !== undefined),
+            step('merge', false, state.pr !== undefined, {
+              qualifier: 'waiting',
+              reason: 'integration requires human landing',
+            }),
+          ]
+        : steps,
     ...(setupError !== undefined ? { setupError } : {}),
     blockers: [
       ...state.openEscalations.map((e) => e.question),
@@ -1163,7 +1182,7 @@ export function buildDashboard(
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
   const activeCount = entries.filter(
-    ({ state }) => state.status !== 'done' && state.status !== 'aborted',
+    ({ state }) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
   ).length
   return buildDashboardFromProjected(
     builds,
@@ -1175,4 +1194,27 @@ export function buildDashboard(
     },
     repositoryEvents,
   )
+}
+
+/** One vocabulary for CLI, terminal, web and operator reads. */
+export function buildVocabulary(state: BuildState): {
+  kind?: 'integration' | 'work'
+  target?: string
+  integration?: 'opening' | 'empty' | 'collecting'
+} {
+  return {
+    kind: state.kind === 'node' ? 'integration' : 'work',
+    ...(state.target?.ticket.id || state.baseBranch
+      ? { target: state.target?.ticket.id ?? state.baseBranch }
+      : {}),
+    ...(state.kind === 'node'
+      ? {
+          integration: !state.nodeOpened
+            ? 'opening'
+            : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0
+              ? 'empty'
+              : 'collecting',
+        }
+      : {}),
+  }
 }

@@ -287,6 +287,61 @@ function atT0(offsetMs: number): string {
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
     describe('builds', () => {
+      test('integration facts replay through cached reads and digests without a runner', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const input = sampleBuildInput('integration-node')
+          await store.createBuild({
+            ...input,
+            branch: 'ab-node/integration-node',
+            created: {
+              actor: DISPATCHER,
+              type: 'build.created',
+              payload: {
+                ticket: input.ticket!,
+                repo: input.repo,
+                baseBranch: 'main',
+                kind: 'node',
+                target: { ticket: { source: 'file', id: 'parent' }, build: 'parent-build' },
+              },
+            },
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.opening',
+            payload: { branch: 'ab-node/integration-node', parent: 'main', sha: 'opening' },
+          })
+          await readBuildFacts(store, input.slug)
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.opened',
+            payload: { sha: 'opening' },
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'node.compared',
+            payload: { parentSha: 'parent', headSha: 'opening', ahead: 0 },
+          })
+          const current = (await readBuildFacts(store, input.slug)).value.state
+          expect(current).toEqual(reduceBuild(await store.getEvents(input.slug)))
+          expect(current.status).toBe('collecting')
+          expect(current.target?.build).toBe('parent-build')
+          expect((await store.getRepoBuildDigests(input.repo)).get(input.slug)).toMatchObject({
+            kind: 'node',
+            nodeOpened: true,
+          })
+          await store.append(input.slug, {
+            actor: DISPATCHER,
+            type: 'pr.opened',
+            payload: {
+              pr: { number: 1, url: 'https://example.test/pr/1', headSha: 'child' },
+            },
+          })
+          await store.append(input.slug, { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+          expect((await store.getRepoBuildDigests(input.repo)).get(input.slug)?.prClosed).toBe(true)
+          expect((await store.getBuild(input.slug))?.lease).toBeUndefined()
+        })
+      })
+
       test('createBuild returns a record with store-assigned createdAt/updatedAt', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {
@@ -396,7 +451,6 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       test('optional repo listing preserves records and order without creating journals', async () => {
         const clock = manualClock()
         await withStore(factory, { clock }, async (store) => {
-          if (!store.listBuildsForRepo) return
           const repo = "acme/quote'repo"
           await store.createBuild(sampleBuildInput('scoped-old', { repo }))
           clock.advance(1000)
@@ -1041,6 +1095,107 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.releaseRepoLease('acme/a', 'one')
           expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(true)
         })
+      })
+    })
+
+    describe('repository change position', () => {
+      test('read-only, monotonic and repository isolated across durable writes and holder changes', async () => {
+        const clock = manualClock()
+        const { store, cleanup } = await factory({ clock })
+        try {
+          const repo = 'change-position'
+          expect(await store.getRepoChangePosition(repo)).toBe('0')
+          expect(await store.getRepo(repo)).toBeNull()
+          let previous = 0n
+          const advanced = async () => {
+            const value = await store.getRepoChangePosition(repo)
+            expect(value).toMatch(/^(0|[1-9][0-9]*)$/)
+            expect(BigInt(value)).toBeGreaterThan(previous)
+            previous = BigInt(value)
+          }
+          const stable = async () =>
+            expect(await store.getRepoChangePosition(repo)).toBe(String(previous))
+          await store.createBuild({ slug: 'position-build', repo })
+          await advanced()
+          expect(await store.getRepo(repo)).toBeNull()
+          await store.append('position-build', {
+            actor: KERNEL,
+            type: 'build.aborted',
+            payload: {},
+          })
+          await advanced()
+          await store.appendWithArtifacts(
+            'position-build',
+            [{ kind: 'notes', content: 'ok' }],
+            () => ({ actor: KERNEL, type: 'build.aborted', payload: {} }),
+          )
+          await advanced()
+          expect(
+            await store.appendIfCurrent('position-build', 0, {
+              actor: KERNEL,
+              type: 'build.aborted',
+              payload: {},
+            }),
+          ).toBeNull()
+          await stable()
+          await store.appendIfCurrent('position-build', 2, {
+            actor: KERNEL,
+            type: 'build.aborted',
+            payload: {},
+          })
+          await advanced()
+          await expect(
+            store.append('position-build', {
+              actor: KERNEL,
+              type: 'build.aborted',
+              payload: { invalid: true },
+            } as never),
+          ).rejects.toThrow()
+          await stable()
+          await store.ensureRepo(repo)
+          await stable()
+          const event = {
+            actor: humanActor('operator'),
+            type: 'dispatcher.intake-set' as const,
+            payload: { enabled: true },
+          }
+          await store.appendRepo(repo, event)
+          await advanced()
+          await store.appendRepoWithArtifacts(repo, [{ kind: 'notes', content: 'ok' }], () => event)
+          await advanced()
+          await store.claimRepoLease(repo, 'one', 1000)
+          await advanced()
+          await store.claimRepoLease(repo, 'one', 1000)
+          await store.heartbeatRepo(repo, 'one')
+          expect(await store.claimRepoLease(repo, 'two', 1000)).toBe(false)
+          await store.releaseRepoLease(repo, 'two')
+          await stable()
+          clock.advance(1001)
+          await stable()
+          await store.claimRepoLease(repo, 'two', 1000)
+          await advanced()
+          await store.beginRepoTick(repo, 'two')
+          await stable()
+          await store.finishRepoTick(repo, 'two', { outcome: 'failed', error: 'test' }, [
+            { actor: DISPATCHER, type: 'dispatcher.tick-started', payload: { run: 'two' } },
+            {
+              actor: DISPATCHER,
+              type: 'dispatcher.tick-failed',
+              payload: { run: 'two', error: 'test' },
+            },
+          ])
+          await advanced()
+          await store.releaseRepoLease(repo, 'two')
+          await advanced()
+          await store.createBuild({ slug: 'position-foreign', repo: 'foreign' })
+          await store.ensureRepo('foreign')
+          await store.appendRepo('foreign', event)
+          await store.claimRepoLease('foreign', 'peer', 1000)
+          await stable()
+        } finally {
+          await store.close()
+          await cleanup?.()
+        }
       })
     })
 
@@ -3163,6 +3318,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           )
           expect(() => scoped.subscribe('scope-b', {}, () => {})).toThrow(/build-scoped store/)
           await expect(scoped.listBuilds()).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.listBuildsForRepo('repo')).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.getRepoChangePosition('repo')).rejects.toThrow(/build-scoped store/)
           await expect(scoped.createBuild(sampleBuildInput('scope-c'))).rejects.toThrow(
             /build-scoped store/,
           )
@@ -4083,6 +4240,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               () => scoped.getBuild('scope-build'),
               () => scoped.append('scope-build', sampleEventWrite()),
               () => scoped.listBuilds(),
+              () => scoped.listBuildsForRepo('acme/a'),
+              () => scoped.getRepoChangePosition('acme/a'),
               () => scoped.createBuild(sampleBuildInput('scope-build-2')),
               () => scoped.ensureRepo('acme/a'),
               () => scoped.appendRepo('acme/a', harvestStartedWrite()),

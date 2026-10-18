@@ -50,6 +50,7 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:integration-wide:png .ab/web-dashboard-frames/integration-wide.png --attach
    ab artifact put web-dashboard-frame:connect-code-wide:png .ab/web-dashboard-frames/connect-code-wide.png --attach
    ab artifact put web-dashboard-frame:connect-approval-wide:png .ab/web-dashboard-frames/connect-approval-wide.png --attach
    ab artifact put web-dashboard-frame:connect-error-wide:png .ab/web-dashboard-frames/connect-error-wide.png --attach

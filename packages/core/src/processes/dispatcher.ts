@@ -82,7 +82,7 @@ import type {
   TicketSource,
   WorkspaceProvider,
 } from '../ports/types'
-import { TicketSourceRateLimitError } from '../ports/types'
+import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { preparePinnedAssets } from '../store/ticket-assets'
@@ -1157,6 +1157,7 @@ export class Dispatcher {
     )) {
       while (true) {
         const { state } = await store.buildFacts(record.slug)
+        if (state.kind === 'node') break
         const target = autoMergeDefaultTarget(state, fact)
         if (target === undefined) break
         if (target === 'observed') {
@@ -1200,6 +1201,7 @@ export class Dispatcher {
     launched: Set<string>,
     report: TickReport = emptyTickReport(),
   ): Promise<LaunchRunnerResult> {
+    if ((await this.store.buildFacts(slug)).state.kind === 'node') return 'already-active'
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
@@ -1791,6 +1793,30 @@ export class Dispatcher {
           }
           continue
         }
+        if (state.kind === 'node' && state.status !== 'aborted') {
+          const command =
+            state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(0)
+          if (command !== undefined) {
+            await this.store.append(record.slug, {
+              actor: DISPATCHER,
+              type:
+                command.command === 'abort'
+                  ? 'build.aborted'
+                  : command.command === 'pause'
+                    ? 'build.paused'
+                    : 'build.resumed',
+              payload: {},
+            })
+            if (command.command === 'abort')
+              await this.cleanupAborted(record, await history(), report)
+            continue
+          }
+          if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) continue
+          if (state.nodeOpened !== undefined && state.pr === undefined) {
+            await this.pollEmptyNode(record, state)
+            continue
+          }
+        }
         // Abort is destructive human judgment and therefore outranks a queued
         // discard when both requests raced into the same stream.
         if (
@@ -2139,7 +2165,8 @@ export class Dispatcher {
     // the build completes); fall back to the repo itself for odd logs.
     const workspacePath = this.forgeWorkspacePathOf(source.workspace)
     const prState = await forge.getPrState(workspacePath, pr.number)
-    const autoMerge = prState.state === 'open' ? pendingAutoMerge(state) : undefined
+    const integration = state.kind === 'node'
+    const autoMerge = !integration && prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
     // Revoking consent takes priority even while the PR is conflicted. A live
     // native request could otherwise merge immediately after reconcile pushes
@@ -2159,7 +2186,7 @@ export class Dispatcher {
     // A positive conflict re-enters reconcile before any enable attempt. In
     // particular, an ungated fallback can never race ahead of the conflict
     // event and its full post-reconcile verification cycle.
-    if (prState.state === 'open' && prState.mergeable === false) {
+    if (!integration && prState.state === 'open' && prState.mergeable === false) {
       // Dedupe: a reduced prState of 'conflicted' means reconcile is already
       // pending (a `reconcile.completed` returns it to 'open').
       if (state.prState === 'conflicted') return
@@ -2191,7 +2218,7 @@ export class Dispatcher {
     // predicate. Only `applied` acknowledges native state. A direct merge is
     // owned solely by this janitor and only after the engine is parked at
     // awaiting-pr (all verify/finalize work complete).
-    const commandSeq = state.autoMerge.commandSeq
+    const commandSeq = integration ? undefined : state.autoMerge.commandSeq
     const canApply = async (): Promise<boolean> => {
       await store.refreshBuild(record.slug)
       const latest = await store.buildFacts(record.slug)
@@ -2217,7 +2244,7 @@ export class Dispatcher {
     ) {
       const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
         buildSlug: record.slug,
-        baseBranch: this.deps.config.baseBranch,
+        baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
         canApply,
       })
       if (result.kind === 'applied' && autoMerge?.enabled === true) {
@@ -2260,7 +2287,7 @@ export class Dispatcher {
         ) {
           await forge.squashMerge(workspacePath, pr.number, result.headSha, {
             buildSlug: record.slug,
-            baseBranch: this.deps.config.baseBranch,
+            baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
           })
         }
       }
@@ -2637,14 +2664,23 @@ export class Dispatcher {
     ticket: TicketRef,
     repo: string,
     seed:
-      | { autoMergeUser?: string; autoMergeDefaultSeq?: number; assets?: PinnedAsset[] }
+      | {
+          autoMergeUser?: string
+          autoMergeDefaultSeq?: number
+          assets?: PinnedAsset[]
+          kind?: 'work' | 'node'
+          target?: EventPayload<'build.created'>['target']
+          baseBranch?: string
+        }
       | undefined,
   ): EventPayload<'build.created'> {
     const { config } = this.deps
     return {
       ticket,
       repo,
-      baseBranch: config.baseBranch,
+      baseBranch: seed?.baseBranch ?? config.baseBranch,
+      ...(seed?.kind !== undefined ? { kind: seed.kind } : {}),
+      ...(seed?.target !== undefined ? { target: seed.target } : {}),
       ...(seed?.autoMergeUser !== undefined ? { autoMergeRequestedBy: seed.autoMergeUser } : {}),
       ...(seed?.autoMergeDefaultSeq !== undefined
         ? { autoMergeDefaultSeq: seed.autoMergeDefaultSeq }
@@ -2723,7 +2759,11 @@ export class Dispatcher {
       // the seed's own value first (this dispatch created the build), else the
       // durable `build.created` fact a recovery pass resumes from.
       const autoMergeDefaultSeq = seed?.autoMergeDefaultSeq ?? created?.payload.autoMergeDefaultSeq
-      if (autoMergeUser !== undefined && !events.autoMergeEverRequested) {
+      if (
+        created.payload.kind !== 'node' &&
+        autoMergeUser !== undefined &&
+        !events.autoMergeEverRequested
+      ) {
         await store.append(record.slug, {
           actor: humanActor(autoMergeUser),
           type: 'build.auto-merge-requested',
@@ -2733,6 +2773,9 @@ export class Dispatcher {
         })
         events = (await readBuildFacts(store, record.slug)).value
       }
+
+      if (created.payload.kind === 'node')
+        return this.completeDispatchBoundaries(record, seed, report, launched)
 
       stage = 'workspace'
       if (openWorkspace(events) === null) {
@@ -2895,6 +2938,15 @@ export class Dispatcher {
           type: 'dispatch.comment-posted',
           payload: {},
         })
+      }
+
+      if (state.kind === 'node') {
+        stage = 'branch'
+        await store.refreshBuild(record.slug)
+        const current = (await store.buildFacts(record.slug)).state
+        if (current.status !== 'queued' || current.pendingCommands.length > 0) return 'parked'
+        await this.openNode(record, current)
+        return 'completed'
       }
 
       stage = 'launch'
@@ -3216,7 +3268,7 @@ export class Dispatcher {
     const activeRefs: TicketRef[] = []
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (digest.terminal === undefined) {
-        active += 1
+        if (digest.kind !== 'node') active += 1
         if (record.ticket) activeRefs.push(record.ticket)
       }
     }
@@ -3269,7 +3321,7 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
-    if (capacity <= 0 || paused) {
+    if (paused || (capacity <= 0 && !ready.some((ticket) => ticket.kind === 'node'))) {
       await this.sourceCondition(undefined, 'ready-scan')
       if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
       return
@@ -3294,9 +3346,18 @@ export class Dispatcher {
     let scanSuccessful = true
     const verdicts = new Map<string, DependencyVerdict>()
     const failed = new Set<string>()
+    const targetBlocked = new Set<string>()
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) return
       if (withheld.has(ticket.ref.id)) continue
+      const target = await this.resolveNodeTarget(ticket)
+      if (typeof target === 'string') {
+        targetBlocked.add(ticket.ref.id)
+        report.dependencyBlocked += 1
+        report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
+        continue
+      }
+      if (this.outOfBudget(opts)) return
       if (ticket.blockersResolved === true || (ticket.blockedBy ?? []).length === 0) continue
       let verdict: DependencyVerdict
       try {
@@ -3326,11 +3387,18 @@ export class Dispatcher {
       }
     }
     for (const ticket of ready) {
-      if (capacity <= 0 || this.outOfBudget(opts)) break
+      if (this.outOfBudget(opts)) break
+      if (ticket.kind !== 'node' && capacity <= 0) continue
       if (withheld.has(ticket.ref.id)) continue
-      if (failed.has(ticket.ref.id)) continue
+      if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
       if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
 
+      const target = await this.resolveNodeTarget(ticket)
+      if (typeof target === 'string') {
+        report.dependencyBlocked += 1
+        report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
+        continue
+      }
       // Claim-before-launch (§12): losing the claim means another dispatcher
       // (or an earlier tick) owns this ticket.
       if (!(await tickets.claim(ticket.ref.id))) {
@@ -3367,9 +3435,11 @@ export class Dispatcher {
 
       const baseSlug = await this.chooseSlugBase(ticket.title, body)
       const slug = await this.uniqueSlug(baseSlug)
-      const branch = `ab/${slug}`
+      const branch = `${ticket.kind === 'node' ? 'ab-node' : 'ab'}/${slug}`
       const repoOrigin = await this.resolveRepoOriginOnce()
       const createdSeed = {
+        ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
+        ...(target !== undefined ? { target: target.target, baseBranch: target.branch } : {}),
         ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
         // Claim-time provenance: the newest durable default fact that agrees
         // with the launch sample, recorded on `build.created` so the fan-out's
@@ -3394,7 +3464,7 @@ export class Dispatcher {
         },
       })
       report.queued -= 1
-      capacity -= 1
+      if (ticket.kind !== 'node') capacity -= 1
       const outcome = await this.attemptDispatchCompletion(record, launched, report, {
         ticket,
         body,
@@ -3412,6 +3482,121 @@ export class Dispatcher {
    * Walk unresolved branches in provider order. Listing facts and dependency
    * reads share a tick-local cache; traversal visits are local to this root.
    */
+  private async resolveNodeTarget(
+    ticket: Ticket,
+  ): Promise<
+    | { target: NonNullable<EventPayload<'build.created'>['target']>; branch: string }
+    | string
+    | undefined
+  > {
+    const forge = this.deps.forge
+    if (
+      ticket.kind === 'node' &&
+      (!forge.createNodeBranch || !forge.compareBranches || !forge.remoteBranchSha)
+    )
+      return `integration requires forge ${forge.name} capabilities createNodeBranch, compareBranches and remoteBranchSha; upgrade the plugin`
+    if (ticket.target === undefined) return undefined
+    const entries = (await this.repoBuildDigests())
+      .filter(
+        ({ record }) =>
+          record.ticket?.source === ticket.ref.source && record.ticket.id === ticket.target,
+      )
+      .sort(
+        (a, b) =>
+          b.record.createdAt.localeCompare(a.record.createdAt) ||
+          b.record.slug.localeCompare(a.record.slug),
+      )
+    const latest = entries[0]
+    if (latest && entries[1]?.record.createdAt === latest.record.createdAt)
+      return `target node ${ticket.target} has ambiguous build generations at ${latest.record.createdAt}`
+    if (!latest) return `target node ${ticket.target} is not yet claimed`
+    const { record, digest } = latest
+    if (digest.kind !== 'node') return `target ${ticket.target} is not a node`
+    if (digest.terminal || digest.prClosed || digest.merged)
+      return `target node ${ticket.target} is ${digest.terminal === 'aborted' ? 'aborted' : digest.merged ? 'landed' : 'closed'}`
+    const state = (await this.store.buildFacts(record.slug)).state
+    if (
+      state.status === 'done' ||
+      state.status === 'aborted' ||
+      state.prState === 'merged' ||
+      state.prState === 'closed'
+    )
+      return `target node ${ticket.target} is ${state.prState === 'merged' ? 'landed' : 'closed'}`
+    if (state.pendingCommands.some((c) => c.command === 'abort'))
+      return `target node ${ticket.target} is closing`
+    if (!digest.nodeOpened || !record.branch) return `target node ${ticket.target} is not yet open`
+    return { target: { ticket: record.ticket!, build: record.slug }, branch: record.branch }
+  }
+
+  private async openNode(record: BuildRecord, state: BuildState): Promise<void> {
+    if (!record.branch || !state.baseBranch)
+      throw new Error('integration lacks frozen branch facts')
+    const forge = this.deps.forge
+    if (!forge.createNodeBranch || !forge.remoteBranchSha)
+      throw new Error('forge lacks node branch capabilities')
+    let intent = state.nodeOpening
+    if (!intent) {
+      intent = {
+        branch: record.branch,
+        parent: state.baseBranch,
+        sha: await forge.remoteBranchSha(state.baseBranch),
+      }
+      const written = await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'node.opening',
+        payload: intent,
+      })
+      if (!written) return
+    }
+    const sha = await forge.createNodeBranch(intent.branch, intent.sha)
+    await this.store.refreshBuild(record.slug)
+    const latest = (await this.store.buildFacts(record.slug)).state
+    if (latest.status !== 'queued' || latest.pendingCommands.length > 0 || latest.nodeOpened) return
+    await this.store.appendIfCurrent(record.slug, latest.lastSeq, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha },
+    })
+  }
+
+  private async pollEmptyNode(record: BuildRecord, state: BuildState): Promise<void> {
+    const forge = this.deps.forge
+    if (!forge.compareBranches || !record.branch || !state.baseBranch)
+      throw new Error('integration lacks comparison capability or frozen branch facts')
+    const observe = async () => {
+      const comparison = await forge.compareBranches!(state.baseBranch!, record.branch!)
+      if (
+        comparison.parentSha !== state.nodeComparison?.parentSha ||
+        comparison.headSha !== state.nodeComparison?.headSha ||
+        comparison.ahead !== state.nodeComparison?.ahead
+      ) {
+        await this.store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'node.compared',
+          payload: comparison,
+        })
+        state.nodeComparison = comparison
+      }
+      return comparison
+    }
+    const comparison = await observe()
+    if (comparison.ahead === 0) return
+    let pr: Awaited<ReturnType<typeof forge.openPr>>
+    try {
+      pr = await forge.openPr({
+        workspacePath: this.deps.checkout ?? this.deps.repo,
+        head: record.branch,
+        base: state.baseBranch,
+        title: `Integration: ${record.ticket?.id ?? record.slug}`,
+        body: `Integration build ${record.slug}. Target: ${state.target?.ticket.id ?? state.baseBranch}. Human landing required.`,
+      })
+    } catch (error) {
+      if (error instanceof NoCommitsBetweenBranchesError && (await observe()).ahead === 0) return
+      throw error
+    }
+    await this.store.append(record.slug, { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
+  }
+
   private async loadDependencyGraph(
     ticket: Ticket,
     nodes: Map<string, DependencyState>,
