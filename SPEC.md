@@ -1976,10 +1976,44 @@ or unverified. The janitor records human provenance and whether the actual merge
 head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Automatic landing policy and reparenting are not provided. A forge plugin needs node branch creation, comparison and
+Automatic landing policy is not provided. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
-**Descendant cascade and node writers.** Every open node observes its frozen
+**Changing a node's parent.** Updating an open node ticket's target moves it to
+another open node generation, or to the configured root when cleared. The node
+branch replays only its contribution above the last completed boundary onto the
+new parent. Former-parent-only history is excluded; owned foreign changes and
+source build identities survive. Existing review identity is retained and its PR
+base changes after branch publication. Empty and same-head moves need no new
+commit or PR. Descendants keep targeting the moved node and follow its head
+through the ordinary cascade, including source-aware conflict reconciliation.
+
+A supported ticket mutation records `node.parent-requested` before the provider
+write under node writer authority. The dispatcher reads back the source and
+records `node.parent-accepted` with old/new target, branch, destination build
+generation and observed ticket revision. Only acceptance changes the effective
+node ancestry; `build.created` and `node.opening` remain historical provenance.
+Replay completion, `node.parent-pr-retargeted`, and `node.parent-completed`
+acknowledge independent effects. Pending requests and accepted moves fence
+verification and landing, and keep both old and new parents incomplete. Leases
+alone do not represent outstanding work. Recovery rereads ambiguous writes,
+cancels unconfirmed requests, resumes frozen replay, and retries PR retargeting
+without replaying unrelated ticket edits. Later edits wait for the reserved
+operation to settle. Native auto-merge is cancelled before changing the base.
+Parent identity changes invalidate eligibility even at identical SHAs; historical
+verification evidence remains immutable.
+
+Self/ancestor cycles (including pending effective ancestry), unopened or terminal
+destination generations, landing/closing sources and unsupported forge retargeting
+are refused with a reason. Busy writer reservations defer external changes and
+refuse synchronous mutations. Direct provider edits receive durable, revision-
+deduplicated `node.parent-rejected` diagnostics when invalid, preserving effective
+ancestry. Missing source reads fail closed. A PR merged or closed by a human
+follows ordinary terminal handling. Changing a claimed work ticket's target is
+refused before any combined patch is written: abort and re-dispatch is the
+supported path. Unclaimed tickets retain ordinary target editing.
+
+**Descendant cascade and node writers.** Every open node observes its effective
 parent branch and its own authoritative head. Parent movement schedules a
 multi-change restack, including for an empty node with no PR. Publications flow
 down the tree on subsequent dispatcher polls, to arbitrary depth; clean replay

@@ -14,8 +14,8 @@ content and blocker relationships. The default file source needs no secret.
 Tickets have `kind = "work"` by default, or `kind = "node"` for a named
 integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
-These fields currently describe intent only: dispatch, branches and landing
-behavior are unchanged in this increment. Blockers remain a separate graph.
+Ready node tickets open integration branches. Work claims freeze their target
+identity and branch. Blockers remain a separate graph.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
@@ -24,6 +24,17 @@ reset kind with `--kind work`. Omitted fields preserve existing values.
 shows the configured root and every ticket, including completed work and empty
 nodes, nested by target with state. Siblings are sorted by id. Invalid external
 graphs and listing diagnostics are reported explicitly.
+
+Changing an open node target re-parents its branch and existing PR; `--no-target`
+moves it to the configured root. The dispatcher confirms source metadata, replays
+only node-owned contributions onto the new parent, then retargets the same review.
+Children follow through the ordinary cascade; conflicts use normal source-aware
+reconcile. Pending moves block verification and landing. Cycles, non-open parents,
+landing/closing nodes and unsupported forge retargeting are refused with a reason.
+Busy operations must settle first. Changing a claimed work target is refused before
+any combined patch is written: abort and re-dispatch instead. Direct provider edits
+are observed too; invalid edits leave effective ancestry unchanged with a durable
+diagnostic. Status shows effective ancestry; ticket tree shows source metadata.
 
 Targets must exist and be nodes in the configured source. Self-targeting,
 ancestor cycles and demoting a node with targeting tickets are refused before

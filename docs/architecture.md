@@ -1153,6 +1153,29 @@ including empty nodes, and advances clean cascades without agent calls. Only the
 active conflicted item attaches a reconcile runner, using source-build artifacts
 materialized by the dispatcher into the integration owner's store scope.
 
+`kernel/node-parent.ts` coordinates lifecycle-aware target mutations for CLI
+and operator requests. It canonicalizes source aliases, checks the latest build
+generation and proposed/effective/pending ancestry, and reserves a durable
+`node.parent-requested` before provider mutation. Claimed work targets stay frozen;
+a changed target requires abort and re-dispatch before any mixed patch is written.
+The dispatcher reads node tickets independently of readiness and activates a
+confirmed, revalidated request with `node.parent-accepted`. Provider edits use
+the same validation; refusals are deduplicated by revision, target and reason.
+Uncertain writes recover by source readback rather than replaying a caller patch.
+
+Accepted parent facts update node target/base projections while creation facts
+remain provenance. Pending requests and moves fence verification, child landing
+and source landing, and count against both parents' completeness. Existing writer
+reservations settle before activation. The existing replay transaction freezes the
+new destination and retains the old contribution boundary until completion, even
+for distinct parents at the same SHA. Afterwards the dispatcher retargets the same
+PR through the optional `Forge.retargetPr` capability, inspects its acknowledged
+base/head, records a receipt and completes the parent operation. GitHub uses the
+[documented PR update endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request)
+with a branch-name `base`. Publication and PR acknowledgement retry separately;
+terminal human PR changes keep their ordinary handling. Children retain the moved
+node's identity and branch, so the usual target observations cascade the move.
+
 In origin mode, node plumbing uses the forge's trusted `kernelExec` transport.
 The GitHub adapter supplies its token through subprocess-only Git configuration,
 scoped to the repository's HTTPS URL; credentials are absent from argv, saved
