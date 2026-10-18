@@ -2820,6 +2820,32 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('leases (§15.2.6, §7.4 — mutable liveness, never events)', () => {
+      test('node writer is independent, exclusive, holder checked and recoverable after expiry', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const slug = 'node-writer'
+          await store.createBuild(sampleBuildInput(slug))
+          expect(await store.claimLease(slug, 'runner', 60_000)).toBe(true)
+          expect(await store.claimNodeWriter(slug, 'one', 1000)).toBe(true)
+          expect(await store.claimNodeWriter(slug, 'two', 1000)).toBe(false)
+          expect(await store.renewNodeWriter(slug, 'two')).toBe(false)
+          await store.releaseNodeWriter(slug, 'two')
+          clock.advance(900)
+          expect(await store.renewNodeWriter(slug, 'one')).toBe(true)
+          clock.advance(900)
+          expect(await store.claimNodeWriter(slug, 'two', 1000)).toBe(false)
+          clock.advance(100)
+          expect(await store.renewNodeWriter(slug, 'one')).toBe(false)
+          expect(await store.claimNodeWriter(slug, 'two', 1000)).toBe(true)
+          await store.releaseNodeWriter(slug, 'one')
+          expect(await store.claimNodeWriter(slug, 'three', 1000)).toBe(false)
+          await store.releaseNodeWriter(slug, 'two')
+          expect(await store.claimNodeWriter(slug, 'three', 1000)).toBe(true)
+          expect((await store.getBuild(slug))?.lease?.holder).toBe('runner')
+          expect(await store.getEvents(slug)).toEqual([])
+        })
+      })
+
       test('claim on an unheld lease succeeds and is visible on the record', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {

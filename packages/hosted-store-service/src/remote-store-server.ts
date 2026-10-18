@@ -1121,6 +1121,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const kind = url.searchParams.get('kind') ?? undefined
         return json(200, await store.listArtifacts(slug, kind))
       }
+      case 'POST node-writer/claim': {
+        const body = await readBody(req, leaseClaimBodySchema)
+        return json(200, { ok: await store.claimNodeWriter(slug, body.holder, body.ttlMs) })
+      }
+      case 'POST node-writer/heartbeat': {
+        const body = await readBody(req, leaseHolderBodySchema)
+        return json(200, { ok: await store.renewNodeWriter(slug, body.holder) })
+      }
+      case 'POST node-writer/release': {
+        const body = await readBody(req, leaseHolderBodySchema)
+        await store.releaseNodeWriter(slug, body.holder)
+        return json(200, { ok: true })
+      }
       case 'POST lease/claim': {
         const body = await readBody(req, leaseClaimBodySchema)
         return json(200, { ok: await store.claimLease(slug, body.holder, body.ttlMs) })
@@ -1355,6 +1368,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
 
     const slug = segments[1]!
     const scope = await authorize(req, 'build', slug)
+    if (segments[2] === 'node-writer' && scope?.kind === 'delegated')
+      throw new MachineAuthError(403, 'delegated executions cannot acquire node writer authority')
     const record = await store.getBuild(slug)
     if (record === null) {
       return fail(404, 'not-found', `unknown build "${slug}"`)

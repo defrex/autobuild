@@ -369,6 +369,12 @@ export interface BuildStore {
    * already held by `holder` (renewal). Claiming is how a new sandbox takes
    * over a dead one's build (§7.4, §15.6-C).
    */
+  /** Independent node-branch writer authority. Expiry permits recovery of the
+   * durable reserved operation, never an incompatible writer. */
+  claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean>
+  renewNodeWriter(slug: string, holder: string): Promise<boolean>
+  releaseNodeWriter(slug: string, holder: string): Promise<void>
+
   claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean>
   /** Bump liveness; false (no-op) unless `holder` holds an unexpired lease. */
   heartbeat(slug: string, holder: string): Promise<boolean>

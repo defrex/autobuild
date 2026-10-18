@@ -592,6 +592,43 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
+  async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+    return this.tx(async (q) => {
+      const row = await this.lockBuild(q, slug)
+      const now = this.clock().getTime()
+      if (
+        row.node_writer_holder &&
+        row.node_writer_holder !== holder &&
+        row.node_writer_expires_at &&
+        Date.parse(iso(row.node_writer_expires_at)) > now
+      )
+        return false
+      const expires = new Date(now + ttlMs).toISOString()
+      await q`UPDATE builds SET node_writer_holder=${holder}, node_writer_expires_at=${expires}, node_writer_ttl_ms=${ttlMs} WHERE slug=${slug}`
+      return true
+    })
+  }
+  async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+    return this.tx(async (q) => {
+      const row = await this.lockBuild(q, slug)
+      const now = this.clock().getTime()
+      if (
+        row.node_writer_holder !== holder ||
+        !row.node_writer_expires_at ||
+        Date.parse(iso(row.node_writer_expires_at)) <= now
+      )
+        return false
+      const expires = new Date(now + num(row.node_writer_ttl_ms)).toISOString()
+      await q`UPDATE builds SET node_writer_expires_at=${expires} WHERE slug=${slug}`
+      return true
+    })
+  }
+  async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+    await this.tx(async (q) => {
+      await this.lockBuild(q, slug)
+      await q`UPDATE builds SET node_writer_holder=NULL, node_writer_expires_at=NULL, node_writer_ttl_ms=NULL WHERE slug=${slug} AND node_writer_holder=${holder}`
+    })
+  }
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.claim('builds', slug, holder, ttlMs)
   }

@@ -153,6 +153,18 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       own('listArtifacts', slug)
       return store.listArtifacts(slug, kind)
     },
+    async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+      own('claimNodeWriter', slug)
+      return store.claimNodeWriter(slug, holder, ttlMs)
+    },
+    async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+      own('renewNodeWriter', slug)
+      return store.renewNodeWriter(slug, holder)
+    },
+    async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+      own('releaseNodeWriter', slug)
+      return store.releaseNodeWriter(slug, holder)
+    },
     async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
       own('claimLease', slug)
       return store.claimLease(slug, holder, ttlMs)

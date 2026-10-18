@@ -392,6 +392,15 @@ export class RepoViewStore implements BuildStore {
     if (repo === this.repo) await this.foldJournalAppend(result.event as RepositoryEvent)
     return result
   }
+  async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+    return this.backing.claimNodeWriter(slug, holder, ttlMs)
+  }
+  async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+    return this.backing.renewNodeWriter(slug, holder)
+  }
+  async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+    return this.backing.releaseNodeWriter(slug, holder)
+  }
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
     const result = await this.backing.claimLease(slug, holder, ttlMs)
     this.invalidate()

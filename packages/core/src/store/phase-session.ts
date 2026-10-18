@@ -275,6 +275,15 @@ export function scopeLocalStoreToPhaseSession(
       own('listArtifacts', 'build', slug)
       return store.listArtifacts(slug, kind)
     },
+    async claimNodeWriter(_slug: string, _holder: string, _ttlMs: number): Promise<boolean> {
+      throw new Error('phase sessions cannot mutate node writer leases')
+    },
+    async renewNodeWriter(_slug: string, _holder: string): Promise<boolean> {
+      throw new Error('phase sessions cannot mutate node writer leases')
+    },
+    async releaseNodeWriter(_slug: string, _holder: string): Promise<void> {
+      throw new Error('phase sessions cannot mutate node writer leases')
+    },
     async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
       own('claimLease', 'build', slug)
       return store.claimLease(slug, holder, ttlMs)

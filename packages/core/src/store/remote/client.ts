@@ -441,6 +441,37 @@ export class RemoteBuildStore implements BuildStore {
     )
   }
 
+  async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+    const result = await this.requestJson(
+      'POST',
+      `${this.buildPath(slug)}/node-writer/claim`,
+      okResponseSchema,
+      { holder, ttlMs },
+    )
+    return result.ok
+  }
+
+  async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+    const result = await this.requestJson(
+      'POST',
+      `${this.buildPath(slug)}/node-writer/heartbeat`,
+      okResponseSchema,
+      { holder },
+    )
+    return result.ok
+  }
+
+  async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+    await this.requestJson(
+      'POST',
+      `${this.buildPath(slug)}/node-writer/release`,
+      okResponseSchema,
+      {
+        holder,
+      },
+    )
+  }
+
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
     const result = await this.requestJson(
       'POST',

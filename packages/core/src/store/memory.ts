@@ -143,6 +143,7 @@ interface RepoState {
 }
 
 interface BuildState {
+  nodeWriter?: Lease
   record: {
     slug: string
     repo: string
@@ -522,6 +523,38 @@ export class MemoryBuildStore implements BuildStore {
     return structuredClone(
       filtered.sort((a, b) => a.kind.localeCompare(b.kind) || a.revision - b.revision),
     )
+  }
+
+  async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+    const state = this.state(slug)
+    const now = this.clock().getTime()
+    const lease = state.nodeWriter
+    if (lease && lease.holder !== holder && lease.expiresAt > now) {
+      return false
+    }
+    state.nodeWriter = { holder, expiresAt: now + ttlMs, ttlMs }
+    state.record.updatedAt = new Date(now).toISOString()
+    return true
+  }
+
+  async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+    const state = this.state(slug)
+    const now = this.clock().getTime()
+    const lease = state.nodeWriter
+    if (!lease || lease.holder !== holder || lease.expiresAt <= now) {
+      return false
+    }
+    lease.expiresAt = now + lease.ttlMs
+    state.record.updatedAt = new Date(now).toISOString()
+    return true
+  }
+
+  async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+    const state = this.state(slug)
+    if (state.nodeWriter?.holder === holder) {
+      state.nodeWriter = undefined
+      state.record.updatedAt = this.now()
+    }
   }
 
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
