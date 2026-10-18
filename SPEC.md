@@ -1956,8 +1956,9 @@ eligibility, including a clean restack. Failure blocks the node; file a repair
 child targeting it. Repair children remain admissible, and their landed head
 supersedes the failed cycle. Reports retain their actual head/base citations.
 
-Landing requires explicit per-build consent; repository defaults do not grant it.
-Consent ON refuses incomplete nodes and names open children; OFF remains available.
+Landing follows ordered `[[landing]]` rules (§15.7), defaulting to node consent.
+Auto mode authorizes complete, verified nodes; consent mode waits for `ab land`.
+Land refuses incomplete nodes and names open children; `ab hold` remains available.
 Node parents and local-git roots receive guarded fast-forwards, preserving one
 commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
@@ -1975,7 +1976,7 @@ or unverified. The janitor records human provenance and whether the actual merge
 head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Automatic landing policy and reparenting are not provided. A forge plugin needs node branch creation, comparison and
+Reparenting is not provided. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
 **Descendant cascade and node writers.** Every open node observes its frozen
@@ -2745,7 +2746,8 @@ for it. Quiet polls append no attempt facts. Native application receipts are
 bookkeeping, not pipeline execution progress.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
-landing state. It is disabled while held, unauthorized, unready, or replacement
+landing state using the native state in the existing PR read, without additional
+forge reads. A native write is issued only when observed and desired state disagree. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
 through the forge's expected-head guard. Every replacement publication confirms
 cancellation first, and its first following poll re-reads and reconciles native

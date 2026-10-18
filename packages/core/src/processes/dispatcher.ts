@@ -1813,6 +1813,7 @@ export class Dispatcher {
           loaded ??= (await readBuildFacts(this.store, record.slug)).value
           return loaded
         }
+        let observedPr: Awaited<ReturnType<Forge['getPrState']>> | undefined
         // A replacement head is followed first by a forge read and cancellation,
         // ahead of node cascade, controls, or any other action for this build.
         if (
@@ -1824,6 +1825,7 @@ export class Dispatcher {
         ) {
           const path = this.forgeWorkspacePathOf(workspace)
           const observed = await this.deps.forge.getPrState(path, state.pr.number)
+          observedPr = observed
           if (observed.state !== 'open') {
             await this.checkPr(
               record,
@@ -1832,12 +1834,17 @@ export class Dispatcher {
               report,
               launched,
               executionLeaseLive,
+              observedPr,
             )
             continue
           }
-          const result = await this.deps.forge.setAutoMerge(path, state.pr.number, false)
+          const result =
+            observed.nativeAutoMerge === false
+              ? { kind: 'applied' as const }
+              : await this.deps.forge.setAutoMerge(path, state.pr.number, false)
           if (result.kind !== 'applied')
             throw new Error('Replacement-head native cancellation unconfirmed')
+          observedPr = { ...observed, nativeAutoMerge: false }
         }
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
         // has its own crash window after build.completed. Revisit only pending
@@ -1968,6 +1975,7 @@ export class Dispatcher {
             report,
             launched,
             executionLeaseLive,
+            observedPr,
           )
         }
       } catch (error) {
@@ -2306,6 +2314,7 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     executionLeaseLive: boolean,
+    observedPr?: Awaited<ReturnType<Forge['getPrState']>>,
   ): Promise<void> {
     const store = this.store
     const { tickets, forge } = this.deps
@@ -2324,7 +2333,7 @@ export class Dispatcher {
       reservation?.operation === 'landing' && reservation.source === record.slug
     let prState: Awaited<ReturnType<typeof forge.getPrState>>
     try {
-      prState = await forge.getPrState(workspacePath, pr.number)
+      prState = observedPr ?? (await forge.getPrState(workspacePath, pr.number))
     } catch (error) {
       if (!recoverLanding && state.prState !== 'merged') throw error
       prState = { state: 'open', mergeable: null }
@@ -2332,7 +2341,12 @@ export class Dispatcher {
     if (state.prState === 'merged' && state.mergedSha)
       prState = { state: 'merged', sha: state.mergedSha }
     let nativeCancelled = false
-    if (nodeTarget && prState.state === 'open' && !recoverLanding) {
+    if (
+      nodeTarget &&
+      prState.state === 'open' &&
+      !recoverLanding &&
+      prState.nativeAutoMerge !== false
+    ) {
       const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
       if (cancelled.kind !== 'applied')
         throw new Error('node-target native auto-merge cancellation unconfirmed')
@@ -2385,9 +2399,10 @@ export class Dispatcher {
         !landingAuthorized(state.landing) ||
         !sameLandingCandidate(await candidateOf(state), state.landing?.decision?.candidate))
     ) {
-      const cancellation = nativeCancelled
-        ? { kind: 'applied' as const }
-        : await forge.setAutoMerge(workspacePath, pr.number, false)
+      const cancellation =
+        nativeCancelled || prState.nativeAutoMerge === false
+          ? { kind: 'applied' as const }
+          : await forge.setAutoMerge(workspacePath, pr.number, false)
       if (cancellation.kind !== 'applied')
         throw new Error('Native landing cancellation unconfirmed')
       nativeCancelled = true
@@ -2439,9 +2454,10 @@ export class Dispatcher {
       !recoverLanding &&
       (nodeTarget || !isReady || !landingAuthorized(state.landing))
     ) {
-      const result = nativeCancelled
-        ? { kind: 'applied' as const }
-        : await forge.setAutoMerge(workspacePath, pr.number, false)
+      const result =
+        nativeCancelled || prState.nativeAutoMerge === false
+          ? { kind: 'applied' as const }
+          : await forge.setAutoMerge(workspacePath, pr.number, false)
       if (result.kind !== 'applied')
         throw new Error('Native landing cancellation unconfirmed; retrying')
       const current = (await store.buildFacts(record.slug)).state
@@ -2667,7 +2683,9 @@ export class Dispatcher {
       !nodeTarget &&
       prState.state === 'open' &&
       landingAuthorized(state.landing) &&
-      (!nativeLandingApplied(state.landing) || !!state.landing?.nativeEnablePending) &&
+      (prState.nativeAutoMerge === false ||
+        !nativeLandingApplied(state.landing) ||
+        !!state.landing?.nativeEnablePending) &&
       (!retry || Date.parse(retry.after) <= this.deps.clock().getTime()) &&
       commandSeq !== undefined &&
       (await canApply())
@@ -2701,27 +2719,30 @@ export class Dispatcher {
           },
         })
       }
-      const result = await forge
-        .setAutoMerge(workspacePath, pr.number, true, {
-          buildSlug: record.slug,
-          baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
-          canApply: async () => {
-            if (!(await canApply())) return false
-            if (enableSeq === undefined)
-              enableSeq = (
-                await store.append(record.slug, {
-                  actor: DISPATCHER,
-                  type: 'landing.native-enable-started',
-                  payload: {},
-                })
-              ).seq
-            return true
-          },
-        })
-        .catch(async (error: unknown) => {
-          await settleFailedEnable()
-          throw error
-        })
+      const result =
+        prState.nativeAutoMerge === true && !nativeCancelled
+          ? { kind: 'applied' as const }
+          : await forge
+              .setAutoMerge(workspacePath, pr.number, true, {
+                buildSlug: record.slug,
+                baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+                canApply: async () => {
+                  if (!(await canApply())) return false
+                  if (enableSeq === undefined)
+                    enableSeq = (
+                      await store.append(record.slug, {
+                        actor: DISPATCHER,
+                        type: 'landing.native-enable-started',
+                        payload: {},
+                      })
+                    ).seq
+                  return true
+                },
+              })
+              .catch(async (error: unknown) => {
+                await settleFailedEnable()
+                throw error
+              })
       // Only an attempt that reached the mutation guard needs cancellation.
       // Persist retry timing with its receipt so restart cannot reset backoff.
       if (result.kind !== 'applied') await settleFailedEnable()

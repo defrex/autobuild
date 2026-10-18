@@ -510,7 +510,9 @@ export class FakeForge implements Forge {
     this.getPrStateCalls.push({ workspacePath, number })
     const state = this.prs.get(number)
     if (!state) throw new Error(`FakeForge: unknown PR #${number}`)
-    return state
+    return state.state === 'open'
+      ? { ...state, nativeAutoMerge: state.nativeAutoMerge ?? this.isAutoMergeEnabled(number) }
+      : state
   }
 
   async setAutoMerge(

@@ -127,7 +127,7 @@ describe('FakeForge', () => {
   test('getPrState journals workspacePath and number', async () => {
     const forge = new FakeForge()
     const { number } = await forge.openPr(prOpts())
-    expect(await forge.getPrState('/ws/a', number)).toEqual({
+    expect(await forge.getPrState('/ws/a', number)).toMatchObject({
       state: 'open',
       mergeable: null,
     })
@@ -145,7 +145,7 @@ describe('FakeForge', () => {
     const { number } = await forge.openPr(prOpts())
 
     forge.setPrState(number, { state: 'open', mergeable: false })
-    expect(await forge.getPrState('/ws/a', number)).toEqual({
+    expect(await forge.getPrState('/ws/a', number)).toMatchObject({
       state: 'open',
       mergeable: false,
     })
@@ -161,7 +161,7 @@ describe('FakeForge', () => {
     const forge = new FakeForge()
     const state: PrState = { state: 'closed' }
     forge.setPrState(99, state)
-    expect(await forge.getPrState('/ws/a', 99)).toEqual(state)
+    expect(await forge.getPrState('/ws/a', 99)).toMatchObject(state)
     await forge.commentOnPr('/ws/a', 99, 'seeded')
     expect(forge.comments).toEqual([{ workspacePath: '/ws/a', number: 99, body: 'seeded' }])
   })
@@ -265,7 +265,7 @@ describe('FakeForge', () => {
 
     await expect(forge.squashMerge('/ws/a', pr.number, 'old-head')).rejects.toThrow('head changed')
     expect(forge.squashMergeCalls).toEqual([])
-    expect(await forge.getPrState('/ws/a', pr.number)).toEqual({
+    expect(await forge.getPrState('/ws/a', pr.number)).toMatchObject({
       state: 'open',
       mergeable: true,
     })

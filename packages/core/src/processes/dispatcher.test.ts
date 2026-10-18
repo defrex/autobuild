@@ -3492,7 +3492,7 @@ describe('Dispatcher janitor', () => {
 
     // An applied candidate stays quiet until its readiness or command changes.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.forge.autoMergeCalls).toHaveLength(2)
+    expect(h.forge.autoMergeCalls).toHaveLength(1)
     expect(
       (await h.store.getEvents(slug)).filter(
         (e) => e.type === 'landing.native-applied' && e.payload.enabled,
@@ -3630,9 +3630,8 @@ describe('Dispatcher janitor', () => {
     ).toBe(false)
 
     await h.dispatcher.tick()
-    // Native state was already true, so this is an idempotent no-op call whose
-    // correlated fact repairs the event log.
-    expect(h.forge.autoMergeCalls.at(-1)).toMatchObject({ enabled: true })
+    // Native readback repairs the receipt without another provider write.
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
     const applied = (await h.store.getEvents(slug)).at(-1)
     expect(applied?.type).toBe('landing.native-applied')
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
@@ -8957,7 +8956,11 @@ describe('stable merged-build evidence and native maintenance', () => {
       expect(options?.buildSlug).toBe(slug)
       expect(await options?.canApply?.()).toBe(true)
       attempts++
-      return attempts === 1 ? { kind: 'applied' } : { kind: 'ungated', headSha: 'new-head' }
+      if (attempts === 1) {
+        h.forge.setPrState(1, { state: 'open', mergeable: true, nativeAutoMerge: true })
+        return { kind: 'applied' }
+      }
+      return { kind: 'ungated', headSha: 'new-head' }
     }
     await h.dispatcher.tick()
     await h.dispatcher.tick()
@@ -9384,6 +9387,53 @@ describe('declarative landing reconciliation', () => {
     const state = async () => reduceBuild(await h.store.getEvents(slug))
     return { ...h, slug, poll, state }
   }
+  test('consent queue polls read each PR once and write only to repair observed drift', async () => {
+    const h = harness({ toml: '[[landing]]\nmode = "consent"' })
+    for (let number = 1; number <= 4; number++) {
+      const slug = await seedAwaitingPr(h, `queued-${number}`)
+      if (number !== 1)
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'finalize.completed',
+          payload: { pr: { ...PR, number } },
+        })
+      h.forge.setPrState(number, { state: 'open', mergeable: true })
+    }
+    for (let poll = 0; poll < 3; poll++) {
+      h.forge.getPrStateCalls.length = 0
+      h.forge.autoMergeCalls.length = 0
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      expect(h.forge.getPrStateCalls).toHaveLength(4)
+      expect(h.forge.autoMergeCalls).toHaveLength(0)
+    }
+    await h.forge.setAutoMerge('/repo', 2, true)
+    h.forge.autoMergeCalls.length = 0
+    h.forge.getPrStateCalls.length = 0
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.forge.getPrStateCalls).toHaveLength(4)
+    expect(h.forge.autoMergeCalls).toMatchObject([{ number: 2, enabled: false }])
+  })
+  test('replacement and paused polls reuse the existing PR read without redundant cancellation', async () => {
+    const h = await candidate()
+    await h.poll()
+    await h.store.append(h.slug, {
+      actor: KERNEL,
+      type: 'landing.native-applied',
+      payload: { enabled: false, operation: 'replacement' },
+    })
+    await h.store.append(h.slug, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    for (let poll = 0; poll < 3; poll++) {
+      h.forge.getPrStateCalls.length = 0
+      h.forge.autoMergeCalls.length = 0
+      expect((await h.poll()).janitorFailed).toBe(0)
+      expect(h.forge.getPrStateCalls).toHaveLength(1)
+      expect(h.forge.autoMergeCalls).toHaveLength(0)
+    }
+  })
   test('quiet enabled and inspection-deferred polls append no facts', async () => {
     for (const deferred of [false, true]) {
       const h = await candidate('auto')
@@ -9602,7 +9652,7 @@ describe('declarative landing reconciliation', () => {
           ? null
           : 'Landing contrary to policy: possible stale native enable; inspect the target',
       )
-      expect(h.forge.autoMergeCalls).toHaveLength(1)
+      expect(h.forge.autoMergeCalls).toHaveLength(0)
       await h.poll()
       expect(
         (await h.store.getEvents(h.slug)).filter((e) => e.type === 'landing.forge-merged'),

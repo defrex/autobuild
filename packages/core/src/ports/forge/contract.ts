@@ -157,7 +157,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toMatchObject({
           state: 'open',
           mergeable: true,
         })
@@ -168,7 +168,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.makeConflict(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toMatchObject({
           state: 'open',
           mergeable: false,
         })
@@ -252,7 +252,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         await expect(
           harness.forge.squashMerge(harness.workspacePath, pr.number, pr.headSha),
         ).rejects.toThrow()
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toMatchObject({
           state: 'open',
           mergeable: true,
         })
