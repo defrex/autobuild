@@ -428,6 +428,11 @@ import { dispatchStatusReducer } from './dispatch-status'
  * correlations outside it use the explicitly parameterized cache. */
 export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
+  presence: Record<
+    string,
+    Extract<RepositoryEvent, { type: 'change-presence.observed' }>['payload']
+  >
+
   openHarvest: ReturnType<typeof openHarvestExecutionsReducer.initial>
   attention: ReturnType<typeof repositoryAttentionReducer.initial>
   harvestFailures: Record<
@@ -468,7 +473,7 @@ export interface RepositoryReadAcc {
 }
 export const repositoryReadFactsReducer = defineReducer({
   version:
-    1 +
+    2 +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     repositoryAttentionReducer.version +
@@ -480,6 +485,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxStatesReducer.version +
     dispatchStatusReducer('version').version,
   initial: (): RepositoryReadAcc => ({
+    presence: {},
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
     attention: repositoryAttentionReducer.initial(),
@@ -511,6 +517,8 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.config = effectiveConfigReducer.advance(acc.config, events)
     acc.sandboxes = sandboxStatesReducer.advance(acc.sandboxes, events)
     for (const event of events) {
+      if (event.type === 'change-presence.observed')
+        acc.presence[event.payload.destination] = event.payload
       if (event.type === 'harvest.failed') {
         const key = JSON.stringify([event.payload.run, event.payload.step, event.payload.round])
         acc.harvestFailures[key] = {
@@ -596,6 +604,7 @@ export const repositoryReadFactsReducer = defineReducer({
     }
   },
   finish: (acc: RepositoryReadAcc) => ({
+    presence: structuredClone(acc.presence),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
     harvestAuthorizations: structuredClone(acc.harvestAuthorizations),

@@ -1,4 +1,4 @@
-import { readBuildFacts, readBuildSelector } from './reduced-reads'
+import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
@@ -788,6 +788,46 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('repository journal (workflow and control paper trail)', () => {
+      test('change presence is retained and reduced across repository read boundaries', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'presence-contract'
+          await store.ensureRepo(repo)
+          const payload = {
+            destination: 'root:main',
+            branch: 'main',
+            head: 'a'.repeat(40),
+            evidence: 'landing-revision-1',
+            identities: ['build:blocker'],
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload,
+          })
+          expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
+            payload,
+          )
+          const later = {
+            ...payload,
+            evidence: 'landing-revision-2',
+            identities: ['build:blocker', 'build:second'],
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload: later,
+          })
+          expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
+            later,
+          )
+          expect(
+            (await store.getRepoStateEvents(repo)).filter(
+              (event) => event.type === 'change-presence.observed',
+            ),
+          ).toHaveLength(2)
+        })
+      })
+
       test('tick observations are fenced, bounded, atomic and detached snapshots', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {
