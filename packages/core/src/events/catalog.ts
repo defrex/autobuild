@@ -44,6 +44,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.hold-requested': ['human'],
   'build.land-requested': ['human'],
   'landing.command-acknowledged': ['dispatcher', 'kernel'],
+  'landing.native-enable-started': ['dispatcher'],
+  'landing.forge-merged': ['kernel'],
   'landing.native-applied': ['dispatcher', 'kernel'],
   'target.moved': ['dispatcher', 'kernel'],
   'restack.prepared': ['kernel', 'dispatcher'],

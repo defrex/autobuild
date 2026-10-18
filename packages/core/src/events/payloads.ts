@@ -623,7 +623,13 @@ export const eventPayloadSchemas = {
   'build.hold-requested': empty,
   'build.land-requested': z.strictObject({ decisionSeq: z.number().int().positive() }),
   'landing.command-acknowledged': z.strictObject({ commandSeq: z.number().int().positive() }),
+  'landing.native-enable-started': empty,
+  'landing.forge-merged': z.strictObject({
+    classification: z.enum(['human', 'possible-stale-enable']),
+    overrodeHold: z.boolean(),
+  }),
   'landing.native-applied': z.strictObject({
+    enableSeq: z.number().int().positive().optional(),
     enabled: z.boolean(),
     candidate: landingCandidateSchema.optional(),
     decisionSeq: z.number().int().positive().optional(),

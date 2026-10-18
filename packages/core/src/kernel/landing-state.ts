@@ -3,6 +3,8 @@ import type { EventPayload } from '../events/payloads'
 import { landingCandidateId, type LandingCandidate } from './landing-policy'
 
 export interface LandingState {
+  nativeEnablePending?: number
+  forgeMerge?: EventPayload<'landing.forge-merged'>
   decision?: EventPayload<'landing.decided'> & { seq: number }
   command?: { kind: 'hold' | 'land'; seq: number; decisionSeq?: number; legacy?: true }
   acknowledgedSeq?: number
@@ -24,7 +26,19 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       if (event.payload.commandSeq === state.command?.seq)
         state.acknowledgedSeq = event.payload.commandSeq
       break
+    case 'pr.auto-merge-enabled':
+    case 'pr.auto-merge-disabled':
+      // Historical provider acknowledgements remain applied-state evidence.
+      state.native = { enabled: event.type === 'pr.auto-merge-enabled', seq: event.seq }
+      break
+    case 'landing.native-enable-started':
+      state.nativeEnablePending = event.seq
+      break
+    case 'landing.forge-merged':
+      state.forgeMerge = event.payload
+      break
     case 'landing.native-applied':
+      if (event.payload.enableSeq === state.nativeEnablePending) delete state.nativeEnablePending
       state.native = { ...event.payload, seq: event.seq }
       break
     case 'build.auto-merge-requested':

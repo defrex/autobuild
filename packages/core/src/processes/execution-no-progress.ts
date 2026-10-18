@@ -13,6 +13,8 @@ export const executionProgress = {
   'build.hold-requested': 'progress',
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',
+  'landing.native-enable-started': 'bookkeeping',
+  'landing.forge-merged': 'progress',
   'landing.native-applied': 'progress',
   'target.moved': 'bookkeeping',
   'restack.prepared': 'progress',

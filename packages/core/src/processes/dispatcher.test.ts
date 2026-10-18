@@ -1,3 +1,4 @@
+import { buildNeedsAttention } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
 import { publicationPending } from './publication-state'
 import {
@@ -9662,6 +9663,55 @@ describe('declarative landing reconciliation', () => {
     expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
     expect((await h.state()).landing?.acknowledgedSeq).toBe(held.seq)
   })
+  test.each([
+    ['unheld human', false, false, 'human'],
+    ['held human', true, false, 'human'],
+    ['armed native', true, true, 'possible-stale-enable'],
+    ['indeterminate native', true, 'pending', 'possible-stale-enable'],
+  ] as const)(
+    '%s forge landing uses durable native evidence',
+    async (_, held, native, expected) => {
+      const h = await candidate()
+      await h.poll() // records a confirmed native disable while awaiting consent
+      if (held)
+        await h.store.append(h.slug, {
+          actor: humanActor('operator'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+      if (native === true)
+        await h.store.append(h.slug, {
+          actor: KERNEL,
+          type: 'landing.native-applied',
+          payload: { enabled: true },
+        })
+      if (native === 'pending')
+        await h.store.append(h.slug, {
+          actor: DISPATCHER,
+          type: 'landing.native-enable-started',
+          payload: {},
+        })
+      h.forge.setPrState(1, { state: 'merged', sha: 'human-or-native' })
+      expect((await h.poll()).janitorFailed).toBe(0)
+      const state = await h.state()
+      expect(state.landing?.forgeMerge).toEqual({ classification: expected, overrodeHold: held })
+      expect(state.prState).toBe('merged')
+      const events = await h.store.getEvents(h.slug)
+      expect(
+        events.filter(
+          (e) =>
+            e.type === 'observation.recorded' &&
+            e.payload.refs?.includes('landing-contrary-to-policy'),
+        ),
+      ).toHaveLength(expected === 'human' ? 0 : 1)
+      expect(buildNeedsAttention(events, state)).toBe(expected !== 'human')
+      expect(h.forge.autoMergeCalls).toHaveLength(1)
+      await h.poll()
+      expect(
+        (await h.store.getEvents(h.slug)).filter((e) => e.type === 'landing.forge-merged'),
+      ).toHaveLength(1)
+    },
+  )
   test('enable finishing after cancellation is repaired immediately and on the next poll', async () => {
     const h = await candidate('auto')
     const set = h.forge.setAutoMerge.bind(h.forge)

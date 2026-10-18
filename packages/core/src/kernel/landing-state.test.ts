@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import { validateEventWrite } from '../events/catalog'
-import { KERNEL, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { buildReducer } from './reducer'
 import { landingAuthorized, nativeLandingApplied } from './landing-state'
 
@@ -106,6 +106,45 @@ describe('durable landing state', () => {
       }),
     )
     expect(landingAuthorized(buildReducer.reduce(log).landing)).toBe(false)
+  })
+
+  test('enable uncertainty survives replay until a confirmed native application', () => {
+    const log = [
+      decided(),
+      event(2, {
+        actor: KERNEL,
+        type: 'landing.native-applied',
+        payload: { enabled: false },
+      }),
+      event(3, {
+        actor: DISPATCHER,
+        type: 'landing.native-enable-started',
+        payload: {},
+      }),
+    ]
+    expect(buildReducer.reduce(log).landing?.nativeEnablePending).toBe(3)
+    log.push(
+      event(4, {
+        actor: KERNEL,
+        type: 'landing.native-applied',
+        payload: { enabled: false },
+      }),
+    )
+    expect(buildReducer.reduce(log).landing?.nativeEnablePending).toBe(3)
+    log.push(
+      event(5, {
+        actor: KERNEL,
+        type: 'landing.native-applied',
+        payload: { enabled: false, enableSeq: 3 },
+      }),
+    )
+    expect(buildReducer.reduce(log).landing?.nativeEnablePending).toBeUndefined()
+    for (let split = 0; split <= log.length; split++) {
+      const first = buildReducer.advance(buildReducer.initial(), log.slice(0, split))
+      expect(
+        buildReducer.finish(buildReducer.advance(structuredClone(first), log.slice(split))),
+      ).toEqual(buildReducer.reduce(log))
+    }
   })
 
   test('incremental reduction equals replay at every interruption', () => {

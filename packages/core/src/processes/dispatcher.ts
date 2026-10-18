@@ -2435,7 +2435,7 @@ export class Dispatcher {
       if (result.kind !== 'applied')
         throw new Error('Native landing cancellation unconfirmed; retrying')
       const current = (await store.buildFacts(record.slug)).state
-      if (current.landing?.native?.enabled !== false)
+      if (current.landing?.native?.enabled !== false || current.landing.nativeEnablePending)
         await store.append(record.slug, {
           actor: DISPATCHER,
           type: 'landing.native-applied',
@@ -2653,6 +2653,13 @@ export class Dispatcher {
       (await canApply())
     ) {
       const decision = state.landing!.decision!
+      // Persist uncertainty before the external effect: a crash or error must
+      // never make an enable look like a confirmed disabled native state.
+      const enable = await store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'landing.native-enable-started',
+        payload: {},
+      })
       const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
         buildSlug: record.slug,
         baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
@@ -2662,6 +2669,7 @@ export class Dispatcher {
         const latest = (await store.buildFacts(record.slug)).state
         if (await canApply()) {
           if (
+            latest.landing?.nativeEnablePending ||
             latest.landing?.native?.enabled !== true ||
             latest.landing.native.decisionSeq !== decision.seq ||
             latest.landing.native.commandSeq !== latest.landing.command?.seq
@@ -2671,6 +2679,7 @@ export class Dispatcher {
               type: 'landing.native-applied',
               payload: {
                 enabled: true,
+                enableSeq: enable.seq,
                 candidate: decision.candidate,
                 decisionSeq: decision.seq,
                 ...(latest.landing?.command ? { commandSeq: latest.landing.command.seq } : {}),
@@ -2679,7 +2688,13 @@ export class Dispatcher {
         } else {
           // Enable may have won after cancellation. Repair immediately, and
           // again on the next poll if this process dies at this boundary.
-          await forge.setAutoMerge(workspacePath, pr.number, false)
+          const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+          if (cancelled.kind === 'applied')
+            await store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'landing.native-applied',
+              payload: { enabled: false, enableSeq: enable.seq },
+            })
         }
       } else if (result.kind === 'deferred' && result.reason) {
         await recordAutoMergeDeferralObservation(
@@ -2773,21 +2788,31 @@ export class Dispatcher {
       case 'merged': {
         if (executionLeaseLive) return
         const events = await source.history()
-        if (
-          !landingAuthorized(state.landing) &&
-          !events.observations.some((e) => e.refs?.includes('landing-contrary-to-policy'))
-        ) {
+        if (!landingAuthorized(state.landing) && !state.landing?.forgeMerge) {
+          // Use our durable native-effect evidence, never provider origin.
+          // Absence of a confirmed disabled receipt is indeterminate too.
+          const classification =
+            state.landing?.native?.enabled === false && !state.landing.nativeEnablePending
+              ? ('human' as const)
+              : ('possible-stale-enable' as const)
+          const overrodeHold = state.landing?.command?.kind === 'hold'
           await store.append(record.slug, {
             actor: KERNEL,
-            type: 'observation.recorded',
-            payload: {
-              id: this.deps.ids('obs'),
-              kind: 'followup',
-              summary:
-                'Landing contrary to policy: the forge merged while held or without landing authorization; inspect the target. The target has not been rewritten.',
-              refs: ['landing-contrary-to-policy'],
-            },
+            type: 'landing.forge-merged',
+            payload: { classification, overrodeHold },
           })
+          if (classification === 'possible-stale-enable')
+            await store.append(record.slug, {
+              actor: KERNEL,
+              type: 'observation.recorded',
+              payload: {
+                id: this.deps.ids('obs'),
+                kind: 'followup',
+                summary:
+                  'Landing contrary to policy: native auto-merge was armed or indeterminate when the forge merged without landing authorization. Operator attention required; the target has not been rewritten.',
+                refs: ['landing-contrary-to-policy'],
+              },
+            })
         }
         // Emit the fact once (a crash between steps re-runs this block; the
         // reduced prState dedupes the event, the log dedupes the release).
