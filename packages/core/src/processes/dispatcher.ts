@@ -1,5 +1,9 @@
 import { landIntegrationRoot, auditIntegrationLanding } from '../kernel/integration-landing'
-import { observeIntegration } from '../kernel/integration-completeness'
+import {
+  observeIntegration,
+  integrationObservationInputs,
+  type IntegrationObservationInputs,
+} from '../kernel/integration-completeness'
 import {
   integrationComplete,
   integrationCurrent,
@@ -652,6 +656,59 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 }
 
 export class Dispatcher {
+  // Only scheduling is cached. Eligibility facts still come from durable state,
+  // and each admitted verification/publication samples the source this pass.
+  private integrationInputs?: Promise<IntegrationObservationInputs>
+  private integrationPublicationInputs?: Promise<IntegrationObservationInputs>
+  private readonly integrationTargets = new Map<string, string | undefined>()
+  private readonly integrationPolls = new Map<string, { key: string; at: number }>()
+  private readonly integrationLandingPolls = new Map<string, { key: string; at: number }>()
+  private integrationPollDue(
+    polls: Map<string, { key: string; at: number }>,
+    slug: string,
+    key: string,
+  ): boolean {
+    const now = this.deps.clock().getTime()
+    const previous = polls.get(slug)
+    if (previous?.key === key && now - previous.at < 300_000) return false
+    polls.set(slug, { key, at: now })
+    return true
+  }
+  private async integrationClaimKey(slug: string): Promise<string> {
+    const children = []
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      // Frozen targets are immutable build metadata. Discover each claim once;
+      // only this node's children can invalidate its periodic source schedule.
+      if (!this.integrationTargets.has(record.slug)) {
+        const state = (await this.store.buildFacts(record.slug)).state
+        if (state.lastSeq > 0) this.integrationTargets.set(record.slug, state.target?.build)
+      }
+      if (this.integrationTargets.get(record.slug) === slug)
+        children.push(
+          `${record.slug}:${digest.terminal ?? ''}:${digest.merged ?? ''}:${digest.prClosed ?? ''}`,
+        )
+    }
+    return children.sort().join('|')
+  }
+  private observeIntegration(slug: string, publication = false) {
+    return observeIntegration(this.store, this.deps.tickets, slug, () => {
+      if (publication) {
+        this.integrationPublicationInputs ??= integrationObservationInputs(
+          this.store,
+          this.deps.tickets,
+          this.deps.repo,
+        )
+        return this.integrationPublicationInputs
+      }
+      this.integrationInputs ??= integrationObservationInputs(
+        this.store,
+        this.deps.tickets,
+        this.deps.repo,
+      )
+      return this.integrationInputs
+    })
+  }
+
   /** Read at each decision boundary: artifact revisions are independent of events. */
   private async decideBuild(
     slug: string,
@@ -766,6 +823,8 @@ export class Dispatcher {
   }
 
   private async runTick(opts: TickOpts): Promise<TickReport> {
+    this.integrationInputs = undefined
+    this.integrationPublicationInputs = undefined
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -1636,7 +1695,10 @@ export class Dispatcher {
         // Local providers provision FROM the physical checkout; remote
         // providers ignore the value (their host seams are injected).
         repo: this.deps.checkout ?? this.deps.repo,
-        baseBranch: baseBranchOf(events, config),
+        baseBranch:
+          events.state.kind === 'node' && events.state.integration?.cycle
+            ? input.branch
+            : baseBranchOf(events, config),
         branch: input.branch,
         ...(priorGenerations > 0 || input.generation > 0
           ? {
@@ -2363,15 +2425,28 @@ export class Dispatcher {
       await store.refreshBuild(record.slug)
       const latest = await store.buildFacts(record.slug)
       if (integration) {
-        await observeIntegration(store, tickets, record.slug)
-        if (!record.branch || !latest.state.baseBranch || !forge.compareBranches) return false
-        const exact = await forge.compareBranches(latest.state.baseBranch, record.branch)
-        const current = (await store.buildFacts(record.slug)).state
-        const cycle = current.integration?.cycle
         const artifact = await store.getArtifact(record.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
         const config = artifact
           ? composeBuildConfig(parseEffectiveBuildConfig(artifact), this.deps.config)
           : this.deps.config
+        const candidate = latest.state
+        if (
+          !candidate.autoMerge.requested ||
+          candidate.autoMerge.commandSeq !== commandSeq ||
+          candidate.autoMerge.explicitCommandSeq !== commandSeq ||
+          candidate.status === 'paused' ||
+          candidate.status === 'done' ||
+          candidate.status === 'aborted' ||
+          candidate.openEscalations.length ||
+          candidate.pendingCommands.length ||
+          !integrationVerified(candidate, config)
+        )
+          return false
+        await this.observeIntegration(record.slug, true)
+        if (!record.branch || !latest.state.baseBranch || !forge.compareBranches) return false
+        const exact = await forge.compareBranches(latest.state.baseBranch, record.branch)
+        const current = (await store.buildFacts(record.slug)).state
+        const cycle = current.integration?.cycle
         return (
           current.autoMerge.requested &&
           current.autoMerge.commandSeq === commandSeq &&
@@ -2396,7 +2471,16 @@ export class Dispatcher {
         decision.reason === 'awaiting-pr'
       )
     }
+    const integrationPublicationDue =
+      !integration ||
+      prState.state === 'merged' ||
+      this.integrationPollDue(
+        this.integrationLandingPolls,
+        record.slug,
+        `${state.integration?.cycle?.id ?? ''}:${state.verify.results.at(-1)?.seq ?? ''}:${state.autoMerge.commandSeq ?? ''}:${state.nodeComparison?.headSha ?? ''}:${state.nodeRestack?.observedParent?.sha ?? ''}`,
+      )
     if (
+      integrationPublicationDue &&
       nodeTarget &&
       (recoverLanding ||
         (prState.state === 'open' &&
@@ -2551,6 +2635,7 @@ export class Dispatcher {
 
     if (
       integration &&
+      integrationPublicationDue &&
       !nodeTarget &&
       record.branch &&
       !executionLeaseLive &&
@@ -4226,7 +4311,17 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
   ): Promise<void> {
-    await observeIntegration(this.store, this.deps.tickets, record.slug)
+    if (
+      state.status === 'paused' ||
+      state.status === 'done' ||
+      state.status === 'aborted' ||
+      state.pendingCommands.length ||
+      state.openEscalations.length ||
+      state.prState === 'merged' ||
+      state.prState === 'closed' ||
+      state.integration?.intent
+    )
+      return
     const forge = this.kernelForge()
     if (!record.branch || !state.baseBranch || !forge.compareBranches) return
     const comparison = await forge.compareBranches(state.baseBranch!, record.branch!)
@@ -4237,6 +4332,19 @@ export class Dispatcher {
         payload: comparison,
       })
     state = (await this.store.buildFacts(record.slug)).state
+    const claims = await this.integrationClaimKey(record.slug)
+    const unchangedFailure = integrationFailed(state)
+    if (
+      !unchangedFailure &&
+      this.integrationPollDue(
+        this.integrationPolls,
+        record.slug,
+        `${comparison.headSha}:${comparison.parentSha}:${state.autoMerge.commandSeq ?? ''}:${claims}`,
+      )
+    ) {
+      await this.observeIntegration(record.slug)
+      state = (await this.store.buildFacts(record.slug)).state
+    }
     if (
       state.integration?.cycle &&
       !state.nodeRestack?.active &&
@@ -4247,6 +4355,7 @@ export class Dispatcher {
       state = (await this.store.buildFacts(record.slug)).state
     }
     if (
+      unchangedFailure ||
       !integrationComplete(state) ||
       state.nodeRestack?.active ||
       state.integration?.intent ||
@@ -4268,6 +4377,9 @@ export class Dispatcher {
       !integrationCurrent(state) ||
       state.integration?.cycle?.config !== integrationConfig(config)
     ) {
+      await this.observeIntegration(record.slug)
+      state = (await this.store.buildFacts(record.slug)).state
+      if (!integrationComplete(state)) return
       const holder = this.deps.ids('node-writer')
       if (!(await this.store.claimNodeWriter(record.slug, holder, 60_000))) return
       try {
@@ -4324,6 +4436,9 @@ export class Dispatcher {
         occupied++
     }
     if (occupied >= this.deps.config.capacity) return
+    await this.observeIntegration(record.slug)
+    state = (await this.store.buildFacts(record.slug)).state
+    if (!integrationCurrent(state)) return
     const facts = (await readBuildFacts(this.store, record.slug)).value
     if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
       const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
@@ -4333,7 +4448,7 @@ export class Dispatcher {
     if (openWorkspace(facts) === null) {
       const handle = await this.deps.workspaces.provision({
         repo: this.deps.checkout ?? this.deps.repo,
-        baseBranch: state.baseBranch!,
+        baseBranch: record.branch,
         branch: record.branch,
         revision: state.integration!.cycle!.head,
       })

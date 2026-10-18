@@ -1,3 +1,4 @@
+import { snapshotParent } from './snapshot-parent'
 import { buildTrailers } from './build-identity'
 import { KERNEL, DISPATCHER } from '../events/envelope'
 import type { Forge } from '../ports/types'
@@ -27,7 +28,7 @@ export interface IntegrationLandingDeps {
 /** The source-owned reservation protects root publication across lease loss. */
 export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise<void> {
   const { store, forge, slug, workspacePath, exec } = deps
-  if (!forge.rewrite || !forge.inspectLandingPr || !forge.snapshotBase) return
+  if (!forge.rewrite || !forge.inspectLandingPr) return
   if (!(await store.claimNodeWriter(slug, deps.holder, 60_000))) return
   const authority = async () => {
     if (!(await store.renewNodeWriter(slug, deps.holder)))
@@ -43,11 +44,11 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
       const pr = await forge.getPrState(workspacePath, deps.pr)
       if (pr.state === 'merged' && pr.headSha === existing.head) landed = pr.sha
       if (forge.name === 'local-git') {
-        const actual = await forge.snapshotBase!({
-          workspacePath,
-          base: deps.destination,
-          destinationRef: `refs/autobuild/reconcile/${slug}/readback`,
-        })
+        const actual = await snapshotParent(
+          deps,
+          deps.destination,
+          `refs/autobuild/reconcile/${slug}/readback`,
+        )
         const contains = await exec(['git', 'merge-base', '--is-ancestor', existing.head, actual], {
           cwd: workspacePath,
         })
@@ -55,11 +56,12 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
       }
     }
     const abandon = async (reason: string) => {
-      if (existing)
+      const pending = (await readBuildFacts(store, slug)).value.state.integration?.intent
+      if (pending)
         await store.append(slug, {
           actor: KERNEL,
           type: 'integration.abandoned',
-          payload: { id: existing.id, reason },
+          payload: { id: pending.id, reason },
         })
     }
     if (!landed) {
@@ -77,11 +79,11 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
         pr.headSha !== deps.head
       )
         return
-      const parent = await forge.snapshotBase!({
-        workspacePath,
-        base: deps.destination,
-        destinationRef: `refs/autobuild/reconcile/${slug}/parent`,
-      })
+      const parent = await snapshotParent(
+        deps,
+        deps.destination,
+        `refs/autobuild/reconcile/${slug}/parent`,
+      )
       const head = await forge.rewrite.snapshot({
         workspacePath,
         branch: deps.branch,
@@ -127,15 +129,18 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
         existing.commandSeq !== deps.commandSeq
       )
         return
-      if (!(await deps.eligible())) return
+      if (!(await deps.eligible())) {
+        await abandon('Eligibility changed before publication')
+        return
+      }
       await authority()
       // This is the final external read before the merge request. GitHub's
       // endpoint fences the head only; its remaining race is audited below.
-      const current = await forge.snapshotBase!({
-        workspacePath,
-        base: deps.destination,
-        destinationRef: `refs/autobuild/reconcile/${slug}/fresh`,
-      })
+      const current = await snapshotParent(
+        deps,
+        deps.destination,
+        `refs/autobuild/reconcile/${slug}/fresh`,
+      )
       if (current !== parent) {
         const pending = (await readBuildFacts(store, slug)).value.state.integration?.intent
         if (pending)

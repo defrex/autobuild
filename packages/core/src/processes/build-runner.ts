@@ -747,6 +747,16 @@ export class BuildRunner {
     }
 
     const state = facts.state
+    if (state.kind === 'node' && state.integration?.cycle && !state.nodeRestack?.conflict) {
+      // Local worktree provisioning may create a new branch at its parent;
+      // verification consumes the archived cycle commit, never that mutable tip.
+      const checkout = await this.deps.exec(
+        ['git', 'checkout', '--detach', state.integration.cycle.head],
+        { cwd: this.deps.workspacePath },
+      )
+      if (checkout.exitCode !== 0)
+        throw new Error(`cannot check out prepared integration head: ${checkout.stderr}`)
+    }
     const currentFailure = state.setupFailure
     const openSetupEscalation = state.openEscalations.some(
       (escalation) => escalation.phase === 'setup' && escalation.source === 'policy',

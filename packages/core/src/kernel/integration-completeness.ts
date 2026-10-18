@@ -1,14 +1,36 @@
-import type { TicketSource } from '../ports/types'
-import type { BuildStore } from '../store/types'
+import type { BuildState } from './reducer'
+import type { TicketSource, TicketListing } from '../ports/types'
+import type { BuildStore, BuildRecord } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
+
+/** One exhaustive source sample shared by every node in a dispatcher pass.
+ * Scheduling may be cached; publication always requests a sample from this pass. */
+export interface IntegrationObservationInputs {
+  listing: TicketListing
+  builds: { record: BuildRecord; state: BuildState }[]
+}
+export async function integrationObservationInputs(
+  store: BuildStore,
+  tickets: TicketSource,
+  repo: string,
+): Promise<IntegrationObservationInputs> {
+  if (!tickets.integrationTree || !tickets.listAll)
+    throw new Error('ticket source cannot establish exhaustive integration completeness')
+  const listing = await tickets.listAll()
+  const builds = []
+  for (const record of await store.listBuildsForRepo(repo))
+    builds.push({ record, state: (await readBuildFacts(store, record.slug)).value.state })
+  return { listing, builds }
+}
 
 /** A failed or partial enumeration cannot authorize verification or publication. */
 export async function observeIntegration(
   store: BuildStore,
   tickets: TicketSource,
   slug: string,
+  inputs?: () => Promise<IntegrationObservationInputs>,
 ): Promise<EventPayload<'integration.observed'>> {
   const record = await store.getBuild(slug)
   const state = (await readBuildFacts(store, slug)).value.state
@@ -23,13 +45,14 @@ export async function observeIntegration(
       throw new Error('ticket source cannot establish exhaustive integration completeness')
     if (record.ticket.source !== tickets.name)
       throw new Error('configured ticket source differs from the frozen node source')
-    const listing = await tickets.listAll()
+    const { listing, builds } = await (inputs
+      ? inputs()
+      : integrationObservationInputs(store, tickets, record.repo))
     observation.diagnostics.push(...listing.diagnostics)
     for (const ticket of listing.tickets)
       if (ticket.target === record.ticket.id && !ticket.resolved) children.add(ticket.ref.id)
     // Frozen claims survive edits to the source ticket's target.
-    for (const build of await store.listBuildsForRepo(record!.repo)) {
-      const child = (await readBuildFacts(store, build.slug)).value.state
+    for (const { record: build, state: child } of builds) {
       if (child.target?.build === slug && child.status !== 'done' && child.status !== 'aborted')
         children.add(build.ticket?.id ?? build.slug)
       if (child.target?.build === slug && child.prState === 'merged')
