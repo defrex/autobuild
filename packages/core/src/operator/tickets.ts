@@ -1,5 +1,5 @@
 import { updateTicketTarget } from '../kernel/node-parent'
-import { compatibleTicketSource } from '../ports/tickets/tree'
+import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
 import type { TicketRef } from '../ontology'
@@ -307,4 +307,25 @@ export async function createOperatorTicketState(opts: {
       error instanceof Error ? error.message : String(error),
     )
   }
+}
+
+/** Exhaustive source tree, including resolved tickets and listing diagnostics. */
+export async function readTicketTree(source: TicketSource, root: string) {
+  source = compatibleTicketSource(source)
+  if (!source.listAll)
+    throw new Error(
+      `${source.name} cannot enumerate all tickets; use a source with listAll support`,
+    )
+  const listing = await source.listAll()
+  return { ...projectTicketTree(listing.tickets, root), diagnostics: listing.diagnostics }
+}
+
+export async function getOperatorTicketTree(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+}) {
+  const { context, source } = await openOperatorTickets(opts)
+  if (!context.baseBranch) throw new Error('Repository base branch unavailable')
+  return readTicketTree(source, context.baseBranch)
 }

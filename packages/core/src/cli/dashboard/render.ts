@@ -1,3 +1,4 @@
+import { treeVocabulary, consentQueue } from './tree'
 /**
  * The dashboard's other pure half: model → `string[]`. No terminal, no state,
  * no I/O — `live.ts` owns the writer, this owns the pixels.
@@ -373,10 +374,23 @@ function renderBuild(
   if (build.target)
     lines.push(
       truncate(
-        `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
+        `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
         width,
       ),
     )
+  if (build.tree && (build.kind === 'integration' || build.tree.consent)) {
+    const tree = build.tree
+    for (const text of [
+      `${tree.branch ?? 'unknown branch'} · ${treeVocabulary.restack} ${tree.restack} · ${treeVocabulary.verify} ${tree.verification.current ? treeVocabulary.current : treeVocabulary.pending} · ${tree.reason ?? (tree.ready ? treeVocabulary.readyToLand : treeVocabulary.notReady)}`,
+      ...(tree.kind === 'node'
+        ? [
+            `${treeVocabulary.children} ${tree.children?.length ?? 'unknown'} · ${tree.completeness}${tree.diagnostics?.length ? ` · ${tree.diagnostics.join('; ')}` : ''}`,
+          ]
+        : []),
+    ])
+      for (const line of wrappedText(text, width - 4, ''))
+        lines.push(truncate(`    ${line}`, width))
+  }
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) lines.push(truncate(`  ${ceiling}`, width))
 
@@ -663,8 +677,29 @@ function detailBody(
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
   if (build.target)
     body.push(
-      `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
+      `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
     )
+  if (build.tree && (build.kind === 'integration' || build.tree.consent)) {
+    const tree = build.tree
+    body.push(
+      `  ${treeVocabulary.branch} ${tree.branch ?? 'unknown'} · ${treeVocabulary.restack} ${tree.restack}`,
+    )
+    body.push(
+      `  ${treeVocabulary.verification} ${tree.verification.current ? treeVocabulary.current : treeVocabulary.pending} · ${tree.verification.head ?? 'unknown head'} onto ${tree.verification.parent ?? 'unknown parent'}`,
+    )
+    for (const result of tree.verification.results)
+      body.push(`    ${result.step}: ${result.outcome}`)
+    if (tree.kind === 'node') {
+      body.push(
+        `  ${treeVocabulary.children} ${tree.children?.length ?? 'unknown'} · ${tree.completeness}`,
+      )
+      for (const child of tree.children ?? []) body.push(`    ${JSON.stringify(child)}`)
+      for (const diagnostic of tree.diagnostics ?? []) body.push(`    ${diagnostic}`)
+    }
+    body.push(
+      `  ${treeVocabulary.landing} ${tree.reason ?? (tree.ready ? treeVocabulary.readyToLand : treeVocabulary.notReady)}`,
+    )
+  }
   if (build.kind !== 'integration') body.push(`  landing ${landingPolicyDisplay(build.landing)}`)
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
@@ -1511,14 +1546,19 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       return [
         {
           selection,
-          lines: renderBuild(
-            build,
-            model.repositoryPaused,
-            opts,
-            widths,
-            sameSelection(selection, model.selection),
-            selecting,
-          ),
+          lines: [
+            ...(consentQueue(model.builds)[0]?.slug === build.slug
+              ? [paint(`  ${treeVocabulary.consent} ${treeVocabulary.queue}`, 'dim', color)]
+              : []),
+            ...renderBuild(
+              build,
+              model.repositoryPaused,
+              opts,
+              widths,
+              sameSelection(selection, model.selection),
+              selecting,
+            ),
+          ],
         },
       ]
     },

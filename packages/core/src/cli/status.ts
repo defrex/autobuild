@@ -1,3 +1,5 @@
+import { indexLog } from '../kernel/log-index'
+import { projectTree, type TreeProjection } from './dashboard/tree'
 import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -145,6 +147,7 @@ export type BuildDecisionProjection =
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
+  tree?: TreeProjection
   /** Immutable policy provenance and durable command/native application state. */
   landing?: BuildState['landing']
   /** Current work-owner decision. Open PRs use the build-owned config; ended
@@ -289,6 +292,7 @@ export function detail(
     record,
     {
       state: reduceBuild(events),
+      log: indexLog(events),
       observations: events
         .filter((event) => event.type === 'observation.recorded')
         .map((event) => event.payload),
@@ -303,7 +307,8 @@ export function detail(
 
 export function detailFromFacts(
   record: BuildRecord,
-  facts: Pick<BuildFacts, 'state' | 'open'> & { observations: BuildState['observations'] },
+  facts: Pick<BuildFacts, 'state' | 'open'> &
+    Partial<Pick<BuildFacts, 'log'>> & { observations: BuildState['observations'] },
   now: Date,
   events?: AbEvent[],
   decision?: BuildDecisionProjection,
@@ -338,6 +343,7 @@ export function detailFromFacts(
     }))
   return {
     ...summary,
+    ...(facts.log ? { tree: projectTree(record, state, facts.log.restack) } : {}),
     autoMerge: autoMergeDisplay(state),
     ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
     ...(decision !== undefined ? { decision } : {}),

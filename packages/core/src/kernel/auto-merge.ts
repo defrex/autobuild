@@ -1,4 +1,3 @@
-import { landingAuthorized } from './landing-state'
 import { readDeferralLedger } from '../store/reduced-reads'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
@@ -354,17 +353,9 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
     state.status === 'aborted'
   )
     return null
+  // Consent and hold attention belongs to the current readiness queue. Only
+  // gate deferrals remain here, so stale or unfinished landings cannot wake
+  // through a second, weaker consent predicate.
   const deferral = currentAutoMergeDeferralFrom(ledger, state)
-  if (
-    deferral === undefined &&
-    (landingAuthorized(state.landing) ||
-      (!state.landing?.decision && state.landing?.command?.kind !== 'hold'))
-  )
-    return null
-  return {
-    pr: state.pr,
-    reason:
-      deferral ??
-      (state.landing?.command?.kind === 'hold' ? 'Landing held' : 'Landing awaits consent'),
-  }
+  return deferral === undefined ? null : { pr: state.pr, reason: deferral }
 }
