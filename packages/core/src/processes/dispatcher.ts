@@ -4407,10 +4407,12 @@ export class Dispatcher {
         }
       }
     } catch (error) {
-      for (const id of required.keys()) unresolved.push(id)
-      diagnostics.push(
-        `ticket ${ticket.ref.id}: blocker presence unavailable in ${destination} (${branch}): ${error instanceof Error ? error.message : String(error)}`,
-      )
+      for (const id of required.keys()) {
+        unresolved.push(id)
+        diagnostics.push(
+          `ticket ${ticket.ref.id}: blocker ${id} presence unavailable in ${destination} (${branch}): ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
     }
     return { unresolved, diagnostics }
   }

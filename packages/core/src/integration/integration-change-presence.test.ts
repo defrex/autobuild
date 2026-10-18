@@ -163,6 +163,19 @@ for (const trailerFlag of [undefined, false]) {
           ...(trailerFlag === undefined ? {} : { buildTrailerPresent: trailerFlag }),
         },
       })
+      if (trailerFlag === undefined) {
+        const snapshot = h.forgeAdapter.snapshotBase!.bind(h.forgeAdapter)
+        h.forgeAdapter.snapshotBase = async () => {
+          throw new Error('snapshot unavailable')
+        }
+        const unavailable = await h.dispatcher.tick()
+        expect(unavailable.dependencyDiagnostics.join(' ')).toContain(
+          'blocker BLOCK presence unavailable in root:main',
+        )
+        expect(h.tickets.claims).not.toContain('DEP')
+        h.forgeAdapter.snapshotBase = snapshot
+        h.clock.advance(60_000)
+      }
       if (trailerFlag === false) {
         const snapshot = h.forgeAdapter.snapshotBase!.bind(h.forgeAdapter)
         let moved = false
