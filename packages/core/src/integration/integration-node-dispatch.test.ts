@@ -26,7 +26,7 @@ test('real git node claims, child landing, lazy PR and human node landing', asyn
     expect(row.steps.some((s) => s.label === 'implement')).toBe(false)
     expect(buildActionAvailability(row)).toMatchObject({
       abort: true,
-      autoMerge: false,
+      autoMerge: true,
       discard: false,
     })
     expect(summarize(node, emptyEvents, h.clock())).toMatchObject({

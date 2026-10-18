@@ -237,9 +237,13 @@ record the first signal in the stop fact, and release its lease before exit.
 
 The default watch reports actionable conditions only:
 
-- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
-  with auto-merge off or a current actionable merge-gate deferral. Armed consent
-  awaiting application is silent. One merge decision is reported per build/PR.
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
+  conflicted `restack.replayed` events. `build.consent-ready` is the single
+  signal for a ready consent or held landing, including first repository-wide
+  discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
+  Unready and stale candidates stay silent. `build.merge-decision` remains for
+  current actionable merge-gate deferrals and unsafe forge outcomes, once per
+  build/PR; it does not duplicate consent or hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
