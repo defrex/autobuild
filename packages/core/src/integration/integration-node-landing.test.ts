@@ -268,3 +268,39 @@ test('prepared cycles consume capacity only when execution resources are admitte
     await h.cleanup()
   }
 })
+
+test('integration agent verification receives exact commit range without producer artifacts', async () => {
+  const { CONFIG_TOML } = await import('./harness')
+  const handlers = happyHandlers()
+  let verified = 0
+  handlers['ab-verify-feature'] = async (cli) => {
+    await cli.run(['context'])
+    const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+    expect(manifest.commitRange.base).toBeTruthy()
+    expect(manifest.commitRange.head).toBe(await git(['rev-parse', 'HEAD'], cli.ws))
+    expect(manifest.materialized['plan.md']).toBeUndefined()
+    expect(manifest.materialized['implement-notes.md']).toBeUndefined()
+    verified++
+    await cli.run(['verdict', 'pass'])
+  }
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers,
+    configToml:
+      CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "feature"]') +
+      '\n[verify.feature]\nkind = "agent"\nskill = "ab-verify-feature"\n',
+    tickets: [{ ...readyTicket('NODE', { title: 'Agent verified integration' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await addStack(h, node.branch!)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    expect(verified).toBe(1)
+    const state = reduceBuild(await h.events(node.slug))
+    expect(integrationHeadVerified(state, state.integration!.cycle!.head)).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})

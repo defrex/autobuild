@@ -810,10 +810,20 @@ async function agentVerifyVerdict(
     facts.log.restack.gates[
       String(Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq))
     ]
+  const integrationStart =
+    facts.state.kind === 'node'
+      ? facts.log.verifyStarted.findLast((record) => record.attempt === env.round)
+      : undefined
   const evidence =
-    start === undefined
-      ? {}
-      : { baseSha: start.targetBase, headSha: start.headSha, restackId: start.id }
+    integrationStart !== undefined
+      ? {
+          baseSha: integrationStart.baseSha,
+          headSha: integrationStart.headSha,
+          restackId: integrationStart.restackId,
+        }
+      : start === undefined
+        ? {}
+        : { baseSha: start.targetBase, headSha: start.headSha, restackId: start.id }
 
   if (opts.verdict === 'pass') {
     // Optional --notes are deposited as the step's report kind and the event
