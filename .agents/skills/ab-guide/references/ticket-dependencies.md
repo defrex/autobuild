@@ -63,8 +63,9 @@ and claims the ticket only after they resolve and other readiness gates pass.
 Tickets have `kind = "work"` by default, or `kind = "node"` for a named
 integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
-These fields currently describe intent only: dispatch, branches and landing
-behavior are unchanged in this increment. Blockers remain a separate graph.
+A ready node opens an integration branch; a targeting build freezes that node
+as its base and landing destination. The existing cascade restacks descendants
+when a parent moves. Blockers remain a separate graph.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
@@ -94,3 +95,26 @@ Existing tickets default to work with no target. Metadata changes increment the
 revision once; equivalent aliases and unchanged values do not. Node demotion
 checks all targeting tickets, including completed work. Legacy plugins without
 integrationTree support read as work with no target and refuse metadata writes.
+
+## When a blocker resolves
+
+In a repository with nodes, a blocker that has a build resolves when its change
+is present in the dependent's target head (or the configured root branch).
+Source done state and aggregate blocker flags do not bypass this gate. A
+confirmed landing SHA reachable from the sampled target proves presence even
+without a build trailer. A node blocker requires its entire completed owned
+contribution, including nested changes and foreign commits, excluding inherited
+parent history. An empty completed contribution is satisfied; missing evidence,
+an open or aborted node, or ambiguous newest build generations remain queued.
+Older successful generations are never substituted for the newest build.
+
+- Same node: the blocking change lands directly into the target.
+- Ancestor: the change lands into an ancestor, then the cascade restacks the target.
+- Sibling: the blocking node lands into their common ancestor, then the cascade reaches the target.
+- Descendant: the blocking node lands into the dependent's target ancestor.
+
+Blockers that never had a build, and repositories without nodes, retain the
+source's done-state rule. Waiting tickets stay source work; diagnostics identify
+the missing blocker and destination. Presence is checked only when claiming,
+against an exact sampled head revalidated before claim. Changing presence later
+never stops an existing build.
