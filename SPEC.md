@@ -2331,7 +2331,7 @@ dispatcher-authored. Existing merged/closed PR, abort and completion facts close
 
 Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
 `node.item-conflicted`, `node.item-replayed`, `node.publish-intended`,
-`node.rewritten`, `node.writer-settled`, and `node.inventory` (§6 integration
+`node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
 cascade). It retains the previous contribution boundary, latest parent
 observation, complete replay prefix, active source item and merge proofs.
 A rewrite receipt alone never promotes the boundary; only completed settlement
