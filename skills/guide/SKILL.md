@@ -401,6 +401,36 @@ credential. See [repository setup](references/setup.md#connect-a-project).
 Changing the store requires restarting dispatch.
 
 
+### `[landing]`
+
+Declare an ordered array of rules with `[[landing]]` headers. Each rule ANDs
+its predicates; the first match wins. Omitted predicates are wildcards.
+An unmatched leaf defaults to `auto`; an unmatched node defaults to `consent`.
+Rules are strict and blank predicates are rejected with their array index.
+
+| Field | Required | Values / purpose |
+|---|---|---|
+| `into` | No | `root`, any `node`, or an exact frozen destination node ticket id. |
+| `from` | No | `leaf` or `node`. |
+| `label` | No | Exact, case-sensitive source ticket label sampled at readiness. |
+| `mode` | Yes | `auto` or `consent`. |
+
+Help the operator choose policy around their release process. A solo team can
+use one catch-all `mode = "auto"` rule. A team requiring an operator's review
+for every landing can use one catch-all `mode = "consent"` rule. For release
+nodes that collect work automatically but require a final click, put an
+`into = "root"`, `mode = "consent"` rule first, followed by a catch-all
+`mode = "auto"` rule. A broad rule placed first shadows narrower rules below
+it. Use `from = "node"` or a release label to narrow that root decision when
+ordinary leaves should follow a different release process.
+
+Specific-node matching uses the claimed build's immutable destination, never
+the source ticket's current parent. Decisions retain the sampled labels,
+matched rule index and snapshot (or explicit default). Policy is live
+dispatcher configuration, excluded from pinned pipeline settings and
+integration verification inputs; later config edits do not rewrite an earlier
+decision's provenance.
+
 ### `[pr]`
 
 Optional PR-projection settings. Omission leaves artifact attachments text-only.

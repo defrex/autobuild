@@ -23,6 +23,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
+  landingRuleSchema,
   imageHostSchema,
   orchestratorSchema,
   prSchema,
@@ -63,6 +64,7 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
+  landing: Object.keys(landingRuleSchema.shape),
   store: ['url'],
   pr: Object.keys(prSchema.shape),
   workspace: Object.keys(workspaceSchema.shape),
