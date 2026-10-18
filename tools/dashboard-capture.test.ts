@@ -211,6 +211,12 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'The scripted plan scenario is intentionally blocked for dashboard capture.',
   )
   expect(resume).toContain('EXPANDED FINAL LINE: dashboard message preview complete.')
+  const composer = resume.slice(resume.indexOf('Resume plan-blocked-dashboard'))
+  expect(composer).toContain(
+    'The scripted plan scenario is intentionally blocked for dashboard capture.',
+  )
+  expect(composer).toMatch(/\.\.\. and \d+ more lines/)
+  expect(composer).not.toContain('EXPANDED FINAL LINE: dashboard message preview complete.')
   expect(resume).not.toContain('more rows - Enter details')
   expect(resume).toContain('Use the manual merge path.')
   expect(resume).toContain('Re-run verify:test |afterwards — naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦.')

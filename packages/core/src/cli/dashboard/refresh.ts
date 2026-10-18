@@ -135,9 +135,14 @@ export class DashboardRefresh {
     this.timer = undefined
   }
 
+  /** Current admission cadence, also used to bound presentation staleness. */
+  get intervalMs(): number {
+    return this.live || this.time.now() < this.deadline ? 500 : 5000
+  }
+
   private schedule(): void {
     if (!this.active || this.suspended || !this.focused) return
-    const interval = this.live || this.time.now() < this.deadline ? 500 : 5000
+    const interval = this.intervalMs
     // Slow/failing requests do not spin when their start deadline is overdue.
     const remaining = this.started + interval - this.time.now()
     const delay = remaining > 0 ? remaining : 50

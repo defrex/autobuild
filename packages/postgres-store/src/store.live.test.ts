@@ -851,3 +851,46 @@ if (testUrl)
       await database.cleanup()
     }
   }, 30_000)
+
+if (testUrl)
+  test('additive position migration preserves lockstep, concurrent increments and precision', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      const marker = await sql`SELECT * FROM ab_schema_migrations`
+      // Simulate an existing current-version database before the additive rollout.
+      await sql`DROP TABLE repo_change_positions`
+      await migratePostgres(database.url)
+      const blobs = new MemoryBlobStore()
+      const store = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await store.createBuild({ slug: 'counter-a', repo: 'repo' })
+        await store.createBuild({ slug: 'counter-b', repo: 'repo' })
+        await Promise.all([
+          runWorker(database.url, 'build', 'counter-a', 20),
+          runWorker(database.url, 'build', 'counter-b', 20),
+        ])
+        expect(await store.getRepoChangePosition('repo')).toBe('42')
+        await expect(
+          sql.begin(async (tx) => {
+            await tx`INSERT INTO builds(slug, repo, created_at, updated_at) VALUES ('rollback', 'repo', now(), now())`
+            throw new Error('rollback')
+          }),
+        ).rejects.toThrow('rollback')
+        expect(await store.getRepoChangePosition('repo')).toBe('42')
+        await sql`UPDATE repo_change_positions SET position = 9007199254740993 WHERE repo = 'repo'`
+        expect(await store.getRepoChangePosition('repo')).toBe('9007199254740993')
+        await migratePostgres(database.url)
+        expect(await store.getRepoChangePosition('repo')).toBe('9007199254740993')
+        expect(await sql`SELECT * FROM ab_schema_migrations`).toEqual(marker)
+        await sql`INSERT INTO builds(slug, repo, created_at, updated_at) VALUES ('old-writer', 'repo', now(), now())`
+        expect(await store.getRepoChangePosition('repo')).toBe('9007199254740994')
+        expect(await store.getRepoChangePosition('foreign')).toBe('0')
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  })

@@ -1964,6 +1964,30 @@ reenables them, assumes focus, and refreshes immediately. Teardown disables focu
 reporting even when no frame painted, with synchronous process restoration for
 catchable faults. Plain, non-TTY, and once runs never enable focus reporting.
 
+Interactive frames first read `BuildStore.getRepoChangePosition(repo)`, a canonical
+unsigned decimal string used only for invalidation. Unknown repositories return
+`"0"` without creating state. Each repository's durable position advances in the
+same transaction as build creation, build/repository event insertion (including
+artifact-backed and tick writes), or a stored dispatcher lease holder transition.
+Other repositories, failed writes, denied claims, same-holder renewals, heartbeats,
+and passive expiry do not advance it. It is separate from journal sequence cursors.
+Unchanged positions reuse the complete presentation snapshot; a focused ordinary
+refresh then makes exactly one store request. Discovery uses required exact-repo
+`listBuildsForRepo(repo)`, never a global listing. Initial hydration, position or
+configuration changes, and at most ten seconds between full reads refresh the
+snapshot, including mutable lease/stream/artifact/ticket enrichment. Failed or
+cancelled reads do not acknowledge the sampled position. Open session feeds poll
+independently; kernel ticks and watch/wait retain their existing reads.
+
+SQLite installs an additive counter table and transactional triggers on open.
+PostgreSQL installs the corresponding additive table/functions/triggers through
+explicit migration before deploying the new service; the core schema version
+and checksum stay unchanged. Existing data starts at zero, with no replay or
+backfill, and migration reruns preserve counters. Hosted reads use one GET
+`/repos/:repo/change-position` returning only `{ position: string }`, and
+`/repos/:repo/builds` returns scoped build records. Both routes authorize the
+repository before reading and support repositories with builds but no journal.
+
 Durable operator settings (intake, the repository-wide pause, the auto-merge
 default, the harvest gate) are repository-journal facts: they survive restarts,
 propagate between dispatchers by ordinary polling, and are never optimistically

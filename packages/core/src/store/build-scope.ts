@@ -101,6 +101,12 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       own('getBuild', slug)
       return store.getBuild(slug)
     },
+    listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listBuildsForRepo', repo))
+    },
+    getRepoChangePosition(repo: string): Promise<string> {
+      return Promise.reject(new BuildScopeError(scope, 'getRepoChangePosition', repo))
+    },
     listBuilds(): Promise<BuildRecord[]> {
       return Promise.reject(new BuildScopeError(scope, 'listBuilds'))
     },
