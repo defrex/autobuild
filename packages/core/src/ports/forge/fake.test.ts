@@ -15,15 +15,17 @@ const prOpts = (over: Partial<Parameters<Forge['openPr']>[0]> = {}) => ({
 const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
   const headSha = `head-${crypto.randomUUID()}`
   const landingSha = `squash-${crypto.randomUUID()}`
+  const head = `ab/contract-head-${crypto.randomUUID()}`
   const forge = new FakeForge({
     headSha,
     mergeSha: landingSha,
     gatePresence: opts.gated ? 'present' : 'absent',
   })
+  forge.seedBranch(head, headSha)
   return {
     forge,
     workspacePath: `/fake/forge-contract/${crypto.randomUUID()}`,
-    head: `ab/contract-head-${crypto.randomUUID()}`,
+    head,
     base: `contract-base-${crypto.randomUUID()}`,
     title: `Forge contract ${crypto.randomUUID()}`,
     body: 'Autobuild Forge contract fixture',

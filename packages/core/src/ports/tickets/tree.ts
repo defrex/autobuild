@@ -15,7 +15,7 @@ export function refuseUnsupportedMetadata(
 ): void {
   if (!source.integrationTree && (patch.kind !== undefined || patch.target !== undefined))
     throw new Error(
-      `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file or Linear)`,
+      `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file, Linear or hosted)`,
     )
 }
 

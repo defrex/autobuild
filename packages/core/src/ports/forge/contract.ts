@@ -110,6 +110,30 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         }
       })
     })
+    test('optional rewrite snapshots the authoritative head and refuses a stale lease', async () => {
+      await withForge(factory, undefined, async (harness) => {
+        const capability = harness.forge.rewrite
+        if (capability === undefined) return
+        const { remoteHead } = await pushAndOpen(harness)
+        expect(
+          await capability.snapshot({
+            workspacePath: harness.workspacePath,
+            branch: harness.head,
+            destinationRef: 'refs/autobuild/reconcile/contract-probe/head',
+          }),
+        ).toBe(remoteHead)
+        expect(
+          await capability.replace({
+            workspacePath: harness.workspacePath,
+            branch: harness.head,
+            expected: '0'.repeat(40),
+            sha: 'e'.repeat(40),
+          }),
+        ).toEqual({ kind: 'lease-mismatch', actual: remoteHead })
+        expect(await harness.controls.remoteHead(harness.head)).toBe(remoteHead)
+      })
+    })
+
     test('pushBranch publishes the head and openPr returns/adopts the actual PR', async () => {
       await withForge(factory, undefined, async (harness) => {
         const { pr, remoteHead } = await pushAndOpen(harness)

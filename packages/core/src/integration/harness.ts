@@ -1,3 +1,4 @@
+import { gitRewrite } from '../ports/forge/git-rewrite'
 /**
  * End-to-end harness (SPEC §15.6 as LIVE scenarios, §8.7, §12, §15.7):
  * real components everywhere the seam matters.
@@ -465,10 +466,19 @@ export async function makeHarness(opts: {
   // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
   // at the harness boundary rather than relying on production wiring.
   config.roles.default ??= { runtime: 'scripted' }
+  await git(['config', 'user.name', 'ab-e2e'], origin)
+  await git(['config', 'user.email', 'ab-e2e@example.invalid'], origin)
+  await git(['config', 'commit.gpgsign', 'false'], origin)
   const forge = new FakeForge({
     gatePresence: opts.gatePresence ?? 'present',
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
   })
+  const recordPush = forge.pushBranch.bind(forge)
+  forge.pushBranch = async (cwd, branch) => {
+    await recordPush(cwd, branch)
+    await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
+  }
+  forge.rewrite = gitRewrite(spawnExec, false)
   let selectedForge: Forge =
     opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin }) : forge
   let plugins: PluginRegistry | undefined

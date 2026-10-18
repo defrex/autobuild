@@ -1,3 +1,4 @@
+import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
@@ -41,6 +42,9 @@ function detail(error: unknown): string {
  * Git database. No method invokes a shell, remote command, network client, or
  * `gh`; every subprocess is an argv-form `git` command. */
 export class LocalGitForge implements Forge {
+  get rewrite() {
+    return gitRewrite(this.exec, true)
+  }
   readonly name = 'local-git'
   private readonly exec: Exec
   /** The repository the optional checkout-less read seam reads from. The

@@ -102,7 +102,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
   const workspacePath = join(tmp, 'repo')
   const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 20)
   const base = `ab-contract-${suffix}-base`
-  const head = `ab-contract-${suffix}-head`
+  const head = `ab/contract-${suffix}-head`
   const protectionEndpoint =
     `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/` +
     `${encodeURIComponent(base)}/protection`
@@ -507,6 +507,82 @@ const runLiveGitHub =
 
 describe.skipIf(!runLiveGitHub)('GitHub live port contracts (opt-in)', () => {
   describeForgeContract('GitHubForge (live)', githubForgeContractFactory)
+})
+
+describe.skipIf(!runLiveGitHub)('GitHub reconcile transport (manual opt-in)', () => {
+  test('archive-only objects are fetchable and rewrite leases reject stale heads', async () => {
+    const h = await githubForgeContractFactory()
+    const slug = `probe-${crypto.randomUUID().replaceAll('-', '')}`
+    const branch = `ab/${slug}`
+    const cwd = h.workspacePath
+    const fresh = await mkdtemp(join(tmpdir(), 'ab-archive-fetch-'))
+    let archive: string | undefined
+    let candidate: string | undefined
+    let branchHead: string | undefined
+    let archived = false
+    try {
+      const old = await run(['git', 'rev-parse', 'HEAD'], cwd)
+      const tree = await run(['git', 'rev-parse', 'HEAD^{tree}'], cwd)
+      candidate = await run(
+        ['git', ...GIT_ID, 'commit-tree', tree, '-m', `Archive-only ${slug}`],
+        cwd,
+      )
+      archive = `refs/autobuild/archive/${slug}/${candidate}`
+      const before = await run(['git', 'ls-remote', '--heads', '--tags', 'origin'], cwd)
+      await h.forge.rewrite!.archive({ workspacePath: cwd, ref: archive, sha: candidate })
+      archived = true
+      expect(await run(['git', 'ls-remote', '--heads', '--tags', 'origin'], cwd)).toBe(before)
+      const origin = await run(['git', 'remote', 'get-url', 'origin'], cwd)
+      await run(['git', 'init', '-q'], fresh)
+      await run(['git', 'fetch', '--no-tags', origin, archive], fresh)
+      expect(await run(['git', 'rev-parse', 'FETCH_HEAD^{tree}'], fresh)).toBe(tree)
+      expect(await run(['git', 'cat-file', '-t', candidate], fresh)).toBe('commit')
+      await run(
+        [
+          'git',
+          'push',
+          `--force-with-lease=refs/heads/${branch}:`,
+          'origin',
+          `${old}:refs/heads/${branch}`,
+        ],
+        cwd,
+      )
+      branchHead = old
+      expect(
+        await h.forge.rewrite!.replace({
+          workspacePath: cwd,
+          branch,
+          expected: old,
+          sha: candidate,
+        }),
+      ).toEqual({ kind: 'published' })
+      branchHead = candidate
+      expect(
+        await h.forge.rewrite!.replace({ workspacePath: cwd, branch, expected: old, sha: old }),
+      ).toEqual({ kind: 'lease-mismatch', actual: candidate })
+    } finally {
+      if (candidate !== undefined) {
+        if (branchHead !== undefined)
+          await run(
+            [
+              'git',
+              'push',
+              `--force-with-lease=refs/heads/${branch}:${branchHead}`,
+              'origin',
+              `:refs/heads/${branch}`,
+            ],
+            cwd,
+          )
+        if (archived && archive !== undefined)
+          await run(
+            ['git', 'push', `--force-with-lease=${archive}:${candidate}`, 'origin', `:${archive}`],
+            cwd,
+          )
+      }
+      await rm(fresh, { recursive: true, force: true })
+      await h.cleanup?.()
+    }
+  }, 180_000)
 })
 
 // A separate opt-in permits temporarily changing squash defaults on the explicitly

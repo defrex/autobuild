@@ -313,7 +313,7 @@ mechanically:
 | `code-review` | `/code-review <build>` | `code-review.verdict` | `code-review` (rev N) |
 | `verify:e2e` | `/verify-app-e2e <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:e2e` on pass/fail when present |
 | `finalize` | `/finalize <build>` | `finalize.completed` | PR ref, summary |
-| `reconcile` | `/reconcile <build>` | `reconcile.started`, `reconcile.completed` | `reconcile-notes` + merge commit |
+| `reconcile` | `/reconcile <build>` | `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` | `reconcile-notes` + one replayed change |
 
 Every phase skill takes **only the build slug**; everything else it needs
 comes from the store via the `ab` CLI (§8).
@@ -366,7 +366,8 @@ is kernel-hard-coded. That is what keeps the system inspectable.
 `spec` is *not* a phase; it is satisfied at or before dispatch (§6). After
 `finalize`, the build enters a post-PR epilogue owned by the dispatcher's
 janitor duty (§15.7): a conflicted PR triggers the `reconcile` phase —
-agent-resolved merge of base into branch, full `verify:*` re-run — repeating
+kernel-prepared single-change replay onto a frozen refreshed base, with agent
+conflict resolution and the captured post-reconcile `verify:*` policy — repeating
 until merge or close.
 
 ## 6. The spec
@@ -1183,7 +1184,7 @@ terminals:
 | `code-review` | spec, plan, commit range `{base, head}`, prior findings, implement-notes | `verdict` |
 | `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range | `verdict pass` \| `verdict fail --report` \| `verdict skip --reason` |
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
-| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` from this attempt's `reconcile.started` | `done` (requires merge commit present) |
+| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` and kernel-prepared replay transaction | `done` (requires one replayed commit on the frozen base) |
 
 Scoping is deliberate: the planner never sees code-review rounds; the
 reviewer sees prior findings but not the producer's session. What a phase
@@ -1252,7 +1253,8 @@ requires a clean worktree and a descendant local `HEAD`, then regular-pushes
 the configured build branch and records that head before completing the step.
 A no-op step has no push. Agents only ever commit locally. Consequences: forge
 credentials **never enter the sandbox** (load-bearing once builds run on
-remote sandboxes), history is extended rather than force-pushed, and the
+remote sandboxes), ordinary implementation history is extended and reconcile
+uses exact expected-head guarded rewrites with archived evidence, and the
 push-at-boundary rule from [D3] is enforced by construction rather than
 convention. The same rule bounds the orchestrator's small fixes: an operator
 sandbox publishes work only through the `sandbox.publish` tool, whose push and
@@ -1921,9 +1923,11 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+Hosted sources support kind and target with project-scoped transactional validation.
+Existing tickets default to work with no target. Metadata changes increment the
+revision once; equivalent aliases and unchanged values do not. Node demotion
+checks all targeting tickets, including completed work. Legacy plugins without
+integrationTree support read as work with no target and refuse metadata writes.
 
 
 
@@ -2155,7 +2159,7 @@ with illustrative members:
 | Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome, skipCause?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.completed` |
+| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
@@ -2172,7 +2176,7 @@ missing Forge capabilities or outages leave the remainder due on the next tick.
 One deliberate subtlety worth recording: `pr.conflicted.baseSha` is
 detection-time evidence, while `reconcile.progress-checked.baseSha` is the
 kernel's authoritative observation for deciding whether a completed attempt
-made progress and `reconcile.started.baseSha` is the separately refreshed merge
+made progress and `reconcile.started.baseSha` is the separately refreshed replay
 target for the next attempt. Agent context uses only the started fact, so a
 reconcile never runs against a persisted or known-stale observation.
 
@@ -2426,20 +2430,64 @@ correlated facts; a failed delete remains pending and retries on later ticks,
 including after the build is already done. A merged-PR fixup request is a *new
 ticket*, never a reopened build.
 
-**Merge standard: one rule per direction, never rebase.**
+**Merge standard: one change per build, replay at reconcile.**
 
-- **PR → main: squash merge.** Main stays linear, one commit per build —
-  which keeps reverts (one commit → one new ticket), release notes, and
-  history archaeology clean.
-- **main → feature branch: merge commit.** A stale branch is refreshed by
-  merging base *into* it, resolving conflicts once against current main.
-- **Rebase is banned**, for two reasons. Operationally: at this system's
-  merge velocity, a rebase re-resolves conflicts commit-by-commit against a
-  target that keeps moving — agents can be stuck in
-  rebase-conflict-after-rebase-conflict nearly indefinitely (observed in
-  practice). Structurally: rebase rewrites the branch and severs the SHAs
-  recorded in `implement.completed` events [D3]. Squash-at-merge is safe on
-  both counts.
+- **PR → main: squash merge.** Main stays linear, one commit per build.
+- **Conflicted build → refreshed base: restack.** The kernel collapses the
+  contribution relative to its effective diff base into one commit with the
+  original head's exact tree, then replays that change onto the freshly captured
+  `reconcile.started.baseSha`. The result has exactly one parent equal to that
+  frozen SHA and one `Autobuild-Build: <slug>` identity trailer, including when
+  the resolved change is empty. No reconcile creates a merge commit.
+
+This reverses the original rebase ban [D1, D3]. Replaying many WIP commits caused
+repeated conflict loops; replaying one net change resolves the conflict once.
+Rewrites used to sever event-recorded SHAs; immutable archives and durable
+rewrite facts retain them. Ordinary per-WIP-commit rebase remains inappropriate.
+Existing historical merge reconciliations retain their original replay/display
+semantics and supply the promoted contribution base for a later restack.
+
+Before branch replacement the kernel publishes Git tips named by retained
+history and rewrite facts, plus both heads and the temporary change, under immutable non-branch refs
+`refs/autobuild/archive/<slug>/<sha>`. Archives must be fetchable by exact ref;
+namespace or permission failures stop publication without a branch/tag fallback.
+Publication requests and loss records alone are not retained Git history: their
+unpublished objects may have died with a released sandbox. A separately published
+or reviewed tip remains an archive requirement even when an earlier request named
+that same SHA.
+The branch replacement uses an explicit expected-old-head guard. A lost lease
+fetches the observed contribution and prepares another correlated transaction on
+the same occurrence's frozen base, preserving external work; deleted, divergent,
+or ambiguous history requires operator resolution. It never changes the target
+because upstream advances during contention. Only a later conflict occurrence
+captures a new base. Replay occurs detached, leaving the named branch untouched
+until publication. Confirmed publication reattaches the matching workspace HEAD
+to the build branch so a later verify → implement cycle can publish normally.
+Missing third-party forge capabilities refuse actionably.
+
+`reconcile.prepared` records transaction identity, attempt, branch, old head,
+effective old base, target base and temporary single-change SHA before checkout.
+Before that fact is appended, the exact temporary commit bytes are deposited as a
+SHA-keyed BuildStore artifact. A replacement sandbox restores and verifies the
+same object from those bytes, retaining the original transaction and frozen base
+without requiring prepare-time remote write credentials. Retained trees and
+parents supply the rest of its object graph; trusted publication still archives
+the temporary commit before replacing the branch.
+`reconcile.replayed` records whether replay conflicted. Notes and the resolved
+head are deposited with `reconcile.publish-intended` before publication;
+`reconcile.rewritten` records old/new heads, old/new change SHAs, frozen base,
+conflict outcome and archive refs after confirmed publication. A successful CAS
+that is overtaken before readback still records its receipt, with `observedHead`
+naming the later head (or null for deletion). That observed head informs recovery;
+it does not complete reconcile or promote the verification base. Intent recovery
+can recognize an overtaken candidate newly introduced into the observed branch
+history, while a candidate already present in the expected old history is not
+evidence of a new write. New completion is
+`{headSha, rewriteId, artifact}`; historical `{mergeCommit, artifact}` remains
+valid. Remote requests carry identical transaction inputs and use the provider's
+trusted rewrite/archive capability only after execution teardown. Contention is
+recorded durably and uses the existing runner-failure bound, without spending
+unchanged-base no-progress budget before completion.
 
 **Stable landed identity.** A kernel landing remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
@@ -2518,9 +2566,9 @@ build-runner (the dispatcher itself never runs agents). Immediately before
 each attempt, the runner asks the Forge for its current authoritative base
 snapshot when supported, otherwise fetching the build's frozen base branch
 fresh from `origin`, and records the resolved SHA on `reconcile.started` — known-stale input is never
-used (§15.3). The agent merges that base into the branch guided by the spec,
-plan, and implement-notes, with the explicit charge to regress against
-neither; the resolution lands as a merge commit, and because reconciliation
+used (§15.3). The kernel prepares one replay on that frozen base. The agent
+resolves it guided by the spec, plan, and implement-notes, with the explicit
+charge to regress against neither side; the result is one commit, and because reconciliation
 changed code, **`verify:*` starts a fresh cycle**, subject to the captured
 post-reconcile policy (default: re-run all applicable steps). A resolution the agent judges
 risky — semantic conflicts, spec-relevant choices — escalates rather than
@@ -2948,7 +2996,9 @@ or installs releases in the foreground or background.
    open.
 2. **[OPEN] Retention/archival policy** — the pilot's archival gap, now a store
    config concern rather than a repo problem. Needs a default (e.g. prune
-   blobs for merged builds after N months, keep events).
+   blobs for merged builds after N months, keep events). Immutable reconcile
+   archive refs are retained indefinitely for now; their retention policy is
+   part of this open thread.
 3. **[OPEN] Global capacity** — per-repo capacity is the top-level `capacity`
    scalar (§16.1); whether a cross-repo global cap is needed, and where it
    lives, is unresolved.

@@ -1,3 +1,4 @@
+import { reconcileHead } from '../kernel/reconcile-head'
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import {
@@ -22,7 +23,7 @@ function referenceHead(events: readonly AbEvent[]): string | undefined {
   let head: string | undefined
   for (const event of events) {
     if (event.type === 'implement.completed') head = event.payload.commits.head
-    else if (event.type === 'reconcile.completed') head = event.payload.mergeCommit
+    else if (event.type === 'reconcile.completed') head = reconcileHead(event.payload)
     else if (
       event.type === 'finalize.step-completed' &&
       event.payload.ok &&

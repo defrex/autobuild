@@ -37,36 +37,36 @@
       "value": "404"
     },
     "buildReadFacts": {
-      "acc": "817",
-      "value": "944"
+      "acc": "840",
+      "value": "972"
     },
     "effectiveConfig": {
       "acc": "378",
       "value": "400"
     },
     "buildDelegation": {
-      "acc": "984",
-      "value": "984"
+      "acc": "1012",
+      "value": "1012"
     },
     "harvestDelegation": {
-      "acc": "989",
-      "value": "989"
+      "acc": "1017",
+      "value": "1017"
     },
     "dispatchFrontend": {
-      "acc": "996",
-      "value": "997"
+      "acc": "1024",
+      "value": "1025"
     },
     "executionNoProgress": {
-      "acc": "899",
-      "value": "980"
+      "acc": "923",
+      "value": "1008"
     },
     "summaryBoundary": {
-      "acc": "820",
-      "value": "945"
+      "acc": "843",
+      "value": "973"
     },
     "summaryRequests": {
-      "acc": "818",
-      "value": "819"
+      "acc": "841",
+      "value": "842"
     },
     "ticketSourceHealth": {
       "acc": "373",
@@ -74,7 +74,7 @@
     },
     "build": {
       "acc": "405",
-      "value": "952"
+      "value": "980"
     },
     "harvest": {
       "acc": "338",
@@ -89,76 +89,76 @@
       "value": "385"
     },
     "session": {
-      "acc": "999",
-      "value": "1023"
+      "acc": "1027",
+      "value": "1051"
     },
     "buildDigest": {
-      "acc": "1031",
-      "value": "1035"
+      "acc": "1059",
+      "value": "1062"
     },
     "sandboxStates": {
       "acc": "379",
       "value": "401"
     },
     "logIndex": {
-      "acc": "835",
-      "value": "1038"
+      "acc": "858",
+      "value": "1065"
     },
     "frozenPrImageHost": {
-      "acc": "826",
+      "acc": "849",
       "value": "551"
     },
     "currentPrAttachments": {
-      "acc": "825",
-      "value": "950"
+      "acc": "848",
+      "value": "978"
     },
     "hostedPrAttachments": {
-      "acc": "822",
-      "value": "1042"
+      "acc": "845",
+      "value": "1069"
     },
     "pendingPrAttachmentReclaims": {
-      "acc": "829",
-      "value": "830"
+      "acc": "852",
+      "value": "853"
     },
     "publicationState": {
-      "acc": "883",
-      "value": "1043"
+      "acc": "906",
+      "value": "1070"
     },
     "repositoryStateEvents": {
-      "acc": "1050",
-      "value": "997"
+      "acc": "1077",
+      "value": "1025"
     },
     "journalView": {
-      "acc": "1051",
-      "value": "997"
+      "acc": "1078",
+      "value": "1025"
     },
     "openExecution": {
-      "acc": "904",
-      "value": "905"
+      "acc": "928",
+      "value": "929"
     },
     "lastExecutionOutcome": {
-      "acc": "909",
-      "value": "910"
+      "acc": "933",
+      "value": "934"
     },
     "openHarvestExecutions": {
       "acc": "320",
       "value": "321"
     },
     "openTick": {
-      "acc": "1052",
+      "acc": "1079",
       "value": "54"
     },
     "dispatchFailureBudget": {
-      "acc": "1053",
-      "value": "1055"
+      "acc": "1080",
+      "value": "1082"
     },
     "infrastructureFailureReset": {
-      "acc": "941",
+      "acc": "969",
       "value": "12"
     },
     "openWorkspace": {
-      "acc": "1057",
-      "value": "1058"
+      "acc": "1084",
+      "value": "1085"
     },
     "publishedBranchHead": {
       "acc": "5",
@@ -173,44 +173,44 @@
       "value": "1"
     },
     "setupStreak": {
-      "acc": "1060",
+      "acc": "1087",
       "value": "12"
     },
     "phaseFailures": {
-      "acc": "1061",
-      "value": "1066"
+      "acc": "1088",
+      "value": "1093"
     },
     "openBuildWorkspace": {
-      "acc": "907",
-      "value": "908"
+      "acc": "931",
+      "value": "932"
     },
     "baseBranch": {
       "acc": "0",
       "value": "1"
     },
     "provisionMarker": {
-      "acc": "832",
-      "value": "951"
+      "acc": "855",
+      "value": "979"
     },
     "recoveryCheckpoint": {
-      "acc": "831",
+      "acc": "854",
       "value": "1"
     },
     "currentDeferralObservation": {
-      "acc": "805",
-      "value": "805"
+      "acc": "828",
+      "value": "828"
     },
     "dashboardFacts": {
-      "acc": "912",
-      "value": "912"
+      "acc": "936",
+      "value": "936"
     },
     "autoMergeDefault": {
       "acc": "375",
       "value": "375"
     },
     "pinnedAssets": {
-      "acc": "1067",
-      "value": "1069"
+      "acc": "1094",
+      "value": "1096"
     }
   },
   "schemas": {
@@ -5420,7 +5420,7 @@
           "optional": false
         },
         "deferral": {
-          "type": "805",
+          "type": "828",
           "optional": false
         },
         "mergeAttentionPrs": {
@@ -6074,7 +6074,7 @@
     },
     "467": {
       "kind": "union",
-      "items": ["2", "421", "333", "468", "334"]
+      "items": ["2", "421", "468", "333", "334"]
     },
     "468": {
       "kind": "literal",
@@ -6876,57 +6876,62 @@
         "625",
         "631",
         "634",
-        "642",
-        "646",
-        "649",
-        "652",
-        "655",
-        "658",
+        "644",
+        "648",
+        "651",
+        "654",
+        "657",
         "660",
-        "663",
+        "662",
         "665",
         "667",
         "669",
-        "672",
+        "671",
         "674",
-        "677",
+        "676",
         "679",
         "681",
         "683",
-        "686",
-        "689",
-        "692",
-        "695",
-        "703",
-        "712",
-        "715",
-        "718",
-        "721",
-        "724",
-        "727",
-        "730",
+        "685",
+        "688",
+        "691",
+        "694",
+        "697",
+        "705",
+        "714",
+        "717",
+        "720",
+        "723",
+        "726",
+        "729",
         "732",
-        "735",
-        "740",
-        "747",
+        "734",
+        "737",
+        "742",
         "749",
-        "753",
-        "758",
-        "761",
-        "765",
-        "768",
-        "771",
-        "774",
-        "777",
-        "780",
+        "751",
+        "755",
+        "760",
+        "763",
+        "767",
+        "770",
+        "773",
+        "776",
+        "779",
         "782",
-        "785",
-        "788",
-        "791",
-        "794",
+        "784",
+        "787",
+        "790",
+        "793",
         "796",
-        "799",
-        "802"
+        "800",
+        "803",
+        "806",
+        "812",
+        "817",
+        "819",
+        "822",
+        "825"
       ]
     },
     "546": {
@@ -8171,7 +8176,7 @@
     },
     "636": {
       "kind": "union",
-      "items": ["637", "638", "639", "640"]
+      "items": ["637", "638", "641", "642"]
     },
     "637": {
       "kind": "object",
@@ -8220,10 +8225,63 @@
         "artifact": {
           "type": "40",
           "optional": false
+        },
+        "rewrite": {
+          "type": "639",
+          "optional": true
         }
       }
     },
     "639": {
+      "kind": "union",
+      "items": ["2", "640"]
+    },
+    "640": {
+      "kind": "object",
+      "props": {
+        "id": {
+          "type": "3",
+          "optional": false
+        },
+        "attempt": {
+          "type": "12",
+          "optional": false
+        },
+        "branch": {
+          "type": "3",
+          "optional": false
+        },
+        "oldHead": {
+          "type": "3",
+          "optional": false
+        },
+        "oldBase": {
+          "type": "3",
+          "optional": false
+        },
+        "targetBase": {
+          "type": "3",
+          "optional": false
+        },
+        "changeSha": {
+          "type": "3",
+          "optional": false
+        },
+        "workspaceHead": {
+          "type": "3",
+          "optional": false
+        },
+        "localBranchHead": {
+          "type": "3",
+          "optional": false
+        },
+        "conflicted": {
+          "type": "54",
+          "optional": false
+        }
+      }
+    },
+    "641": {
       "kind": "object",
       "props": {
         "operation": {
@@ -8244,11 +8302,11 @@
         }
       }
     },
-    "640": {
+    "642": {
       "kind": "object",
       "props": {
         "operation": {
-          "type": "641",
+          "type": "643",
           "optional": false
         },
         "branch": {
@@ -8265,11 +8323,11 @@
         }
       }
     },
-    "641": {
+    "643": {
       "kind": "literal",
       "value": "finalize-step"
     },
-    "642": {
+    "644": {
       "kind": "object",
       "props": {
         "build": {
@@ -8289,20 +8347,20 @@
           "optional": false
         },
         "type": {
-          "type": "643",
+          "type": "645",
           "optional": false
         },
         "payload": {
-          "type": "644",
+          "type": "646",
           "optional": false
         }
       }
     },
-    "643": {
+    "645": {
       "kind": "literal",
       "value": "publication.lost"
     },
-    "644": {
+    "646": {
       "kind": "object",
       "props": {
         "request": {
@@ -8310,7 +8368,7 @@
           "optional": false
         },
         "operation": {
-          "type": "645",
+          "type": "647",
           "optional": false
         },
         "branch": {
@@ -8327,11 +8385,11 @@
         }
       }
     },
-    "645": {
+    "647": {
       "kind": "union",
-      "items": ["428", "429", "430", "641"]
+      "items": ["428", "429", "430", "643"]
     },
-    "646": {
+    "648": {
       "kind": "object",
       "props": {
         "build": {
@@ -8351,62 +8409,20 @@
           "optional": false
         },
         "type": {
-          "type": "647",
+          "type": "649",
           "optional": false
         },
         "payload": {
-          "type": "648",
-          "optional": false
-        }
-      }
-    },
-    "647": {
-      "kind": "literal",
-      "value": "abort.remote-branch-deleted"
-    },
-    "648": {
-      "kind": "object",
-      "props": {
-        "branch": {
-          "type": "3",
+          "type": "650",
           "optional": false
         }
       }
     },
     "649": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "650",
-          "optional": false
-        },
-        "payload": {
-          "type": "651",
-          "optional": false
-        }
-      }
+      "kind": "literal",
+      "value": "abort.remote-branch-deleted"
     },
     "650": {
-      "kind": "literal",
-      "value": "abort.local-branch-deleted"
-    },
-    "651": {
       "kind": "object",
       "props": {
         "branch": {
@@ -8415,7 +8431,7 @@
         }
       }
     },
-    "652": {
+    "651": {
       "kind": "object",
       "props": {
         "build": {
@@ -8435,20 +8451,62 @@
           "optional": false
         },
         "type": {
-          "type": "653",
+          "type": "652",
           "optional": false
         },
         "payload": {
-          "type": "654",
+          "type": "653",
           "optional": false
         }
       }
     },
+    "652": {
+      "kind": "literal",
+      "value": "abort.local-branch-deleted"
+    },
     "653": {
+      "kind": "object",
+      "props": {
+        "branch": {
+          "type": "3",
+          "optional": false
+        }
+      }
+    },
+    "654": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "655",
+          "optional": false
+        },
+        "payload": {
+          "type": "656",
+          "optional": false
+        }
+      }
+    },
+    "655": {
       "kind": "literal",
       "value": "abort.ticket-returned"
     },
-    "654": {
+    "656": {
       "kind": "object",
       "props": {
         "ticket": {
@@ -8465,7 +8523,7 @@
         }
       }
     },
-    "655": {
+    "657": {
       "kind": "object",
       "props": {
         "build": {
@@ -8485,20 +8543,20 @@
           "optional": false
         },
         "type": {
-          "type": "656",
+          "type": "658",
           "optional": false
         },
         "payload": {
-          "type": "657",
+          "type": "659",
           "optional": false
         }
       }
     },
-    "656": {
+    "658": {
       "kind": "literal",
       "value": "dispatch.failed"
     },
-    "657": {
+    "659": {
       "kind": "object",
       "props": {
         "stage": {
@@ -8514,39 +8572,6 @@
           "optional": false
         }
       }
-    },
-    "658": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "659",
-          "optional": false
-        },
-        "payload": {
-          "type": "164",
-          "optional": false
-        }
-      }
-    },
-    "659": {
-      "kind": "literal",
-      "value": "dispatch.comment-posted"
     },
     "660": {
       "kind": "object",
@@ -8572,25 +8597,16 @@
           "optional": false
         },
         "payload": {
-          "type": "662",
+          "type": "164",
           "optional": false
         }
       }
     },
     "661": {
       "kind": "literal",
-      "value": "build.pause-requested"
+      "value": "dispatch.comment-posted"
     },
     "662": {
-      "kind": "object",
-      "props": {
-        "reason": {
-          "type": "1",
-          "optional": true
-        }
-      }
-    },
-    "663": {
       "kind": "object",
       "props": {
         "build": {
@@ -8610,18 +8626,27 @@
           "optional": false
         },
         "type": {
-          "type": "664",
+          "type": "663",
           "optional": false
         },
         "payload": {
-          "type": "662",
+          "type": "664",
           "optional": false
         }
       }
     },
-    "664": {
+    "663": {
       "kind": "literal",
-      "value": "build.resume-requested"
+      "value": "build.pause-requested"
+    },
+    "664": {
+      "kind": "object",
+      "props": {
+        "reason": {
+          "type": "1",
+          "optional": true
+        }
+      }
     },
     "665": {
       "kind": "object",
@@ -8647,14 +8672,14 @@
           "optional": false
         },
         "payload": {
-          "type": "662",
+          "type": "664",
           "optional": false
         }
       }
     },
     "666": {
       "kind": "literal",
-      "value": "build.abort-requested"
+      "value": "build.resume-requested"
     },
     "667": {
       "kind": "object",
@@ -8680,14 +8705,14 @@
           "optional": false
         },
         "payload": {
-          "type": "164",
+          "type": "664",
           "optional": false
         }
       }
     },
     "668": {
       "kind": "literal",
-      "value": "build.discard-requested"
+      "value": "build.abort-requested"
     },
     "669": {
       "kind": "object",
@@ -8713,25 +8738,16 @@
           "optional": false
         },
         "payload": {
-          "type": "671",
+          "type": "164",
           "optional": false
         }
       }
     },
     "670": {
       "kind": "literal",
-      "value": "build.auto-merge-requested"
+      "value": "build.discard-requested"
     },
     "671": {
-      "kind": "object",
-      "props": {
-        "defaultSeq": {
-          "type": "13",
-          "optional": true
-        }
-      }
-    },
-    "672": {
       "kind": "object",
       "props": {
         "build": {
@@ -8751,18 +8767,27 @@
           "optional": false
         },
         "type": {
-          "type": "673",
+          "type": "672",
           "optional": false
         },
         "payload": {
-          "type": "671",
+          "type": "673",
           "optional": false
         }
       }
     },
-    "673": {
+    "672": {
       "kind": "literal",
-      "value": "build.auto-merge-cancelled"
+      "value": "build.auto-merge-requested"
+    },
+    "673": {
+      "kind": "object",
+      "props": {
+        "defaultSeq": {
+          "type": "13",
+          "optional": true
+        }
+      }
     },
     "674": {
       "kind": "object",
@@ -8788,25 +8813,16 @@
           "optional": false
         },
         "payload": {
-          "type": "676",
+          "type": "673",
           "optional": false
         }
       }
     },
     "675": {
       "kind": "literal",
-      "value": "build.auto-merge-default-observed"
+      "value": "build.auto-merge-cancelled"
     },
     "676": {
-      "kind": "object",
-      "props": {
-        "defaultSeq": {
-          "type": "12",
-          "optional": false
-        }
-      }
-    },
-    "677": {
       "kind": "object",
       "props": {
         "build": {
@@ -8826,18 +8842,27 @@
           "optional": false
         },
         "type": {
-          "type": "678",
+          "type": "677",
           "optional": false
         },
         "payload": {
-          "type": "164",
+          "type": "678",
           "optional": false
         }
       }
     },
-    "678": {
+    "677": {
       "kind": "literal",
-      "value": "build.paused"
+      "value": "build.auto-merge-default-observed"
+    },
+    "678": {
+      "kind": "object",
+      "props": {
+        "defaultSeq": {
+          "type": "12",
+          "optional": false
+        }
+      }
     },
     "679": {
       "kind": "object",
@@ -8870,7 +8895,7 @@
     },
     "680": {
       "kind": "literal",
-      "value": "build.resumed"
+      "value": "build.paused"
     },
     "681": {
       "kind": "object",
@@ -8903,7 +8928,7 @@
     },
     "682": {
       "kind": "literal",
-      "value": "build.aborted"
+      "value": "build.resumed"
     },
     "683": {
       "kind": "object",
@@ -8929,16 +8954,49 @@
           "optional": false
         },
         "payload": {
-          "type": "685",
+          "type": "164",
           "optional": false
         }
       }
     },
     "684": {
       "kind": "literal",
-      "value": "spec.imported"
+      "value": "build.aborted"
     },
     "685": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "686",
+          "optional": false
+        },
+        "payload": {
+          "type": "687",
+          "optional": false
+        }
+      }
+    },
+    "686": {
+      "kind": "literal",
+      "value": "spec.imported"
+    },
+    "687": {
       "kind": "object",
       "props": {
         "artifact": {
@@ -8951,7 +9009,7 @@
         }
       }
     },
-    "686": {
+    "688": {
       "kind": "object",
       "props": {
         "build": {
@@ -8971,20 +9029,20 @@
           "optional": false
         },
         "type": {
-          "type": "687",
+          "type": "689",
           "optional": false
         },
         "payload": {
-          "type": "688",
+          "type": "690",
           "optional": false
         }
       }
     },
-    "687": {
+    "689": {
       "kind": "literal",
       "value": "spec.authored"
     },
-    "688": {
+    "690": {
       "kind": "object",
       "props": {
         "artifact": {
@@ -8997,7 +9055,7 @@
         }
       }
     },
-    "689": {
+    "691": {
       "kind": "object",
       "props": {
         "build": {
@@ -9017,20 +9075,20 @@
           "optional": false
         },
         "type": {
-          "type": "690",
+          "type": "692",
           "optional": false
         },
         "payload": {
-          "type": "691",
+          "type": "693",
           "optional": false
         }
       }
     },
-    "690": {
+    "692": {
       "kind": "literal",
       "value": "spec.revised"
     },
-    "691": {
+    "693": {
       "kind": "object",
       "props": {
         "artifact": {
@@ -9047,7 +9105,7 @@
         }
       }
     },
-    "692": {
+    "694": {
       "kind": "object",
       "props": {
         "build": {
@@ -9067,20 +9125,20 @@
           "optional": false
         },
         "type": {
-          "type": "693",
+          "type": "695",
           "optional": false
         },
         "payload": {
-          "type": "694",
+          "type": "696",
           "optional": false
         }
       }
     },
-    "693": {
+    "695": {
       "kind": "literal",
       "value": "session.started"
     },
-    "694": {
+    "696": {
       "kind": "object",
       "props": {
         "session": {
@@ -9121,7 +9179,7 @@
         }
       }
     },
-    "695": {
+    "697": {
       "kind": "object",
       "props": {
         "build": {
@@ -9141,24 +9199,24 @@
           "optional": false
         },
         "type": {
-          "type": "696",
+          "type": "698",
           "optional": false
         },
         "payload": {
-          "type": "697",
+          "type": "699",
           "optional": false
         }
       }
     },
-    "696": {
+    "698": {
       "kind": "literal",
       "value": "session.ended"
     },
-    "697": {
+    "699": {
       "kind": "union",
-      "items": ["698", "700"]
+      "items": ["700", "702"]
     },
-    "698": {
+    "700": {
       "kind": "object",
       "props": {
         "session": {
@@ -9170,12 +9228,12 @@
           "optional": false
         },
         "usage": {
-          "type": "699",
+          "type": "701",
           "optional": false
         }
       }
     },
-    "699": {
+    "701": {
       "kind": "object",
       "props": {
         "inputTokens": {
@@ -9192,7 +9250,7 @@
         }
       }
     },
-    "700": {
+    "702": {
       "kind": "object",
       "props": {
         "session": {
@@ -9200,20 +9258,20 @@
           "optional": false
         },
         "outcome": {
-          "type": "701",
+          "type": "703",
           "optional": false
         },
         "reclaimedBy": {
-          "type": "702",
+          "type": "704",
           "optional": false
         }
       }
     },
-    "701": {
+    "703": {
       "kind": "literal",
       "value": "reclaimed"
     },
-    "702": {
+    "704": {
       "kind": "object",
       "props": {
         "instance": {
@@ -9226,7 +9284,7 @@
         }
       }
     },
-    "703": {
+    "705": {
       "kind": "object",
       "props": {
         "build": {
@@ -9246,20 +9304,20 @@
           "optional": false
         },
         "type": {
-          "type": "704",
+          "type": "706",
           "optional": false
         },
         "payload": {
-          "type": "705",
+          "type": "707",
           "optional": false
         }
       }
     },
-    "704": {
+    "706": {
       "kind": "literal",
       "value": "plan.started"
     },
-    "705": {
+    "707": {
       "kind": "object",
       "props": {
         "round": {
@@ -9267,16 +9325,16 @@
           "optional": false
         },
         "feedback": {
-          "type": "706",
+          "type": "708",
           "optional": true
         }
       }
     },
-    "706": {
+    "708": {
       "kind": "union",
-      "items": ["2", "707", "708", "710"]
+      "items": ["2", "709", "710", "712"]
     },
-    "707": {
+    "709": {
       "kind": "object",
       "props": {
         "findings": {
@@ -9285,16 +9343,16 @@
         }
       }
     },
-    "708": {
+    "710": {
       "kind": "object",
       "props": {
         "verify": {
-          "type": "709",
+          "type": "711",
           "optional": false
         }
       }
     },
-    "709": {
+    "711": {
       "kind": "object",
       "props": {
         "step": {
@@ -9307,16 +9365,16 @@
         }
       }
     },
-    "710": {
+    "712": {
       "kind": "object",
       "props": {
         "guidance": {
-          "type": "711",
+          "type": "713",
           "optional": false
         }
       }
     },
-    "711": {
+    "713": {
       "kind": "object",
       "props": {
         "escalation": {
@@ -9329,7 +9387,7 @@
         }
       }
     },
-    "712": {
+    "714": {
       "kind": "object",
       "props": {
         "build": {
@@ -9349,20 +9407,20 @@
           "optional": false
         },
         "type": {
-          "type": "713",
+          "type": "715",
           "optional": false
         },
         "payload": {
-          "type": "714",
+          "type": "716",
           "optional": false
         }
       }
     },
-    "713": {
+    "715": {
       "kind": "literal",
       "value": "plan.completed"
     },
-    "714": {
+    "716": {
       "kind": "object",
       "props": {
         "round": {
@@ -9379,7 +9437,7 @@
         }
       }
     },
-    "715": {
+    "717": {
       "kind": "object",
       "props": {
         "build": {
@@ -9399,20 +9457,20 @@
           "optional": false
         },
         "type": {
-          "type": "716",
+          "type": "718",
           "optional": false
         },
         "payload": {
-          "type": "717",
+          "type": "719",
           "optional": false
         }
       }
     },
-    "716": {
+    "718": {
       "kind": "literal",
       "value": "plan-review.started"
     },
-    "717": {
+    "719": {
       "kind": "object",
       "props": {
         "round": {
@@ -9421,7 +9479,7 @@
         }
       }
     },
-    "718": {
+    "720": {
       "kind": "object",
       "props": {
         "build": {
@@ -9441,20 +9499,20 @@
           "optional": false
         },
         "type": {
-          "type": "719",
+          "type": "721",
           "optional": false
         },
         "payload": {
-          "type": "720",
+          "type": "722",
           "optional": false
         }
       }
     },
-    "719": {
+    "721": {
       "kind": "literal",
       "value": "plan-review.verdict"
     },
-    "720": {
+    "722": {
       "kind": "object",
       "props": {
         "round": {
@@ -9479,7 +9537,7 @@
         }
       }
     },
-    "721": {
+    "723": {
       "kind": "object",
       "props": {
         "build": {
@@ -9499,20 +9557,20 @@
           "optional": false
         },
         "type": {
-          "type": "722",
+          "type": "724",
           "optional": false
         },
         "payload": {
-          "type": "723",
+          "type": "725",
           "optional": false
         }
       }
     },
-    "722": {
+    "724": {
       "kind": "literal",
       "value": "implement.started"
     },
-    "723": {
+    "725": {
       "kind": "object",
       "props": {
         "round": {
@@ -9520,12 +9578,12 @@
           "optional": false
         },
         "feedback": {
-          "type": "706",
+          "type": "708",
           "optional": true
         }
       }
     },
-    "724": {
+    "726": {
       "kind": "object",
       "props": {
         "build": {
@@ -9545,20 +9603,20 @@
           "optional": false
         },
         "type": {
-          "type": "725",
+          "type": "727",
           "optional": false
         },
         "payload": {
-          "type": "726",
+          "type": "728",
           "optional": false
         }
       }
     },
-    "725": {
+    "727": {
       "kind": "literal",
       "value": "implement.completed"
     },
-    "726": {
+    "728": {
       "kind": "object",
       "props": {
         "round": {
@@ -9575,7 +9633,7 @@
         }
       }
     },
-    "727": {
+    "729": {
       "kind": "object",
       "props": {
         "build": {
@@ -9595,20 +9653,20 @@
           "optional": false
         },
         "type": {
-          "type": "728",
+          "type": "730",
           "optional": false
         },
         "payload": {
-          "type": "729",
+          "type": "731",
           "optional": false
         }
       }
     },
-    "728": {
+    "730": {
       "kind": "literal",
       "value": "code-review.started"
     },
-    "729": {
+    "731": {
       "kind": "object",
       "props": {
         "round": {
@@ -9616,39 +9674,6 @@
           "optional": false
         }
       }
-    },
-    "730": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "731",
-          "optional": false
-        },
-        "payload": {
-          "type": "720",
-          "optional": false
-        }
-      }
-    },
-    "731": {
-      "kind": "literal",
-      "value": "code-review.verdict"
     },
     "732": {
       "kind": "object",
@@ -9674,33 +9699,16 @@
           "optional": false
         },
         "payload": {
-          "type": "734",
+          "type": "722",
           "optional": false
         }
       }
     },
     "733": {
       "kind": "literal",
-      "value": "verify.started"
+      "value": "code-review.verdict"
     },
     "734": {
-      "kind": "object",
-      "props": {
-        "step": {
-          "type": "3",
-          "optional": false
-        },
-        "attempt": {
-          "type": "12",
-          "optional": false
-        },
-        "feedback": {
-          "type": "706",
-          "optional": true
-        }
-      }
-    },
-    "735": {
       "kind": "object",
       "props": {
         "build": {
@@ -9720,20 +9728,70 @@
           "optional": false
         },
         "type": {
-          "type": "736",
+          "type": "735",
           "optional": false
         },
         "payload": {
-          "type": "737",
+          "type": "736",
           "optional": false
         }
       }
     },
+    "735": {
+      "kind": "literal",
+      "value": "verify.started"
+    },
     "736": {
+      "kind": "object",
+      "props": {
+        "step": {
+          "type": "3",
+          "optional": false
+        },
+        "attempt": {
+          "type": "12",
+          "optional": false
+        },
+        "feedback": {
+          "type": "708",
+          "optional": true
+        }
+      }
+    },
+    "737": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "738",
+          "optional": false
+        },
+        "payload": {
+          "type": "739",
+          "optional": false
+        }
+      }
+    },
+    "738": {
       "kind": "literal",
       "value": "verify.reconcile-policy-captured"
     },
-    "737": {
+    "739": {
       "kind": "object",
       "props": {
         "reconcileSeq": {
@@ -9741,16 +9799,16 @@
           "optional": false
         },
         "steps": {
-          "type": "738",
+          "type": "740",
           "optional": false
         }
       }
     },
-    "738": {
+    "740": {
       "kind": "array",
-      "items": "739"
+      "items": "741"
     },
-    "739": {
+    "741": {
       "kind": "object",
       "props": {
         "step": {
@@ -9767,7 +9825,7 @@
         }
       }
     },
-    "740": {
+    "742": {
       "kind": "object",
       "props": {
         "build": {
@@ -9787,24 +9845,24 @@
           "optional": false
         },
         "type": {
-          "type": "741",
+          "type": "743",
           "optional": false
         },
         "payload": {
-          "type": "742",
+          "type": "744",
           "optional": false
         }
       }
     },
-    "741": {
+    "743": {
       "kind": "literal",
       "value": "verify.completed"
     },
-    "742": {
+    "744": {
       "kind": "union",
-      "items": ["743", "744", "745", "746"]
+      "items": ["745", "746", "747", "748"]
     },
-    "743": {
+    "745": {
       "kind": "object",
       "props": {
         "outcome": {
@@ -9825,7 +9883,7 @@
         }
       }
     },
-    "744": {
+    "746": {
       "kind": "object",
       "props": {
         "outcome": {
@@ -9846,7 +9904,7 @@
         }
       }
     },
-    "745": {
+    "747": {
       "kind": "object",
       "props": {
         "outcome": {
@@ -9871,7 +9929,7 @@
         }
       }
     },
-    "746": {
+    "748": {
       "kind": "object",
       "props": {
         "pass": {
@@ -9891,39 +9949,6 @@
           "optional": true
         }
       }
-    },
-    "747": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "748",
-          "optional": false
-        },
-        "payload": {
-          "type": "164",
-          "optional": false
-        }
-      }
-    },
-    "748": {
-      "kind": "literal",
-      "value": "finalize.started"
     },
     "749": {
       "kind": "object",
@@ -9949,42 +9974,16 @@
           "optional": false
         },
         "payload": {
-          "type": "751",
+          "type": "164",
           "optional": false
         }
       }
     },
     "750": {
       "kind": "literal",
-      "value": "finalize.completed"
+      "value": "finalize.started"
     },
     "751": {
-      "kind": "object",
-      "props": {
-        "pr": {
-          "type": "752",
-          "optional": false
-        }
-      }
-    },
-    "752": {
-      "kind": "object",
-      "props": {
-        "number": {
-          "type": "12",
-          "optional": false
-        },
-        "url": {
-          "type": "3",
-          "optional": false
-        },
-        "headSha": {
-          "type": "3",
-          "optional": false
-        }
-      }
-    },
-    "753": {
       "kind": "object",
       "props": {
         "build": {
@@ -10004,24 +10003,83 @@
           "optional": false
         },
         "type": {
-          "type": "754",
+          "type": "752",
           "optional": false
         },
         "payload": {
-          "type": "755",
+          "type": "753",
+          "optional": false
+        }
+      }
+    },
+    "752": {
+      "kind": "literal",
+      "value": "finalize.completed"
+    },
+    "753": {
+      "kind": "object",
+      "props": {
+        "pr": {
+          "type": "754",
           "optional": false
         }
       }
     },
     "754": {
+      "kind": "object",
+      "props": {
+        "number": {
+          "type": "12",
+          "optional": false
+        },
+        "url": {
+          "type": "3",
+          "optional": false
+        },
+        "headSha": {
+          "type": "3",
+          "optional": false
+        }
+      }
+    },
+    "755": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "756",
+          "optional": false
+        },
+        "payload": {
+          "type": "757",
+          "optional": false
+        }
+      }
+    },
+    "756": {
       "kind": "literal",
       "value": "finalize.step-completed"
     },
-    "755": {
+    "757": {
       "kind": "union",
-      "items": ["756", "757"]
+      "items": ["758", "759"]
     },
-    "756": {
+    "758": {
       "kind": "object",
       "props": {
         "step": {
@@ -10042,7 +10100,7 @@
         }
       }
     },
-    "757": {
+    "759": {
       "kind": "object",
       "props": {
         "step": {
@@ -10059,7 +10117,7 @@
         }
       }
     },
-    "758": {
+    "760": {
       "kind": "object",
       "props": {
         "build": {
@@ -10079,20 +10137,20 @@
           "optional": false
         },
         "type": {
-          "type": "759",
+          "type": "761",
           "optional": false
         },
         "payload": {
-          "type": "760",
+          "type": "762",
           "optional": false
         }
       }
     },
-    "759": {
+    "761": {
       "kind": "literal",
       "value": "pr-attachment.designated"
     },
-    "760": {
+    "762": {
       "kind": "object",
       "props": {
         "artifact": {
@@ -10109,7 +10167,7 @@
         }
       }
     },
-    "761": {
+    "763": {
       "kind": "object",
       "props": {
         "build": {
@@ -10129,20 +10187,20 @@
           "optional": false
         },
         "type": {
-          "type": "762",
+          "type": "764",
           "optional": false
         },
         "payload": {
-          "type": "763",
+          "type": "765",
           "optional": false
         }
       }
     },
-    "762": {
+    "764": {
       "kind": "literal",
       "value": "pr-attachment.hosted"
     },
-    "763": {
+    "765": {
       "kind": "object",
       "props": {
         "designationSeq": {
@@ -10150,12 +10208,12 @@
           "optional": false
         },
         "asset": {
-          "type": "764",
+          "type": "766",
           "optional": false
         }
       }
     },
-    "764": {
+    "766": {
       "kind": "object",
       "props": {
         "provider": {
@@ -10180,7 +10238,7 @@
         }
       }
     },
-    "765": {
+    "767": {
       "kind": "object",
       "props": {
         "build": {
@@ -10200,20 +10258,20 @@
           "optional": false
         },
         "type": {
-          "type": "766",
+          "type": "768",
           "optional": false
         },
         "payload": {
-          "type": "767",
+          "type": "769",
           "optional": false
         }
       }
     },
-    "766": {
+    "768": {
       "kind": "literal",
       "value": "pr-attachment.reclaimed"
     },
-    "767": {
+    "769": {
       "kind": "object",
       "props": {
         "hostedSeq": {
@@ -10222,7 +10280,7 @@
         }
       }
     },
-    "768": {
+    "770": {
       "kind": "object",
       "props": {
         "build": {
@@ -10242,20 +10300,20 @@
           "optional": false
         },
         "type": {
-          "type": "769",
+          "type": "771",
           "optional": false
         },
         "payload": {
-          "type": "770",
+          "type": "772",
           "optional": false
         }
       }
     },
-    "769": {
+    "771": {
       "kind": "literal",
       "value": "pr-attachment.reclaim-failed"
     },
-    "770": {
+    "772": {
       "kind": "object",
       "props": {
         "hostedSeq": {
@@ -10272,7 +10330,7 @@
         }
       }
     },
-    "771": {
+    "773": {
       "kind": "object",
       "props": {
         "build": {
@@ -10292,62 +10350,20 @@
           "optional": false
         },
         "type": {
-          "type": "772",
+          "type": "774",
           "optional": false
         },
         "payload": {
-          "type": "773",
-          "optional": false
-        }
-      }
-    },
-    "772": {
-      "kind": "literal",
-      "value": "pr.auto-merge-enabled"
-    },
-    "773": {
-      "kind": "object",
-      "props": {
-        "commandSeq": {
-          "type": "12",
+          "type": "775",
           "optional": false
         }
       }
     },
     "774": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "775",
-          "optional": false
-        },
-        "payload": {
-          "type": "776",
-          "optional": false
-        }
-      }
+      "kind": "literal",
+      "value": "pr.auto-merge-enabled"
     },
     "775": {
-      "kind": "literal",
-      "value": "pr.auto-merge-disabled"
-    },
-    "776": {
       "kind": "object",
       "props": {
         "commandSeq": {
@@ -10356,7 +10372,7 @@
         }
       }
     },
-    "777": {
+    "776": {
       "kind": "object",
       "props": {
         "build": {
@@ -10376,20 +10392,62 @@
           "optional": false
         },
         "type": {
-          "type": "778",
+          "type": "777",
           "optional": false
         },
         "payload": {
-          "type": "779",
+          "type": "778",
           "optional": false
         }
       }
     },
+    "777": {
+      "kind": "literal",
+      "value": "pr.auto-merge-disabled"
+    },
     "778": {
+      "kind": "object",
+      "props": {
+        "commandSeq": {
+          "type": "12",
+          "optional": false
+        }
+      }
+    },
+    "779": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "780",
+          "optional": false
+        },
+        "payload": {
+          "type": "781",
+          "optional": false
+        }
+      }
+    },
+    "780": {
       "kind": "literal",
       "value": "pr.merged"
     },
-    "779": {
+    "781": {
       "kind": "object",
       "props": {
         "sha": {
@@ -10401,39 +10459,6 @@
           "optional": true
         }
       }
-    },
-    "780": {
-      "kind": "object",
-      "props": {
-        "build": {
-          "type": "3",
-          "optional": false
-        },
-        "seq": {
-          "type": "12",
-          "optional": false
-        },
-        "ts": {
-          "type": "3",
-          "optional": false
-        },
-        "actor": {
-          "type": "22",
-          "optional": false
-        },
-        "type": {
-          "type": "781",
-          "optional": false
-        },
-        "payload": {
-          "type": "164",
-          "optional": false
-        }
-      }
-    },
-    "781": {
-      "kind": "literal",
-      "value": "pr.closed"
     },
     "782": {
       "kind": "object",
@@ -10459,25 +10484,16 @@
           "optional": false
         },
         "payload": {
-          "type": "784",
+          "type": "164",
           "optional": false
         }
       }
     },
     "783": {
       "kind": "literal",
-      "value": "pr.conflicted"
+      "value": "pr.closed"
     },
     "784": {
-      "kind": "object",
-      "props": {
-        "baseSha": {
-          "type": "3",
-          "optional": false
-        }
-      }
-    },
-    "785": {
       "kind": "object",
       "props": {
         "build": {
@@ -10497,20 +10513,62 @@
           "optional": false
         },
         "type": {
-          "type": "786",
+          "type": "785",
           "optional": false
         },
         "payload": {
-          "type": "787",
+          "type": "786",
           "optional": false
         }
       }
     },
+    "785": {
+      "kind": "literal",
+      "value": "pr.conflicted"
+    },
     "786": {
+      "kind": "object",
+      "props": {
+        "baseSha": {
+          "type": "3",
+          "optional": false
+        }
+      }
+    },
+    "787": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "788",
+          "optional": false
+        },
+        "payload": {
+          "type": "789",
+          "optional": false
+        }
+      }
+    },
+    "788": {
       "kind": "literal",
       "value": "reconcile.progress-checked"
     },
-    "787": {
+    "789": {
       "kind": "object",
       "props": {
         "conflictSeq": {
@@ -10527,7 +10585,7 @@
         }
       }
     },
-    "788": {
+    "790": {
       "kind": "object",
       "props": {
         "build": {
@@ -10547,20 +10605,20 @@
           "optional": false
         },
         "type": {
-          "type": "789",
+          "type": "791",
           "optional": false
         },
         "payload": {
-          "type": "790",
+          "type": "792",
           "optional": false
         }
       }
     },
-    "789": {
+    "791": {
       "kind": "literal",
       "value": "reconcile.started"
     },
-    "790": {
+    "792": {
       "kind": "object",
       "props": {
         "attempt": {
@@ -10573,7 +10631,7 @@
         }
       }
     },
-    "791": {
+    "793": {
       "kind": "object",
       "props": {
         "build": {
@@ -10593,64 +10651,59 @@
           "optional": false
         },
         "type": {
-          "type": "792",
+          "type": "794",
           "optional": false
         },
         "payload": {
-          "type": "793",
-          "optional": false
-        }
-      }
-    },
-    "792": {
-      "kind": "literal",
-      "value": "reconcile.completed"
-    },
-    "793": {
-      "kind": "object",
-      "props": {
-        "mergeCommit": {
-          "type": "3",
-          "optional": false
-        },
-        "artifact": {
-          "type": "40",
+          "type": "795",
           "optional": false
         }
       }
     },
     "794": {
+      "kind": "literal",
+      "value": "reconcile.prepared"
+    },
+    "795": {
       "kind": "object",
       "props": {
-        "build": {
+        "id": {
           "type": "3",
           "optional": false
         },
-        "seq": {
+        "attempt": {
           "type": "12",
           "optional": false
         },
-        "ts": {
+        "branch": {
           "type": "3",
           "optional": false
         },
-        "actor": {
-          "type": "22",
+        "oldHead": {
+          "type": "3",
           "optional": false
         },
-        "type": {
-          "type": "795",
+        "oldBase": {
+          "type": "3",
           "optional": false
         },
-        "payload": {
-          "type": "493",
+        "targetBase": {
+          "type": "3",
+          "optional": false
+        },
+        "changeSha": {
+          "type": "3",
+          "optional": false
+        },
+        "workspaceHead": {
+          "type": "3",
+          "optional": false
+        },
+        "localBranchHead": {
+          "type": "3",
           "optional": false
         }
       }
-    },
-    "795": {
-      "kind": "literal",
-      "value": "observation.recorded"
     },
     "796": {
       "kind": "object",
@@ -10683,9 +10736,406 @@
     },
     "797": {
       "kind": "literal",
-      "value": "escalation.raised"
+      "value": "reconcile.contended"
     },
     "798": {
+      "kind": "object",
+      "props": {
+        "id": {
+          "type": "3",
+          "optional": false
+        },
+        "request": {
+          "type": "12",
+          "optional": false
+        },
+        "actual": {
+          "type": "799",
+          "optional": false
+        }
+      }
+    },
+    "799": {
+      "kind": "union",
+      "items": ["86", "3"]
+    },
+    "800": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "801",
+          "optional": false
+        },
+        "payload": {
+          "type": "802",
+          "optional": false
+        }
+      }
+    },
+    "801": {
+      "kind": "literal",
+      "value": "reconcile.replayed"
+    },
+    "802": {
+      "kind": "object",
+      "props": {
+        "id": {
+          "type": "3",
+          "optional": false
+        },
+        "conflicted": {
+          "type": "54",
+          "optional": false
+        }
+      }
+    },
+    "803": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "804",
+          "optional": false
+        },
+        "payload": {
+          "type": "805",
+          "optional": false
+        }
+      }
+    },
+    "804": {
+      "kind": "literal",
+      "value": "reconcile.publish-intended"
+    },
+    "805": {
+      "kind": "object",
+      "props": {
+        "id": {
+          "type": "3",
+          "optional": false
+        },
+        "attempt": {
+          "type": "12",
+          "optional": false
+        },
+        "branch": {
+          "type": "3",
+          "optional": false
+        },
+        "oldHead": {
+          "type": "3",
+          "optional": false
+        },
+        "oldBase": {
+          "type": "3",
+          "optional": false
+        },
+        "targetBase": {
+          "type": "3",
+          "optional": false
+        },
+        "changeSha": {
+          "type": "3",
+          "optional": false
+        },
+        "workspaceHead": {
+          "type": "3",
+          "optional": false
+        },
+        "localBranchHead": {
+          "type": "3",
+          "optional": false
+        },
+        "headSha": {
+          "type": "3",
+          "optional": false
+        },
+        "conflicted": {
+          "type": "54",
+          "optional": false
+        },
+        "artifact": {
+          "type": "40",
+          "optional": false
+        }
+      }
+    },
+    "806": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "807",
+          "optional": false
+        },
+        "payload": {
+          "type": "808",
+          "optional": false
+        }
+      }
+    },
+    "807": {
+      "kind": "literal",
+      "value": "reconcile.rewritten"
+    },
+    "808": {
+      "kind": "object",
+      "props": {
+        "id": {
+          "type": "3",
+          "optional": false
+        },
+        "attempt": {
+          "type": "12",
+          "optional": false
+        },
+        "branch": {
+          "type": "3",
+          "optional": false
+        },
+        "oldHead": {
+          "type": "3",
+          "optional": false
+        },
+        "oldBase": {
+          "type": "3",
+          "optional": false
+        },
+        "targetBase": {
+          "type": "3",
+          "optional": false
+        },
+        "changeSha": {
+          "type": "3",
+          "optional": false
+        },
+        "workspaceHead": {
+          "type": "3",
+          "optional": false
+        },
+        "localBranchHead": {
+          "type": "3",
+          "optional": false
+        },
+        "headSha": {
+          "type": "3",
+          "optional": false
+        },
+        "conflicted": {
+          "type": "54",
+          "optional": false
+        },
+        "archives": {
+          "type": "809",
+          "optional": false
+        },
+        "observedHead": {
+          "type": "811",
+          "optional": true
+        }
+      }
+    },
+    "809": {
+      "kind": "array",
+      "items": "810"
+    },
+    "810": {
+      "kind": "object",
+      "props": {
+        "ref": {
+          "type": "3",
+          "optional": false
+        },
+        "sha": {
+          "type": "3",
+          "optional": false
+        }
+      }
+    },
+    "811": {
+      "kind": "union",
+      "items": ["2", "86", "3"]
+    },
+    "812": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "813",
+          "optional": false
+        },
+        "payload": {
+          "type": "814",
+          "optional": false
+        }
+      }
+    },
+    "813": {
+      "kind": "literal",
+      "value": "reconcile.completed"
+    },
+    "814": {
+      "kind": "union",
+      "items": ["815", "816"]
+    },
+    "815": {
+      "kind": "object",
+      "props": {
+        "mergeCommit": {
+          "type": "3",
+          "optional": false
+        },
+        "artifact": {
+          "type": "40",
+          "optional": false
+        }
+      }
+    },
+    "816": {
+      "kind": "object",
+      "props": {
+        "headSha": {
+          "type": "3",
+          "optional": false
+        },
+        "rewriteId": {
+          "type": "3",
+          "optional": false
+        },
+        "artifact": {
+          "type": "40",
+          "optional": false
+        }
+      }
+    },
+    "817": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "818",
+          "optional": false
+        },
+        "payload": {
+          "type": "493",
+          "optional": false
+        }
+      }
+    },
+    "818": {
+      "kind": "literal",
+      "value": "observation.recorded"
+    },
+    "819": {
+      "kind": "object",
+      "props": {
+        "build": {
+          "type": "3",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "ts": {
+          "type": "3",
+          "optional": false
+        },
+        "actor": {
+          "type": "22",
+          "optional": false
+        },
+        "type": {
+          "type": "820",
+          "optional": false
+        },
+        "payload": {
+          "type": "821",
+          "optional": false
+        }
+      }
+    },
+    "820": {
+      "kind": "literal",
+      "value": "escalation.raised"
+    },
+    "821": {
       "kind": "object",
       "props": {
         "id": {
@@ -10718,7 +11168,7 @@
         }
       }
     },
-    "799": {
+    "822": {
       "kind": "object",
       "props": {
         "build": {
@@ -10738,20 +11188,20 @@
           "optional": false
         },
         "type": {
-          "type": "800",
+          "type": "823",
           "optional": false
         },
         "payload": {
-          "type": "801",
+          "type": "824",
           "optional": false
         }
       }
     },
-    "800": {
+    "823": {
       "kind": "literal",
       "value": "escalation.answered"
     },
-    "801": {
+    "824": {
       "kind": "object",
       "props": {
         "id": {
@@ -10780,7 +11230,7 @@
         }
       }
     },
-    "802": {
+    "825": {
       "kind": "object",
       "props": {
         "build": {
@@ -10800,20 +11250,20 @@
           "optional": false
         },
         "type": {
-          "type": "803",
+          "type": "826",
           "optional": false
         },
         "payload": {
-          "type": "804",
+          "type": "827",
           "optional": false
         }
       }
     },
-    "803": {
+    "826": {
       "kind": "literal",
       "value": "phase.failed"
     },
-    "804": {
+    "827": {
       "kind": "object",
       "props": {
         "phase": {
@@ -10842,28 +11292,28 @@
         }
       }
     },
-    "805": {
+    "828": {
       "kind": "object",
       "props": {
         "entries": {
-          "type": "806",
+          "type": "829",
           "optional": false
         }
       }
     },
-    "806": {
+    "829": {
       "kind": "array",
-      "items": "807"
+      "items": "830"
     },
-    "807": {
+    "830": {
       "kind": "union",
-      "items": ["808", "810", "811", "813", "815"]
+      "items": ["831", "833", "834", "836", "838"]
     },
-    "808": {
+    "831": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "809",
+          "type": "832",
           "optional": false
         },
         "seq": {
@@ -10872,11 +11322,11 @@
         }
       }
     },
-    "809": {
+    "832": {
       "kind": "literal",
       "value": "barrier"
     },
-    "810": {
+    "833": {
       "kind": "object",
       "props": {
         "t": {
@@ -10884,16 +11334,16 @@
           "optional": false
         },
         "event": {
-          "type": "794",
+          "type": "817",
           "optional": false
         }
       }
     },
-    "811": {
+    "834": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "812",
+          "type": "835",
           "optional": false
         },
         "seq": {
@@ -10906,15 +11356,15 @@
         }
       }
     },
-    "812": {
+    "835": {
       "kind": "literal",
       "value": "finalized"
     },
-    "813": {
+    "836": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "814",
+          "type": "837",
           "optional": false
         },
         "seq": {
@@ -10923,15 +11373,15 @@
         }
       }
     },
-    "814": {
+    "837": {
       "kind": "literal",
       "value": "terminal"
     },
-    "815": {
+    "838": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "816",
+          "type": "839",
           "optional": false
         },
         "seq": {
@@ -10940,43 +11390,43 @@
         }
       }
     },
-    "816": {
+    "839": {
       "kind": "literal",
       "value": "reconciled"
     },
-    "817": {
+    "840": {
       "kind": "object",
       "props": {
         "summaryRequests": {
-          "type": "818",
+          "type": "841",
           "optional": false
         },
         "summaryBoundary": {
-          "type": "820",
+          "type": "843",
           "optional": false
         },
         "hostedImages": {
-          "type": "822",
+          "type": "845",
           "optional": false
         },
         "designations": {
-          "type": "825",
+          "type": "848",
           "optional": false
         },
         "imageHost": {
-          "type": "826",
+          "type": "849",
           "optional": false
         },
         "pendingAttachments": {
-          "type": "829",
+          "type": "852",
           "optional": false
         },
         "recoveryCheckpoint": {
-          "type": "831",
+          "type": "854",
           "optional": false
         },
         "provisionMarker": {
-          "type": "832",
+          "type": "855",
           "optional": false
         },
         "baseBranch": {
@@ -10988,39 +11438,39 @@
           "optional": false
         },
         "log": {
-          "type": "835",
+          "type": "858",
           "optional": false
         },
         "publication": {
-          "type": "883",
+          "type": "906",
           "optional": false
         },
         "executionNoProgress": {
-          "type": "899",
+          "type": "923",
           "optional": false
         },
         "open": {
-          "type": "904",
+          "type": "928",
           "optional": false
         },
         "workspace": {
-          "type": "907",
+          "type": "931",
           "optional": false
         },
         "lastExecution": {
-          "type": "909",
+          "type": "933",
           "optional": false
         },
         "dashboard": {
-          "type": "912",
+          "type": "936",
           "optional": false
         },
         "deferral": {
-          "type": "805",
+          "type": "828",
           "optional": false
         },
         "summaryHistory": {
-          "type": "925",
+          "type": "949",
           "optional": false
         },
         "summaryAttempts": {
@@ -11028,7 +11478,7 @@
           "optional": false
         },
         "summaryRequested": {
-          "type": "930",
+          "type": "954",
           "optional": false
         },
         "summaryEligibleAfter": {
@@ -11040,35 +11490,51 @@
           "optional": false
         },
         "latestWorkspace": {
-          "type": "931",
+          "type": "955",
           "optional": true
         },
         "findings": {
-          "type": "932",
+          "type": "956",
           "optional": false
         },
         "planFeedback": {
-          "type": "933",
+          "type": "957",
           "optional": false
         },
         "feedback": {
-          "type": "933",
+          "type": "957",
           "optional": false
         },
         "reconcileBases": {
           "type": "328",
           "optional": false
         },
+        "reconcileHistory": {
+          "type": "959",
+          "optional": false
+        },
+        "gitTips": {
+          "type": "57",
+          "optional": false
+        },
+        "reconcileTransaction": {
+          "type": "961",
+          "optional": true
+        },
+        "reconcileReplay": {
+          "type": "962",
+          "optional": true
+        },
         "firstWorkspace": {
-          "type": "931",
+          "type": "955",
           "optional": true
         },
         "latestAbort": {
-          "type": "935",
+          "type": "963",
           "optional": true
         },
         "latestDiscard": {
-          "type": "936",
+          "type": "964",
           "optional": true
         },
         "maxPlanRevision": {
@@ -11076,15 +11542,15 @@
           "optional": false
         },
         "created": {
-          "type": "937",
+          "type": "965",
           "optional": true
         },
         "lastCreated": {
-          "type": "937",
+          "type": "965",
           "optional": true
         },
         "latestRelease": {
-          "type": "938",
+          "type": "966",
           "optional": true
         },
         "latestWorkspaceFailureSeq": {
@@ -11112,7 +11578,7 @@
           "optional": false
         },
         "seenTypes": {
-          "type": "939",
+          "type": "967",
           "optional": false
         },
         "localWorkspace": {
@@ -11128,7 +11594,7 @@
           "optional": false
         },
         "infrastructureReset": {
-          "type": "941",
+          "type": "969",
           "optional": false
         },
         "infrastructureCount": {
@@ -11152,7 +11618,7 @@
           "optional": false
         },
         "observationFacts": {
-          "type": "942",
+          "type": "970",
           "optional": false
         },
         "observations": {
@@ -11161,11 +11627,11 @@
         }
       }
     },
-    "818": {
+    "841": {
       "kind": "object",
       "props": {
         "requests": {
-          "type": "819",
+          "type": "842",
           "optional": false
         },
         "settled": {
@@ -11174,11 +11640,11 @@
         }
       }
     },
-    "819": {
+    "842": {
       "kind": "array",
       "items": "613"
     },
-    "820": {
+    "843": {
       "kind": "object",
       "props": {
         "occurrence": {
@@ -11190,21 +11656,21 @@
           "optional": true
         },
         "sessions": {
-          "type": "821",
+          "type": "844",
           "optional": false
         }
       }
     },
-    "821": {
+    "844": {
       "kind": "object",
       "props": {},
       "index": "586"
     },
-    "822": {
+    "845": {
       "kind": "object",
       "props": {
         "hostedByDesignation": {
-          "type": "823",
+          "type": "846",
           "optional": false
         },
         "restartSeq": {
@@ -11212,22 +11678,22 @@
           "optional": false
         },
         "byKind": {
-          "type": "824",
+          "type": "847",
           "optional": false
         }
       }
     },
-    "823": {
+    "846": {
       "kind": "object",
       "props": {},
-      "index": "761"
+      "index": "763"
     },
-    "824": {
+    "847": {
       "kind": "object",
       "props": {},
-      "index": "758"
+      "index": "760"
     },
-    "825": {
+    "848": {
       "kind": "object",
       "props": {
         "restartSeq": {
@@ -11235,25 +11701,25 @@
           "optional": false
         },
         "byKind": {
-          "type": "824",
+          "type": "847",
           "optional": false
         }
       }
     },
-    "826": {
+    "849": {
       "kind": "object",
       "props": {
         "created": {
-          "type": "827",
+          "type": "850",
           "optional": true
         }
       }
     },
-    "827": {
+    "850": {
       "kind": "union",
-      "items": ["2", "828"]
+      "items": ["2", "851"]
     },
-    "828": {
+    "851": {
       "kind": "object",
       "props": {
         "seq": {
@@ -11266,11 +11732,11 @@
         }
       }
     },
-    "829": {
+    "852": {
       "kind": "object",
       "props": {
         "hosted": {
-          "type": "830",
+          "type": "853",
           "optional": false
         },
         "reclaimedAt": {
@@ -11279,11 +11745,11 @@
         }
       }
     },
-    "830": {
+    "853": {
       "kind": "array",
-      "items": "761"
+      "items": "763"
     },
-    "831": {
+    "854": {
       "kind": "object",
       "props": {
         "settled": {
@@ -11296,20 +11762,20 @@
         }
       }
     },
-    "832": {
+    "855": {
       "kind": "object",
       "props": {
         "marker": {
-          "type": "833",
+          "type": "856",
           "optional": false
         }
       }
     },
-    "833": {
+    "856": {
       "kind": "union",
-      "items": ["86", "834"]
+      "items": ["86", "857"]
     },
-    "834": {
+    "857": {
       "kind": "object",
       "props": {
         "provider": {
@@ -11334,7 +11800,7 @@
         }
       }
     },
-    "835": {
+    "858": {
       "kind": "object",
       "props": {
         "restartSeq": {
@@ -11342,7 +11808,7 @@
           "optional": false
         },
         "maxRoundEver": {
-          "type": "836",
+          "type": "859",
           "optional": false
         },
         "maxVerifyAttemptEver": {
@@ -11350,15 +11816,15 @@
           "optional": false
         },
         "pendingGuidanceStarts": {
-          "type": "837",
+          "type": "860",
           "optional": false
         },
         "guidanceDeliveries": {
-          "type": "839",
+          "type": "862",
           "optional": false
         },
         "lastConflict": {
-          "type": "841",
+          "type": "864",
           "optional": true
         },
         "conflictSeqs": {
@@ -11366,32 +11832,32 @@
           "optional": false
         },
         "conflictReconcileStarted": {
-          "type": "843",
+          "type": "866",
           "optional": true
         },
         "activeReconcileStart": {
-          "type": "845",
+          "type": "868",
           "optional": true
         },
         "reconcileStarts": {
-          "type": "847",
+          "type": "870",
           "optional": false
         },
         "reconcileCompletions": {
-          "type": "848",
+          "type": "871",
           "optional": false
         },
         "reconcileProgressChecks": {
-          "type": "850",
+          "type": "873",
           "optional": false
         },
         "candidates": {
-          "type": "852",
+          "type": "875",
           "optional": false
         }
       }
     },
-    "836": {
+    "859": {
       "kind": "object",
       "props": {
         "plan": {
@@ -11404,12 +11870,12 @@
         }
       }
     },
-    "837": {
+    "860": {
       "kind": "object",
       "props": {},
-      "index": "838"
+      "index": "861"
     },
-    "838": {
+    "861": {
       "kind": "object",
       "props": {
         "escalation": {
@@ -11422,11 +11888,11 @@
         }
       }
     },
-    "839": {
+    "862": {
       "kind": "array",
-      "items": "840"
+      "items": "863"
     },
-    "840": {
+    "863": {
       "kind": "object",
       "props": {
         "escalation": {
@@ -11439,11 +11905,11 @@
         }
       }
     },
-    "841": {
+    "864": {
       "kind": "union",
-      "items": ["2", "842"]
+      "items": ["2", "865"]
     },
-    "842": {
+    "865": {
       "kind": "object",
       "props": {
         "seq": {
@@ -11452,11 +11918,11 @@
         }
       }
     },
-    "843": {
+    "866": {
       "kind": "union",
-      "items": ["2", "844"]
+      "items": ["2", "867"]
     },
-    "844": {
+    "867": {
       "kind": "object",
       "props": {
         "attempt": {
@@ -11465,11 +11931,11 @@
         }
       }
     },
-    "845": {
+    "868": {
       "kind": "union",
-      "items": ["2", "846"]
+      "items": ["2", "869"]
     },
-    "846": {
+    "869": {
       "kind": "object",
       "props": {
         "seq": {
@@ -11486,15 +11952,15 @@
         }
       }
     },
-    "847": {
+    "870": {
       "kind": "array",
-      "items": "846"
+      "items": "869"
     },
-    "848": {
+    "871": {
       "kind": "array",
-      "items": "849"
+      "items": "872"
     },
-    "849": {
+    "872": {
       "kind": "object",
       "props": {
         "completedSeq": {
@@ -11515,11 +11981,11 @@
         }
       }
     },
-    "850": {
+    "873": {
       "kind": "array",
-      "items": "851"
+      "items": "874"
     },
-    "851": {
+    "874": {
       "kind": "object",
       "props": {
         "seq": {
@@ -11540,23 +12006,23 @@
         }
       }
     },
-    "852": {
+    "875": {
       "kind": "array",
-      "items": "853"
+      "items": "876"
     },
-    "853": {
+    "876": {
       "kind": "union",
-      "items": ["854", "858", "860", "862", "864", "866", "868", "870", "875", "878", "880", "881"]
+      "items": ["877", "881", "883", "885", "887", "889", "891", "893", "898", "901", "903", "904"]
     },
-    "854": {
+    "877": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "855",
+          "type": "878",
           "optional": false
         },
         "loop": {
-          "type": "856",
+          "type": "879",
           "optional": false
         },
         "seq": {
@@ -11569,23 +12035,23 @@
         }
       }
     },
-    "855": {
+    "878": {
       "kind": "literal",
       "value": "round-start"
     },
-    "856": {
+    "879": {
       "kind": "union",
-      "items": ["431", "857"]
+      "items": ["431", "880"]
     },
-    "857": {
+    "880": {
       "kind": "literal",
       "value": "code"
     },
-    "858": {
+    "881": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "859",
+          "type": "882",
           "optional": false
         },
         "seq": {
@@ -11606,19 +12072,19 @@
         }
       }
     },
-    "859": {
+    "882": {
       "kind": "literal",
       "value": "plan-completed"
     },
-    "860": {
+    "883": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "861",
+          "type": "884",
           "optional": false
         },
         "loop": {
-          "type": "856",
+          "type": "879",
           "optional": false
         },
         "seq": {
@@ -11631,19 +12097,19 @@
         }
       }
     },
-    "861": {
+    "884": {
       "kind": "literal",
       "value": "round-touch"
     },
-    "862": {
+    "885": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "863",
+          "type": "886",
           "optional": false
         },
         "loop": {
-          "type": "856",
+          "type": "879",
           "optional": false
         },
         "seq": {
@@ -11656,19 +12122,19 @@
         }
       }
     },
-    "863": {
+    "886": {
       "kind": "literal",
       "value": "round-completed"
     },
-    "864": {
+    "887": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "865",
+          "type": "888",
           "optional": false
         },
         "loop": {
-          "type": "856",
+          "type": "879",
           "optional": false
         },
         "seq": {
@@ -11693,15 +12159,15 @@
         }
       }
     },
-    "865": {
+    "888": {
       "kind": "literal",
       "value": "verdict"
     },
-    "866": {
+    "889": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "867",
+          "type": "890",
           "optional": false
         },
         "seq": {
@@ -11710,15 +12176,15 @@
         }
       }
     },
-    "867": {
+    "890": {
       "kind": "literal",
       "value": "implement-completed"
     },
-    "868": {
+    "891": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "869",
+          "type": "892",
           "optional": false
         },
         "seq": {
@@ -11731,15 +12197,15 @@
         }
       }
     },
-    "869": {
+    "892": {
       "kind": "literal",
       "value": "verify-started"
     },
-    "870": {
+    "893": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "871",
+          "type": "894",
           "optional": false
         },
         "seq": {
@@ -11747,16 +12213,16 @@
           "optional": false
         },
         "policy": {
-          "type": "872",
+          "type": "895",
           "optional": false
         }
       }
     },
-    "871": {
+    "894": {
       "kind": "literal",
       "value": "reconcile-policy"
     },
-    "872": {
+    "895": {
       "kind": "object",
       "props": {
         "reconcileSeq": {
@@ -11764,16 +12230,16 @@
           "optional": false
         },
         "steps": {
-          "type": "873",
+          "type": "896",
           "optional": false
         }
       }
     },
-    "873": {
+    "896": {
       "kind": "array",
-      "items": "874"
+      "items": "897"
     },
-    "874": {
+    "897": {
       "kind": "object",
       "props": {
         "step": {
@@ -11790,24 +12256,24 @@
         }
       }
     },
-    "875": {
+    "898": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "876",
+          "type": "899",
           "optional": false
         },
         "record": {
-          "type": "877",
+          "type": "900",
           "optional": false
         }
       }
     },
-    "876": {
+    "899": {
       "kind": "literal",
       "value": "verify-completed"
     },
-    "877": {
+    "900": {
       "kind": "object",
       "props": {
         "seq": {
@@ -11840,11 +12306,11 @@
         }
       }
     },
-    "878": {
+    "901": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "879",
+          "type": "902",
           "optional": false
         },
         "seq": {
@@ -11853,15 +12319,15 @@
         }
       }
     },
-    "879": {
+    "902": {
       "kind": "literal",
       "value": "finalize-completed"
     },
-    "880": {
+    "903": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "641",
+          "type": "643",
           "optional": false
         },
         "seq": {
@@ -11874,11 +12340,11 @@
         }
       }
     },
-    "881": {
+    "904": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "882",
+          "type": "905",
           "optional": false
         },
         "seq": {
@@ -11887,32 +12353,32 @@
         }
       }
     },
-    "882": {
+    "905": {
       "kind": "literal",
       "value": "reconcile-completed"
     },
-    "883": {
+    "906": {
       "kind": "object",
       "props": {
         "ledger": {
-          "type": "884",
+          "type": "907",
           "optional": false
         }
       }
     },
-    "884": {
+    "907": {
       "kind": "array",
-      "items": "885"
+      "items": "908"
     },
-    "885": {
+    "908": {
       "kind": "union",
-      "items": ["886", "888", "889", "891", "893", "894", "895", "896", "898"]
+      "items": ["909", "911", "912", "914", "916", "917", "918", "919", "920", "922"]
     },
-    "886": {
+    "909": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "887",
+          "type": "910",
           "optional": false
         },
         "seq": {
@@ -11925,11 +12391,11 @@
         }
       }
     },
-    "887": {
+    "910": {
       "kind": "literal",
       "value": "request"
     },
-    "888": {
+    "911": {
       "kind": "object",
       "props": {
         "t": {
@@ -11946,11 +12412,32 @@
         }
       }
     },
-    "889": {
+    "912": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "890",
+          "type": "913",
+          "optional": false
+        },
+        "seq": {
+          "type": "12",
+          "optional": false
+        },
+        "request": {
+          "type": "12",
+          "optional": false
+        }
+      }
+    },
+    "913": {
+      "kind": "literal",
+      "value": "cancelled"
+    },
+    "914": {
+      "kind": "object",
+      "props": {
+        "t": {
+          "type": "915",
           "optional": false
         },
         "seq": {
@@ -11963,11 +12450,11 @@
         }
       }
     },
-    "890": {
+    "915": {
       "kind": "literal",
       "value": "provisioned"
     },
-    "891": {
+    "916": {
       "kind": "object",
       "props": {
         "t": {
@@ -11979,16 +12466,12 @@
           "optional": false
         },
         "ref": {
-          "type": "892",
+          "type": "811",
           "optional": true
         }
       }
     },
-    "892": {
-      "kind": "union",
-      "items": ["2", "86", "3"]
-    },
-    "893": {
+    "917": {
       "kind": "object",
       "props": {
         "t": {
@@ -12013,7 +12496,7 @@
         }
       }
     },
-    "894": {
+    "918": {
       "kind": "object",
       "props": {
         "t": {
@@ -12027,10 +12510,14 @@
         "mergeCommit": {
           "type": "3",
           "optional": false
+        },
+        "rewriteId": {
+          "type": "1",
+          "optional": true
         }
       }
     },
-    "895": {
+    "919": {
       "kind": "object",
       "props": {
         "t": {
@@ -12047,11 +12534,11 @@
         }
       }
     },
-    "896": {
+    "920": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "897",
+          "type": "921",
           "optional": false
         },
         "seq": {
@@ -12072,15 +12559,15 @@
         }
       }
     },
-    "897": {
+    "921": {
       "kind": "literal",
       "value": "step"
     },
-    "898": {
+    "922": {
       "kind": "object",
       "props": {
         "t": {
-          "type": "809",
+          "type": "832",
           "optional": false
         },
         "seq": {
@@ -12089,11 +12576,11 @@
         }
       }
     },
-    "899": {
+    "923": {
       "kind": "object",
       "props": {
         "active": {
-          "type": "900",
+          "type": "924",
           "optional": false
         },
         "count": {
@@ -12105,16 +12592,16 @@
           "optional": false
         },
         "latest": {
-          "type": "902",
+          "type": "926",
           "optional": false
         }
       }
     },
-    "900": {
+    "924": {
       "kind": "union",
-      "items": ["86", "901"]
+      "items": ["86", "925"]
     },
-    "901": {
+    "925": {
       "kind": "object",
       "props": {
         "instance": {
@@ -12131,11 +12618,11 @@
         }
       }
     },
-    "902": {
+    "926": {
       "kind": "union",
-      "items": ["86", "903"]
+      "items": ["86", "927"]
     },
-    "903": {
+    "927": {
       "kind": "object",
       "props": {
         "instance": {
@@ -12148,20 +12635,20 @@
         }
       }
     },
-    "904": {
+    "928": {
       "kind": "object",
       "props": {
         "open": {
-          "type": "905",
+          "type": "929",
           "optional": false
         }
       }
     },
-    "905": {
+    "929": {
       "kind": "union",
-      "items": ["86", "906"]
+      "items": ["86", "930"]
     },
-    "906": {
+    "930": {
       "kind": "object",
       "props": {
         "instance": {
@@ -12190,37 +12677,37 @@
         }
       }
     },
-    "907": {
+    "931": {
       "kind": "object",
       "props": {
         "open": {
-          "type": "908",
+          "type": "932",
           "optional": false
         }
       }
     },
-    "908": {
+    "932": {
       "kind": "union",
       "items": ["86", "576"]
     },
-    "909": {
+    "933": {
       "kind": "object",
       "props": {
         "state": {
-          "type": "910",
+          "type": "934",
           "optional": false
         }
       }
     },
-    "910": {
+    "934": {
       "kind": "union",
-      "items": ["231", "382", "606", "334", "911"]
+      "items": ["231", "382", "606", "334", "935"]
     },
-    "911": {
+    "935": {
       "kind": "literal",
       "value": "none"
     },
-    "912": {
+    "936": {
       "kind": "object",
       "props": {
         "created": {
@@ -12244,15 +12731,15 @@
           "optional": true
         },
         "latestFailure": {
-          "type": "913",
+          "type": "937",
           "optional": true
         },
         "sessionEvents": {
-          "type": "915",
+          "type": "939",
           "optional": false
         },
         "intervals": {
-          "type": "917",
+          "type": "941",
           "optional": false
         },
         "pausedAt": {
@@ -12260,16 +12747,16 @@
           "optional": true
         },
         "produced": {
-          "type": "923",
+          "type": "947",
           "optional": false
         }
       }
     },
-    "913": {
+    "937": {
       "kind": "union",
-      "items": ["2", "914"]
+      "items": ["2", "938"]
     },
-    "914": {
+    "938": {
       "kind": "object",
       "props": {
         "seq": {
@@ -12290,37 +12777,37 @@
         }
       }
     },
-    "915": {
+    "939": {
       "kind": "array",
-      "items": "916"
+      "items": "940"
     },
-    "916": {
+    "940": {
       "kind": "union",
-      "items": ["692", "695"]
+      "items": ["694", "697"]
     },
-    "917": {
+    "941": {
       "kind": "object",
       "props": {},
-      "index": "918"
+      "index": "942"
     },
-    "918": {
+    "942": {
       "kind": "object",
       "props": {
         "closed": {
-          "type": "919",
+          "type": "943",
           "optional": false
         },
         "open": {
-          "type": "921",
+          "type": "945",
           "optional": true
         }
       }
     },
-    "919": {
+    "943": {
       "kind": "array",
-      "items": "920"
+      "items": "944"
     },
-    "920": {
+    "944": {
       "kind": "object",
       "props": {
         "start": {
@@ -12337,11 +12824,11 @@
         }
       }
     },
-    "921": {
+    "945": {
       "kind": "union",
-      "items": ["2", "922"]
+      "items": ["2", "946"]
     },
-    "922": {
+    "946": {
       "kind": "object",
       "props": {
         "start": {
@@ -12354,41 +12841,41 @@
         }
       }
     },
-    "923": {
+    "947": {
       "kind": "object",
       "props": {
         "planCompleted": {
-          "type": "924",
+          "type": "948",
           "optional": false
         },
         "planReviewVerdict": {
-          "type": "924",
+          "type": "948",
           "optional": false
         },
         "implementCompleted": {
-          "type": "924",
+          "type": "948",
           "optional": false
         },
         "codeReviewVerdict": {
-          "type": "924",
+          "type": "948",
           "optional": false
         }
       }
     },
-    "924": {
+    "948": {
       "kind": "object",
       "props": {},
       "index": "12"
     },
-    "925": {
+    "949": {
       "kind": "array",
-      "items": "926"
+      "items": "950"
     },
-    "926": {
+    "950": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "927",
+          "type": "951",
           "optional": false
         },
         "phase": {
@@ -12408,67 +12895,83 @@
           "optional": true
         },
         "result": {
-          "type": "929",
+          "type": "953",
           "optional": true
         }
       }
     },
-    "927": {
+    "951": {
       "kind": "union",
-      "items": ["928", "182"]
+      "items": ["952", "182"]
     },
-    "928": {
+    "952": {
       "kind": "literal",
       "value": "verify"
     },
-    "929": {
+    "953": {
       "kind": "union",
-      "items": ["2", "743", "744", "745", "746"]
+      "items": ["2", "745", "746", "747", "748"]
     },
-    "930": {
+    "954": {
       "kind": "object",
       "props": {},
       "index": "613"
     },
-    "931": {
+    "955": {
       "kind": "union",
       "items": ["2", "574"]
     },
-    "932": {
+    "956": {
       "kind": "object",
       "props": {},
       "index": "262"
     },
-    "933": {
+    "957": {
       "kind": "object",
       "props": {},
-      "index": "934"
+      "index": "958"
     },
-    "934": {
+    "958": {
       "kind": "union",
-      "items": ["86", "707", "708", "710"]
+      "items": ["86", "709", "710", "712"]
     },
-    "935": {
+    "959": {
+      "kind": "array",
+      "items": "960"
+    },
+    "960": {
       "kind": "union",
-      "items": ["2", "665"]
+      "items": ["574", "787", "790", "793", "796", "800", "803", "806", "812", "825"]
     },
-    "936": {
+    "961": {
+      "kind": "union",
+      "items": ["2", "795"]
+    },
+    "962": {
+      "kind": "union",
+      "items": ["2", "802"]
+    },
+    "963": {
       "kind": "union",
       "items": ["2", "667"]
     },
-    "937": {
+    "964": {
+      "kind": "union",
+      "items": ["2", "669"]
+    },
+    "965": {
       "kind": "union",
       "items": ["2", "546"]
     },
-    "938": {
+    "966": {
       "kind": "union",
       "items": ["2", "587"]
     },
-    "939": {
+    "967": {
       "kind": "array",
-      "items": "940"
+      "items": "968"
     },
-    "940": {
+    "968": {
       "kind": "union",
       "items": [
         "547",
@@ -12492,60 +12995,65 @@
         "626",
         "632",
         "635",
-        "643",
-        "647",
-        "650",
-        "653",
-        "656",
-        "659",
+        "645",
+        "649",
+        "652",
+        "655",
+        "658",
         "661",
-        "664",
+        "663",
         "666",
         "668",
         "670",
-        "673",
+        "672",
         "675",
-        "678",
+        "677",
         "680",
         "682",
         "684",
-        "687",
-        "690",
-        "693",
-        "696",
-        "704",
-        "713",
-        "716",
-        "719",
-        "722",
-        "725",
-        "728",
-        "731",
+        "686",
+        "689",
+        "692",
+        "695",
+        "698",
+        "706",
+        "715",
+        "718",
+        "721",
+        "724",
+        "727",
+        "730",
         "733",
-        "736",
-        "741",
-        "748",
+        "735",
+        "738",
+        "743",
         "750",
-        "754",
-        "759",
-        "762",
-        "766",
-        "769",
-        "772",
-        "775",
-        "778",
-        "781",
+        "752",
+        "756",
+        "761",
+        "764",
+        "768",
+        "771",
+        "774",
+        "777",
+        "780",
         "783",
-        "786",
-        "789",
-        "792",
-        "795",
+        "785",
+        "788",
+        "791",
+        "794",
         "797",
-        "800",
-        "803"
+        "801",
+        "804",
+        "807",
+        "813",
+        "818",
+        "820",
+        "823",
+        "826"
       ]
     },
-    "941": {
+    "969": {
       "kind": "object",
       "props": {
         "escalations": {
@@ -12558,11 +13066,11 @@
         }
       }
     },
-    "942": {
+    "970": {
       "kind": "array",
-      "items": "943"
+      "items": "971"
     },
-    "943": {
+    "971": {
       "kind": "object",
       "props": {
         "payload": {
@@ -12579,23 +13087,23 @@
         }
       }
     },
-    "944": {
+    "972": {
       "kind": "object",
       "props": {
         "summaryRequests": {
-          "type": "819",
+          "type": "842",
           "optional": false
         },
         "summaryBoundary": {
-          "type": "945",
+          "type": "973",
           "optional": false
         },
         "hostedImages": {
-          "type": "947",
+          "type": "975",
           "optional": false
         },
         "designations": {
-          "type": "950",
+          "type": "978",
           "optional": false
         },
         "imageHost": {
@@ -12603,7 +13111,7 @@
           "optional": false
         },
         "pendingAttachments": {
-          "type": "830",
+          "type": "853",
           "optional": false
         },
         "recoveryCheckpoint": {
@@ -12611,7 +13119,7 @@
           "optional": false
         },
         "provisionMarker": {
-          "type": "951",
+          "type": "979",
           "optional": false
         },
         "baseBranch": {
@@ -12619,43 +13127,43 @@
           "optional": false
         },
         "state": {
-          "type": "952",
-          "optional": false
-        },
-        "log": {
-          "type": "960",
-          "optional": false
-        },
-        "publication": {
-          "type": "883",
-          "optional": false
-        },
-        "executionNoProgress": {
           "type": "980",
           "optional": false
         },
+        "log": {
+          "type": "988",
+          "optional": false
+        },
+        "publication": {
+          "type": "906",
+          "optional": false
+        },
+        "executionNoProgress": {
+          "type": "1008",
+          "optional": false
+        },
         "open": {
-          "type": "905",
+          "type": "929",
           "optional": false
         },
         "workspace": {
-          "type": "908",
+          "type": "932",
           "optional": false
         },
         "lastExecution": {
-          "type": "910",
+          "type": "934",
           "optional": false
         },
         "dashboard": {
-          "type": "912",
+          "type": "936",
           "optional": false
         },
         "deferral": {
-          "type": "805",
+          "type": "828",
           "optional": false
         },
         "observationFacts": {
-          "type": "942",
+          "type": "970",
           "optional": false
         },
         "mergeTimes": {
@@ -12671,7 +13179,7 @@
           "optional": false
         },
         "summaryHistory": {
-          "type": "925",
+          "type": "949",
           "optional": false
         },
         "summaryAttempts": {
@@ -12679,7 +13187,7 @@
           "optional": false
         },
         "summaryRequested": {
-          "type": "930",
+          "type": "954",
           "optional": false
         },
         "summaryEligibleAfter": {
@@ -12691,35 +13199,51 @@
           "optional": false
         },
         "latestWorkspace": {
-          "type": "931",
+          "type": "955",
           "optional": false
         },
         "planFeedback": {
-          "type": "933",
+          "type": "957",
           "optional": false
         },
         "findings": {
-          "type": "932",
+          "type": "956",
           "optional": false
         },
         "feedback": {
-          "type": "933",
+          "type": "957",
           "optional": false
         },
         "reconcileBases": {
-          "type": "981",
+          "type": "1009",
+          "optional": false
+        },
+        "reconcileHistory": {
+          "type": "959",
+          "optional": false
+        },
+        "gitTips": {
+          "type": "57",
+          "optional": false
+        },
+        "reconcileTransaction": {
+          "type": "961",
+          "optional": false
+        },
+        "reconcileReplay": {
+          "type": "962",
           "optional": false
         },
         "firstWorkspace": {
-          "type": "931",
+          "type": "955",
           "optional": false
         },
         "latestAbort": {
-          "type": "935",
+          "type": "963",
           "optional": false
         },
         "latestDiscard": {
-          "type": "936",
+          "type": "964",
           "optional": false
         },
         "maxPlanRevision": {
@@ -12727,7 +13251,7 @@
           "optional": false
         },
         "seenTypes": {
-          "type": "939",
+          "type": "967",
           "optional": false
         },
         "localWorkspace": {
@@ -12735,11 +13259,11 @@
           "optional": false
         },
         "cleanupCounts": {
-          "type": "982",
+          "type": "1010",
           "optional": false
         },
         "reclaimCounts": {
-          "type": "983",
+          "type": "1011",
           "optional": false
         },
         "infrastructureReset": {
@@ -12759,15 +13283,15 @@
           "optional": false
         },
         "created": {
-          "type": "937",
+          "type": "965",
           "optional": false
         },
         "lastCreated": {
-          "type": "937",
+          "type": "965",
           "optional": false
         },
         "latestRelease": {
-          "type": "938",
+          "type": "966",
           "optional": false
         },
         "latestWorkspaceFailureSeq": {
@@ -12796,11 +13320,11 @@
         }
       }
     },
-    "945": {
+    "973": {
       "kind": "union",
-      "items": ["2", "946"]
+      "items": ["2", "974"]
     },
-    "946": {
+    "974": {
       "kind": "object",
       "props": {
         "occurrence": {
@@ -12813,27 +13337,27 @@
         }
       }
     },
-    "947": {
+    "975": {
       "kind": "array",
-      "items": "948"
+      "items": "976"
     },
-    "948": {
+    "976": {
       "kind": "array",
-      "items": "949"
+      "items": "977"
     },
-    "949": {
+    "977": {
       "kind": "union",
-      "items": ["12", "761"]
+      "items": ["12", "763"]
     },
-    "950": {
+    "978": {
       "kind": "array",
-      "items": "758"
+      "items": "760"
     },
-    "951": {
+    "979": {
       "kind": "union",
-      "items": ["2", "834"]
+      "items": ["2", "857"]
     },
-    "952": {
+    "980": {
       "kind": "object",
       "props": {
         "kind": {
@@ -12861,7 +13385,7 @@
           "optional": true
         },
         "status": {
-          "type": "953",
+          "type": "981",
           "optional": false
         },
         "outcome": {
@@ -12869,7 +13393,7 @@
           "optional": true
         },
         "phase": {
-          "type": "957",
+          "type": "985",
           "optional": true
         },
         "round": {
@@ -12953,7 +13477,7 @@
           "optional": true
         },
         "reviewFindings": {
-          "type": "958",
+          "type": "986",
           "optional": false
         },
         "verify": {
@@ -13005,7 +13529,7 @@
           "optional": false
         },
         "sessions": {
-          "type": "959",
+          "type": "987",
           "optional": false
         },
         "failures": {
@@ -13014,27 +13538,27 @@
         }
       }
     },
-    "953": {
+    "981": {
       "kind": "union",
-      "items": ["593", "954", "342", "418", "419", "955", "956"]
+      "items": ["593", "982", "342", "418", "419", "983", "984"]
     },
-    "954": {
+    "982": {
       "kind": "literal",
       "value": "queued"
     },
-    "955": {
+    "983": {
       "kind": "literal",
       "value": "collecting"
     },
-    "956": {
+    "984": {
       "kind": "literal",
       "value": "paused"
     },
-    "957": {
+    "985": {
       "kind": "union",
       "items": ["2", "428", "429", "430", "431", "432", "433", "434"]
     },
-    "958": {
+    "986": {
       "kind": "object",
       "props": {
         "planReview": {
@@ -13047,7 +13571,7 @@
         }
       }
     },
-    "959": {
+    "987": {
       "kind": "object",
       "props": {
         "open": {
@@ -13056,11 +13580,11 @@
         }
       }
     },
-    "960": {
+    "988": {
       "kind": "object",
       "props": {
         "reconcilePolicy": {
-          "type": "961",
+          "type": "989",
           "optional": true
         },
         "restartSeq": {
@@ -13068,11 +13592,11 @@
           "optional": false
         },
         "verifyCompleted": {
-          "type": "962",
+          "type": "990",
           "optional": false
         },
         "verifyStarted": {
-          "type": "963",
+          "type": "991",
           "optional": false
         },
         "maxVerifyAttemptEver": {
@@ -13092,19 +13616,19 @@
           "optional": false
         },
         "lastConflict": {
-          "type": "965",
+          "type": "993",
           "optional": true
         },
         "conflictReconcileStarted": {
-          "type": "967",
+          "type": "995",
           "optional": true
         },
         "lastReconcileCompleted": {
-          "type": "969",
+          "type": "997",
           "optional": true
         },
         "lastConflictProgressCheck": {
-          "type": "970",
+          "type": "998",
           "optional": true
         },
         "reconcileNoProgressCount": {
@@ -13112,15 +13636,15 @@
           "optional": false
         },
         "guidanceDeliveries": {
-          "type": "839",
+          "type": "862",
           "optional": false
         },
         "plan": {
-          "type": "971",
+          "type": "999",
           "optional": false
         },
         "code": {
-          "type": "971",
+          "type": "999",
           "optional": false
         },
         "finalizeStepsDone": {
@@ -13129,19 +13653,19 @@
         }
       }
     },
-    "961": {
+    "989": {
       "kind": "union",
-      "items": ["2", "872"]
+      "items": ["2", "895"]
     },
-    "962": {
+    "990": {
       "kind": "array",
-      "items": "877"
+      "items": "900"
     },
-    "963": {
+    "991": {
       "kind": "array",
-      "items": "964"
+      "items": "992"
     },
-    "964": {
+    "992": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13154,11 +13678,11 @@
         }
       }
     },
-    "965": {
+    "993": {
       "kind": "union",
-      "items": ["2", "966"]
+      "items": ["2", "994"]
     },
-    "966": {
+    "994": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13167,11 +13691,11 @@
         }
       }
     },
-    "967": {
+    "995": {
       "kind": "union",
-      "items": ["2", "968"]
+      "items": ["2", "996"]
     },
-    "968": {
+    "996": {
       "kind": "object",
       "props": {
         "attempt": {
@@ -13180,15 +13704,15 @@
         }
       }
     },
-    "969": {
+    "997": {
       "kind": "union",
-      "items": ["2", "849"]
+      "items": ["2", "872"]
     },
-    "970": {
+    "998": {
       "kind": "union",
-      "items": ["2", "851"]
+      "items": ["2", "874"]
     },
-    "971": {
+    "999": {
       "kind": "object",
       "props": {
         "maxRoundEver": {
@@ -13200,7 +13724,7 @@
           "optional": false
         },
         "latestRevise": {
-          "type": "972",
+          "type": "1000",
           "optional": true
         },
         "latestApproveSeq": {
@@ -13208,7 +13732,7 @@
           "optional": false
         },
         "approvedPlan": {
-          "type": "974",
+          "type": "1002",
           "optional": true
         },
         "findingsByRound": {
@@ -13216,16 +13740,16 @@
           "optional": false
         },
         "rounds": {
-          "type": "976",
+          "type": "1004",
           "optional": false
         }
       }
     },
-    "972": {
+    "1000": {
       "kind": "union",
-      "items": ["2", "973"]
+      "items": ["2", "1001"]
     },
-    "973": {
+    "1001": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13250,11 +13774,11 @@
         }
       }
     },
-    "974": {
+    "1002": {
       "kind": "union",
-      "items": ["2", "975"]
+      "items": ["2", "1003"]
     },
-    "975": {
+    "1003": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13271,19 +13795,19 @@
         }
       }
     },
-    "976": {
+    "1004": {
       "kind": "array",
-      "items": "977"
+      "items": "1005"
     },
-    "977": {
+    "1005": {
       "kind": "array",
-      "items": "978"
+      "items": "1006"
     },
-    "978": {
+    "1006": {
       "kind": "union",
-      "items": ["12", "979"]
+      "items": ["12", "1007"]
     },
-    "979": {
+    "1007": {
       "kind": "object",
       "props": {
         "startedSeq": {
@@ -13295,16 +13819,16 @@
           "optional": true
         },
         "planCompletion": {
-          "type": "974",
+          "type": "1002",
           "optional": true
         },
         "verdict": {
-          "type": "972",
+          "type": "1000",
           "optional": true
         }
       }
     },
-    "980": {
+    "1008": {
       "kind": "object",
       "props": {
         "open": {
@@ -13312,7 +13836,7 @@
           "optional": false
         },
         "active": {
-          "type": "900",
+          "type": "924",
           "optional": false
         },
         "count": {
@@ -13320,27 +13844,27 @@
           "optional": false
         },
         "latest": {
-          "type": "902",
+          "type": "926",
           "optional": false
         }
       }
     },
-    "981": {
+    "1009": {
       "kind": "object",
       "props": {},
       "index": "3"
     },
-    "982": {
+    "1010": {
       "kind": "object",
       "props": {},
       "index": "12"
     },
-    "983": {
+    "1011": {
       "kind": "object",
       "props": {},
       "index": "12"
     },
-    "984": {
+    "1012": {
       "kind": "object",
       "props": {
         "lastSeq": {
@@ -13348,21 +13872,21 @@
           "optional": false
         },
         "sessions": {
-          "type": "985",
+          "type": "1013",
           "optional": false
         },
         "terminals": {
-          "type": "987",
+          "type": "1015",
           "optional": false
         }
       }
     },
-    "985": {
+    "1013": {
       "kind": "object",
       "props": {},
-      "index": "986"
+      "index": "1014"
     },
-    "986": {
+    "1014": {
       "kind": "object",
       "props": {
         "starts": {
@@ -13370,16 +13894,16 @@
           "optional": false
         },
         "endings": {
-          "type": "987",
+          "type": "1015",
           "optional": false
         }
       }
     },
-    "987": {
+    "1015": {
       "kind": "array",
-      "items": "988"
+      "items": "1016"
     },
-    "988": {
+    "1016": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13392,7 +13916,7 @@
         }
       }
     },
-    "989": {
+    "1017": {
       "kind": "object",
       "props": {
         "lastSeq": {
@@ -13400,43 +13924,43 @@
           "optional": false
         },
         "runs": {
-          "type": "821",
+          "type": "844",
           "optional": false
         },
         "sessions": {
-          "type": "990",
+          "type": "1018",
           "optional": false
         },
         "authorizations": {
-          "type": "991",
+          "type": "1019",
           "optional": false
         },
         "releases": {
-          "type": "994",
+          "type": "1022",
           "optional": false
         },
         "endings": {
-          "type": "995",
+          "type": "1023",
           "optional": false
         }
       }
     },
-    "990": {
+    "1018": {
       "kind": "object",
       "props": {},
-      "index": "985"
+      "index": "1013"
     },
-    "991": {
+    "1019": {
       "kind": "object",
       "props": {},
-      "index": "992"
+      "index": "1020"
     },
-    "992": {
+    "1020": {
       "kind": "object",
       "props": {},
-      "index": "993"
+      "index": "1021"
     },
-    "993": {
+    "1021": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13449,21 +13973,21 @@
         }
       }
     },
-    "994": {
+    "1022": {
       "kind": "object",
       "props": {},
       "index": "57"
     },
-    "995": {
+    "1023": {
       "kind": "object",
       "props": {},
-      "index": "987"
+      "index": "1015"
     },
-    "996": {
+    "1024": {
       "kind": "object",
       "props": {
         "retained": {
-          "type": "997",
+          "type": "1025",
           "optional": false
         },
         "incompleteIdentities": {
@@ -13472,11 +13996,11 @@
         }
       }
     },
-    "997": {
+    "1025": {
       "kind": "array",
-      "items": "998"
+      "items": "1026"
     },
-    "998": {
+    "1026": {
       "kind": "union",
       "items": [
         "21",
@@ -13532,11 +14056,11 @@
         "304"
       ]
     },
-    "999": {
+    "1027": {
       "kind": "object",
       "props": {
         "turns": {
-          "type": "1000",
+          "type": "1028",
           "optional": false
         },
         "archived": {
@@ -13544,7 +14068,7 @@
           "optional": false
         },
         "pendingApproval": {
-          "type": "1019",
+          "type": "1047",
           "optional": false
         },
         "wakeGlobs": {
@@ -13561,15 +14085,15 @@
         }
       }
     },
-    "1000": {
+    "1028": {
       "kind": "array",
-      "items": "1001"
+      "items": "1029"
     },
-    "1001": {
+    "1029": {
       "kind": "object",
       "props": {
         "suspensionCause": {
-          "type": "1002",
+          "type": "1030",
           "optional": true
         },
         "turn": {
@@ -13585,15 +14109,15 @@
           "optional": false
         },
         "trigger": {
-          "type": "1005",
+          "type": "1033",
           "optional": false
         },
         "state": {
-          "type": "1011",
+          "type": "1039",
           "optional": false
         },
         "usage": {
-          "type": "1013",
+          "type": "1041",
           "optional": true
         },
         "error": {
@@ -13601,32 +14125,32 @@
           "optional": true
         },
         "kind": {
-          "type": "1015",
+          "type": "1043",
           "optional": true
         }
       }
     },
-    "1002": {
+    "1030": {
       "kind": "union",
-      "items": ["2", "1003", "1004"]
+      "items": ["2", "1031", "1032"]
     },
-    "1003": {
+    "1031": {
       "kind": "literal",
       "value": "budget"
     },
-    "1004": {
+    "1032": {
       "kind": "literal",
       "value": "approval"
     },
-    "1005": {
+    "1033": {
       "kind": "union",
-      "items": ["1006", "1008"]
+      "items": ["1034", "1036"]
     },
-    "1006": {
+    "1034": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "1007",
+          "type": "1035",
           "optional": false
         },
         "messageSeq": {
@@ -13635,15 +14159,15 @@
         }
       }
     },
-    "1007": {
+    "1035": {
       "kind": "literal",
       "value": "message"
     },
-    "1008": {
+    "1036": {
       "kind": "object",
       "props": {
         "kind": {
-          "type": "1009",
+          "type": "1037",
           "optional": false
         },
         "build": {
@@ -13651,7 +14175,7 @@
           "optional": true
         },
         "journal": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "seq": {
@@ -13664,27 +14188,27 @@
         }
       }
     },
-    "1009": {
+    "1037": {
       "kind": "literal",
       "value": "wake"
     },
-    "1010": {
+    "1038": {
       "kind": "union",
       "items": ["2", "586"]
     },
-    "1011": {
+    "1039": {
       "kind": "union",
-      "items": ["231", "112", "334", "1012"]
+      "items": ["231", "112", "334", "1040"]
     },
-    "1012": {
+    "1040": {
       "kind": "literal",
       "value": "suspended"
     },
-    "1013": {
+    "1041": {
       "kind": "union",
-      "items": ["2", "1014"]
+      "items": ["2", "1042"]
     },
-    "1014": {
+    "1042": {
       "kind": "object",
       "props": {
         "inputTokens": {
@@ -13705,27 +14229,27 @@
         }
       }
     },
-    "1015": {
+    "1043": {
       "kind": "union",
-      "items": ["2", "248", "249", "1016", "1017", "1018"]
+      "items": ["2", "248", "249", "1044", "1045", "1046"]
     },
-    "1016": {
+    "1044": {
       "kind": "literal",
       "value": "provider-unavailable"
     },
-    "1017": {
+    "1045": {
       "kind": "literal",
       "value": "exhausted"
     },
-    "1018": {
+    "1046": {
       "kind": "literal",
       "value": "internal"
     },
-    "1019": {
+    "1047": {
       "kind": "union",
-      "items": ["2", "1020"]
+      "items": ["2", "1048"]
     },
-    "1020": {
+    "1048": {
       "kind": "object",
       "props": {
         "turn": {
@@ -13741,7 +14265,7 @@
           "optional": false
         },
         "input": {
-          "type": "1021",
+          "type": "1049",
           "optional": false
         },
         "requestedSeq": {
@@ -13750,31 +14274,31 @@
         }
       }
     },
-    "1021": {
+    "1049": {
       "kind": "object",
       "props": {},
-      "index": "1022"
+      "index": "1050"
     },
-    "1022": {
+    "1050": {
       "kind": "json"
     },
-    "1023": {
+    "1051": {
       "kind": "object",
       "props": {
         "status": {
-          "type": "1024",
+          "type": "1052",
           "optional": false
         },
         "suspendedCause": {
-          "type": "1002",
+          "type": "1030",
           "optional": true
         },
         "openTurn": {
-          "type": "1027",
+          "type": "1055",
           "optional": true
         },
         "pendingApproval": {
-          "type": "1019",
+          "type": "1047",
           "optional": true
         },
         "wakeGlobs": {
@@ -13790,28 +14314,28 @@
           "optional": false
         },
         "turns": {
-          "type": "1029",
+          "type": "1057",
           "optional": false
         }
       }
     },
-    "1024": {
+    "1052": {
       "kind": "union",
-      "items": ["140", "342", "1012", "1025", "1026"]
+      "items": ["140", "342", "1040", "1053", "1054"]
     },
-    "1025": {
+    "1053": {
       "kind": "literal",
       "value": "awaiting-approval"
     },
-    "1026": {
+    "1054": {
       "kind": "literal",
       "value": "archived"
     },
-    "1027": {
+    "1055": {
       "kind": "union",
-      "items": ["2", "1028"]
+      "items": ["2", "1056"]
     },
-    "1028": {
+    "1056": {
       "kind": "object",
       "props": {
         "turn": {
@@ -13827,16 +14351,16 @@
           "optional": false
         },
         "trigger": {
-          "type": "1005",
+          "type": "1033",
           "optional": false
         }
       }
     },
-    "1029": {
+    "1057": {
       "kind": "array",
-      "items": "1030"
+      "items": "1058"
     },
-    "1030": {
+    "1058": {
       "kind": "object",
       "props": {
         "turn": {
@@ -13852,15 +14376,15 @@
           "optional": false
         },
         "trigger": {
-          "type": "1005",
+          "type": "1033",
           "optional": false
         },
         "state": {
-          "type": "1011",
+          "type": "1039",
           "optional": false
         },
         "usage": {
-          "type": "1013",
+          "type": "1041",
           "optional": true
         },
         "error": {
@@ -13868,12 +14392,12 @@
           "optional": true
         },
         "kind": {
-          "type": "1015",
+          "type": "1043",
           "optional": true
         }
       }
     },
-    "1031": {
+    "1059": {
       "kind": "object",
       "props": {
         "kind": {
@@ -13881,11 +14405,11 @@
           "optional": true
         },
         "nodeOpened": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "prClosed": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "readinessChangeSeq": {
@@ -13901,7 +14425,7 @@
           "optional": true
         },
         "observations": {
-          "type": "1032",
+          "type": "1060",
           "optional": false
         },
         "hosted": {
@@ -13913,16 +14437,16 @@
           "optional": false
         },
         "openInstance": {
-          "type": "1034",
+          "type": "799",
           "optional": false
         }
       }
     },
-    "1032": {
+    "1060": {
       "kind": "array",
-      "items": "1033"
+      "items": "1061"
     },
-    "1033": {
+    "1061": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13935,11 +14459,7 @@
         }
       }
     },
-    "1034": {
-      "kind": "union",
-      "items": ["86", "3"]
-    },
-    "1035": {
+    "1062": {
       "kind": "object",
       "props": {
         "kind": {
@@ -13951,7 +14471,7 @@
           "optional": true
         },
         "observations": {
-          "type": "1036",
+          "type": "1063",
           "optional": false
         },
         "terminal": {
@@ -13959,11 +14479,11 @@
           "optional": true
         },
         "nodeOpened": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "prClosed": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "readinessChangeSeq": {
@@ -13971,20 +14491,20 @@
           "optional": true
         },
         "reclaimPending": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         },
         "executionOpen": {
-          "type": "1010",
+          "type": "1038",
           "optional": true
         }
       }
     },
-    "1036": {
+    "1063": {
       "kind": "array",
-      "items": "1037"
+      "items": "1064"
     },
-    "1037": {
+    "1064": {
       "kind": "object",
       "props": {
         "seq": {
@@ -13997,11 +14517,11 @@
         }
       }
     },
-    "1038": {
+    "1065": {
       "kind": "object",
       "props": {
         "reconcilePolicy": {
-          "type": "961",
+          "type": "989",
           "optional": true
         },
         "restartSeq": {
@@ -14009,19 +14529,19 @@
           "optional": false
         },
         "plan": {
-          "type": "1039",
+          "type": "1066",
           "optional": false
         },
         "code": {
-          "type": "1039",
+          "type": "1066",
           "optional": false
         },
         "verifyCompleted": {
-          "type": "962",
+          "type": "990",
           "optional": false
         },
         "verifyStarted": {
-          "type": "963",
+          "type": "991",
           "optional": false
         },
         "maxVerifyAttemptEver": {
@@ -14041,23 +14561,23 @@
           "optional": false
         },
         "finalizeStepsDone": {
-          "type": "1041",
+          "type": "1068",
           "optional": false
         },
         "lastConflict": {
-          "type": "965",
+          "type": "993",
           "optional": true
         },
         "conflictReconcileStarted": {
-          "type": "967",
+          "type": "995",
           "optional": true
         },
         "lastReconcileCompleted": {
-          "type": "969",
+          "type": "997",
           "optional": true
         },
         "lastConflictProgressCheck": {
-          "type": "970",
+          "type": "998",
           "optional": true
         },
         "reconcileNoProgressCount": {
@@ -14065,12 +14585,12 @@
           "optional": false
         },
         "guidanceDeliveries": {
-          "type": "839",
+          "type": "862",
           "optional": false
         }
       }
     },
-    "1039": {
+    "1066": {
       "kind": "object",
       "props": {
         "maxRoundEver": {
@@ -14082,11 +14602,11 @@
           "optional": false
         },
         "rounds": {
-          "type": "1040",
+          "type": "1067",
           "optional": false
         },
         "latestRevise": {
-          "type": "972",
+          "type": "1000",
           "optional": true
         },
         "latestApproveSeq": {
@@ -14094,7 +14614,7 @@
           "optional": false
         },
         "approvedPlan": {
-          "type": "974",
+          "type": "1002",
           "optional": true
         },
         "findingsByRound": {
@@ -14103,72 +14623,72 @@
         }
       }
     },
-    "1040": {
+    "1067": {
       "kind": "excluded",
       "reason": "collection"
     },
-    "1041": {
+    "1068": {
       "kind": "excluded",
       "reason": "collection"
     },
-    "1042": {
+    "1069": {
       "kind": "excluded",
       "reason": "collection"
     },
-    "1043": {
+    "1070": {
       "kind": "object",
       "props": {
         "requestCompleted": {
-          "type": "1044",
+          "type": "1071",
           "optional": false
         },
         "requestSettled": {
-          "type": "1045",
+          "type": "1072",
           "optional": false
         },
         "latestUncompletedRequest": {
-          "type": "1046",
+          "type": "1073",
           "optional": false
         },
         "lostRecorded": {
-          "type": "1047",
+          "type": "1074",
           "optional": false
         },
         "abandonedPending": {
-          "type": "1048",
+          "type": "1075",
           "optional": false
         },
         "pending": {
-          "type": "1049",
+          "type": "1076",
           "optional": false
         }
       }
     },
-    "1044": {
+    "1071": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1045": {
+    "1072": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1046": {
+    "1073": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1047": {
+    "1074": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1048": {
+    "1075": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1049": {
+    "1076": {
       "kind": "excluded",
       "reason": "function"
     },
-    "1050": {
+    "1077": {
       "kind": "object",
       "props": {
         "anchor": {
@@ -14176,12 +14696,12 @@
           "optional": true
         },
         "retained": {
-          "type": "997",
+          "type": "1025",
           "optional": false
         }
       }
     },
-    "1051": {
+    "1078": {
       "kind": "object",
       "props": {
         "anchor": {
@@ -14189,12 +14709,12 @@
           "optional": true
         },
         "retained": {
-          "type": "997",
+          "type": "1025",
           "optional": false
         }
       }
     },
-    "1052": {
+    "1079": {
       "kind": "object",
       "props": {
         "boundary": {
@@ -14203,11 +14723,11 @@
         }
       }
     },
-    "1053": {
+    "1080": {
       "kind": "object",
       "props": {
         "failures": {
-          "type": "1054",
+          "type": "1081",
           "optional": false
         },
         "open": {
@@ -14220,11 +14740,11 @@
         }
       }
     },
-    "1054": {
+    "1081": {
       "kind": "array",
-      "items": "655"
+      "items": "657"
     },
-    "1055": {
+    "1082": {
       "kind": "object",
       "props": {
         "count": {
@@ -14232,7 +14752,7 @@
           "optional": false
         },
         "latest": {
-          "type": "1056",
+          "type": "1083",
           "optional": false
         },
         "parked": {
@@ -14241,24 +14761,24 @@
         }
       }
     },
-    "1056": {
+    "1083": {
       "kind": "union",
-      "items": ["2", "655"]
+      "items": ["2", "657"]
     },
-    "1057": {
+    "1084": {
       "kind": "object",
       "props": {
         "open": {
-          "type": "1058",
+          "type": "1085",
           "optional": false
         }
       }
     },
-    "1058": {
+    "1085": {
       "kind": "union",
-      "items": ["86", "1059"]
+      "items": ["86", "1086"]
     },
-    "1059": {
+    "1086": {
       "kind": "object",
       "props": {
         "ref": {
@@ -14275,7 +14795,7 @@
         }
       }
     },
-    "1060": {
+    "1087": {
       "kind": "object",
       "props": {
         "escalations": {
@@ -14292,11 +14812,11 @@
         }
       }
     },
-    "1061": {
+    "1088": {
       "kind": "object",
       "props": {
         "raised": {
-          "type": "1062",
+          "type": "1089",
           "optional": false
         },
         "count": {
@@ -14312,17 +14832,17 @@
           "optional": true
         },
         "lastProviderAttempts": {
-          "type": "1064",
+          "type": "1091",
           "optional": true
         }
       }
     },
-    "1062": {
+    "1089": {
       "kind": "object",
       "props": {},
-      "index": "1063"
+      "index": "1090"
     },
-    "1063": {
+    "1090": {
       "kind": "object",
       "props": {
         "phase": {
@@ -14343,15 +14863,15 @@
         }
       }
     },
-    "1064": {
+    "1091": {
       "kind": "union",
-      "items": ["2", "1065"]
+      "items": ["2", "1092"]
     },
-    "1065": {
+    "1092": {
       "kind": "array",
       "items": "244"
     },
-    "1066": {
+    "1093": {
       "kind": "object",
       "props": {
         "count": {
@@ -14367,29 +14887,29 @@
           "optional": true
         },
         "lastProviderAttempts": {
-          "type": "1064",
+          "type": "1091",
           "optional": true
         }
       }
     },
-    "1067": {
+    "1094": {
       "kind": "object",
       "props": {
         "pins": {
-          "type": "1068",
+          "type": "1095",
           "optional": false
         }
       }
     },
-    "1068": {
+    "1095": {
       "kind": "array",
       "items": "458"
     },
-    "1069": {
+    "1096": {
       "kind": "object",
       "props": {
         "pins": {
-          "type": "1068",
+          "type": "1095",
           "optional": false
         }
       }

@@ -273,7 +273,7 @@ snapshot of fields, blockers and revision.
 
 `POST /tickets/mutate-if-revision` accepts the usual authenticated context and
 `input: { id, expectedRevision, mutation }`. Mutation is one of
-`{ kind: "update", patch: { title?, body?, labels? } }`,
+`{ kind: "update", patch: { title?, body?, labels?, kind?, target? } }`,
 `{ kind: "transition", state }`, or
 `{ kind: "blockers", operation: "block" | "unblock", ids: string[] }`.
 Unknown keys and empty patches are refused. Success returns `{ ok: true }`.
@@ -312,3 +312,21 @@ before source construction. Their ordinary create grants remain unchanged.
 
 See the [migration procedure](ticket-migration.md) for preflight, state mapping,
 resumption and portable file records.
+
+## Integration tree metadata
+
+Hosted tickets store `kind` (`work` or `node`, default `work`) and optional
+`target`, the canonical readable id of a node in the same project. Create accepts
+both fields; update and guarded update preserve omitted fields and accept
+`target: null` to clear an edge. Targets must exist and be nodes. Self-targets,
+ancestor cycles, and demoting a node with targeting tickets (including completed
+work) are rejected before any part of a mixed patch is written. Graph mutations
+serialize per project in the same transaction as validation and revision checks.
+Effective metadata changes increment the revision; equivalent aliases are no-ops.
+
+Ticket responses include these fields only with `x-autobuild-ticket-tree: 1`.
+This capability is independent of revision and comment capabilities and of the
+client version. Without it, both fields are projected away, preserving historical
+strict decoders. Current hosted clients send all three capability headers and
+default absent kind to `work`. Unfiltered listing includes all ticket states and
+empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.

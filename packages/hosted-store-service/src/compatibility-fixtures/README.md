@@ -44,3 +44,11 @@ ticket and listing decoders are byte-identical to this v0.12.0 baseline.
 The ticket-server seam tests exercise both identities with this decoder.
 Comments require explicit capability header `x-autobuild-ticket-comments: 1`,
 independently of version; clients without it retain their historical shape.
+
+The v0.13.0 ticket protocol is frozen in `tickets-v0.13.ts` from
+2f0923645d4541d29f9f9124cb55d660114c1585. The v0.14.0 protocol
+(0f37a7888e769984ca2ea145a7b1ce7cf8178b0d) is byte-identical.
+Their ticket-reference decoder is unchanged from the frozen v0.12 dependency.
+These clients send revision and comment capabilities, but no tree capability;
+contracts exercise populated node/target records through get, list, creation-key
+adoption and legacy updates while retaining strict tagged decoders.

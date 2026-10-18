@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#639](https://github.com/defrex/autobuild/pull/639) — Open integration node branches and route targeted builds
+- [#638](https://github.com/defrex/autobuild/pull/638) — Support node kinds and targets in hosted tickets
+- [#636](https://github.com/defrex/autobuild/pull/636) — Reconcile builds by replaying one change onto the refreshed base
 - [#633](https://github.com/defrex/autobuild/pull/633) — Add node tickets and source-local integration targets
 - [#635](https://github.com/defrex/autobuild/pull/635) — Pause unfocused dashboard polling and relax idle refreshes
 - [#634](https://github.com/defrex/autobuild/pull/634) — Reduce idle dispatcher ticks to six store requests

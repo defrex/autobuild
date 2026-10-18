@@ -128,6 +128,9 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       'autobuild,ready',
       '--json',
     ])
+    await invoke(['create', 'Node', '--body', bodyPath, '--kind', 'node', '--json'])
+    await invoke(['update', 'fake-1', '--target', 'fake-2', '--json'])
+    await invoke(['tree', '--json'])
     await invoke(['block', 'fake-1', 'B', '--json'])
     await invoke(['list', '--json'])
     await backend.comment('fake-1', commentBody)
@@ -409,11 +412,11 @@ test('file export imports Linear-style ids and states through hosted HTTP with c
     await mkdir(join(root, 'tickets', 'Done'), { recursive: true })
     await writeFile(
       join(root, 'tickets', 'In Progress', 'AUT-706.md'),
-      '+++\nid = "AUT-706"\ntitle = "Preserved"\nblockedBy = ["foreign"]\ncomments = [{ body = "exact ☃", createdAt = "2026-01-01T00:00:00Z" }]\nattachments = [{ kind = "design", name = "image", layout = "file", entries = [{ type = "file", path = "image.png", base64 = "AP8=" }] }]\n+++\nexact body\n',
+      '+++\nid = "AUT-706"\ntitle = "Preserved"\ntarget = "foreign"\nblockedBy = ["foreign"]\ncomments = [{ body = "exact ☃", createdAt = "2026-01-01T00:00:00Z" }]\nattachments = [{ kind = "design", name = "image", layout = "file", entries = [{ type = "file", path = "image.png", base64 = "AP8=" }] }]\n+++\nexact body\n',
     )
     await writeFile(
       join(root, 'tickets', 'Done', 'foreign.md'),
-      '+++\nid = "foreign"\ntitle = "Foreign"\n+++\ndependency\n',
+      '+++\nid = "foreign"\ntitle = "Foreign"\nkind = "node"\n+++\ndependency\n',
     )
     await writeFile(
       join(root, 'autobuild.toml'),
@@ -430,6 +433,8 @@ test('file export imports Linear-style ids and states through hosted HTTP with c
     expect((await target.get('AUT-706'))?.state).toBe('in-progress')
     expect((await target.get('AUT-706'))?.blockedBy).toEqual(['AUT-707'])
     expect((await target.get('AUT-707'))?.state).toBe('done')
+    expect((await target.get('AUT-707'))?.kind).toBe('node')
+    expect((await target.get('AUT-706'))?.target).toBe('AUT-707')
     expect(target.comments.filter((c) => c.id === 'AUT-706')).toEqual([
       { id: 'AUT-706', body: 'exact ☃' },
     ])

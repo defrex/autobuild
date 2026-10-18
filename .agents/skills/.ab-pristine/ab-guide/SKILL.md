@@ -57,9 +57,11 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+Hosted sources support kind and target with project-scoped transactional validation.
+Existing tickets default to work with no target. Metadata changes increment the
+revision once; equivalent aliases and unchanged values do not. Node demotion
+checks all targeting tickets, including completed work. Legacy plugins without
+integrationTree support read as work with no target and refuse metadata writes.
 
 ## How to use this skill
 
@@ -144,7 +146,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   content-producing step commits selected files locally and finishes clean;
   the runner regular-pushes a descendant head to extend the open PR branch.
 - **Epilogue.** If main moves and the PR conflicts, `pr.conflicted` sends the
-  build to `reconcile` (merge base *into* the branch — never a rebase), then
+  build to `reconcile` (replay its single change onto the refreshed base), then
   back through `verify:*`. This can repeat. The build terminates **merged** or
   **closed**.
 
@@ -260,7 +262,7 @@ The distinctions that change an administrator's answer:
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
   locally and never push, never touch a remote, never open the PR. A push
   happens at the implement terminal boundary or after the runner validates a
-  successful content-producing finalize post-step; neither path force-pushes.
+  successful content-producing finalize post-step. Reconcile alone uses an exact expected-head guarded rewrite after archiving every recorded Git tip under `refs/autobuild/archive/<slug>/<sha>`.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
   operation: durable PR records live under private Git refs, the review locator
   is `refs/heads/ab/<slug>`, and consent lands a local guarded, unsigned squash
@@ -325,7 +327,7 @@ under the preceding table.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
+| `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` replays the build change onto. |
 | `ticketScanIntervalSeconds` | `60` | positive integer seconds | Hot-reloaded ready scan cadence; tick spacing is the floor, and same-repository merge/completion/abort forces an early scan. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
 | `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. `github` authenticates with `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login. |
@@ -823,7 +825,7 @@ three fresh executions. The guard is derived from durable facts, including on
 supervisor restart, and uses the ordinary watch, dashboard and operator API
 attention paths.
 
-For each repeat conflict, Autobuild compares the base merged by the latest
+For each repeat conflict, Autobuild compares the target base of the latest
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
@@ -2123,7 +2125,7 @@ default, when you need to know what this repo's version says).
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
-| `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
+| `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
 | `ab-operate` | outside the pipeline; model-invocable | The orchestrator role's operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control auto-merge, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
 

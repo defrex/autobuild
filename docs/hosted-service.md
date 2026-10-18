@@ -238,3 +238,21 @@ To retain earlier names configure `triageState = "Backlog"`,
 `claimedState = "Doing"`, `doneState = "Done"`, and the desired `readyState`.
 Existing ticket rows are never renamed. Older combined-service clients continue
 using the uploaded dispatcher configuration until independent policy is published.
+
+## Integration tree metadata
+
+Hosted tickets store `kind` (`work` or `node`, default `work`) and optional
+`target`, the canonical readable id of a node in the same project. Create accepts
+both fields; update and guarded update preserve omitted fields and accept
+`target: null` to clear an edge. Targets must exist and be nodes. Self-targets,
+ancestor cycles, and demoting a node with targeting tickets (including completed
+work) are rejected before any part of a mixed patch is written. Graph mutations
+serialize per project in the same transaction as validation and revision checks.
+Effective metadata changes increment the revision; equivalent aliases are no-ops.
+
+Ticket responses include these fields only with `x-autobuild-ticket-tree: 1`.
+This capability is independent of revision and comment capabilities and of the
+client version. Without it, both fields are projected away, preserving historical
+strict decoders. Current hosted clients send all three capability headers and
+default absent kind to `work`. Unfiltered listing includes all ticket states and
+empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.

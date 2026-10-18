@@ -115,6 +115,11 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'pr.conflicted': ['dispatcher'],
   'reconcile.progress-checked': ['kernel'],
   'reconcile.started': ['kernel'],
+  'reconcile.prepared': ['kernel'],
+  'reconcile.contended': ['dispatcher'],
+  'reconcile.replayed': ['kernel'],
+  'reconcile.publish-intended': ['kernel'],
+  'reconcile.rewritten': ['kernel', 'dispatcher'],
   'reconcile.completed': ['agent', 'dispatcher'],
 
   'observation.recorded': ['kernel', 'agent'],
