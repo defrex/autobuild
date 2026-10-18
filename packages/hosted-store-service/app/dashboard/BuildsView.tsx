@@ -6,6 +6,7 @@ import type {
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
+  landingPolicyDisplay,
   type DashboardBuild,
   repositoryActionAvailability,
   type DashboardHarvest,
@@ -733,9 +734,7 @@ function BuildDetail({
         )}
         <span>
           <span className="k">landing </span>
-          {build.landing?.command?.kind === 'hold'
-            ? 'held'
-            : (build.landing?.decision?.mode ?? 'not ready')}
+          {landingPolicyDisplay(build.landing)}
         </span>
         {ceilingText && <span>{ceilingText}</span>}
         {build.pr && (

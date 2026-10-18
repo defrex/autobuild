@@ -222,7 +222,14 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     width: 1440,
     height: 1300,
     requires: ['merge(waiting)', 'Landing awaits consent', 'ab land complete-dashboard-evidence'],
-    forbids: ['BLOCKED', 'QUEUED', '(held)'],
+    forbids: [
+      'BLOCKED',
+      'QUEUED',
+      '(held)',
+      'landing not ready',
+      'landing policy pending',
+      'use l on the build row',
+    ],
   },
   {
     id: 'builds-mixed-selected-narrow',
@@ -491,10 +498,8 @@ function selectedBuildModel(
   }
 }
 
-/** The observed default-on/parked-off state: one build parked on an open PR
- * whose merge step carries the shared projection's no-consent reason, under a
- * repository default that reads ON. The web row and the open detail must say
- * the same words the terminal renders (f_b163d7ca). */
+/** A ready landing with a recorded consent policy. Row and detail share
+ * both policy provenance and the explanation of the required operator action. */
 function parkedNoConsentModel(source: DashboardModel): DashboardModel {
   const origin = source.builds[0]
   if (origin === undefined) {
@@ -515,6 +520,17 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
         sessions: undefined,
         blockers: [],
         autoMerge: 'off',
+        landing: {
+          decision: {
+            seq: 1,
+            candidate: { head: 'capture-head', parent: 'capture-base', cycle: '1' },
+            from: 'leaf',
+            into: { kind: 'root' },
+            labels: [],
+            mode: 'consent',
+            rule: { index: 0, snapshot: { mode: 'consent' } },
+          },
+        },
         pr: { url: 'https://forge.example/pr/3', state: 'open' },
         steps: [
           { label: 'plan', state: 'done', timing: { accumulatedMs: 61_000 } },

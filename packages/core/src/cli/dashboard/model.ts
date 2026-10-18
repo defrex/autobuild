@@ -394,7 +394,7 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
  * so the terminal row/detail and the web row/detail say the same words, and
  * so it names the per-build control that unblocks the parked build. */
 export function autoMergeConsentReason(slug: string): string {
-  return `Landing awaits consent — use l on the build row or ab land ${slug}; use ab hold ${slug} to withdraw consent`
+  return `Landing awaits consent — use ab land ${slug}; use ab hold ${slug} to withdraw consent`
 }
 
 /**
@@ -852,15 +852,16 @@ export function projectBuildFromFacts(
       : { accumulatedMs: 0, runningSince: lastMs }
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
   const autoMerge = autoMergeDisplay(state)
-  // The parked no-consent reason: a merge-current build whose effective
-  // auto-merge state is off will never merge without operator action, and the
-  // step must say so (and name the control) wherever the pipeline renders.
-  // Display-only; the deferral `mergeWaitReason` stays in `blockers`.
+  // Only a recorded consent decision can ask the operator to land. A
+  // finalized PR may still be awaiting the dispatcher's readiness decision.
   if (mergeCurrent && !landingAuthorized(state.landing)) {
-    steps[steps.length - 1] = {
-      ...steps[steps.length - 1]!,
-      reason: autoMergeConsentReason(record.slug),
-    }
+    const reason =
+      state.landing?.command?.kind === 'hold'
+        ? `Landing held — use ab land ${record.slug} when ready to release the hold`
+        : state.landing?.decision?.mode === 'consent'
+          ? autoMergeConsentReason(record.slug)
+          : 'Landing policy decision pending'
+    steps[steps.length - 1] = { ...steps[steps.length - 1]!, reason }
   }
 
   const setupError =

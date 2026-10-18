@@ -27,6 +27,7 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
+import { landingPolicyDisplay } from './landing-display'
 import { dashboardBuildControl } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
@@ -664,10 +665,7 @@ function detailBody(
     body.push(
       `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
     )
-  if (build.kind !== 'integration')
-    body.push(
-      `  landing ${build.landing?.command?.kind === 'hold' ? 'held' : (build.landing?.decision?.mode ?? 'not ready')}`,
-    )
+  if (build.kind !== 'integration') body.push(`  landing ${landingPolicyDisplay(build.landing)}`)
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)

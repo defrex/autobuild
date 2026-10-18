@@ -2392,7 +2392,7 @@ describe('renderDashboard: build detail and transcript views', () => {
       { color: false, width: 200 },
     ).join('\n')
     expect(out).toContain('status BLOCKED (also paused)')
-    expect(out).toContain('landing not ready')
+    expect(out).toContain('landing policy pending')
     expect(out).toContain('PR open')
     expect(out).toContain('plan (round 1, 2s)')
     expect(out).toContain('verify:unit (attempt 2, 3s)')

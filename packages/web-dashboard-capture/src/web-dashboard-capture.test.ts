@@ -479,7 +479,25 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   // Both surfaces, same words: the row register and the open detail register.
   expect(evidenceText(html).split(reason)).toHaveLength(3)
   expect(evidenceText(html)).toContain('ab land complete-dashboard-evidence')
+  expect(evidenceText(html)).toContain('landing consent')
+  expect(evidenceText(html)).not.toContain('landing not ready')
+  expect(evidenceText(html)).not.toContain('landing policy pending')
+  expect(evidenceText(html)).not.toContain('use l on the build row')
   expect(html).not.toContain('data-mismatch')
+})
+
+test('landing detail distinguishes a pending policy decision from a hold', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  for (const held of [false, true]) {
+    const fixtures = models()
+    fixtures.mixed.builds = fixtures.mixed.builds.map((build) => ({
+      ...build,
+      landing: held ? { command: { kind: 'hold', seq: 1 } } : undefined,
+    }))
+    const text = evidenceText(await renderWebFrame(spec, fixtures, { css: '', fontCss: '' }))
+    expect(text).toContain(held ? 'landing held' : 'landing policy pending')
+    expect(text).not.toContain('landing not ready')
+  }
 })
 
 test('the named consent frame renders the real page with its registered client', async () => {

@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { abDispatch } from '../packages/core/src/cli/dispatch'
@@ -555,6 +556,26 @@ export async function prepareScenario(): Promise<E2eHarness> {
         outcome: 'skipped',
         skipCause: 'post-reconcile-policy',
         reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      },
+    })
+
+    const readyState = (await readBuildFacts(harness.store, slug)).value.state
+    if (!readyState.pr || !readyState.finalizeCompletedSeq)
+      throw new Error('post-reconcile capture requires a finalized PR')
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: {
+          head: readyState.pr.headSha,
+          parent: 'capture-base',
+          cycle: String(readyState.finalizeCompletedSeq),
+        },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { index: 0, snapshot: { mode: 'consent' } },
       },
     })
 
