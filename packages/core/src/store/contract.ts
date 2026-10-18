@@ -2832,6 +2832,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.releaseNodeWriter(slug, 'two')
           clock.advance(900)
           expect(await store.renewNodeWriter(slug, 'one')).toBe(true)
+          expect((await store.getBuild(slug))?.updatedAt).toBe(atT0(900))
           clock.advance(900)
           expect(await store.claimNodeWriter(slug, 'two', 1000)).toBe(false)
           clock.advance(100)
@@ -2843,6 +2844,51 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await store.claimNodeWriter(slug, 'three', 1000)).toBe(true)
           expect((await store.getBuild(slug))?.lease?.holder).toBe('runner')
           expect(await store.getEvents(slug)).toEqual([])
+        })
+      })
+
+      test('writer takeover retains the durable operation and its revision boundary', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const slug = 'writer-reservation'
+          await store.createBuild(sampleBuildInput(slug))
+          expect(await store.claimNodeWriter(slug, 'one', 1000)).toBe(true)
+          const reserved = await store.appendIfCurrent(slug, 0, {
+            actor: KERNEL,
+            type: 'node.writer-reserved',
+            payload: {
+              id: 'operation',
+              operation: 'restack',
+              expected: 'a'.repeat(40),
+              parent: 'b'.repeat(40),
+              oldBase: 'c'.repeat(40),
+              archive: `refs/autobuild/archive/${slug}/${'a'.repeat(40)}`,
+              changes: [],
+              merges: [],
+              upstreamBuilds: [],
+            },
+          })
+          clock.advance(1000)
+          expect(await store.claimNodeWriter(slug, 'two', 1000)).toBe(true)
+          await store.releaseNodeWriter(slug, 'one')
+          expect(await store.claimNodeWriter(slug, 'three', 1000)).toBe(false)
+          const recovered = (await readBuildFacts(store, slug)).value.state.nodeRestack!
+          expect(recovered.active?.id).toBe('operation')
+          expect(recovered.reservedSeq).toBe(reserved!.seq)
+          expect(
+            await store.appendIfCurrent(slug, 0, {
+              actor: KERNEL,
+              type: 'node.writer-settled',
+              payload: { id: 'operation', outcome: 'abandoned' },
+            }),
+          ).toBeNull()
+          expect(
+            await store.appendIfCurrent(slug, reserved!.seq, {
+              actor: KERNEL,
+              type: 'node.writer-settled',
+              payload: { id: 'operation', outcome: 'abandoned' },
+            }),
+          ).not.toBeNull()
         })
       })
 

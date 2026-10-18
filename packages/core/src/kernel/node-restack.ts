@@ -49,7 +49,11 @@ async function identity(deps: NodeGit, sha: string): Promise<string | undefined>
   if (trailers.length === 0) return undefined
   if (trailers.length !== 1)
     throw new Error(`ambiguous build identity on ${sha}: ${trailers.join(', ')}`)
-  validateBuildSlug(trailers[0]!)
+  try {
+    validateBuildSlug(trailers[0]!)
+  } catch {
+    throw new Error(`invalid build identity on ${sha}: ${JSON.stringify(trailers[0])}`)
+  }
   return trailers[0]
 }
 async function reachableBuilds(deps: NodeGit, revision: string): Promise<Set<string>> {
@@ -148,7 +152,7 @@ export async function replayNodeChange(
   index: number,
   base: string,
 ): Promise<
-  | { kind: 'dropped'; head: string }
+  | { kind: 'dropped'; head: string; reason: 'upstream-identity' | 'upstream-commit' }
   | { kind: 'replayed'; head: string }
   | { kind: 'conflict'; base: string }
 > {
@@ -156,7 +160,15 @@ export async function replayNodeChange(
   const change = inputs.changes[index]
   if (change === undefined) throw new Error(`missing node replay item ${index}`)
   if (change.build !== undefined && inputs.upstreamBuilds.includes(change.build))
-    return { kind: 'dropped', head: base }
+    return { kind: 'dropped', head: base, reason: 'upstream-identity' }
+  const reachable = await git(
+    deps,
+    ['merge-base', '--is-ancestor', change.sha, inputs.parent],
+    true,
+  )
+  if (reachable.exitCode === 0) return { kind: 'dropped', head: base, reason: 'upstream-commit' }
+  if (reachable.exitCode !== 1)
+    throw new Error(`cannot prove upstream reachability for ${change.sha}`)
   if ((await output(deps, ['status', '--porcelain'])) !== '')
     throw new Error('node replay requires a clean worktree')
   await git(deps, ['checkout', '--detach', base])

@@ -2015,3 +2015,60 @@ describe('GitHubForge.inspectLandingGate', () => {
     expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
   })
 })
+
+test('node landing PR inspection refreshes exact base/head through a read-only request', async () => {
+  const { forge, calls } = makeForge([
+    {
+      json: {
+        ...PR_REF,
+        state: 'open',
+        merged: false,
+        draft: false,
+        base: { ref: 'ab-node/target' },
+      },
+    },
+  ])
+  expect(await forge.inspectLandingPr('/work', 123)).toEqual({
+    base: 'ab-node/target',
+    head: 'ab/fix-login',
+    headSha: 'abc123def',
+    open: true,
+  })
+  expect(paths(calls)).toEqual(['GET repos/acme/app/pulls/123'])
+})
+
+test('node push acknowledgement comments with the landed SHA and closes an unacknowledged review', async () => {
+  const { acknowledgeNodeLanding } = await import('../../kernel/node-landing')
+  const open = { merged: false, state: 'open', mergeable: true, merge_commit_sha: null }
+  const { forge, calls } = makeForge([
+    { json: open },
+    { json: {} },
+    { json: open },
+    { json: {} },
+    { json: { ...open, state: 'closed' } },
+  ])
+  await acknowledgeNodeLanding(forge, '/work', 123, 'a'.repeat(40))
+  expect(paths(calls)).toEqual([
+    'GET repos/acme/app/pulls/123',
+    'POST repos/acme/app/issues/123/comments',
+    'GET repos/acme/app/pulls/123',
+    'PATCH repos/acme/app/pulls/123',
+    'GET repos/acme/app/pulls/123',
+  ])
+  expect(calls[1]?.opts?.body).toEqual({ body: expect.stringContaining('a'.repeat(40)) })
+  expect(calls[3]?.opts?.body).toEqual({ state: 'closed' })
+})
+
+test('node push acknowledgement observes a merged review and tolerates provider failure', async () => {
+  const { acknowledgeNodeLanding } = await import('../../kernel/node-landing')
+  const merged = makeForge([
+    { json: { merged: true, state: 'closed', mergeable: true, merge_commit_sha: 'a'.repeat(40) } },
+  ])
+  await acknowledgeNodeLanding(merged.forge, '/work', 123, 'a'.repeat(40))
+  expect(paths(merged.calls)).toEqual(['GET repos/acme/app/pulls/123'])
+  const unavailable = makeForge([{ status: 503 }])
+  await expect(
+    acknowledgeNodeLanding(unavailable.forge, '/work', 123, 'a'.repeat(40)),
+  ).resolves.toBeUndefined()
+  expect(paths(unavailable.calls)).toEqual(['GET repos/acme/app/pulls/123'])
+})

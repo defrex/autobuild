@@ -274,6 +274,8 @@ const DEFERRAL_SUMMARIES = {
   'github-plan-limitation':
     'GitHub rulesets are unavailable because of the repository account plan',
   'repository-auto-merge-disabled': 'repository-level auto-merge is disabled',
+  'gated-node-destination':
+    'node destination has merge-blocking gates; serialized landing requires human action',
   'unproven-gate-state': 'merge-gate state or native auto-merge application could not be proven',
   'merge-conflicts': 'the PR has merge conflicts with its base branch',
   'mergeability-uncomputed':

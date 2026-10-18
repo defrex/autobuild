@@ -96,6 +96,14 @@ export interface ContextManifest {
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
   conflict?: { baseSha: string }
+  nodeChange?: {
+    owner: string
+    transaction: string
+    index: number
+    sha: string
+    build?: string
+    foreign: boolean
+  }
   replay?: import('../events/payloads').EventPayload<'reconcile.prepared'> & {
     conflicted?: boolean
     needsCompletion: boolean
@@ -197,7 +205,16 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   /** Latest rev when `rev` omitted; silently skips absent kinds — the tree is
    * a projection of what exists, and the manifest shows what materialized. */
   async function writeArtifact(desiredPath: string, kind: string, rev?: number): Promise<void> {
-    const artifact = await store.getArtifact(build, kind, rev)
+    const node = state.nodeRestack
+    const sourceKind =
+      phase === 'reconcile' && node?.conflict && ['spec', 'plan', 'implement-notes'].includes(kind)
+        ? `node-source-${node.active!.id}-${node.conflict.index}-${kind}`
+        : kind
+    const artifact = await store.getArtifact(
+      build,
+      sourceKind,
+      sourceKind === kind ? rev : undefined,
+    )
     if (artifact === null) return
     const relPath = locate(desiredPath)
     const target = join(abDir, relPath)
@@ -383,6 +400,25 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     manifest.commitRange = state.implement.commits
   }
 
+  if (phase === 'reconcile' && state.nodeRestack?.conflict) {
+    const node = state.nodeRestack
+    const conflict = node.conflict!
+    const change = node.active!.changes[conflict.index]!
+    manifest.nodeChange = {
+      owner: build,
+      transaction: node.active!.id,
+      index: conflict.index,
+      sha: change.sha,
+      build: change.build,
+      foreign: change.build === undefined,
+    }
+    manifest.conflict = { baseSha: conflict.base }
+    if (!change.build)
+      await writeArtifact(
+        'foreign-change.patch',
+        `node-source-${node.active!.id}-${conflict.index}-foreign`,
+      )
+  }
   if (inputs.conflict === true) {
     // `pr.conflicted.baseSha` is the janitor's detection-time evidence. The
     // runner refreshes the remote base immediately before each actual run and

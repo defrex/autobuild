@@ -839,6 +839,28 @@ export class GitHubForge implements Forge {
     return state
   }
 
+  async inspectLandingPr(_workspacePath: string, number: number) {
+    const { owner, name } = await this.requireCoordinates()
+    const response = await this.request(
+      'GET',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+    )
+    const schema = z.object({
+      state: z.enum(['open', 'closed']),
+      merged: z.boolean(),
+      draft: z.boolean(),
+      base: z.object({ ref: z.string() }),
+      head: z.object({ ref: z.string(), sha: z.string() }),
+    })
+    const pr = this.parse(schema, response, `node landing PR #${number}`)
+    return {
+      base: pr.base.ref,
+      head: pr.head.ref,
+      headSha: pr.head.sha,
+      open: pr.state === 'open' && !pr.merged && !pr.draft,
+    }
+  }
+
   async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
     const before = await this.getPrState(workspacePath, number)
     if (before.state === 'merged' || before.state === 'closed') return before

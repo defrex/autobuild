@@ -84,8 +84,26 @@ export type MergeSha = string | ((number: number) => string)
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
-  async inspectLandingGate(_branch: string): Promise<import('../types').LandingGateInspection> {
-    return { kind: 'proved-ungated' }
+  async inspectLandingPr(_workspacePath: string, number: number) {
+    const pr = this.opened[number - 1]
+    if (!pr) throw new Error(`FakeForge: missing PR refs #${number}`)
+    return {
+      base: pr.base,
+      head: pr.head,
+      headSha: this.headShas.get(number) ?? this.resolveHeadSha(number),
+      open: this.prs.get(number)?.state === 'open',
+    }
+  }
+  async inspectLandingGate(branch: string): Promise<import('../types').LandingGateInspection> {
+    const index = this.opened.findIndex((pr) => pr.base === branch)
+    const gate =
+      index === -1
+        ? this.defaultGatePresence
+        : (this.gates.get(index + 1) ?? this.defaultGatePresence)
+    if (typeof gate !== 'string') return { kind: 'unproven', reason: gate.detail }
+    return gate === 'absent'
+      ? { kind: 'proved-ungated' }
+      : { kind: 'gated', reason: 'Fake destination requires merge gates' }
   }
   readonly name = 'fake'
   readonly archives = new Map<string, string>()

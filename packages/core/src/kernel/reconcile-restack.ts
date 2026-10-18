@@ -118,7 +118,7 @@ export async function retainReplay(deps: RestackDeps, head: string, base: string
     content: result.stdout.trim(),
   })
 }
-async function restoreReplay(deps: RestackDeps, sha: string): Promise<boolean> {
+export async function restoreReplay(deps: RestackDeps, sha: string): Promise<boolean> {
   const artifact = await deps.store.getArtifact(deps.slug, `replay-objects-${sha}`)
   if (artifact === null) return false
   const content = new TextDecoder().decode(artifact.content)

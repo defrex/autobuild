@@ -187,6 +187,9 @@ export const BOOTSTRAP_DDL = [
     lease_holder TEXT,
     lease_expires_at TEXT,
     lease_ttl_ms INTEGER,
+    node_writer_holder TEXT,
+    node_writer_expires_at TEXT,
+    node_writer_ttl_ms INTEGER,
     heartbeat_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS events (

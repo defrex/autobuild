@@ -1899,8 +1899,8 @@ integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
 A ready node ticket opens an integration build on `ab-node/<slug>`, cut
 from its parent's sampled head. Opening intent and acknowledgement are durable;
-the branch is open to targeting tickets immediately, without a PR. Integration
-builds use no workspace, runner, lease, or dispatch capacity while collecting.
+the branch is open to targeting tickets immediately, without a PR. Idle integration
+builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
@@ -1914,9 +1914,43 @@ falls back to an older open one. Blockers remain a separate graph.
 Humans land node PRs. The janitor records landing and completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Node verification, automatic landing, restacking and reparenting are not provided
-by this increment. A forge plugin needs node branch creation, comparison and
+Node verification, automatic node landing and reparenting are not provided. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
+
+**Descendant cascade and node writers.** Every open node observes its frozen
+parent branch and its own authoritative head. Parent movement schedules a
+multi-change restack, including for an empty node with no PR. Publications flow
+down the tree on subsequent dispatcher polls, to arbitrary depth; clean replay
+starts no agent and consumes no runner capacity. Observations coalesce after the
+active frozen transaction completes. Leaf children retain their verify-entry and
+awaiting-landing restack rules. Existing integration PR numbers and bases survive
+rewrites; an empty node never creates a placeholder PR.
+
+Node branches have one writer at a time. A distinct mutable node writer lease
+(serialized independently of runner execution leases) guards both restacks and
+controlled child landings. A revision-checked `node.writer-reserved` fact freezes
+the operation, original expected head, parent snapshot, previous contribution
+boundary, immutable archives, ordered changes, and merge proofs. Expiry permits
+recovery of that reservation, never an incompatible operation. Each change has
+prepared, conflicted, or replayed receipts. Resolved objects are retained in the
+BuildStore before their receipts. `node.publish-intended`, `node.rewritten`, and
+`node.writer-settled` distinguish intent, proven effect, and completion. Exact
+expected-head replacement and immutable archive refs preserve displaced history;
+contention retains the previous contribution boundary and retries the complete
+observed contribution. An untagged commit, including an empty commit, is foreign.
+`node.inventory` reports reachable build identities separately from node-owned
+foreign commits above the durable boundary; inherited foreign history is excluded
+from the owned count.
+
+Only a conflicted replay item attaches the integration build's reconcile runner.
+Its context names the integration owner separately from the original source
+build and supplies that source's pinned spec, approved plan and implement-notes.
+Missing source artifacts or invalid identities escalate. Foreign conflicts supply
+commit metadata and a diff, with escalation when intent is unclear. Completion
+validates exactly one commit on that item's replay base, retaining its original
+identity or foreign status. The agent never publishes the stack; the dispatcher
+resumes only after session and execution settlement. Node verification and
+automatic node landing remain outside this grammar.
 
 **Foreign merge safety for node replay.** A node contribution is enumerated
 oldest first along first-parent history above its durable previous contribution
@@ -2572,7 +2606,7 @@ trusted rewrite/archive capability only after execution teardown. Contention is
 recorded durably and uses the existing runner-failure bound, without spending
 unchanged-base no-progress budget before completion.
 
-**Stable landed identity.** A kernel landing remains one squash commit and
+**Stable landed identity.** A root-target kernel landing remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
 identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
 Implementation commits and deposited PR descriptions are unchanged. The janitor
@@ -2581,6 +2615,14 @@ including human landings. True and false are successful observations; historical
 logs, unsupported inspection, and transient read failures leave evidence absent.
 A failed inspection records an actionable observation and never blocks merge
 completion. This evidence does not change reduction or display semantics.
+
+A node-target child landing instead fast-forwards its already canonical
+single-change commit, preserving exactly one terminal source-build identity.
+The guarded destination write is authoritative: its pushed SHA and identity
+produce the durable landing receipt independently of forge PR state. PR
+acknowledgement is best-effort: observe a provider-reported merge, or comment
+with the landed SHA and close a still-open review. Acknowledgement failure never
+retries or fails the landing.
 
 GitHub uses its authoritative viewer squash headline and body with an expected
 head guard. Native auto-merge messages are checked against fresh server defaults
@@ -2607,6 +2649,16 @@ effect: a ruleset probe that proves merge-blocking rules settles presence even
 when the classic protection response is incomplete, while an incomplete classic
 response with no proven ruleset gate still fails closed with a reason naming
 the missing subsection.
+
+Serialized node-target landing has a stricter path: native auto-merge is
+cancelled and cancellation confirmed, never enabled. Under the destination
+writer reservation, refresh the PR's actual base and head and inspect gates on
+that exact frozen destination immediately before mutation. Only proved-ungated
+branches permit the guarded fast-forward, regardless of token bypass privileges.
+Gated branches defer with `gated-node-destination`; unknown or unreadable policy
+defers with `unproven-gate-state`. Both leave the PR open with actionable human
+guidance, and every later attempt obtains fresh proof. No native fallback can
+participate in node serialization. Human node landing remains observable.
 
 Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
 creation failure: finalize still records the open PR and completes, and consent

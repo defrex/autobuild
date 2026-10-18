@@ -282,6 +282,66 @@ export const eventPayloadSchemas = {
     sha: z.string().min(1),
   }),
   'node.opened': z.strictObject({ sha: z.string().min(1) }),
+  'node.writer-reserved': z.strictObject({
+    id: z.string().min(1),
+    operation: z.enum(['restack', 'landing']),
+    expected: z.string().min(1),
+    parent: z.string().min(1),
+    oldBase: z.string().min(1),
+    source: z.string().min(1).optional(),
+    archive: z.string().min(1),
+    changes: z.array(
+      z.strictObject({
+        sha: z.string().min(1),
+        build: z.string().min(1).optional(),
+        mainline: z.literal(1).optional(),
+      }),
+    ),
+    upstreamBuilds: z.array(z.string()),
+    merges: z.array(
+      z.strictObject({
+        sha: z.string().min(1),
+        parent: z.string().min(1),
+        identities: z.array(z.string()),
+        build: z.string().optional(),
+        missing: z.array(z.string()),
+      }),
+    ),
+  }),
+  'node.item-prepared': z.strictObject({
+    id: z.string().min(1),
+    index: z.number().int().nonnegative(),
+    base: z.string().min(1),
+  }),
+  'node.item-replayed': z.strictObject({
+    id: z.string().min(1),
+    index: z.number().int().nonnegative(),
+    base: z.string().min(1),
+    head: z.string().min(1),
+    dropped: z.boolean(),
+    dropReason: z.enum(['upstream-identity', 'upstream-commit']).optional(),
+  }),
+  'node.item-conflicted': z.strictObject({
+    id: z.string().min(1),
+    index: z.number().int().nonnegative(),
+    base: z.string().min(1),
+  }),
+  'node.publish-intended': z.strictObject({ id: z.string().min(1), head: z.string().min(1) }),
+  'node.rewritten': z.strictObject({
+    id: z.string().min(1),
+    previous: z.string().min(1),
+    head: z.string().min(1),
+  }),
+  'node.writer-settled': z.strictObject({
+    id: z.string().min(1),
+    outcome: z.enum(['completed', 'contended', 'abandoned']),
+    actual: z.string().nullable().optional(),
+  }),
+  'node.inventory': z.strictObject({
+    head: z.string().min(1),
+    builds: z.array(z.string()),
+    foreign: z.array(z.string()),
+  }),
   'node.compared': z.strictObject({
     parentSha: z.string().min(1),
     headSha: z.string().min(1),

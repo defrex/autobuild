@@ -290,3 +290,99 @@ test('a hand-rewritten node head refuses an incompatible contribution boundary',
     'no longer descends',
   )
 })
+
+test('durable node transaction publishes ordered changes and promotes its boundary only on completion', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { gitRewrite } = await import('../ports/forge/git-rewrite')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { runNodeTransaction } = await import('./node-restack-transaction')
+  const { sampleBuildInput } = await import('../store/contract')
+  const { deps, git, commit, base } = await fixture()
+  await git('checkout', '-b', 'ab-node/a')
+  await commit('one', 'one')
+  await commit('foreign')
+  const oldHead = await git('rev-parse', 'HEAD')
+  await git('checkout', 'main')
+  const parent = await commit('parent')
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('a'))
+  await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.claimNodeWriter('a', 'holder', 60_000)
+  const forge: import('../ports/types').Forge = new FakeForge()
+  Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
+  forge.snapshotBase = async () => parent
+  const tx = { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true }
+  expect(
+    await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'first' }),
+  ).toBe('completed')
+  const node = (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value
+    .state.nodeRestack!
+  expect(node.contributionBase).toBe(parent)
+  expect(node.active).toBeUndefined()
+  expect(node.inventory?.builds).toEqual(['one'])
+  expect(node.inventory?.foreign).toHaveLength(1)
+  expect(await git('rev-parse', 'ab-node/a')).toBe(node.inventory!.head)
+  expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+  expect(
+    await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'next' }),
+  ).toBe('idle')
+})
+
+for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
+  test(`node recovery resumes frozen inputs after effect-before-receipt at ${boundary}`, async () => {
+    const { MemoryBuildStore } = await import('../store/memory')
+    const { DISPATCHER } = await import('../events/envelope')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { gitRewrite } = await import('../ports/forge/git-rewrite')
+    const { FakeForge } = await import('../ports/forge/fake')
+    const { runNodeTransaction } = await import('./node-restack-transaction')
+    const { sampleBuildInput } = await import('../store/contract')
+    const { deps, git, commit, base } = await fixture()
+    await git('checkout', '-b', 'ab-node/a')
+    await commit('one', 'one')
+    await commit('foreign')
+    const oldHead = await git('rev-parse', 'HEAD')
+    await git('checkout', 'main')
+    const parent = await commit('parent')
+    const store = new MemoryBuildStore()
+    await store.createBuild(sampleBuildInput('a'))
+    await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.claimNodeWriter('a', 'first', 60_000)
+    const forge: import('../ports/types').Forge = new FakeForge()
+    Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
+    forge.snapshotBase = async () => parent
+    const tx = { ...deps, store, slug: 'a', forge, holder: 'first', canWrite: async () => true }
+    const append = store.appendIfCurrent.bind(store)
+    let crashed = false
+    store.appendIfCurrent = async (...args) => {
+      if (!crashed && args[2].type === boundary) {
+        crashed = true
+        throw new Error('simulated crash')
+      }
+      return append(...args)
+    }
+    await expect(
+      runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'frozen' }),
+    ).rejects.toThrow('simulated crash')
+    expect((await readBuildFacts(store, 'a')).value.state.nodeRestack?.contributionBase).toBe(base)
+    await store.releaseNodeWriter('a', 'first')
+    await store.claimNodeWriter('a', 'replacement', 60_000)
+    // A later observation does not change the transaction already in flight.
+    forge.snapshotBase = async () => {
+      throw new Error('must not resample a reserved transaction')
+    }
+    expect(
+      await runNodeTransaction(
+        { ...tx, holder: 'replacement' },
+        { branch: 'ab-node/a', parentBranch: 'main', id: 'ignored-new-id' },
+      ),
+    ).toBe('completed')
+    const state = (await readBuildFacts(store, 'a')).value.state.nodeRestack!
+    expect(state.contributionBase).toBe(parent)
+    expect(state.inventory?.builds).toEqual(['one'])
+    expect(state.inventory?.foreign).toHaveLength(1)
+    expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+    expect(await git('rev-list', '--count', `${parent}..ab-node/a`)).toBe('2')
+  })
+}

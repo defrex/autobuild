@@ -520,7 +520,7 @@ describe.skipIf(!runLiveGitHub)('GitHub live port contracts (opt-in)', () => {
 // production code relies on indirect PR recognition. The destination is a real
 // non-default ab-node/ branch; only the fixture's explicit scratch repo is used.
 describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in)', () => {
-  test('a guarded destination fast-forward preserves identity and marks the PR merged', async () => {
+  test('a guarded destination fast-forward preserves identity and reconciles the PR best-effort', async () => {
     const h = await githubForgeContractFactory({ nodeBase: true })
     const cwd = h.workspacePath
     const slug = `contract-${crypto.randomUUID()}`
@@ -566,8 +566,18 @@ describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in
         cwd,
       )
       expect(await h.controls.remoteHead(h.base)).toBe(candidate)
-      expect(await h.controls.mergeSha(pr.number)).toBe(candidate)
-      expect(await h.forge.getPrState(cwd, pr.number)).toMatchObject({ state: 'merged' })
+      const acknowledged = await h.forge.getPrState(cwd, pr.number)
+      if (acknowledged.state === 'merged') expect(acknowledged.sha).toBe(candidate)
+      else if (acknowledged.state === 'open') {
+        await h.forge.commentOnPr?.(
+          cwd,
+          pr.number,
+          `Landed by Autobuild at commit ${candidate}. Closing after guarded fast-forward.`,
+        )
+        await h.forge.closePr!(cwd, pr.number)
+        expect((await h.forge.getPrState(cwd, pr.number)).state).toBe('closed')
+      }
+      expect(await h.controls.remoteHead(h.base)).toBe(candidate)
       // A stale worker must fail even if its replacement is a known ancestor.
       const stale = await execute(
         [

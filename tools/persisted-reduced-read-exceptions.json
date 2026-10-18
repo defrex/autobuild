@@ -645,5 +645,9 @@
   "packages/core/src/kernel/log-index.ts::foldLogIndex::advance": {
     "kind": "reduction",
     "reason": "Nested incremental leaf-restack fold consumes only the log-index delta; the log index and build facts are persisted by adapters."
+  },
+  "packages/core/src/kernel/reducer.ts::foldBuild::advanceNodeRestack": {
+    "reason": "Incrementally folds the same single incoming event into the nested node transaction accumulator; no current-state replay or store read.",
+    "kind": "reduction"
   }
 }

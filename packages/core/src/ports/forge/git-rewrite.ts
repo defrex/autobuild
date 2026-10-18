@@ -125,7 +125,7 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
         // Reattach only its exact workspace result; explicit-source callers may
         // legitimately publish an object other than their checked-out HEAD.
         const workspaceHead = await git(input.workspacePath, ['rev-parse', 'HEAD'])
-        if (workspaceHead.stdout.trim() === input.sha)
+        if (!input.branch.startsWith('ab-node/') && workspaceHead.stdout.trim() === input.sha)
           await git(input.workspacePath, ['checkout', '--no-guess', input.branch])
         return { kind: 'published' }
       }

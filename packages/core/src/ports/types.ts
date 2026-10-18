@@ -384,6 +384,7 @@ export type ClosePrResult = { state: 'closed' } | { state: 'merged'; sha: string
 export type AutoMergeDeferralCode =
   | 'github-plan-limitation'
   | 'repository-auto-merge-disabled'
+  | 'gated-node-destination'
   | 'unproven-gate-state'
   /** A persistent, definite state — GitHub has computed merge conflicts with
    * the base branch. Recovery is updating the branch or resolving the
@@ -405,6 +406,7 @@ export type AutoMergeDeferralClass = 'pipeline-resolved' | 'human-actionable'
 export const autoMergeDeferralClasses = {
   'github-plan-limitation': 'human-actionable',
   'repository-auto-merge-disabled': 'human-actionable',
+  'gated-node-destination': 'human-actionable',
   'unproven-gate-state': 'human-actionable',
   'merge-conflicts': 'pipeline-resolved',
   'mergeability-uncomputed': 'pipeline-resolved',
@@ -494,6 +496,11 @@ export type LandingGateInspection =
 
 export interface Forge {
   inspectLandingGate?(branch: string): Promise<LandingGateInspection>
+  inspectLandingPr?(
+    workspacePath: string,
+    number: number,
+  ): Promise<{ base: string; head: string; headSha: string; open: boolean }>
+
   readonly rewrite?: ForgeRewrite
   /** Create once at sha; retries adopt only descendants of that opening commit. */
   createNodeBranch?(branch: string, sha: string): Promise<string>

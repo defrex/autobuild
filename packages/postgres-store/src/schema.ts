@@ -844,10 +844,10 @@ export const SCHEMA_V14_DDL = `${SCHEMA_V13_DDL}\nALTER TABLE repo_streams ADD C
 export const SCHEMA_V14_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(SCHEMA_V14_DDL)
   .digest('hex')
-export const SCHEMA_DDL = `${SCHEMA_V14_DDL}
-ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_holder text;
+const NODE_WRITER_DDL = `ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_holder text;
 ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_expires_at timestamptz;
 ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_ttl_ms bigint;`
+export const SCHEMA_DDL = `${SCHEMA_V14_DDL}\n${NODE_WRITER_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -1517,7 +1517,7 @@ export async function migratePostgres(
   try {
     await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(470281941)`
-      await tx.unsafe(SCHEMA_DDL)
+      await tx.unsafe(SCHEMA_V14_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1732,6 +1732,9 @@ export async function migratePostgres(
         await tx`INSERT INTO ab_schema_migrations (singleton, version, checksum, applied_at)
           VALUES (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
       }
+      // Preserve historical physical column order: legacy repo_origin must
+      // precede the new writer columns just as it does in fresh databases.
+      await tx.unsafe(NODE_WRITER_DDL)
       if (options.legacyProjectEnv !== undefined) {
         await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(
           options.legacyProjectEnv,

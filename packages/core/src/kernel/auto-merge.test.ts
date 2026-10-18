@@ -53,6 +53,7 @@ describe('autoMergeDeferralClasses', () => {
     expect(autoMergeDeferralClasses).toEqual({
       'github-plan-limitation': 'human-actionable',
       'repository-auto-merge-disabled': 'human-actionable',
+      'gated-node-destination': 'human-actionable',
       'unproven-gate-state': 'human-actionable',
       'merge-conflicts': 'pipeline-resolved',
       'mergeability-uncomputed': 'pipeline-resolved',

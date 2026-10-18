@@ -1,3 +1,4 @@
+import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { reconcileRewriteHead } from './reconcile-head'
 /**
  * The state reducer (SPEC §15.5, §3.4): state is a reduction of events — any
@@ -155,8 +156,10 @@ export interface BuildState {
   kind?: 'work' | 'node'
   target?: EventPayload<'build.created'>['target']
   baseBranch?: string
+  mergedSha?: string
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
+  nodeRestack?: NodeRestackState
   nodeComparison?: EventPayload<'node.compared'>
 
   /**
@@ -322,8 +325,10 @@ export interface BuildAcc {
   kind?: 'work' | 'node'
   target?: EventPayload<'build.created'>['target']
   baseBranch?: string
+  mergedSha?: string
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
+  nodeRestack?: NodeRestackState
   nodeComparison?: EventPayload<'node.compared'>
 
   attached: boolean
@@ -368,7 +373,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 4
+export const BUILD_REDUCER_VERSION = 5
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -469,6 +474,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
   let lastEvent = acc.lastEvent
   for (const event of events) {
+    if (event.type.startsWith('node.') || (acc.kind === 'node' && event.type === 'target.moved')) {
+      acc.nodeRestack ??= { items: [] }
+      advanceNodeRestack(acc.nodeRestack, [event])
+    }
     switch (event.type) {
       // Facts the projection does not need (workspace liveness is the
       // dispatcher's concern; finalize post-steps are failure-tolerant §5).
@@ -480,6 +489,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'node.compared':
         acc.nodeComparison = event.payload
+        break
+      case 'node.rewritten':
+        if (pr) pr = { ...pr, headSha: event.payload.head }
         break
       case 'pr.opened':
         pr = event.payload.pr
@@ -768,6 +780,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         autoMerge.applied = { enabled: false, commandSeq: event.payload.commandSeq }
         break
       case 'pr.merged':
+        acc.mergedSha = event.payload.sha
         prState = 'merged'
         break
       case 'pr.closed':
@@ -800,7 +813,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }
         break
       case 'reconcile.completed': {
-        if ('headSha' in event.payload && pr !== undefined)
+        if (acc.kind !== 'node' && 'headSha' in event.payload && pr !== undefined)
           pr = { ...pr, headSha: event.payload.headSha }
         // The terminal payload has no attempt, so preserve it from the
         // matching in-flight occurrence before complete() clears that context.
@@ -942,8 +955,10 @@ function finishBuild(acc: BuildAcc): BuildState {
     target: acc.target,
     baseBranch: acc.baseBranch,
     nodeOpening: acc.nodeOpening,
+    mergedSha: acc.mergedSha,
     nodeOpened: acc.nodeOpened,
     nodeComparison: acc.nodeComparison,
+    nodeRestack: acc.nodeRestack,
     status,
     outcome: acc.outcome,
     phase: active?.phase,

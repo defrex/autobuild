@@ -1,3 +1,4 @@
+import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
@@ -290,7 +291,13 @@ export async function completeFinalizePr(
   await preparePrAttachments(deps, events, pr.url)
 
   const latest = (await readBuildFacts(store, env.build)).value
-  const autoMerge = pendingAutoMerge(latest.state)
+  const nodeTarget = latest.state.target !== undefined
+  if (nodeTarget) {
+    const cancellation = await deps.forge.setAutoMerge(deps.workspacePath, pr.number, false)
+    if (cancellation.kind !== 'applied')
+      throw new Error('node-target native auto-merge cancellation unconfirmed')
+  }
+  const autoMerge = nodeTarget ? undefined : pendingAutoMerge(latest.state)
   const autoMergeResult =
     autoMerge === undefined
       ? undefined
@@ -491,6 +498,38 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       const notesPath = requireNotes(opts.notes, "reconcile's 'ab done' deposits reconcile-notes")
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
+      const node = events.state.nodeRestack
+      if (node?.conflict && node.active) {
+        const conflict = node.conflict
+        const change = node.active.changes[conflict.index]!
+        const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
+        await validateNodeChange(deps, change, conflict.base, head)
+        await retainReplay({ ...deps, slug: env.build }, head, conflict.base)
+        const deposited = await store.appendWithArtifacts(
+          env.build,
+          [{ kind: 'reconcile-notes', content: notes }],
+          () => ({
+            actor: KERNEL,
+            type: 'node.item-replayed',
+            payload: {
+              id: node.active!.id,
+              index: conflict.index,
+              base: conflict.base,
+              head,
+              dropped: false,
+            },
+          }),
+        )
+        return store.append(env.build, {
+          actor,
+          type: 'reconcile.completed',
+          payload: {
+            headSha: head,
+            rewriteId: node.active.id,
+            artifact: refOf(deposited.artifacts[0]),
+          },
+        })
+      }
       const transaction = events.reconcileTransaction
       if (transaction === undefined || transaction.attempt !== env.round)
         throw new Error(

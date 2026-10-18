@@ -1140,3 +1140,29 @@ GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
 `ports/forge/github.live.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
 explicit disposable `AB_GITHUB_CONTRACT_REPO`. Offline transport tests are not
 live provider evidence.
+
+### Descendant node restacking
+
+`kernel/node-restack.ts` inventories the contribution above the durable previous
+base, proves foreign merge safety against the sampled parent's full identity set,
+and replays individual changes. `kernel/node-restack-state.ts` reduces writer
+reservations, ordered receipts, conflicts, publication intent, confirmed effects,
+and inventory. `kernel/node-restack-transaction.ts` retains replay objects and
+archives before expected-head publication. The dispatcher polls all open nodes,
+including empty nodes, and advances clean cascades without agent calls. Only the
+active conflicted item attaches a reconcile runner, using source-build artifacts
+materialized by the dispatcher into the integration owner's store scope.
+
+`kernel/node-landing.ts` shares the node writer lease and reservation with
+restacking. It cancels native auto-merge, refreshes actual PR refs, proves the
+exact destination ungated and fast-forwards the canonical child commit under
+CAS. The destination write proves landing; provider PR reconciliation is
+best-effort and never decides or retries that write. Root landing retains squash
+semantics. Store adapters expose node writer claim, renewal and holder-checked
+release separately from execution leases; Postgres schema version 15 adds their
+columns. Reservations live in the event stream and survive lease expiry.
+
+The contribution boundary advances only on completed restacks. Reachable build
+identities include inherited parent changes; foreign counts include only the
+node's own contribution, preventing a parent rewrite from inflating descendants'
+foreign inventory. Status text and JSON expose both inventory and active items.

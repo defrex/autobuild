@@ -386,6 +386,16 @@ export class LocalGitForge implements Forge {
     return (await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)).ok
   }
 
+  async inspectLandingPr(workspacePath: string, number: number) {
+    const { record } = await this.readRecord(workspacePath, number)
+    return {
+      base: record.base,
+      head: record.head,
+      headSha: await this.sha(`refs/heads/${record.head}`, workspacePath),
+      open: record.status === 'open',
+    }
+  }
+
   async getPrState(workspacePath: string, number: number): Promise<PrState> {
     let { record } = await this.readRecord(workspacePath, number)
     if (record.status === 'merged') return { state: 'merged', sha: record.mergedSha! }
