@@ -1433,7 +1433,7 @@ describe('f_23e76d34: the verify cycle boundary', () => {
     // The code loop IS settled again — `&& !cycleFailed` must not over-fire.
     expect(stateOf(build, 'implement')).toBe('done')
     expect(stateOf(build, 'code-review')).toBe('done')
-    expect(decideNext(log, CONFIG)).toMatchObject({ kind: 'run-check', step: 'lint', attempt: 2 })
+    expect(decideNext(log, CONFIG)).toMatchObject({ kind: 'restack', trigger: 'verify-entry' })
   })
 
   test('a passing step in the CURRENT cycle is done', () => {
