@@ -386,7 +386,7 @@ describe('ab-guide — repository settings status', () => {
       '`ab repository status [--json] [--store <ref>]`',
       'ticket intake (`intake`, default `true`)',
       'repository-wide pause (`paused`, default `false`)',
-      'claim-time auto-merge default (`defaultAutoMerge`, default `false`)',
+      '`defaultAutoMerge` field remains an inert compatibility value',
       'repository with no journal row',
       'writes no state',
       'starts no dispatcher work',
@@ -402,7 +402,8 @@ describe('ab-guide — durable build-control coverage', () => {
     const forms: [string, RegExp][] = [
       ['pause', /`ab pause <slug> \[--store <ref>\]`/],
       ['resume', /`ab resume <slug> \[--store <ref>\]`/],
-      ['auto-merge', /`ab auto-merge <slug> on\\\|off \[--store <ref>\]`/],
+      ['land', /`ab land <slug> \[--store <ref>\]`/],
+      ['hold', /`ab hold <slug> \[--store <ref>\]`/],
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
       ['abort', /`ab abort <slug> \[--store <ref>\]`/],
@@ -437,8 +438,9 @@ describe('ab-guide — durable build-control coverage', () => {
     for (const event of [
       'build.pause-requested',
       'build.resume-requested',
-      'build.auto-merge-requested',
-      'build.auto-merge-cancelled',
+      'build.land-requested',
+      'build.hold-requested',
+      'landing.command-acknowledged',
       'escalation.answered',
       'build.abort-requested',
     ]) {
