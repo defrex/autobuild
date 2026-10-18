@@ -142,6 +142,7 @@ const restPrState = z
     merged: z.boolean(),
     mergeable: z.boolean().nullable(),
     merge_commit_sha: z.string().min(1).nullable(),
+    head: z.object({ sha: z.string().min(1) }).optional(),
   })
   .passthrough()
 
@@ -871,7 +872,11 @@ export class GitHubForge implements Forge {
       if (view.merge_commit_sha === null) {
         throw new Error(`GitHub reports PR #${number} merged with no merge_commit_sha`)
       }
-      state = { state: 'merged', sha: view.merge_commit_sha }
+      state = {
+        state: 'merged',
+        sha: view.merge_commit_sha,
+        ...(view.head ? { headSha: view.head.sha } : {}),
+      }
     } else {
       switch (view.state) {
         case 'closed':
@@ -897,6 +902,118 @@ export class GitHubForge implements Forge {
       }
     }
     return state
+  }
+
+  async mergeLinearStack(
+    _workspacePath: string,
+    number: number,
+    expectedHead: string,
+  ): Promise<string> {
+    const { owner, name } = await this.requireCoordinates()
+    const response = await this.request(
+      'PUT',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
+      { body: { sha: expectedHead, merge_method: 'rebase' } },
+    )
+    const result = this.parse(
+      z.object({ merged: z.literal(true), sha: z.string().min(1), message: z.string() }),
+      response,
+      'linear stack merge',
+    )
+    return result.sha
+  }
+  async inspectMergeFreshness(branch: string): Promise<{ fenced: boolean; evidence: string[] }> {
+    const evidence: string[] = []
+    try {
+      const { owner, name } = await this.requireCoordinates()
+      const response = await this.request(
+        'GET',
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}/protection`,
+      )
+      const protection = z
+        .object({
+          enforce_admins: z.object({ enabled: z.boolean() }),
+          required_status_checks: z
+            .object({
+              strict: z.boolean(),
+              contexts: z.array(z.string()).optional(),
+              checks: z.array(z.object({ context: z.string() })).optional(),
+            })
+            .nullable(),
+        })
+        .parse(response.json)
+      const checks = protection.required_status_checks
+      if (
+        protection.enforce_admins.enabled &&
+        checks?.strict &&
+        (checks.contexts?.length ?? 0) + (checks.checks?.length ?? 0) > 0
+      )
+        return {
+          fenced: true,
+          evidence: [
+            `Classic protection on ${branch} requires current branches and nonempty checks, including administrators.`,
+          ],
+        }
+      evidence.push('Classic protection does not prove enforced freshness for all merge actors.')
+    } catch {
+      evidence.push('Classic freshness protection could not be inspected authoritatively.')
+    }
+    try {
+      const { owner, name } = await this.requireCoordinates()
+      const root = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+      const ruleSchema = z.object({
+        type: z.string(),
+        ruleset_id: z.number().int().positive().optional(),
+        parameters: z.unknown().optional(),
+      })
+      const rules: z.infer<typeof ruleSchema>[] = []
+      for (let page = 1; ; page++) {
+        const response = await this.request(
+          'GET',
+          `${root}/rules/branches/${encodeURIComponent(branch)}`,
+          { query: { per_page: '100', page: String(page) } },
+        )
+        const batch = z.array(ruleSchema).parse(response.json)
+        rules.push(...batch)
+        if (batch.length < 100) break
+      }
+      for (const rule of rules) {
+        if (rule.type !== 'required_status_checks' || !rule.ruleset_id) continue
+        const parameters = z
+          .object({
+            strict_required_status_checks_policy: z.boolean(),
+            required_status_checks: z.array(z.object({ context: z.string() })),
+          })
+          .safeParse(rule.parameters)
+        if (
+          !parameters.success ||
+          !parameters.data.strict_required_status_checks_policy ||
+          !parameters.data.required_status_checks.length
+        )
+          continue
+        // Repository ruleset reads include inherited organization rulesets.
+        // Omitted bypass data is uncertainty, never proof of an empty list.
+        const response = await this.request('GET', `${root}/rulesets/${rule.ruleset_id}`, {
+          query: { includes_parents: 'true' },
+        })
+        const ruleset = z
+          .object({ enforcement: z.literal('active'), bypass_actors: z.array(z.unknown()) })
+          .parse(response.json)
+        if (!ruleset.bypass_actors.length)
+          return {
+            fenced: true,
+            evidence: [
+              `Effective ruleset ${rule.ruleset_id} requires current branches and nonempty checks with no bypass actors.`,
+            ],
+          }
+      }
+      evidence.push('Effective rules do not prove strict freshness without bypass actors.')
+    } catch {
+      evidence.push(
+        'Effective freshness rules or bypass permissions could not be inspected completely.',
+      )
+    }
+    return { fenced: false, evidence }
   }
 
   async inspectLandingPr(_workspacePath: string, number: number) {

@@ -84,6 +84,22 @@ export type MergeSha = string | ((number: number) => string)
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
+  readonly linearStackMerges: { number: number; head: string }[] = []
+  async inspectMergeFreshness(_branch: string) {
+    return { fenced: false, evidence: ['Fake freshness enforcement is not configured'] }
+  }
+  async mergeLinearStack(_workspacePath: string, number: number, head: string): Promise<string> {
+    this.assertPr(number)
+    const pr = this.prs.get(number)!
+    if (pr.state !== 'open' || pr.mergeable !== true || this.headShas.get(number) !== head)
+      throw new Error('Fake stack merge requires an open mergeable exact head')
+    const gate = this.gates.get(number) ?? this.defaultGatePresence
+    if (gate !== 'absent') throw new Error('Fake stack merge is gated')
+    const sha = this.resolveMergeSha(number)
+    this.linearStackMerges.push({ number, head })
+    this.prs.set(number, { state: 'merged', sha, headSha: head })
+    return sha
+  }
   async inspectLandingPr(_workspacePath: string, number: number) {
     const pr = this.opened[number - 1]
     if (!pr) throw new Error(`FakeForge: missing PR refs #${number}`)

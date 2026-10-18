@@ -1,3 +1,4 @@
+import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { reconcileRewriteHead } from './reconcile-head'
 /**
@@ -137,6 +138,7 @@ export type PrLifecycle = 'open' | 'merged' | 'closed' | 'conflicted'
  * non-transactional forge/event boundary: consumers treat the command as
  * settled only when both `enabled` and `commandSeq` match. */
 export interface AutoMergeProjection {
+  explicitCommandSeq?: number
   /** Latest human command. False with no commandSeq means the default: off. */
   requested: boolean
   commandSeq?: number
@@ -160,6 +162,7 @@ export interface BuildState {
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
+  integration?: IntegrationState
   nodeComparison?: EventPayload<'node.compared'>
 
   /**
@@ -329,6 +332,7 @@ export interface BuildAcc {
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
+  integration?: IntegrationState
   nodeComparison?: EventPayload<'node.compared'>
 
   attached: boolean
@@ -373,7 +377,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 6
+export const BUILD_REDUCER_VERSION = 7
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -474,6 +478,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
   let lastEvent = acc.lastEvent
   for (const event of events) {
+    if (event.type.startsWith('integration.')) {
+      acc.integration ??= {}
+      advanceIntegration(acc.integration, event)
+    }
     if (event.type.startsWith('node.') || (acc.kind === 'node' && event.type === 'target.moved')) {
       acc.nodeRestack ??= { items: [] }
       advanceNodeRestack(acc.nodeRestack, [event])
@@ -491,6 +499,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         acc.nodeComparison = event.payload
         break
       case 'node.rewritten':
+        if (acc.nodeComparison)
+          acc.nodeComparison = { ...acc.nodeComparison, headSha: event.payload.head }
         if (pr) pr = { ...pr, headSha: event.payload.head }
         break
       case 'pr.opened':
@@ -602,6 +612,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         discardRequest = { seq: event.seq, actor: event.actor }
         break
       case 'build.auto-merge-requested':
+        if (event.payload.integrationConsent === true) autoMerge.explicitCommandSeq = event.seq
         autoMerge.requested = true
         autoMerge.commandSeq = event.seq
         // A fan-out (or seeded) command carries the default fact it answers; a
@@ -940,7 +951,14 @@ function finishBuild(acc: BuildAcc): BuildState {
     terminal ??
     (pausedFlag
       ? 'paused'
-      : acc.openEscalations.length > 0
+      : acc.openEscalations.length > 0 ||
+          (acc.integration?.cycle &&
+            acc.nodeComparison?.headSha === acc.integration.cycle.head &&
+            acc.nodeComparison?.parentSha === acc.integration.cycle.parent &&
+            acc.verify.results.some(
+              (result) =>
+                result.restackId === acc.integration!.cycle!.id && result.outcome === 'fail',
+            ))
         ? 'blocked'
         : acc.kind === 'node' && acc.nodeOpened !== undefined
           ? 'collecting'
@@ -957,6 +975,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     nodeOpening: acc.nodeOpening,
     mergedSha: acc.mergedSha,
     nodeOpened: acc.nodeOpened,
+    integration: acc.integration,
     nodeComparison: acc.nodeComparison,
     nodeRestack: acc.nodeRestack,
     status,

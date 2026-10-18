@@ -27,10 +27,24 @@ metadata changes. Missing, unopened, landed, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
 
-Humans land node PRs. The janitor records landing and completes the node ticket.
+Nodes collect until every targeting ticket is natively resolved (done or
+cancelled), frozen child claims have settled, and at least one contribution has
+landed. Status names open children. Exhaustive listing failures keep a node
+incomplete. The kernel runs all configured verify steps against the exact head
+and parent; any head or parent movement requires verification again.
+
+A verification failure blocks the integration build. File a repair child targeting
+the node; its landing allows a new cycle. Explicit per-build auto-merge consent
+permits a complete, verified node to land; ON refuses incomplete nodes, while OFF
+remains available. Repository defaults never consent for nodes. Node parents and
+local-git roots use exact-parent guarded fast-forwards. GitHub roots use PR rebase
+merge and report fenced or unfenced provenance; unfenced results are audited for
+tree mismatch, with operator attention on an unverified result. Gates are never
+bypassed. Human forge merges remain an explicit escape hatch, recorded with
+whether the actual head was verified. The janitor completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Node verification, automatic node landing and reparenting are not provided.
+Automatic landing policy and reparenting are not provided.
 Parent movement automatically restacks every open descendant node, including
 empty nodes, without clean-path agents. Node restacks replay ordered individual
 changes above their last completed contribution boundary, preserving source

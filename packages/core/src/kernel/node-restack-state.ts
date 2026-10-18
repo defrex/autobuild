@@ -107,7 +107,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 2,
+  version: 3,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

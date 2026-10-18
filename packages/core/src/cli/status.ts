@@ -97,7 +97,8 @@ export interface LeaseInfo {
 export interface BuildSummary {
   kind?: 'integration' | 'work'
   target?: string
-  integration?: 'opening' | 'empty' | 'collecting'
+  integration?: ReturnType<typeof buildVocabulary>['integration']
+  integrationState?: BuildState['integration']
   nodeRestack?: BuildState['nodeRestack']
   slug: string
   ticket?: TicketRef
@@ -234,6 +235,7 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    ...(state.kind === 'node' ? { integrationState: state.integration } : {}),
     ...(state.kind === 'node' ? { nodeRestack: state.nodeRestack } : {}),
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
@@ -535,6 +537,18 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(
       `  ${d.kind ?? 'work'} · target ${d.target}${d.integration ? ` · ${d.integration}` : ''}`,
     )
+  if (d.integrationState) {
+    const integration = d.integrationState
+    lines.push(`  open children: ${integration.observation?.openChildren.join(', ') || 'none'}`)
+    if (integration.observation?.diagnostics.length)
+      lines.push(`  completeness unavailable: ${integration.observation.diagnostics.join('; ')}`)
+    if (integration.cycle)
+      lines.push(
+        `  verification head: ${integration.cycle.head} · parent ${integration.cycle.parent}`,
+      )
+    if (d.integration === 'verification failed')
+      lines.push('  repair: file a child ticket targeting this node')
+  }
   if (d.nodeRestack) {
     const node = d.nodeRestack
     if (node.inventory) {

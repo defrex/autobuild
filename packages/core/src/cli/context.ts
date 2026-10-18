@@ -396,7 +396,12 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
 
-  if (inputs.commitRange === true && state.implement.commits !== undefined) {
+  if (inputs.commitRange === true && state.kind === 'node' && state.integration?.cycle) {
+    manifest.commitRange = {
+      base: state.integration.cycle.parent,
+      head: state.integration.cycle.head,
+    }
+  } else if (inputs.commitRange === true && state.implement.commits !== undefined) {
     manifest.commitRange = state.implement.commits
   }
 

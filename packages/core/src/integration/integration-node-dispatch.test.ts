@@ -50,7 +50,9 @@ test('real git node claims, child landing, lazy PR and human node landing', asyn
     await h.dispatcher.tick()
     const nodeState = reduceBuild(await h.events(node.slug))
     expect(nodeState.pr).toBeDefined()
-    expect(h.launched.every((r) => r.slug !== node.slug)).toBe(true)
+    expect(h.launched.some((r) => r.slug === node.slug)).toBe(true)
+    await h.runLatest()
+    h.clock.advance(180_000)
     await h.forgeAdapter.squashMerge(h.origin, nodeState.pr!.number, nodeState.pr!.headSha)
     await h.dispatcher.tick()
     expect(reduceBuild(await h.events(node.slug)).status).toBe('done')
@@ -207,6 +209,11 @@ test('node conflict runner resolves the source build with its own spec and plan'
       buildSlug: source.slug,
     })
     await h.dispatcher.tick()
+    h.tickets.add({
+      ...readyTicket('OPEN', { title: 'Keep node collecting' }),
+      state: 'Backlog',
+      target: 'NODE',
+    })
     h.tickets.add(readyTicket('BUSY', { title: 'Occupy the runner slot' }))
     h.clock.advance(60_000)
     await h.dispatcher.tick()
@@ -778,3 +785,69 @@ for (const providerState of ['merged', 'closed'] as const) {
     }
   }, 30_000)
 }
+
+test('complete nodes verify and land a linear stack only after explicit consent', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Release child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+    await expect(
+      controlBuild({
+        store: h.store,
+        repo: h.origin,
+        slug: node.slug,
+        action: { kind: 'auto-merge-on' },
+        ticketSource: async () => h.tickets,
+      }),
+    ).rejects.toThrow('CHILD')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
+    const childState = reduceBuild(await h.events(child.slug))
+    await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+      buildSlug: child.slug,
+    })
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+    await h.runLatest()
+    const verified = reduceBuild(await h.events(node.slug))
+    expect(verified.verify.results.some((result) => result.outcome === 'pass')).toBe(true)
+    expect(ofType(await h.events(node.slug), 'plan.started')).toHaveLength(0)
+    expect(ofType(await h.events(node.slug), 'finalize.started')).toHaveLength(0)
+    expect(verified.status).not.toBe('done')
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: node.slug,
+      action: { kind: 'auto-merge-on' },
+      ticketSource: async () => h.tickets,
+    })
+    h.clock.advance(180_000)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const landed = reduceBuild(await h.events(node.slug))
+    expect(landed.integration?.landing).toMatchObject({
+      provenance: 'kernel',
+      verified: true,
+      fenced: true,
+    })
+    expect(landed.status).toBe('done')
+    expect((await h.tickets.get('NODE'))?.resolved).toBe(true)
+    const { git } = await import('./harness')
+    expect(await git(['show', '-s', '--format=%B', 'main'], h.origin)).toContain(
+      `Autobuild-Build: ${child.slug}`,
+    )
+    expect(await git(['show', '-s', '--format=%B', 'main'], h.origin)).not.toContain(
+      `Autobuild-Build: ${node.slug}`,
+    )
+  } finally {
+    await h.cleanup()
+  }
+})

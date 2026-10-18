@@ -1,3 +1,4 @@
+import { integrationCurrent } from '../kernel/integration-state'
 import { replayNodeChange } from '../kernel/node-restack'
 import { restoreReplay } from '../kernel/reconcile-restack'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
@@ -724,7 +725,11 @@ export class BuildRunner {
    */
   async attach(): Promise<AttachmentResult> {
     const attaching = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    if (attaching.kind === 'node' && !attaching.nodeRestack?.conflict)
+    if (
+      attaching.kind === 'node' &&
+      !attaching.nodeRestack?.conflict &&
+      !integrationCurrent(attaching)
+    )
       throw new Error('integration runners require a reserved node conflict')
     const config = await this.captureConfig()
     const { store, slug, instance } = this.deps
@@ -910,7 +915,8 @@ export class BuildRunner {
    */
   async run(): Promise<BuildState> {
     const initial = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    if (initial.kind === 'node' && !initial.nodeRestack?.conflict) return initial
+    if (initial.kind === 'node' && !initial.nodeRestack?.conflict && !integrationCurrent(initial))
+      return initial
     if (!this.attached) {
       const attachment = await this.attach()
       if (attachment.kind === 'control-acknowledged') {
@@ -1600,7 +1606,11 @@ export class BuildRunner {
    */
   private async evaluateVerify(decision: EvaluateVerifyDecision): Promise<void> {
     const { exec, workspacePath } = this.deps
-    const baseSha = await readBuildSelector(this.deps.store, this.deps.slug, 'verifyDiffBase')
+    const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    const baseSha =
+      state.kind === 'node'
+        ? state.integration?.cycle?.parent
+        : await readBuildSelector(this.deps.store, this.deps.slug, 'verifyDiffBase')
     if (baseSha === undefined)
       throw new Error(
         'conditional verify requires a workspace.provisioned base SHA, but this build has none',
@@ -1639,6 +1649,16 @@ export class BuildRunner {
    * queryable two-fact phase occurrence and launches no command or session. */
   private async verifyEvidence() {
     const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+    if (facts.state.kind === 'node') {
+      const cycle = facts.state.integration?.cycle
+      if (!cycle) throw new Error('missing prepared integration verification')
+      const head = await this.deps.exec(['git', 'rev-parse', 'HEAD'], {
+        cwd: this.deps.workspacePath,
+      })
+      if (head.exitCode !== 0 || head.stdout.trim() !== cycle.head)
+        throw new Error('integration checkout differs from prepared head')
+      return { baseSha: cycle.parent, headSha: cycle.head, restackId: cycle.id }
+    }
     const cycle = Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq)
     const gate = facts.log.restack.gates[String(cycle)]
     if (gate !== undefined)

@@ -21,6 +21,7 @@ export interface NodeMergeProof {
 export interface NodeInventory {
   head: string
   builds: string[]
+  contributions?: string[]
   /** Only commits above this node's durable contribution boundary. */
   foreign: string[]
 }
@@ -166,15 +167,22 @@ export async function nodeInventory(
   contributionBase: string,
 ): Promise<NodeInventory> {
   const foreign: string[] = []
+  const contributions = new Set<string>()
   for (const commit of await history(
     deps,
     [`${contributionBase}..${head}`],
     ['--reverse', '--first-parent'],
   )) {
-    if (commit.parents.length > 1 || messageIdentity(commit.sha, commit.message) === undefined)
-      foreign.push(commit.sha)
+    const identity = messageIdentity(commit.sha, commit.message)
+    if (commit.parents.length > 1 || identity === undefined) foreign.push(commit.sha)
+    else contributions.add(identity)
   }
-  return { head, builds: [...(await reachableBuilds(deps, [head]))].sort(), foreign }
+  return {
+    head,
+    builds: [...(await reachableBuilds(deps, [head]))].sort(),
+    contributions: [...contributions].sort(),
+    foreign,
+  }
 }
 
 /** Run one item only. The caller persists inputs first and retains the result

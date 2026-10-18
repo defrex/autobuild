@@ -94,3 +94,11 @@ Existing tickets default to work with no target. Metadata changes increment the
 revision once; equivalent aliases and unchanged values do not. Node demotion
 checks all targeting tickets, including completed work. Legacy plugins without
 integrationTree support read as work with no target and refuse metadata writes.
+
+
+A node remains incomplete while any ticket targeting it is unresolved, including
+triage and backlog tickets. Done and cancelled tickets are terminal. A complete
+node with landed contributions verifies its exact head before explicit per-build
+landing consent can publish it. If node verification fails, file a repair child
+with that node as its target; landing the repair triggers a fresh cycle. Human
+forge merges are recorded escape hatches from these gates.

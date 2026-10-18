@@ -1,3 +1,10 @@
+import {
+  integrationComplete,
+  integrationFailed,
+  integrationCurrent,
+  integrationHeadVerified,
+  integrationNeedsRunner,
+} from '../../kernel/integration-state'
 import type { RepositoryReadFacts } from '../../store/reduced-reads'
 /**
  * The dashboard's pure projection: `BuildState` → what the operator sees.
@@ -149,7 +156,18 @@ export interface DashboardHarvest {
 export interface DashboardBuild {
   kind?: 'integration' | 'work'
   target?: string
-  integration?: 'opening' | 'empty' | 'collecting'
+  integration?:
+    | 'opening'
+    | 'empty'
+    | 'collecting'
+    | 'verifying'
+    | 'verification failed'
+    | 'awaiting consent'
+    | 'ready to land'
+    | 'human landing'
+    | 'fenced landing'
+    | 'unfenced landing'
+    | 'unverified landing'
   slug: string
   status: EffectiveStatus
   /** True when the build is BOTH paused and blocked: blocked wins the status
@@ -869,7 +887,16 @@ export function projectBuildFromFacts(
             step(buildVocabulary(state).integration!, false, state.nodeOpened !== undefined),
             step('merge', false, state.pr !== undefined, {
               qualifier: 'waiting',
-              reason: 'integration requires human landing',
+              reason: !integrationComplete(state)
+                ? `integration incomplete${state.integration?.observation?.openChildren.length ? `: ${state.integration.observation.openChildren.join(', ')}` : ''}`
+                : integrationFailed(state)
+                  ? 'verification failed; file a repair child targeting this node'
+                  : !state.integration?.cycle ||
+                      !integrationHeadVerified(state, state.integration.cycle.head)
+                    ? 'integration awaits verification'
+                    : !state.autoMerge.requested
+                      ? 'integration awaits explicit per-build consent'
+                      : 'integration awaits guarded landing',
             }),
           ]
         : steps,
@@ -1182,7 +1209,11 @@ export function buildDashboard(
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
   const activeCount = entries.filter(
-    ({ state }) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
+    ({ state }) =>
+      (state.kind !== 'node' ||
+        (integrationNeedsRunner(state) && state.phase?.startsWith('verify:'))) &&
+      state.status !== 'done' &&
+      state.status !== 'aborted',
   ).length
   return buildDashboardFromProjected(
     builds,
@@ -1200,7 +1231,18 @@ export function buildDashboard(
 export function buildVocabulary(state: BuildState): {
   kind?: 'integration' | 'work'
   target?: string
-  integration?: 'opening' | 'empty' | 'collecting'
+  integration?:
+    | 'opening'
+    | 'empty'
+    | 'collecting'
+    | 'verifying'
+    | 'verification failed'
+    | 'awaiting consent'
+    | 'ready to land'
+    | 'human landing'
+    | 'fenced landing'
+    | 'unfenced landing'
+    | 'unverified landing'
 } {
   return {
     kind: state.kind === 'node' ? 'integration' : 'work',
@@ -1209,11 +1251,29 @@ export function buildVocabulary(state: BuildState): {
       : {}),
     ...(state.kind === 'node'
       ? {
-          integration: !state.nodeOpened
-            ? 'opening'
-            : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0
-              ? 'empty'
-              : 'collecting',
+          integration:
+            state.integration?.audit &&
+            state.integration.audit.verifiedTree !== state.integration.audit.landedTree
+              ? 'unverified landing'
+              : state.integration?.landing?.provenance === 'human'
+                ? 'human landing'
+                : state.integration?.landing
+                  ? state.integration.landing.fenced
+                    ? 'fenced landing'
+                    : 'unfenced landing'
+                  : integrationFailed(state)
+                    ? 'verification failed'
+                    : integrationCurrent(state) && integrationComplete(state)
+                      ? !integrationHeadVerified(state, state.integration!.cycle!.head)
+                        ? 'verifying'
+                        : state.autoMerge.requested
+                          ? 'ready to land'
+                          : 'awaiting consent'
+                      : !state.nodeOpened
+                        ? 'opening'
+                        : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0
+                          ? 'empty'
+                          : 'collecting',
         }
       : {}),
   }
