@@ -1386,10 +1386,10 @@ sessionless read-only status projection.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the auto-merge default. It uses the same
+repository-wide pause, and the harvest gate. It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
-pause off, and auto-merge default off; the query does not create that stream,
+pause off; the query does not create that stream,
 append an event, claim a ticket, attach a runner, or start dispatcher work.
 
 Agents never receive TicketSource credentials. Only the deterministic file
@@ -2153,15 +2153,10 @@ backfill, and migration reruns preserve counters. Hosted reads use one GET
 `/repos/:repo/builds` returns scoped build records. Both routes authorize the
 repository before reading and support repositories with builds but no journal.
 
-Durable operator settings (intake, the repository-wide pause, the auto-merge
-default, the harvest gate) are repository-journal facts: they survive restarts,
-propagate between dispatchers by ordinary polling, and are never optimistically
-rendered — the UI shows acknowledged state. The repository-wide pause holds
-every queued build: while it is set, no dispatcher tick may attach a runner to
-a build that does not have one yet. The auto-merge default both seeds new
-claims and, on each change, fans out onto every current non-terminal build of
-the repository as a bulk request or withdrawal attributed to the toggling
-operator (§15.7).
+Durable operator settings (intake, repository pause, harvest gate) survive
+restarts through the repository journal. Per-landing hold and land commands
+live in the build log. Landing policy is declarative dispatcher configuration
+(§15.7); there is no writable repository auto-merge default.
 
 The **operator sandbox** is the third execution kind beside build and harvest
 executions: a persistent, credential-free, per-operator-per-repository
@@ -2705,7 +2700,58 @@ Merge queues ignore message overrides, so identity-aware kernel landing defers
 with `unproven-gate-state` rather than bypassing the queue. Human merges remain
 observable regardless of trailer evidence.
 
-**Merge gates are never bypassed.** The operator's auto-merge command is
+Ordered `[[landing]]` rules in `autobuild.toml` decide authorization. Each rule
+requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
+<node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
+`label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
+match anything. With no match, leaves use auto and nodes require consent.
+The target is the immutable destination frozen at claim, not a ticket's current
+parent. Labels are sampled from a successful source-ticket read at readiness;
+unavailable ticket data defers the decision instead of supplying empty labels.
+
+A leaf becomes ready after verification and finalize on a current base; a node
+must be complete and verified at its exact head and parent. `landing.decided`
+records that candidate, the sampled labels, resulting mode, and the full matched
+rule and index (or explicit default). Editing configuration cannot change this
+recorded decision. A replacement candidate gets a new decision once ready.
+Policy is live dispatcher configuration, outside the pinned execution pipeline.
+
+`ab hold <slug>` durably suppresses landing and revokes previous consent, even
+before readiness. `ab land <slug>` requires readiness, clears hold, and consents
+to this build/node landing into its frozen destination. Consent survives head
+replacement, restacking, verification and re-finalization until another hold or
+completion. It is consent to the landing, not approval of an immutable diff.
+Commands and acknowledgements are sequence-correlated; hold acknowledgement
+requires confirmed native cancellation, while land acknowledgement accepts
+consent without claiming that merge gates passed. The same actions are available
+through the MCP/operator build-control tools. The terminal uses `l` for land and
+`o` for hold on the selected landing. The web has no consent controls.
+
+The repository auto-merge default and its fan-out are retired. Historical events
+still replay; explicit old per-build commands map to consent/hold until a new
+landing command supersedes them, while old default seeds confer no consent.
+`ab upgrade` samples the target repository's configured journal and writes leaf
+auto for old ON, leaf consent for old OFF (including no fact), and node consent
+in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
+configuration or unavailable journals fail with recovery guidance. Fresh init
+uses the no-rules fallback.
+
+Native auto-merge is reconciled on every janitor poll against durable desired
+landing state. It is disabled while held, unauthorized, unready, or replacement
+publication is pending or just completed; enabling binds to the current head
+through the forge's expected-head guard. Every replacement publication confirms
+cancellation first, and its first following poll re-reads and reconciles native
+state before other build actions. Native receipts bind to exact candidates;
+consent does not. A stale enable completing after cancellation is repaired by
+poll reconciliation. This is an explicitly bounded failure model: native merge
+is used only behind a merge-blocking gate, and checks on a replacement head must
+take far longer than one poll interval, allowing cancellation before they pass.
+There is no durable native-effect reservation protocol. A forge landing while
+held or unauthorized is recorded as contrary to policy and raises operator
+attention; Autobuild never rewrites the target to undo it. Merge gates and the
+serialized node-writer publication rules remain authoritative.
+
+**Merge gates are never bypassed.** Landing authorization is
 durable consent to merge, not a bypass. Whenever the base branch has any real
 merge-blocking gate, consent is applied as GitHub-native auto-merge, so the
 forge's own checks decide when the PR lands. Only when the forge

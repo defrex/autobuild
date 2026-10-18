@@ -1192,3 +1192,12 @@ in `node-landing.ts`. GitHub uses guarded PR rebase; local-git uses an ancestry
 proof and exact-parent fast-forward. Shared status vocabulary exposes provenance
 and mismatch attention in both frontends. Human forge merges remain observable
 escape hatches independent of completeness and verification.
+
+### Landing authorization
+
+The pure evaluator in `kernel/landing-policy.ts` chooses the first matching
+`[[landing]]` rule. `kernel/landing-state.ts` reduces immutable candidate
+decisions and persistent hold/land commands. The dispatcher owns readiness,
+ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
+confirms native cancellation at local and trusted remote head-publication seams.
+Node landings retain the existing writer serialization and gate proof.
