@@ -145,6 +145,8 @@ export type BuildDecisionProjection =
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
+  /** Immutable policy provenance and durable command/native application state. */
+  landing?: BuildState['landing']
   /** Current work-owner decision. Open PRs use the build-owned config; ended
    * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
@@ -337,6 +339,7 @@ export function detailFromFacts(
   return {
     ...summary,
     autoMerge: autoMergeDisplay(state),
+    ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
     ...(decision !== undefined ? { decision } : {}),
     openEscalations: state.openEscalations,
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined

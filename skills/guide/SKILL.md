@@ -22,7 +22,7 @@ Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
 
 Claims targeting an open node freeze its build identity and branch as their base.
-Their PR, auto-merge and reconcile all use that frozen base, even after source
+Their PR, landing and reconcile all use that frozen base, even after source
 metadata changes. Missing, unopened, landed, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
@@ -34,9 +34,10 @@ incomplete. The kernel runs all configured verify steps against the exact head
 and parent; any head or parent movement requires verification again.
 
 A verification failure blocks the integration build. File a repair child targeting
-the node; its landing allows a new cycle. Explicit per-build auto-merge consent
-permits a complete, verified node to land; ON refuses incomplete nodes, while OFF
-remains available. Repository defaults never consent for nodes. Node parents and
+the node; its landing allows a new cycle. A complete, verified node lands under
+its recorded policy decision: consent mode requires `ab land <slug>`, while auto
+mode authorizes landing automatically. `ab hold <slug>` withdraws consent and
+suppresses automatic landing, including before readiness. Node parents and
 local-git roots use exact-parent guarded fast-forwards. GitHub roots use PR rebase
 merge and report fenced or unfenced provenance; unfenced results are audited for
 tree mismatch, with operator attention on an unverified result. Gates are never
@@ -44,7 +45,7 @@ bypassed. Human forge merges remain an explicit escape hatch, recorded with
 whether the actual head was verified. The janitor completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Automatic landing policy is not provided.
+Landing follows the ordered declarative policy described below.
 Parent movement automatically restacks every open descendant node, including
 empty nodes, without clean-path agents. Node restacks replay ordered individual
 changes above their last completed contribution boundary, preserving source
@@ -80,8 +81,13 @@ only node-owned contributions onto the new parent, then retargets the same revie
 Children follow through the ordinary cascade; conflicts use normal source-aware
 reconcile. Pending moves block verification and landing. Cycles, non-open parents,
 landing/closing nodes and unsupported forge retargeting are refused with a reason.
-Busy operations must settle first. Changing a claimed work target is refused before
-any combined patch is written: abort and re-dispatch instead. Direct provider edits
+Busy operations must settle first.
+
+Accepted node re-parenting revokes prior land consent through the recorded
+`node.parent-accepted` fact. Holds survive. Readiness evaluates landing policy
+against the new effective parent before another landing can proceed.
+
+Changing a claimed work target is refused before any combined patch is written: abort and re-dispatch instead. Direct provider edits
 are observed too; invalid edits leave effective ancestry unchanged with a durable
 diagnostic. Status shows effective ancestry; ticket tree shows source metadata.
 
@@ -411,6 +417,36 @@ with `ab connect` guidance. `AB_TOKEN` overrides the saved service/project
 credential. See [repository setup](references/setup.md#connect-a-project).
 Changing the store requires restarting dispatch.
 
+
+### `[landing]`
+
+Declare an ordered array of rules with `[[landing]]` headers. Each rule ANDs
+its predicates; the first match wins. Omitted predicates are wildcards.
+An unmatched leaf defaults to `auto`; an unmatched node defaults to `consent`.
+Rules are strict and blank predicates are rejected with their array index.
+
+| Field | Required | Values / purpose |
+|---|---|---|
+| `into` | No | `root`, any `node`, or an exact frozen destination node ticket id. |
+| `from` | No | `leaf` or `node`. |
+| `label` | No | Exact, case-sensitive source ticket label sampled at readiness. |
+| `mode` | Yes | `auto` or `consent`. |
+
+Help the operator choose policy around their release process. A solo team can
+use one catch-all `mode = "auto"` rule. A team requiring an operator's review
+for every landing can use one catch-all `mode = "consent"` rule. For release
+nodes that collect work automatically but require a final click, put an
+`into = "root"`, `mode = "consent"` rule first, followed by a catch-all
+`mode = "auto"` rule. A broad rule placed first shadows narrower rules below
+it. Use `from = "node"` or a release label to narrow that root decision when
+ordinary leaves should follow a different release process.
+
+Specific-node matching uses the claimed build's immutable destination, never
+the source ticket's current parent. Decisions retain the sampled labels,
+matched rule index and snapshot (or explicit default). Policy is live
+dispatcher configuration, excluded from pinned pipeline settings and
+integration verification inputs; later config edits do not rewrite an earlier
+decision's provenance.
 
 ### `[pr]`
 
@@ -1433,8 +1469,7 @@ that display value directly from the BuildStore; a failed refresh retains the
 last successful count, shows a diagnostic, and appends no transport event.
 Non-interactive dispatch performs no frontend-only sampling, and the separate
 drift trigger is not displayed. An indented controls line follows for
-`intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
-ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
+`intake ON`/`intake OFF` and `harvest ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title
 column. From the top of the frame through the body, the two-column marker lane
 stays empty except for the selected row's `> ` marker. These controls and the
@@ -1489,11 +1524,12 @@ Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
 contextual: every row offers navigation and quit; global offers `h harvest`,
-`m auto-merge`, `i intake`, `p pause all`, and `r resume all`; `Harvest` offers `p resume` for ordinary
-failure or `p acknowledge` for exhaustion/escalation only when that action is
-available; runner-attached builds offer `m auto-merge` plus the state-specific
-`p pause`, `p cancel pause`, or `r resume` action, while queued builds offer
-`d discard`. `m` on `Harvest` is an explanatory build-only no-op.
+`i intake`, `p pause all`, and `r resume all`; `Harvest` offers `p resume`
+for ordinary failure or `p acknowledge` for exhaustion/escalation only when
+available. Selected builds offer `l land` and `o hold`, subject to command
+eligibility, plus the state-specific `p pause`, `p cancel pause`, or `r resume`
+action; queued builds offer `d discard`. Land requires readiness; hold may be
+recorded before readiness. There is no repository landing toggle.
 
 A running build reads `PAUSING` after `p` appends its pause request and before
 the kernel acknowledges it at a safe boundary. During that window `p` appends
@@ -1542,22 +1578,14 @@ itself, so an already-paused repository shows `repository PAUSED` and `(held)`
 on its first paint; clearing the hold removes both on the next poll. The hold
 survives a restart and is not defeated by re-running `ab dispatch`.
 
-`--auto-merge` and `--no-auto-merge` similarly set the durable repository
-auto-merge default; omission reuses stored state, falling back to OFF only when
-no fact exists. The forms are mutually exclusive independently of the intake
-pair. Global-row `m` re-reads current state, appends the opposite value, and
-posts a dispatcher notice. When on, each fresh dispatcher claim records the
-existing human-authored `build.auto-merge-requested` fact immediately after
-`build.created` and before runner launch. The first visible build frame therefore
-carries `auto merge`. The default is also a bulk action over current builds:
-on each change the dispatcher reconciles every non-terminal build against the
-newest fact, requesting consent when it turns on and withdrawing it when it
-turns off, attributed to the toggling operator exactly as a row keypress would
-be. A per-build toggle overrides its build's state until the global row is
-toggled again, so a seeded or fanned build can still be cancelled while the
-global default stays on. Both repository settings are independently
-last-write-wins by event sequence. They are stored in the BuildStore, not in
-`autobuild.toml`; propagation uses polling, not a push channel.
+`[[landing]]` rules in `autobuild.toml` determine landing policy. The
+dispatcher records an immutable decision when each candidate becomes ready.
+No rules means leaf auto / node consent. There is no claim-time default
+seeding or fan-out over existing builds. `ab land <slug>` supplies consent to
+that landing and frozen destination; it survives replacement heads until hold
+or completion. `ab hold <slug>` suppresses policy and withdraws consent.
+The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
+are retired and return actionable errors; use landing rules and hold/land.
 
 Global-row `h` re-reads the repository journal and appends the existing human
 pause/resume request. The newest pending command determines the next target, so
@@ -1581,13 +1609,14 @@ settles every exhaustion barrier. Exhaustion and escalation remain terminal.
 Escalation's row is dismissed only by a post-terminal human resume request
 followed by its later kernel acknowledgement, never by the request alone.
 
-Every build row renders an explicit `auto merge <state>` token, including off:
-cyan means requested locally but not yet applied on GitHub, green means native
-auto-merge is enabled, yellow means cancellation is in flight, and dim means
-off — turning red while the repository default reads ON, so the
-consent mismatch is visible without opening the detail view. A build parked on
-an open PR with no consent carries the reason on its merge step, naming the
-per-build control that requests it.
+Every build row renders a `landing <state>` token. Cyan requested means
+authorized but not yet applied natively; green enabled means the native request
+is armed; yellow cancelling means cancellation is in flight; dim off means no
+authorization. A recorded consent decision waiting for an operator reads
+`landing awaiting consent`; an explicit hold reads `landing held`.
+There is no red comparison with a repository default. Row and detail merge
+explanations distinguish a pending policy decision, consent, and hold, and name
+`ab land <slug>` / `ab hold <slug>` where appropriate.
 Merge conflicts recover automatically: the gate defers, the pipeline re-enters
 reconcile, and verify re-runs before consent is re-examined — the reconcile
 step on the build row is the only indication, and uncomputed mergeability
@@ -1612,7 +1641,8 @@ to the build's event log and apply the same write-time checks.
 | Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
 | Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
 | Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
-| Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
+| Consent to landing | `ab land <slug> [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
+| Hold landing | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
@@ -1723,15 +1753,16 @@ revision and keeps any open PR. A build's spec can therefore change under it:
 phase runs after the revision read the new revision, while historical runs
 remain readable at the revision they actually saw.
 
-Every command requires the target to exist in this repository and be active
-(`running`, `paused`, or `blocked`), except abort also accepts `queued`;
+Every command requires an applicable target in this repository. Pause and
+resume require an active build; abort and hold also accept queued builds.
+Land requires a ready candidate and cannot bypass verification or merge gates;
 `ab answer` additionally requires an open escalation. A stale, missing, done,
 aborted, or otherwise inapplicable target is an error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
-same stable fallback on both surfaces. All five commands run sessionless and
+same stable fallback on both surfaces. These commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > `[store] url` > repository
 local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
 caller's own phase build, the command refuses it; a phase cannot pause, resume,
-auto-merge, answer, or abort itself. `ab pause --all` and `ab resume --all`
+hold, land, answer, or abort itself. `ab pause --all` and `ab resume --all`
 accept `--store` on the same precedence and are refused for the same reason
 whenever `AB_SESSION` and `AB_BUILD` are both nonblank — the caller's own build
 is inside the walk.
@@ -1744,8 +1775,9 @@ survives `ab dispatch` and `ab dispatch --once` startup until a human answers
 it. Startup still recovers actionable builds and delivers pending operator
 commands, but it never records an answer or re-arms a budget.
 
-Durable repository intake and the claim-time auto-merge default have launch-flag
-setters and global-row toggles but no standalone sessionless control commands.
+Durable repository intake has launch-flag setters and a global-row toggle.
+Landing policy is configured through ordered rules, with per-landing hold/land
+commands; no writable repository auto-merge default remains.
 Abort is available through both its CLI command and the confirmed build-row/detail
 `a` key. Global-row `h` owns the durable harvest gate. Global-row `p`/`r` and
 `ab pause --all` / `ab resume --all` are two surfaces over the one walk described
@@ -1754,7 +1786,7 @@ repository hold nor intake has a standalone sessionless setter of its own, but
 the bulk commands write both as part of quiescing — the hold first. On the
 optional repository-scoped
 `Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
-and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
+and `h` are no-ops; `l` and `o` apply only to selected builds. On build
 rows, `i` and `h` are also no-ops.
 
 ## Checking build status
@@ -1768,13 +1800,15 @@ malformed, shared-only, or mixed build/Harvest identity is rejected rather than
 falling back to operator access. The commands append no events, take no leases,
 and are safe to run at any time.
 
-**`ab repository status [--json] [--store <ref>]`** reports the three durable
-dispatcher settings in one answer: ticket intake (`intake`, default `true`), the
-repository-wide pause (`paused`, default `false`), and the claim-time auto-merge
-default (`defaultAutoMerge`, default `false`). Those defaults also describe a
-repository with no journal row; the read does not create one. Human output is
-the default. `--json` emits one bare object with those exact fields plus the
-canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` > `[store] url` >
+**`ab repository status [--json] [--store <ref>]`** reports ticket intake
+(`intake`, default `true`) and repository-wide pause (`paused`, default
+`false`), alongside dispatcher and infrastructure status. Its historical
+`defaultAutoMerge` field remains an inert compatibility value; it is not
+claim-time policy or a writable setting. Landing decisions and command state
+are queried on the build. A repository with no journal row uses the defaults
+without creating a row. Human output is the default. `--json` emits one bare
+object including the canonical `repo`, and `--store` follows the usual explicit
+flag > `AB_STORE` > `[store] url` >
 repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
 and starts no dispatcher work.
@@ -1863,8 +1897,9 @@ With no slugs the repository journal is included; named watches add it with
 The default watch reports actionable conditions only:
 
 - Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
-  with auto-merge off or a current actionable merge-gate deferral. Armed consent
-  awaiting application is silent. One merge decision is reported per build/PR.
+  with a recorded consent decision awaiting consent, an explicit hold, or a
+  current actionable merge-gate deferral. Policy decisions not yet recorded and
+  authorized landings awaiting application are silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
@@ -2079,7 +2114,7 @@ no run. The dispatch header always shows its acknowledged `harvest ON/OFF` gate
 and global `h` controls it. The optional, non-color-only `Harvest` row omits the
 internal run id and represents one deterministically selected open run or
 unresolved attention; its contextual `p` issues the repository-wide resume or
-acknowledgement, and `m` remains the build-only no-op.
+acknowledgement; `l` / `o` landing controls apply only to builds.
 
 ### Status, durable progress, and lease health are separate
 
@@ -2170,7 +2205,7 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
-| `ab-operate` | outside the pipeline; model-invocable | The orchestrator role's operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control auto-merge, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
+| `ab-operate` | outside the pipeline; model-invocable | The orchestrator role's operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control landing consent and holds, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
 
 Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
 `ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not

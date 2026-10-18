@@ -106,13 +106,14 @@ async function remoteNode() {
   await git(['worktree', 'remove', cwd], h.origin)
   for (let i = 0; i < 3; i++) await h.dispatcher.tick()
   await h.runLatest()
+  await h.dispatcher.tick()
   const verified = reduceBuild(await h.events(node.slug))
   expect(integrationHeadVerified(verified, verified.integration!.cycle!.head)).toBe(true)
   await controlBuild({
     store: h.store,
     repo: h.origin,
     slug: node.slug,
-    action: { kind: 'auto-merge-on' },
+    action: { kind: 'land' },
     ticketSource: async () => h.tickets,
   })
   return {
@@ -189,7 +190,7 @@ test('ambiguous non-local merge response recovers kernel provenance after consen
       store: h.store,
       repo: h.origin,
       slug: node.slug,
-      action: { kind: 'auto-merge-off' },
+      action: { kind: 'hold' },
     })
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     expect(forge.linearStackMerges).toHaveLength(1)

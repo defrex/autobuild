@@ -1,3 +1,4 @@
+import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
@@ -25,11 +26,6 @@ import type { EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
-import {
-  autoMergeApplicationType,
-  pendingAutoMerge,
-  recordAutoMergeDeferralObservation,
-} from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import {
@@ -297,51 +293,11 @@ export async function completeFinalizePr(
     if (cancellation.kind !== 'applied')
       throw new Error('node-target native auto-merge cancellation unconfirmed')
   }
-  const autoMerge = nodeTarget ? undefined : pendingAutoMerge(latest.state)
-  const autoMergeResult =
-    autoMerge === undefined
-      ? undefined
-      : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled, {
-          buildSlug: env.build,
-          baseBranch: input.baseBranch,
-          canApply: async () => {
-            const current = (await readBuildFacts(store, env.build)).value.state
-            return (
-              current.autoMerge.requested === true &&
-              current.autoMerge.commandSeq === autoMerge.commandSeq &&
-              current.status !== 'aborted'
-            )
-          },
-        })
-
   const event = await store.append(env.build, {
     actor: KERNEL,
     type: 'finalize.completed',
     payload: { pr },
   })
-
-  if (autoMerge !== undefined) {
-    try {
-      if (autoMergeResult?.kind === 'applied') {
-        await store.append(env.build, {
-          actor: KERNEL,
-          type: autoMergeApplicationType(autoMerge.enabled),
-          payload: { commandSeq: autoMerge.commandSeq },
-        })
-      } else if (autoMergeResult?.kind === 'deferred' && autoMergeResult.reason !== undefined) {
-        await recordAutoMergeDeferralObservation(
-          store,
-          env.build,
-          autoMergeResult.reason,
-          pr.number,
-          autoMerge.commandSeq,
-          deps.ids('obs'),
-        )
-      }
-    } catch {
-      // The janitor retries unmatched commands and provider diagnostics.
-    }
-  }
 
   return event
 }
@@ -436,6 +392,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         return event
       }
       // Local publication remains immediate and push-before-fact.
+      await suspendNativeLanding({ ...deps, slug: env.build }, `implement:${env.round}`)
       await deps.forge.pushBranch(deps.workspacePath, branch)
       const { event } = await store.appendWithArtifacts(
         env.build,

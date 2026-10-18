@@ -48,6 +48,28 @@ async function makeStore(
   return store
 }
 
+async function readyLanding(store: MemoryBuildStore) {
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: {
+      pr: { number: 1, url: 'https://forge/1', headSha: 'head' },
+    },
+  })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'head', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+}
+
 async function raise(
   store: MemoryBuildStore,
   id: string,
@@ -111,12 +133,13 @@ describe('controlBuild — shared durable controls', () => {
       [{ kind: 'pause' }, 'build.pause-requested'],
       [{ kind: 'resume' }, 'build.resume-requested'],
       [{ kind: 'abort' }, 'build.abort-requested'],
-      [{ kind: 'auto-merge-on' }, 'build.auto-merge-requested'],
-      [{ kind: 'auto-merge-off' }, 'build.auto-merge-cancelled'],
+      [{ kind: 'land' }, 'build.land-requested'],
+      [{ kind: 'hold' }, 'build.hold-requested'],
     ]
 
     for (const [action, eventType] of cases) {
       const store = await makeStore()
+      if (action.kind === 'land') await readyLanding(store)
       const before = (await store.getEvents(SLUG)).length
       const result = await controlBuild({
         store,
@@ -129,7 +152,7 @@ describe('controlBuild — shared durable controls', () => {
       const added = (await store.getEvents(SLUG)).slice(before)
       expect(added).toHaveLength(1)
       expect(added[0]?.type).toBe(eventType)
-      expect(added[0]?.payload).toEqual({})
+      expect(added[0]?.payload).toEqual(action.kind === 'land' ? { decisionSeq: before } : {})
       expect(added[0]?.actor).toEqual({ kind: 'human', user: 'operator' })
       await store.close()
     }
@@ -191,26 +214,15 @@ describe('controlBuild — shared durable controls', () => {
     ).rejects.toMatchObject({ code: 'inactive' })
     expect(await store.getEvents(SLUG)).toEqual(beforeDuplicate)
 
-    const on = await controlBuild({
-      store,
-      repo: REPO,
-      slug: SLUG,
-      env: {},
-      action: { kind: 'toggle-auto-merge' },
-    })
-    const off = await controlBuild({
-      store,
-      repo: REPO,
-      slug: SLUG,
-      env: {},
-      action: { kind: 'toggle-auto-merge' },
-    })
-    expect(on).toMatchObject({ kind: 'command', command: 'auto-merge-on' })
-    expect(off).toMatchObject({ kind: 'command', command: 'auto-merge-off' })
-    expect((await eventTypes(store)).slice(-2)).toEqual([
-      'build.auto-merge-requested',
-      'build.auto-merge-cancelled',
-    ])
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'toggle-auto-merge' },
+      }),
+    ).rejects.toThrow('retired')
     await store.close()
   })
 
@@ -1461,7 +1473,7 @@ describe('controlBuild — shared durable controls', () => {
         repo: REPO,
         slug: SLUG,
         env: { USER: 'operator' },
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
       }),
     ).rejects.toMatchObject({ code: 'discard-pending' })
     expect(await store.getEvents(SLUG)).toEqual(before)
@@ -1471,11 +1483,11 @@ describe('controlBuild — shared durable controls', () => {
       repo: REPO,
       slug: SLUG,
       env: { USER: 'operator' },
-      action: { kind: 'auto-merge-off' },
+      action: { kind: 'hold' },
     })
-    expect(withdrawn).toMatchObject({ kind: 'command', command: 'auto-merge-off' })
+    expect(withdrawn).toMatchObject({ kind: 'command', command: 'hold' })
     const afterOff = reduceBuild(await store.getEvents(SLUG))
-    expect(afterOff.autoMerge.requested).toBe(false)
+    expect(afterOff.landing?.command?.kind).toBe('hold')
     expect(afterOff.discardRequest).toBeDefined()
 
     // Recording again after the withdrawal is still refused.
@@ -1485,61 +1497,10 @@ describe('controlBuild — shared durable controls', () => {
         repo: REPO,
         slug: SLUG,
         env: { USER: 'operator' },
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
       }),
     ).rejects.toMatchObject({ code: 'discard-pending' })
     await store.close()
-  })
-
-  test('toggle-auto-merge on an in-flight discard: ON direction refused, OFF direction resolves', async () => {
-    // Without consent the toggle resolves to ON — recording consent, refused
-    // by the discard guard exactly like a direct `auto-merge-on`.
-    const fresh = await makeStore()
-    await fresh.append(SLUG, {
-      actor: { kind: 'human', user: 'discard-op' },
-      type: 'build.discard-requested',
-      payload: {},
-    })
-    const freshBefore = await fresh.getEvents(SLUG)
-    await expect(
-      controlBuild({
-        store: fresh,
-        repo: REPO,
-        slug: SLUG,
-        env: { USER: 'operator' },
-        action: { kind: 'toggle-auto-merge' },
-      }),
-    ).rejects.toMatchObject({ code: 'discard-pending' })
-    expect(await fresh.getEvents(SLUG)).toEqual(freshBefore)
-    await fresh.close()
-
-    // With consent predating the discard (fan-out/claim-time-seed shape) the
-    // toggle resolves to OFF — a withdrawal, which must remain available:
-    // refusing it would leave the discard-contradicting consent driving
-    // checkPr's merge anyway.
-    const consented = await makeStore()
-    await consented.append(SLUG, {
-      actor: { kind: 'human', user: 'operator' },
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await consented.append(SLUG, {
-      actor: { kind: 'human', user: 'discard-op' },
-      type: 'build.discard-requested',
-      payload: {},
-    })
-    const toggled = await controlBuild({
-      store: consented,
-      repo: REPO,
-      slug: SLUG,
-      env: { USER: 'operator' },
-      action: { kind: 'toggle-auto-merge' },
-    })
-    expect(toggled).toMatchObject({ kind: 'command', command: 'auto-merge-off' })
-    const after = reduceBuild(await consented.getEvents(SLUG))
-    expect(after.autoMerge.requested).toBe(false)
-    expect(after.discardRequest).toBeDefined()
-    await consented.close()
   })
 
   test('a discard racing the consent append is caught by the compare-and-append retry', async () => {
@@ -1548,8 +1509,9 @@ describe('controlBuild — shared durable controls', () => {
     // loop re-reads, and the guard fires on the fresh state — the same CAS
     // idiom the fan-out's dispatcher loop and bulk-control use. Without it,
     // the journal would hold the consent+discard pair `checkPr` merges on.
-    for (const action of [{ kind: 'auto-merge-on' }, { kind: 'toggle-auto-merge' }] as const) {
+    for (const action of [{ kind: 'land' }] as const) {
       const store = await makeStore()
+      await readyLanding(store)
       let injected = false
       const proxy = Object.create(store) as MemoryBuildStore
       proxy.appendIfCurrent = async <T extends EventType>(
@@ -1577,7 +1539,7 @@ describe('controlBuild — shared durable controls', () => {
         }),
       ).rejects.toMatchObject({ code: 'discard-pending' })
       const types = (await store.getEvents(SLUG)).map((entry) => entry.type)
-      expect(types).not.toContain('build.auto-merge-requested')
+      expect(types).not.toContain('build.land-requested')
       expect(types).toContain('build.discard-requested')
       await store.close()
     }
@@ -1614,11 +1576,11 @@ describe('controlBuild — shared durable controls', () => {
       repo: REPO,
       slug: SLUG,
       env: { USER: 'operator' },
-      action: { kind: 'auto-merge-off' },
+      action: { kind: 'hold' },
     })
-    expect(withdrawn).toMatchObject({ kind: 'command', command: 'auto-merge-off' })
+    expect(withdrawn).toMatchObject({ kind: 'command', command: 'hold' })
     const after = reduceBuild(await store.getEvents(SLUG))
-    expect(after.autoMerge.requested).toBe(false)
+    expect(after.landing?.command?.kind).toBe('hold')
     expect(after.discardRequest).toBeDefined()
     await store.close()
   })
@@ -1640,7 +1602,7 @@ describe('controlBuild — shared durable controls', () => {
         repo: REPO,
         slug: SLUG,
         env: { USER: 'operator' },
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
       }),
     ).rejects.toMatchObject({ code: 'inactive' })
     expect(await store.getEvents(SLUG)).toEqual(before)

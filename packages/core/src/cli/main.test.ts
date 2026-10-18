@@ -115,7 +115,8 @@ describe('runCli — routing and exit codes', () => {
       'build',
       'pause',
       'resume',
-      'auto-merge',
+      'hold',
+      'land',
       'answer',
       'abort',
     ]) {
@@ -131,7 +132,8 @@ describe('runCli — routing and exit codes', () => {
     for (const command of [
       'ab pause <slug>',
       'ab resume <slug>',
-      'ab auto-merge <slug> <on|off>',
+      'ab hold <slug>',
+      'ab land <slug>',
       'ab answer <slug>',
       'ab answer <slug> [<text>] --review-round-ceiling <n>',
       'ab answer <slug> [<text>] --dismiss',
@@ -437,7 +439,8 @@ describe('SESSIONLESS_COMMANDS', () => {
       'repository',
       'pause',
       'resume',
-      'auto-merge',
+      'hold',
+      'land',
       'answer',
       'abort',
       'plugin',
@@ -864,8 +867,8 @@ describe('runCli — sessionless build controls', () => {
     const invocations = [
       ['pause', slug],
       ['resume', slug],
-      ['auto-merge', slug, 'on'],
-      ['auto-merge', slug, 'off'],
+      ['hold', slug],
+      ['hold', slug],
       ['abort', slug],
       ['answer', slug, 'Use', 'the', 'safe', 'path.'],
     ]
@@ -881,8 +884,8 @@ describe('runCli — sessionless build controls', () => {
     expect(events.slice(-7).map((event) => event.type)).toEqual([
       'build.pause-requested',
       'build.resume-requested',
-      'build.auto-merge-requested',
-      'build.auto-merge-cancelled',
+      'build.hold-requested',
+      'build.hold-requested',
       'build.abort-requested',
       'escalation.answered',
       'escalation.answered',
@@ -1167,8 +1170,8 @@ describe('runCli — sessionless build controls', () => {
     const attempts = [
       ['pause', slug],
       ['resume', slug],
-      ['auto-merge', slug, 'on'],
-      ['auto-merge', slug, 'off'],
+      ['hold', slug],
+      ['hold', slug],
       ['answer', slug, 'retry please'],
       ['abort', slug],
     ]
@@ -1234,8 +1237,8 @@ describe('runCli — sessionless build controls', () => {
       ['pause'],
       ['pause', slug, 'extra'],
       ['resume', slug, '--unknown'],
-      ['auto-merge', slug],
-      ['auto-merge', slug, 'maybe'],
+      ['hold'],
+      ['land', slug, 'maybe'],
       ['answer'],
       ['answer', slug, '--unknown'],
       ['abort', slug, '--store', '--unknown'],
@@ -2049,7 +2052,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
 
     expect(
       await runCli(
-        ['dispatch', '--once', '--plain', '--store', storeRef, '--no-intake', '--auto-merge'],
+        ['dispatch', '--once', '--plain', '--store', storeRef, '--no-intake'],
         commandDeps,
       ),
     ).toBe(0)
@@ -2068,11 +2071,6 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
         type: 'dispatcher.intake-set',
         payload: { enabled: false, run: expect.stringMatching(/-dispatch-/) },
       },
-      {
-        actor: { kind: 'human', user: 'launch-user' },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true, run: expect.stringMatching(/-dispatch-/) },
-      },
     ])
     await persisted.close()
 
@@ -2084,12 +2082,12 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     persisted = openLocalStore(storeRef)
     expect(
       (await persisted.getRepoEvents(tmp)).filter((event) => event.type.endsWith('-set')).length,
-    ).toBe(2)
+    ).toBe(1)
     await persisted.close()
   })
 
   test('both forms of each durable repository setting parse', async () => {
-    for (const flag of ['--intake', '--no-intake', '--auto-merge', '--no-auto-merge']) {
+    for (const flag of ['--intake', '--no-intake']) {
       const d = deps()
       expect(await runCli(['dispatch', '--once', flag], { ...d, workspacePath: tmp })).toBe(1)
       expect(d.err.join('\n')).toContain('autobuild.toml: not found')
@@ -2118,7 +2116,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       const d = deps()
       expect(await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp })).toBe(1)
       const err = d.err.join('\n')
-      expect(err).toContain('--auto-merge and --no-auto-merge cannot be combined')
+      expect(err).toContain('Auto-merge flags are retired')
       expect(err).toContain('usage: ab dispatch')
     }
   })
@@ -2131,7 +2129,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
         workspacePath: tmp,
       }),
     ).toBe(1)
-    expect(d.err.join('\n')).toContain('autobuild.toml: not found')
+    expect(d.err.join('\n')).toContain('Auto-merge flags are retired')
     expect(d.err.join('\n')).not.toContain('cannot be combined')
   })
 
@@ -2142,7 +2140,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     expect(err).toContain('unknown flag --dashboard')
     expect(err).toContain('[--plain]')
     expect(err).toContain('[--intake | --no-intake]')
-    expect(err).toContain('[--auto-merge | --no-auto-merge]')
+    expect(err).toContain('[--intake | --no-intake]')
   })
 
   test('dispatch help advertises both durable repository settings and stored fallback', async () => {
@@ -2150,10 +2148,10 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     await runCli(['help', 'dispatch'], d)
     const help = d.out.join('\n')
     expect(help).toContain(
-      'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
+      'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake]',
     )
-    expect(help).toContain('durably set repository defaults')
-    expect(help).toContain('omission reuses stored state (fresh repo: intake on, auto-merge off)')
+    expect(help).toContain('Durably turn new ticket intake')
+    expect(help).toContain('omission')
     expect(help).toContain('On a build, pause or cancel a pending pause')
     expect(help).toContain('On a build, resume a paused or blocked build')
     expect(help).toContain('pause every pausable build and turn intake')

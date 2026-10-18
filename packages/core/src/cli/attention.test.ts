@@ -197,7 +197,19 @@ test('merge attention respects consent, current deferral, changed heads, and ter
     type: 'finalize.completed',
     payload: { pr: { number: 1, url: 'https://example.com/pr/1', headSha: 'aaa' } },
   })
-  expect(await read()).toBeNull() // pending consent is armed
+  await store.append('b', {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'aaa', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+  expect(await read()).toBeNull() // historical explicit consent is armed
   await store.append(
     'b',
     autoMergeDeferralObservation(
@@ -219,7 +231,7 @@ test('merge attention respects consent, current deferral, changed heads, and ter
     type: 'build.auto-merge-cancelled',
     payload: {},
   })
-  expect(await read()).toMatchObject({ reason: 'Auto-merge is not armed' })
+  expect(await read()).toMatchObject({ reason: 'Landing held' })
   await store.append('b', {
     actor: DISPATCHER,
     type: 'pr.conflicted',

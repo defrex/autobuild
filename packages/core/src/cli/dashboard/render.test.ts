@@ -121,7 +121,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
     expect(toggles).toContain('intake ON')
-    expect(toggles).toContain('auto merge OFF')
+    expect(toggles).not.toContain('landing OFF')
     expect(toggles).toContain('harvest ON')
     expect(toggles).not.toContain('repository PAUSED')
     expect(summary.indexOf('Autobuild')).toBe(3)
@@ -339,8 +339,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('process defaults and the acknowledged durable gate render explicit ON/OFF state', () => {
     expect(rd({ ...model([]), drained: true }, WIDE)[1]).toContain('intake OFF')
     expect(rd(model([]), WIDE)[1]).toContain('intake ON')
-    expect(rd(model([]), WIDE)[1]).toContain('auto merge OFF')
-    expect(rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1]).toContain('auto merge ON')
+    expect(rd(model([]), WIDE)[1]).not.toContain('landing OFF')
+    expect(rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1]).not.toContain('landing ON')
     expect(rd(model([]), WIDE)[1]).toContain('harvest ON')
     expect(rd({ ...model([]), harvestPaused: true }, WIDE)[1]).toContain('harvest OFF')
     expect(rd({ ...model([]), drained: true }, WIDE)[1]).not.toContain('repository PAUSED')
@@ -350,7 +350,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     )
     const defaults = rd(model([]), { color: true, width: 200 })[1]!
     expect(defaults).toContain('\x1b[32mintake ON\x1b[0m')
-    expect(defaults).toContain('\x1b[33mauto merge OFF\x1b[0m')
+    expect(defaults).not.toContain('landing OFF')
     expect(defaults).toContain('\x1b[32mharvest ON\x1b[0m')
 
     const toggled = rd(
@@ -364,7 +364,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       { color: true, width: 200 },
     )[1]!
     expect(toggled).toContain('\x1b[33mintake OFF\x1b[0m')
-    expect(toggled).toContain('\x1b[32mauto merge ON\x1b[0m')
+    expect(toggled).not.toContain('landing ON')
     expect(toggled).toContain('\x1b[33mharvest OFF\x1b[0m')
     expect(toggled).toContain('\x1b[33mrepository PAUSED\x1b[0m')
   })
@@ -380,7 +380,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('the final legend exposes only controls meaningful for the selection', () => {
     const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
-      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  p pause all  r resume all  Ctrl-C quit',
+      ' Keys: Up/Down select  h harvest  l land  o hold  i intake  p pause all  r resume all  Ctrl-C quit',
     )
 
     const runningHarvestLines = rd(
@@ -421,7 +421,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       WIDE,
     )
     expect(buildLines.at(-1)).toBe(
-      ' Keys: Up/Down select  Enter details  m auto-merge  p pause  a abort  Ctrl-C quit',
+      ' Keys: Up/Down select  Enter details  l land  o hold  p pause  a abort  Ctrl-C quit',
     )
     // The exported constant is the poll-race fallback for a build row whose
     // build vanished between poll and paint. Pinning it to the rendered line
@@ -440,7 +440,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       WIDE,
     )
     expect(detailLines.at(-1)).toBe(
-      ' Keys: Up/Down scroll  Left/Right select session  Enter transcript  m auto-merge  p pause  a abort  Esc back  Ctrl-C quit',
+      ' Keys: Up/Down scroll  Left/Right select session  Enter transcript  l land  o hold  p pause  a abort  Esc back  Ctrl-C quit',
     )
 
     for (const controls of [
@@ -1204,16 +1204,16 @@ describe('renderDashboard: never color-only', () => {
     )
     const row = (slug: string): string => lines.find((line) => line.includes(slug))!
     for (const slug of ['off-row', 'requested-row', 'enabled-row', 'cancelling-row']) {
-      expect(row(slug)).toContain(`auto merge ${slug.split('-')[0]}`)
+      expect(row(slug)).toContain(`landing ${slug.split('-')[0]}`)
     }
     // State is never conveyed by the absence of a token: off draws its own.
-    expect(row('off-row')).toContain('auto merge off')
+    expect(row('off-row')).toContain('landing off')
     expect(lines.join('\n')).not.toContain('auto requested')
     expect(lines.join('\n')).not.toContain('auto enabled')
     expect(lines.join('\n')).not.toContain('auto cancelling')
   })
 
-  test('an off token turns red while the repository default reads ON', () => {
+  test('legacy defaults cannot change a landing token color', () => {
     const mismatch = rd(
       { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: true },
       { color: true, width: 200 },
@@ -1221,8 +1221,8 @@ describe('renderDashboard: never color-only', () => {
       .join('\n')
       .split('\n')
       .find((line) => stripAnsi(line).includes('off-row'))!
-    expect(stripAnsi(mismatch)).toContain('auto merge off')
-    expect(mismatch).toContain('\x1b[31mauto merge off')
+    expect(stripAnsi(mismatch)).toContain('landing off')
+    expect(mismatch).not.toContain('\x1b[31mlanding off')
 
     const agrees = rd(
       { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: false },
@@ -1231,8 +1231,8 @@ describe('renderDashboard: never color-only', () => {
       .join('\n')
       .split('\n')
       .find((line) => stripAnsi(line).includes('off-row'))!
-    expect(stripAnsi(agrees)).toContain('auto merge off')
-    expect(agrees).not.toContain('\x1b[31mauto merge off')
+    expect(stripAnsi(agrees)).toContain('landing off')
+    expect(agrees).not.toContain('\x1b[31mlanding off')
   })
 
   test('the parked no-consent reason renders in the row and the detail view', () => {
@@ -1249,15 +1249,15 @@ describe('renderDashboard: never color-only', () => {
       ],
     })
     const row = rd(model([parked]), WIDE).join('\n')
-    expect(row).toContain('no auto-merge consent has been requested')
-    expect(row).toContain('`ab auto-merge parked-build on`')
+    expect(row).toContain('Landing awaits consent')
+    expect(row).toContain('ab land parked-build')
 
     const detail = rd(
       { ...model([parked]), view: { kind: 'detail' as const, slug: parked.slug, scroll: 0 } },
       WIDE,
     ).join('\n')
-    expect(detail).toContain('no auto-merge consent has been requested')
-    expect(detail).toContain('`ab auto-merge parked-build on`')
+    expect(detail).toContain('Landing awaits consent')
+    expect(detail).toContain('ab land parked-build')
   })
 
   test('a step without a reason renders no dangling separator', () => {
@@ -1347,16 +1347,16 @@ describe('renderDashboard: emphasis', () => {
     expect(out).not.toContain('\x1b]8;;refs/heads/')
   })
 
-  test('auto merge uses cyan while requested, green when enabled, and yellow while cancelling', () => {
-    expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mauto merge requested')
-    expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mauto merge enabled')
-    expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mauto merge cancelling')
+  test('landing uses cyan while requested, green when enabled, and yellow while cancelling', () => {
+    expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mlanding requested')
+    expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mlanding enabled')
+    expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mlanding cancelling')
     const offRow = colored(build({ autoMerge: 'off' }))
       .split('\n')
       .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
     // Off (default off here) still renders its token, in the dim tone.
-    expect(stripAnsi(offRow)).toContain('auto merge off')
-    expect(offRow).toContain('\x1b[2mauto merge off')
+    expect(stripAnsi(offRow)).toContain('landing off')
+    expect(offRow).toContain('\x1b[2mlanding off')
   })
 })
 
@@ -2392,7 +2392,7 @@ describe('renderDashboard: build detail and transcript views', () => {
       { color: false, width: 200 },
     ).join('\n')
     expect(out).toContain('status BLOCKED (also paused)')
-    expect(out).toContain('auto merge enabled')
+    expect(out).toContain('landing policy pending')
     expect(out).toContain('PR open')
     expect(out).toContain('plan (round 1, 2s)')
     expect(out).toContain('verify:unit (attempt 2, 3s)')

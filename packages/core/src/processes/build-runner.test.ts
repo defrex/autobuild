@@ -2149,6 +2149,7 @@ describe('finalize post-step publication', () => {
   async function readyHarness(options: HarnessOptions = {}): Promise<Harness> {
     const h = await makeHarness(options)
     await seedReadyForFinalizeStep(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
     return h
   }
 
@@ -2170,6 +2171,16 @@ describe('finalize post-step publication', () => {
       finalizeHeads: [FINALIZE_HEAD],
       finalizeAncestors: [true],
     })
+
+    await h.forge.setAutoMerge(h.workspacePath, 7, true)
+    const push = h.forge.pushBranch.bind(h.forge)
+    h.forge.pushBranch = async (...args) => {
+      expect(h.forge.isAutoMergeEnabled(7)).toBe(false)
+      expect(
+        ofType(await h.store.getEvents(SLUG), 'landing.native-applied').at(-1)?.payload,
+      ).toMatchObject({ enabled: false, operation: 'finalize-step:release-notes' })
+      await push(...args)
+    }
 
     expect((await h.br.step()).kind).toBe('run-finalize-step')
     expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
@@ -2263,6 +2274,18 @@ describe('finalize post-step publication', () => {
     const observation = ofType(await h.store.getEvents(SLUG), 'observation.recorded').at(-1)
     expect(observation?.payload.summary).toContain('.ab/release-notes.md')
     expect(observation?.payload.summary).toContain('retry completion')
+  })
+
+  test('an unconfirmed native cancellation prevents a post-step push', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ''],
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+    })
+    h.forge.setAutoMerge = async () => ({ kind: 'deferred' })
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([])
+    await expectFailureTolerance(h, 'cancellation unconfirmed')
   })
 
   test('an unchanged HEAD creates and pushes nothing', async () => {
@@ -2478,6 +2501,7 @@ skill = "custom-notes-skill"
       finalizeAncestors: [true],
     })
     await seedReady(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
 
     await h.br.step()
 
@@ -4170,6 +4194,7 @@ describe('phase-session budget', () => {
       }),
     })
     await seedReadyForFinalizeStep(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
     await h.br.attach()
 
     const step = h.br.step()

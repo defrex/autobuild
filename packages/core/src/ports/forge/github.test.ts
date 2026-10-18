@@ -225,6 +225,29 @@ describe('GitHubForge.getPrState', () => {
     await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('Not Found')
   })
 
+  test.each([true, false])(
+    'ordinary PR read exposes native auto-merge (%s), including ETag reuse',
+    async (enabled) => {
+      const { forge, calls } = makeForge([
+        {
+          json: { ...stateJson('open', true), auto_merge: enabled ? {} : null },
+          headers: { etag: '"native"' },
+        },
+        { status: 304 },
+      ])
+      for (let poll = 0; poll < 2; poll++)
+        expect(await forge.getPrState('/ws', 42)).toEqual({
+          state: 'open',
+          mergeable: true,
+          nativeAutoMerge: enabled,
+        })
+      expect(calls).toHaveLength(2)
+      expect(
+        calls.every((call) => call.method === 'GET' && call.path === 'repos/acme/app/pulls/42'),
+      ).toBe(true)
+    },
+  )
+
   test('a cached ETag revalidates: 304 returns the previous poll result unchanged', async () => {
     const { forge, calls } = makeForge([
       { json: stateJson('open', true), headers: { etag: '"etag-1"' } },

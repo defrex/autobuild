@@ -371,8 +371,10 @@ export interface PrRef {
   headSha: string
 }
 
+/** Native state is sampled with the ordinary PR read. Omission means the
+ * adapter cannot observe it; callers retain conservative cancellation. */
 export type PrState =
-  | { state: 'open'; mergeable: boolean | null }
+  | { state: 'open'; mergeable: boolean | null; nativeAutoMerge?: boolean }
   | { state: 'merged'; sha: string; headSha?: string }
   | { state: 'closed' }
 

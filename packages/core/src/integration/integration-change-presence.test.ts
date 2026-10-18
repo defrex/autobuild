@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { makeHarness, happyHandlers, readyTicket, writeFileIn } from './harness'
+import { makeHarness, happyHandlers, readyTicket, writeFileIn, CONFIG_TOML } from './harness'
 import { reduceBuild } from '../kernel/reducer'
 
 for (const scenario of [
@@ -34,6 +34,7 @@ for (const scenario of [
     }
     const h = await makeHarness({
       localGitForge: true,
+      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers,
       tickets: [
         { ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' },
@@ -139,6 +140,7 @@ for (const trailerFlag of [undefined, false]) {
     const { DISPATCHER } = await import('../events/envelope')
     const h = await makeHarness({
       localGitForge: true,
+      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers: happyHandlers(),
       tickets: [
         { ...readyTicket('NODE', { title: 'Empty node' }), kind: 'node' },
@@ -237,6 +239,7 @@ for (const blocked of [false, true]) {
     const reads: string[] = []
     const h = await makeHarness({
       localGitForge: true,
+      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers: happyHandlers(),
       tickets: [
         {

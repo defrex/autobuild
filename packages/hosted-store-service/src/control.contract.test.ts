@@ -1,6 +1,8 @@
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { abBuildControl } from '@defrex/autobuild/testing'
+import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
+import type { TicketSource } from '@defrex/autobuild/plugin-sdk'
 import type { BuildControlAction } from '@defrex/autobuild/operator'
 import { abBulkControl } from '@defrex/autobuild/testing'
 import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
@@ -45,7 +47,7 @@ function fetchFor(server: { fetch(req: Request): Promise<Response> }): typeof fe
     )) as typeof fetch
 }
 
-function api(store: BuildStore): OperatorApiClient {
+function api(store: BuildStore, ticketBackend?: OperatorTicketBackend): OperatorApiClient {
   return new OperatorApiClient({
     url: 'http://operator.test',
     token: mintToken(SECRET, {
@@ -57,6 +59,7 @@ function api(store: BuildStore): OperatorApiClient {
       createOperatorServer({
         projects: testProjects([REPO]),
         store,
+        ticketBackend,
         secret: SECRET,
         clock,
       }),
@@ -198,16 +201,36 @@ describe('operator behavioral parity contract', () => {
       request: { action: 'abort' },
     },
     {
-      name: 'auto merge on',
-      seed: async () => {},
-      direct: { kind: 'auto-merge-on' },
-      request: { action: 'auto-merge-on' },
+      name: 'land',
+      seed: async (store) => {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'finalize.completed',
+          payload: {
+            pr: { number: 1, url: 'https://forge/1', headSha: 'head' },
+          },
+        })
+        await store.append(SLUG, {
+          actor: DISPATCHER,
+          type: 'landing.decided',
+          payload: {
+            candidate: { head: 'head', parent: 'base', cycle: '1' },
+            from: 'leaf',
+            into: { kind: 'root' },
+            labels: [],
+            mode: 'consent',
+            rule: { default: true },
+          },
+        })
+      },
+      direct: { kind: 'land' },
+      request: { action: 'land' },
     },
     {
-      name: 'auto merge off',
+      name: 'hold',
       seed: async () => {},
-      direct: { kind: 'auto-merge-off' },
-      request: { action: 'auto-merge-off' },
+      direct: { kind: 'hold' },
+      request: { action: 'hold' },
     },
   ]
 
@@ -220,6 +243,71 @@ describe('operator behavioral parity contract', () => {
       )
     })
   }
+
+  test('HTTP land rechecks ready node completeness through the configured ticket backend', async () => {
+    const store = await makeStore({ active: false, ticket: true, ticketSource: 'fake' })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        ticket: { source: 'fake', id: 'AUT-1' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await store.append(SLUG, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'parent' } })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'integration.prepared',
+      payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+        from: 'node',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    let reads = 0
+    const backend: OperatorTicketBackend = {
+      contextFor: async (repo) => ({
+        repo,
+        teamKey: 'test',
+        tickets: { source: 'file', readyState: 'ready' },
+      }),
+      sourceFor: () =>
+        ({
+          name: 'fake',
+          integrationTree: true,
+          listAll: async () => {
+            reads++
+            return { tickets: [], diagnostics: [] }
+          },
+        }) as unknown as TicketSource,
+      statesFor: () => [],
+    }
+    await api(store, backend).controlBuild(REPO, SLUG, { action: 'land' })
+    expect(reads).toBeGreaterThan(0)
+    expect(
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested'),
+    ).toHaveLength(1)
+  })
 
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {
     const stores = [await makeStore(), await makeStore()]
@@ -417,25 +505,6 @@ describe('operator behavioral parity contract', () => {
         throughApi
           ? api(store).toggleIntake(REPO)
           : toggleRepositorySetting({ store, repo: REPO, user: USER, setting: 'intake' }),
-      async (store: MemoryBuildStore, throughApi: boolean) =>
-        throughApi
-          ? api(store).setAutoMergeDefault(REPO, true)
-          : setRepositorySetting({
-              store,
-              repo: REPO,
-              user: USER,
-              setting: 'auto-merge-default',
-              enabled: true,
-            }),
-      async (store: MemoryBuildStore, throughApi: boolean) =>
-        throughApi
-          ? api(store).toggleAutoMergeDefault(REPO)
-          : toggleRepositorySetting({
-              store,
-              repo: REPO,
-              user: USER,
-              setting: 'auto-merge-default',
-            }),
       async (store: MemoryBuildStore, throughApi: boolean) => {
         if (throughApi) {
           await api(store).toggleHarvest(REPO)
@@ -457,45 +526,25 @@ describe('operator behavioral parity contract', () => {
     }
   })
 
-  test('a run-bearing default write is exact; a run-less one stays bare', async () => {
+  test('retired default controls reject without writing', async () => {
     const store = await makeStore()
-    await setRepositorySetting({
-      store,
-      repo: REPO,
-      user: USER,
-      setting: 'auto-merge-default',
-      enabled: true,
-      run: 'run-1',
+    await expect(
+      setRepositorySetting({
+        store,
+        repo: REPO,
+        user: USER,
+        setting: 'auto-merge-default',
+        enabled: true,
+      }),
+    ).rejects.toThrow('retired')
+    await expect(
+      toggleRepositorySetting({ store, repo: REPO, user: USER, setting: 'auto-merge-default' }),
+    ).rejects.toThrow('retired')
+    await expect(api(store).setAutoMergeDefault(REPO, true)).rejects.toMatchObject({
+      status: 409,
+      message: 'Auto-merge default is retired; configure [[landing]] rules in autobuild.toml',
     })
-    await toggleRepositorySetting({
-      store,
-      repo: REPO,
-      user: USER,
-      setting: 'auto-merge-default',
-      run: 'run-2',
-    })
-    expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true, run: 'run-1' },
-      },
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: false, run: 'run-2' },
-      },
-    ])
-    // The operator API (which carries no run) keeps writing the bare payload.
-    const apiStore = await makeStore()
-    await api(apiStore).setAutoMergeDefault(REPO, true)
-    expect(repoWrites(await apiStore.getRepoEvents(REPO), 0)).toEqual([
-      {
-        actor: { kind: 'human', user: USER },
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true },
-      },
-    ])
+    expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([])
   })
 
   for (const direction of ['pause', 'resume'] as const) {

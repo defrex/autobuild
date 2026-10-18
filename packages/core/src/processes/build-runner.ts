@@ -1,3 +1,4 @@
+import { suspendNativeLanding } from '../kernel/landing-publication'
 import { integrationCurrent } from '../kernel/integration-state'
 import { replayNodeChange } from '../kernel/node-restack'
 import { restoreReplay } from '../kernel/reconcile-restack'
@@ -1863,6 +1864,7 @@ export class BuildRunner {
             })
             return
           }
+          await suspendNativeLanding(this.deps, `finalize-step:${step}`)
           await this.deps.forge.pushBranch(this.deps.workspacePath, this.deps.branch)
           pushedHead = head
         }

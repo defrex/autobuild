@@ -263,17 +263,9 @@ const buildControlInput = z.strictObject({
   repo: repoField,
   slug: slugField,
   action: z
-    .enum([
-      'pause',
-      'cancel-pause',
-      'resume',
-      'auto-merge-on',
-      'auto-merge-off',
-      'abort',
-      'discard',
-    ])
+    .enum(['pause', 'cancel-pause', 'resume', 'land', 'hold', 'abort', 'discard'])
     .describe(
-      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "auto-merge-on"/"auto-merge-off" for native auto-merge — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
+      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "land" for landing consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
     ),
 })
 
@@ -283,11 +275,7 @@ const repositoryStatusInput = z.strictObject({ repo: repoField })
 
 const repositorySettingsInput = z.strictObject({
   repo: repoField,
-  setting: z
-    .enum(['intake', 'auto-merge-default'])
-    .describe(
-      '"intake" gates whether new tickets may be claimed; "auto-merge-default" is the claim-time auto-merge default for newly claimed builds.',
-    ),
+  setting: z.enum(['intake']).describe('"intake" gates whether new tickets may be claimed.'),
   enabled: z
     .boolean()
     .optional()
@@ -566,7 +554,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Request a durable control for one active build: pause/cancel-pause, resume, auto-merge on/off — or the destructive abort and discard.',
+    'Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.',
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {

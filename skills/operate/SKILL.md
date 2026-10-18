@@ -1,6 +1,6 @@
 ---
 name: operate
-description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control auto-merge, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or inside the hosted service with the operator tool registry.
+description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control landing consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or inside the hosted service with the operator tool registry.
 ---
 
 # Operating the repository
@@ -213,7 +213,15 @@ Read events with a cursor or a small `--events` count; logs are long.
   hold and release the whole repository.
 - `ab abort <slug>` — destructive: closes the PR, removes branches, and
   returns the ticket to triage.
-- `ab auto-merge <slug> on|off` — request or cancel native auto-merge.
+- `ab hold <slug>` — persistently hold a landing and revoke earlier consent.
+- `ab land <slug>` — consent to a ready landing and clear its hold. Consent
+  survives restacks and verification; use hold to withdraw it when work changes.
+  Read the matched policy, readiness, acknowledged command and gate deferral in
+  build status before acting. Work the consent queue by checking completeness
+  and current verification, then issuing land for the chosen landing. A land
+  acknowledgement accepts consent; it never promises that gates passed.
+- Configure ordered `[[landing]]` rules for project policy through ab-guide.
+  Repository auto-merge defaults and per-build auto-merge toggles are retired.
 
 ### Tickets
 

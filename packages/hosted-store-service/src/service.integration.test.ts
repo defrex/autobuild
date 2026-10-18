@@ -49,7 +49,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const h = await makeHarness({
     handlers: happyHandlers(),
     ticketSource: ticketBackend,
-    configToml: hostedConfig,
+    configToml: `${hostedConfig}\n[[landing]]\nmode = "consent"\n`,
     localGitForge: true,
     processCli: true,
     storeAdapter: async (backing) => {

@@ -57,6 +57,10 @@ beforeEach(async () => {
   distV1 = join(root, 'dist-v1')
   distV2 = join(root, 'dist-v2')
   await mkdir(target, { recursive: true })
+  await writeFile(
+    join(target, 'autobuild.toml'),
+    'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
   await writeDist(distV1, { alpha: BODY })
 })
 
@@ -131,6 +135,10 @@ async function seedRealPlanConflict(repo: string): Promise<{
   resolved: string
 }> {
   await mkdir(repo, { recursive: true })
+  await writeFile(
+    join(repo, 'autobuild.toml'),
+    'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
   const plan = (await readDistSkills(defaultDistRoot())).find(
     (skill) => skill.installName === 'ab-plan',
   )
@@ -172,6 +180,10 @@ describe('upgrade distribution fixture', () => {
 
 describe('abUpgrade — legacy project path migration', () => {
   test('moves the complete .agent tree before upgrading and repairs Claude links', async () => {
+    await writeFile(
+      join(target, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     const local = installedForm('alpha', BODY.replace('intro line one', 'intro line one (local)'))
     const pristine = installedForm('alpha', BODY)
     const oldRoot = join(target, '.agent', 'skills')
@@ -482,6 +494,10 @@ describe('abUpgrade — the four pristine-based cases', () => {
       const oldDist = join(root, `old-${entry.name}`)
       const nextDist = join(root, `next-${entry.name}`)
       await mkdir(repo, { recursive: true })
+      await writeFile(
+        join(repo, 'autobuild.toml'),
+        'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      )
       await writeDist(oldDist, { alpha: BODY })
       await abInit({ targetRepo: repo, distRoot: oldDist })
       const live = installedSkillPath(repo, 'ab-alpha')
@@ -905,6 +921,7 @@ describe('abUpgrade — fixed retired skills', () => {
 
     const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
     expect(second).toEqual({
+      landing: { changed: false },
       skills: [{ skill: 'ab-alpha', action: 'current' }],
       discoveryConflicts: [],
       exitCode: 0,
@@ -942,6 +959,7 @@ describe('abUpgrade — fixed retired skills', () => {
 
     const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
     expect(second).toEqual({
+      landing: { changed: false },
       skills: [{ skill: 'ab-alpha', action: 'current' }],
       discoveryConflicts: [],
       exitCode: 0,
@@ -1012,6 +1030,7 @@ describe('abUpgrade — fixed retired skills', () => {
       join(target, 'autobuild.toml'),
       [
         'baseBranch = "main"',
+        'landing = []',
         '[commands]',
         '[verify]',
         'steps = ["legacy-setup"]',
@@ -1049,18 +1068,10 @@ describe('abUpgrade — fixed retired skills', () => {
     await installOldDistribution()
     await writeFile(join(target, 'autobuild.toml'), '[verify\ninvalid')
 
-    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
-
+    await expect(abUpgrade({ targetRepo: target, distRoot: distV2 })).rejects.toThrow()
     for (const name of ['ab-setup', 'ab-verify-e2e']) {
-      const entry = first.skills.find((candidate) => candidate.skill === name)
-      expect(entry?.action).toBe('kept')
-      expect(entry?.detail).toContain('could not safely inspect autobuild.toml references')
       expect(existsSync(installedSkillPath(target, name))).toBe(true)
-      expect(existsSync(pristineSkillPath(target, name))).toBe(false)
     }
-
-    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
-    expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
   })
 
   test('never removes or reports a same-named repository-authored skill without pristine provenance', async () => {
@@ -1234,6 +1245,10 @@ describe('runCli routing — ab upgrade outside a session', () => {
     const oldDist = join(root, 'cancel-old')
     const nextDist = join(root, 'cancel-next')
     await mkdir(repo, { recursive: true })
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     await writeDist(oldDist, { alpha: BODY, beta: BODY.replace('# alpha', '# beta') })
     await abInit({ targetRepo: repo, distRoot: oldDist })
 
@@ -1359,6 +1374,10 @@ describe('runCli routing — ab upgrade outside a session', () => {
     for (const noCommit of [false, true]) {
       const repo = join(root, noCommit ? 'commit-off' : 'commit-on')
       await mkdir(repo)
+      await writeFile(
+        join(repo, 'autobuild.toml'),
+        'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      )
       await abInit({ targetRepo: repo, distRoot: oldDist })
       await spawnExec(['git', 'init', '-q'], { cwd: repo })
       await spawnExec(['git', 'config', 'user.name', 'Upgrade Test'], { cwd: repo })
@@ -1410,6 +1429,10 @@ describe('runCli routing — ab upgrade outside a session', () => {
       alpha: BODY.replace('middle line two', 'middle line two upgraded'),
     })
     await mkdir(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     await abInit({ targetRepo: repo, distRoot: oldDist })
     await writeFile(join(repo, 'package.json'), '{"dependencies":{"autobuild":"old"}}\n')
     await writeFile(join(repo, 'bun.lock'), '{"lock":"old"}\n')

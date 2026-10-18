@@ -112,12 +112,10 @@ JSON bodies are strict: unknown fields are rejected.
 
 | Method and path | Body |
 |---|---|
-| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"auto-merge-on"\|"auto-merge-off"}` |
+| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}` |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |
 | `POST …/settings/intake/toggle` | Empty body. |
-| `PUT …/settings/auto-merge-default` | `{"enabled":boolean}` |
-| `POST …/settings/auto-merge-default/toggle` | Empty body. |
 | `POST …/bulk-control` | `{"action":"pause"\|"resume"}`. The hold fact, intake fact, then eligible build events are written in that order. |
 | `POST …/harvest/control` | `{"action":"toggle-gate"}` or `{"action":"run","run":"…"}`. A run action is bound to that concrete projected run. |
 | `POST …/tickets/states` | `{name,about?}` → `{state,created}`; requires attributed operator identity (`tickets.state.create` in MCP). Hosted duplicate names are refused case-insensitively. |
@@ -296,3 +294,7 @@ Ticket results include kind (default work) and optional same-source node target.
 Metadata-only patches are accepted. Target validation and demotion guards apply
 to CLI, HTTP and MCP alike; unsupported sources refuse even explicit defaults
 or clears before changing other fields. Dispatch routing is unchanged.
+
+Landing controls use `land` and `hold` with acknowledged durable state. Land
+requires readiness and survives restacks; hold persists until land. Repository
+auto-merge settings are retired; configure ordered `[[landing]]` rules.

@@ -216,11 +216,11 @@ test('closing detail releases the selection, and toggling opens after switching 
 test('auto-merge indicator commands select their target without toggling same-row detail', () => {
   const value = harness({ kind: 'build', slug: 'merge-target' })
 
-  value.handlers.buildControl('merge-target', 'auto-merge-on')
+  value.handlers.buildControl('merge-target', 'land')
 
   expect(value.state().selected).toEqual({ kind: 'build', slug: 'merge-target' })
   expect(value.state().detail).toBe(true)
-  expect(value.controls).toEqual([{ slug: 'merge-target', action: 'auto-merge-on' }])
+  expect(value.controls).toEqual([{ slug: 'merge-target', action: 'land' }])
 })
 
 test('Harvest row actions select their run before dispatch', () => {

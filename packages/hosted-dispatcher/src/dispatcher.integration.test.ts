@@ -640,6 +640,12 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       async () => (await buildEvents(b1Slug)).some((event) => event.type === 'finalize.completed'),
       'guest B1 finalize.completed',
     )
+    // Finalize is durable before runner teardown finishes. Settlement must
+    // observe an exited guest, rather than race its remaining cleanup.
+    const b1Runs = [...guestRuns.values()].filter((run) => run.slug === b1Slug)
+    expect(b1Runs).toHaveLength(1)
+    await Promise.all(b1Runs.map((run) => run.done))
+    expect(b1Runs[0]!.error).toBeUndefined()
     const executionsBeforeSettle = (await buildEvents(b1Slug)).filter(
       (event) => event.type === 'execution.started',
     ).length
@@ -712,10 +718,9 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       )
     }
 
-    // Auto-merge default ON + durable pause: the build parks paused, the next
+    // Default auto landing + durable pause: the build parks paused, the next
     // invocation performs no launch work for it, and the resume control makes
     // a later invocation launch it to completion with auto-merge applied.
-    await operator.setAutoMergeDefault(REPO, true)
     clock.advance(60_000)
     ticketBackend.add(readyTicket('T-2', { title: 'Add request timeouts' }))
     holdImplement = new Promise<void>((resolve) => {
@@ -767,8 +772,8 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     await waitForBuildEvent(b2Slug, 'finalize.completed', 'guest B2 finalize.completed')
     pausedEvents = await buildEvents(b2Slug)
     expect(pausedEvents.some((event) => event.type === 'build.resumed')).toBe(true)
-    // The kernel's next-tick auto-merge decision: the finalize applied the
-    // repository default to the opened PR through the forge.
+    // The next janitor tick applies the default auto landing policy.
+    await get({ authorization: 'Bearer cron-secret' })
     expect(
       fakeForge.autoMergeCalls.some((call) => call.enabled === true),
       JSON.stringify(fakeForge.autoMergeCalls),
