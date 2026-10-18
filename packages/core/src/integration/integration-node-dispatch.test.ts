@@ -637,50 +637,86 @@ for (const checkout of ['scratch', 'absent'] as const) {
   }, 30_000)
 }
 
-test('node-target finalize commits are collapsed before guarded landing', async () => {
-  const { git } = await import('./harness')
-  const { humanActor } = await import('../events/envelope')
-  const configToml = `${CONFIG_TOML.replace(
-    'test = "test -f ok.marker"',
-    'test = "test -f ok.marker"\npost = "touch post.marker && git add post.marker && git commit -m post"',
-  )}\n[finalize]\nsteps = ["post"]\n[finalize.post]\nkind = "check"\ncommand = "post"\n`
-  const h = await makeHarness({
-    localGitForge: true,
-    configToml,
-    handlers: happyHandlers(),
-    tickets: [
-      { ...readyTicket('NODE', { title: 'Finalize destination' }), kind: 'node' },
-      { ...readyTicket('CHILD', { title: 'Finalize child' }), target: 'NODE' },
-    ],
-  })
-  try {
-    await h.dispatcher.tick()
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
-    const records = await h.store.listBuilds()
-    const node = records.find((record) => record.ticket?.id === 'NODE')!
-    const child = records.find((record) => record.ticket?.id === 'CHILD')!
-    await h.store.append(child.slug, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
+for (const conflict of [false, true]) {
+  test(`node-target finalize commits are collapsed before guarded landing (reconciled: ${conflict})`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { humanActor } = await import('../events/envelope')
+    const configToml = `${CONFIG_TOML.replace(
+      'test = "test -f ok.marker"',
+      'test = "test -f ok.marker"\npost = "touch post.marker && git add post.marker && git commit -m post"',
+    )}\n[finalize]\nsteps = ["post"]\n[finalize.post]\nkind = "check"\ncommand = "post"\n`
+    const happy = happyHandlers()
+    let nodeBranch = ''
+    let reconciliations = 0
+    const h = await makeHarness({
+      localGitForge: true,
+      configToml,
+      handlers: {
+        ...happy,
+        implement: async (cli) => {
+          await happy.implement!(cli)
+          if (conflict) {
+            const ws = join(h.tmp, 'node-movement')
+            await git(['worktree', 'add', ws, nodeBranch], h.origin)
+            await Bun.write(join(ws, 'rate-limit.txt'), 'upstream node behavior\n')
+            await commitAll(ws, 'Move node before leaf verify entry')
+            await git(['worktree', 'remove', ws], h.origin)
+          }
+        },
+        reconcile: async (cli) => {
+          reconciliations++
+          await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve upstream and child behavior\n')
+          await git(['add', 'rate-limit.txt'], cli.ws)
+          await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
+          const notes = join(cli.ws, '.ab/reconcile-notes.md')
+          await Bun.write(notes, 'Preserved upstream and child behavior.\n')
+          await cli.run(['done', '--notes', notes])
+        },
+      },
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Finalize destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Finalize child' }), target: 'NODE' },
+      ],
     })
-    await h.runLatest()
-    const postStep = ofType(await h.events(child.slug), 'finalize.step-completed')[0]?.payload
-    expect(postStep?.ok && postStep.headSha).toBeTruthy()
-    const canonical = await git(['rev-parse', child.branch!], h.origin)
-    const parent = await git(['rev-parse', `${child.branch}^`], h.origin)
-    expect(parent).toBe(await git(['rev-parse', node.branch!], h.origin))
-    expect(await git(['show', `${child.branch}:post.marker`], h.origin)).toBe('')
-    const observations = ofType(await h.events(child.slug), 'target.moved').length
-    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
-    expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
-    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
-    expect(ofType(await h.events(child.slug), 'target.moved')).toHaveLength(observations)
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const node = records.find((record) => record.ticket?.id === 'NODE')!
+      const child = records.find((record) => record.ticket?.id === 'CHILD')!
+      nodeBranch = node.branch!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      expect(reconciliations).toBe(conflict ? 1 : 0)
+      const postStep = ofType(await h.events(child.slug), 'finalize.step-completed')[0]?.payload
+      expect(postStep?.ok && postStep.headSha).toBeTruthy()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const parent = await git(['rev-parse', `${child.branch}^`], h.origin)
+      expect(parent).toBe(await git(['rev-parse', node.branch!], h.origin))
+      expect(await git(['show', `${child.branch}:post.marker`], h.origin)).toBe('')
+      const message = await git(['show', '-s', '--format=%B', canonical], h.origin)
+      expect(message.match(/Autobuild-Build:/g)).toHaveLength(1)
+      expect(message).toContain(`Autobuild-Build: ${child.slug}`)
+      if (conflict)
+        expect(await git(['show', `${child.branch}:rate-limit.txt`], h.origin)).toBe(
+          'preserve upstream and child behavior',
+        )
+      const observations = ofType(await h.events(child.slug), 'target.moved').length
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      expect(ofType(await h.events(child.slug), 'target.moved')).toHaveLength(observations)
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
 
 for (const providerState of ['merged', 'closed'] as const) {
   test(`node landing settles its reservation before completing a ${providerState} leaf inside writer TTL`, async () => {

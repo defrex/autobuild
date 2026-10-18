@@ -1441,13 +1441,14 @@ export class BuildRunner {
       const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
       if (oldBase === undefined) throw new Error('missing contribution base')
       // A resolver already published one canonical change on this exact base.
-      // Reuse that transaction as the entry gate without replaying it again.
+      // Reuse it only while no later finalize publication has extended it.
       const canonical = facts.reconcileTransaction
       const completed = facts.log.lastReconcileCompleted
       if (
         transaction === undefined &&
         canonical !== undefined &&
         completed?.completedSeq === decision.cycle &&
+        (facts.log.restack.postStepAt ?? 0) <= completed.completedSeq &&
         canonical.targetBase === targetBase
       ) {
         const { attempt: _attempt, restackId: _restackId, ...replay } = canonical
