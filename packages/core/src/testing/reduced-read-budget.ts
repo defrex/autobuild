@@ -1,3 +1,4 @@
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -99,11 +100,20 @@ export async function reducedReadBudget(opts: {
       rule: { default: true },
     },
   })
-  await store.append(slug, {
+  const gateCommand = await store.append(slug, {
     actor: humanActor('human'),
     type: 'build.auto-merge-requested',
     payload: {},
   })
+  await store.append(
+    slug,
+    autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+      7,
+      gateCommand.seq,
+      'historical-gate',
+    ),
+  )
   const reset = () => {
     costs.events = 0
     costs.metadata = 0
@@ -206,7 +216,7 @@ export async function reducedReadBudget(opts: {
     expect(costs.metadata).toBeLessThan(400)
     expect(costs.bytes).toBeLessThan(1_000_000)
 
-    // A fresh watch must suppress historical PR eligibility despite armed
+    // A fresh watch must suppress historical gate attention despite armed
     // consent at registration, including its first event-bearing poll.
     reset()
     let ticks = 0
@@ -285,7 +295,21 @@ export async function reducedReadBudget(opts: {
     expect(costs.events).toBeLessThanOrEqual(6)
     expect(costs.metadata).toBeLessThan(180)
 
-    // Wait applies its current-attention policy instead of watch suppression.
+    // Wait applies its current gate-attention policy instead of watch suppression.
+    const immediateCommand = await store.append(slug, {
+      actor: humanActor('human'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await store.append(
+      slug,
+      autoMergeDeferralObservation(
+        { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+        7,
+        immediateCommand.seq,
+        `gate-wait-${length}`,
+      ),
+    )
     await readBuildStreamSeed(store, slug)
     reset()
     const waitOut: string[] = []
@@ -306,7 +330,7 @@ export async function reducedReadBudget(opts: {
     expect(JSON.parse(waitOut[0]!).observation.pr.number).toBe(7)
     expect(costs.events).toBe(0)
     expect(costs.metadata).toBeLessThan(40)
-    await store.append(slug, {
+    const waitCommand = await store.append(slug, {
       actor: humanActor('human'),
       type: 'build.auto-merge-requested',
       payload: {},
@@ -338,11 +362,15 @@ export async function reducedReadBudget(opts: {
         }
         if (waitTick === 2) {
           expect(costs.events).toBe(0)
-          await store.append(slug, {
-            actor: humanActor('human'),
-            type: 'build.auto-merge-cancelled',
-            payload: {},
-          })
+          await store.append(
+            slug,
+            autoMergeDeferralObservation(
+              { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+              7,
+              waitCommand.seq,
+              `gate-poll-${length}`,
+            ),
+          )
         }
       },
     })

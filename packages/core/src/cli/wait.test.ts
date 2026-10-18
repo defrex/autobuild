@@ -1835,6 +1835,21 @@ test('already finalized merge decision satisfies attention with --since and pres
       rule: { default: true },
     },
   })
+  const { autoMergeDeferralObservation } = await import('../kernel/auto-merge')
+  const command = await store.append('b1', {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await store.append(
+    'b1',
+    autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+      9,
+      command.seq,
+      'gate',
+    ),
+  )
   const since = encodeCursor({
     v: 1,
     store: `${REPO}/.autobuild`,
@@ -1970,3 +1985,42 @@ test.each(['human', 'possible-stale-enable'] as const)(
       expect(h.out.join('\n')).toContain('possible stale native enable')
   },
 )
+
+test('tree conditions parse and node landing is delivered before terminal completion', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'tree')
+  const h = harness(store, {
+    slugs: ['tree'],
+    forValues: ['node-landed'],
+    timeout: '2s',
+    onTick: async () => {
+      await store.append('tree', {
+        actor: DISPATCHER,
+        type: 'integration.landed',
+        payload: {
+          head: 'head',
+          landed: 'landed',
+          provenance: 'kernel',
+          verified: true,
+          fenced: true,
+        },
+      })
+      await appendCompletion(store, 'tree')
+    },
+  })
+  expect(await abWait(h.base)).toBe(0)
+  expect(JSON.parse(h.out[0]!).event.type).toBe('integration.landed')
+})
+
+test('attention backlog recognizes a conflicted replay and ignores a clean replay', async () => {
+  const { reduceBuild } = await import('../kernel/reducer')
+  const { currentDeferralObservationReducer } = await import('../kernel/auto-merge')
+  const facts = { state: reduceBuild([]), deferral: currentDeferralObservationReducer.initial() }
+  const conditions = parseConditions(['attention'], []).conditions
+  expect(
+    matchEvent({ type: 'restack.replayed', payload: { conflicted: true } }, conditions, [], facts),
+  ).toBe('attention')
+  expect(
+    matchEvent({ type: 'restack.replayed', payload: { conflicted: false } }, conditions, [], facts),
+  ).toBeNull()
+})

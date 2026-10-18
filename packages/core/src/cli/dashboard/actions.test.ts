@@ -68,7 +68,7 @@ test.each(['collecting', 'verification failed'] as const)(
         integration,
         autoMerge: 'off',
       }).autoMerge,
-    ).toBe(false)
+    ).toBe(true)
     expect(
       buildActionAvailability({
         ...row('aborting'),

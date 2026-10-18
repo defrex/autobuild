@@ -11,6 +11,7 @@ const COMMANDS = [
   'dispatch',
   'ticket',
   'repository',
+  'landings',
   'builds',
   'build',
   'watch',
@@ -144,6 +145,7 @@ describe('layered CLI help catalog', () => {
 
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
+      landings: ['ab landings', '--json', '--store', 'ab land', 'ab hold'],
       connect: ['ab connect [--tickets] [url]', 'approval', 'credential'],
       disconnect: ['ab disconnect', 'Revokes', 'locally'],
       help: ['ab help <command>', 'requires no', 'AB_*'],

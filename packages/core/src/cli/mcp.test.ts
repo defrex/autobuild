@@ -19,7 +19,7 @@ import { openLocalStore } from '../store/local/store'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
-const TOOL_NAMES = 22
+const TOOL_NAMES = 24
 
 let tmp: string
 let storeDir: string
@@ -66,7 +66,7 @@ async function connect(env: Record<string, string> = bareEnv()): Promise<Client>
   return client
 }
 
-test('ab mcp advertises the registry: 22 tools with schemas and annotations', async () => {
+test('ab mcp advertises the registry: 24 tools with schemas and annotations', async () => {
   await seed()
   const client = await connect()
   try {
@@ -74,6 +74,8 @@ test('ab mcp advertises the registry: 22 tools with schemas and annotations', as
     expect(tools).toHaveLength(TOOL_NAMES)
     const names = tools.map((tool) => tool.name).sort()
     expect(names).toContain('builds.list')
+    expect(names).toContain('landings.list')
+    expect(names).toContain('tickets.tree')
     expect(names).toContain('notes.write')
     expect(names).toContain('tickets.move')
     const buildsList = tools.find((tool) => tool.name === 'builds.list')!

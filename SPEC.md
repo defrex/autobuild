@@ -3411,3 +3411,35 @@ State normalization and the complete operator procedure are documented in
 [Ticket migration](docs/ticket-migration.md). The same reference is delivered in
 the installed guide. Export keeps lifecycle membership without inferring roles;
 import reuses unique case-insensitive states and creates normalized missing ones.
+
+
+### Tree and consent operator reads
+
+The shared dashboard projection supplies root, node, target, integration build,
+landing, restack and consent vocabulary. The terminal groups ready decisions in
+one consent queue, retaining build-slug selection for land/hold controls. Nodes
+show stored open children/completeness diagnostics, restack state, current-cycle
+verification and landing readiness. Ordinary repositories omit empty tree sections.
+The web dashboard consumes shared terminology without introducing a tree surface.
+
+`ab landings [--json] [--store <ref>]` and registry `landings.list` expose the
+same deterministic, repository-scoped ready consent/held candidates. A recorded
+current decision is required; auto-authorized and consented candidates are absent.
+Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listing
+diagnostics; effective build targets remain frozen independently of source metadata.
+
+Default watch attention includes `integration.landed`, `node.item-conflicted`,
+and conflicted `restack.replayed`. Derived `build.consent-ready` observations
+carry target, branch, candidate and the durable readiness entry position in the
+existing cursor envelope. Cursor identities retain readiness episodes across
+restart; a new candidate or exit/re-entry can wake again. Explicit event globs
+remain event-only. Wait adds `consent`, `node-landed`, `restack-conflicted`, and
+includes these in attention; current-state waits return immediately, backlog
+replay retains event ordering, including landing before terminal completion.
+
+Consent/hold readiness is signalled exclusively by `build.consent-ready`,
+including first discovery in a repository-wide watch. `build.merge-decision`
+reports current gate deferrals or unsafe forge outcomes, never a second consent
+or hold wake. Readiness observations and queue entries share the effective
+target shape `{kind, branch, ticket?, build?}`. Tree display labels are owned
+by the shared projection vocabulary and reused by terminal and CLI text.
