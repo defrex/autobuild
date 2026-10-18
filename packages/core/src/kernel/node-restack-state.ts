@@ -2,6 +2,19 @@ import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { defineReducer } from './incremental'
 
+/** JSONB persistence does not preserve object key order. These diagnostics
+ * are identified by their observed fields, never by serialized object bytes. */
+export function sameParentRejection(
+  previous: EventPayload<'node.parent-rejected'> | undefined,
+  next: EventPayload<'node.parent-rejected'>,
+): boolean {
+  return (
+    previous?.revision === next.revision &&
+    previous.target === next.target &&
+    previous.reason === next.reason
+  )
+}
+
 /** Reservations outlive writer leases and disposable replay workspaces. A new
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
@@ -41,6 +54,9 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         break
       case 'node.parent-cancelled':
         if (state.parentRequest?.id === event.payload.id) delete state.parentRequest
+        break
+      case 'node.parent-rejection-cleared':
+        delete state.parentRejection
         break
       case 'node.parent-rejected':
         state.parentRejection = event.payload
@@ -168,7 +184,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 4,
+  version: 5,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

@@ -461,3 +461,131 @@ test('reparent retries head-CAS contention and retains a concurrent node-owned c
     await h.cleanup()
   }
 }, 30_000)
+
+for (const mode of ['missing', 'throwing'] as const)
+  test(`tracker ${mode} reads withhold a move while ordinary nested cascade continues`, async () => {
+    const { h, node, foreign, ticks } = await fixture()
+    try {
+      const a = node('A'),
+        b = node('B')
+      await foreign('A', 'owned-during-outage')
+      await ticks()
+      const get = h.tickets.get.bind(h.tickets)
+      h.tickets.get = async (id) => {
+        if (id === 'A' || id === 'B') {
+          if (mode === 'throwing') throw new Error('tracker rate limited')
+          return null
+        }
+        return get(id)
+      }
+      // Advance the effective parent independently of the unreadable metadata.
+      const parent = await foreign('P', 'upstream-during-outage')
+      const report = await h.dispatcher.tick()
+      expect(report.janitorFailed).toBe(0)
+      expect(report.janitorDiagnostics.join(' ')).toContain('ticket target observation failed')
+      await ticks()
+      for (const record of [a, b]) {
+        expect(await git(['merge-base', '--is-ancestor', parent, record.branch!], h.origin)).toBe(
+          '',
+        )
+        expect(await git(['show', `${record.branch}:owned-during-outage`], h.origin)).toBe(
+          'owned-during-outage',
+        )
+      }
+      expect(reduceBuild(await h.events(a.slug)).target?.build).toBe(node('P').slug)
+      expect(ofType(await h.events(a.slug), 'node.parent-accepted')).toHaveLength(0)
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+
+test('tracker transport errors do not suppress work PR merge observation', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [readyTicket('WORK')],
+  })
+  try {
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const work = (await h.store.listBuilds())[0]!
+    const state = reduceBuild(await h.events(work.slug))
+    await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, state.pr!.headSha)
+    h.tickets.get = async () => {
+      throw new Error('tracker rate limited')
+    }
+    const report = await h.dispatcher.tick()
+    expect(report.janitorDiagnostics.join(' ')).toContain('tracker rate limited')
+    expect(ofType(await h.events(work.slug), 'pr.merged')).toHaveLength(1)
+    expect(reduceBuild(await h.events(work.slug)).status).toBe('done')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('correcting provider metadata clears node and work rejections durably without reparenting', async () => {
+  const { h, node, ticks } = await fixture()
+  try {
+    const get = h.tickets.get.bind(h.tickets)
+    h.tickets.get = async (id) => {
+      const ticket = await get(id)
+      return id === 'A' && ticket ? { ...ticket, target: 'MISSING', revision: 'bad-edit' } : ticket
+    }
+    await ticks(2)
+    const a = node('A')
+    expect(reduceBuild(await h.events(a.slug)).nodeRestack?.parentRejection).toBeDefined()
+    h.tickets.get = get
+    await ticks()
+    expect(reduceBuild(await h.events(a.slug)).nodeRestack?.parentRejection).toBeUndefined()
+    expect(ofType(await h.events(a.slug), 'node.parent-rejection-cleared')).toHaveLength(1)
+    expect(ofType(await h.events(a.slug), 'node.parent-accepted')).toHaveLength(0)
+    // A claimed work build has the same diagnostic lifecycle, while its target
+    // remains frozen throughout.
+    h.tickets.add({ ...readyTicket('WORK'), target: 'A' })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const work = (await h.store.listBuilds()).find((b) => b.ticket?.id === 'WORK')!
+    await h.tickets.update('WORK', { target: 'Q' })
+    await ticks(2)
+    expect(reduceBuild(await h.events(work.slug)).nodeRestack?.parentRejection).toBeDefined()
+    await h.tickets.update('WORK', { target: 'A' })
+    await ticks()
+    expect(reduceBuild(await h.events(work.slug)).nodeRestack?.parentRejection).toBeUndefined()
+    expect(reduceBuild(await h.events(work.slug)).target?.build).toBe(a.slug)
+    expect(ofType(await h.events(work.slug), 'node.parent-rejected')).toHaveLength(1)
+    expect(ofType(await h.events(work.slug), 'node.parent-rejection-cleared')).toHaveLength(1)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('an accepted move finishes its PR effects while the tracker is unavailable', async () => {
+  const { h, node, foreign, ticks, ctx } = await fixture()
+  try {
+    await foreign('A', 'owned')
+    await ticks()
+    const a = node('A')
+    const retarget = h.forgeAdapter.retargetPr!.bind(h.forgeAdapter)
+    h.forgeAdapter.retargetPr = async () => {
+      throw new Error('forge temporarily unavailable')
+    }
+    await updateTicketTarget(ctx, 'A', { target: 'Q' })
+    await ticks(2)
+    const pending = reduceBuild(await h.events(a.slug))
+    expect(pending.nodeRestack?.parentChange).toBeDefined()
+    expect(pending.nodeRestack?.parentReplay).toBe(pending.nodeRestack?.parentChange?.id)
+    h.forgeAdapter.retargetPr = retarget
+    h.tickets.get = async () => {
+      throw new Error('tracker unavailable')
+    }
+    await ticks(2)
+    const completed = reduceBuild(await h.events(a.slug))
+    expect(completed.nodeRestack?.parentChange).toBeUndefined()
+    expect((await h.forgeAdapter.inspectLandingPr!(h.origin, completed.pr!.number)).base).toBe(
+      node('Q').branch!,
+    )
+    expect(ofType(await h.events(a.slug), 'node.parent-completed')).toHaveLength(1)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)

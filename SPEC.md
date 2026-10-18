@@ -2008,8 +2008,13 @@ destination generations, landing/closing sources and unsupported forge retargeti
 are refused with a reason. Busy writer reservations defer external changes and
 refuse synchronous mutations. Direct provider edits receive durable, revision-
 deduplicated `node.parent-rejected` diagnostics when invalid, preserving effective
-ancestry. Missing source reads fail closed. A PR merged or closed by a human
-follows ordinary terminal handling. Changing a claimed work ticket's target is
+ancestry. Restoring the effective target records `node.parent-rejection-cleared`,
+removing the current refusal while retaining its historical fact. Rejection deduplication
+compares revision, target and reason independently of persistence key order.
+Missing source reads withhold parent acceptance; ordinary cascade and PR handling
+continue against durable effective ancestry. Accepted moves finish their reserved
+Git and PR effects independently of tracker availability. A PR merged or closed
+by a human follows ordinary terminal handling. Changing a claimed work ticket's target is
 refused before any combined patch is written: abort and re-dispatch is the
 supported path. Unclaimed tickets retain ordinary target editing.
 

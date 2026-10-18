@@ -58,6 +58,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'node.parent-pr-retargeted': ['dispatcher', 'human'],
   'node.parent-completed': ['dispatcher', 'human'],
   'node.parent-cancelled': ['dispatcher', 'human'],
+  'node.parent-rejection-cleared': ['dispatcher', 'human'],
   'node.parent-rejected': ['dispatcher', 'human'],
   'node.opening': ['dispatcher'],
   'node.writer-reserved': ['kernel', 'dispatcher'],

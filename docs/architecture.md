@@ -1162,6 +1162,12 @@ The dispatcher reads node tickets independently of readiness and activates a
 confirmed, revalidated request with `node.parent-accepted`. Provider edits use
 the same validation; refusals are deduplicated by revision, target and reason.
 Uncertain writes recover by source readback rather than replaying a caller patch.
+Tracker observation errors are contained within that observation, preserving
+ordinary cascade and PR handling against durable ancestry. Already accepted moves
+complete their PR effects without another tracker read. Rejection comparisons use
+revision, target and reason fields so JSONB key ordering cannot defeat deduplication;
+`node.parent-rejection-cleared` removes a current refusal after correction while
+preserving its history.
 
 Accepted parent facts update node target/base projections while creation facts
 remain provenance. Pending requests and moves fence verification, child landing

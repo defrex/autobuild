@@ -1,3 +1,4 @@
+import { sameParentRejection } from '../kernel/node-restack-state'
 import { validateNodeParent, nodeParentBusy, type ParentContext } from '../kernel/node-parent'
 import { landIntegrationRoot, auditIntegrationLanding } from '../kernel/integration-landing'
 import {
@@ -1925,7 +1926,7 @@ export class Dispatcher {
             continue
           }
           if (state.nodeOpened) {
-            await this.observeNodeParent(record, state, report)
+            await this.observeTicketTarget(record, state, report)
             loaded = undefined
             ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
           }
@@ -1999,7 +2000,7 @@ export class Dispatcher {
           continue
         }
         if (state.kind !== 'node' && state.status !== 'aborted')
-          await this.observeWorkTarget(record, state, report)
+          await this.observeTicketTarget(record, state, report)
         if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
           const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
           if (branch !== undefined) {
@@ -2039,6 +2040,29 @@ export class Dispatcher {
     }
   }
 
+  /** Tracker observation can withhold a new parent, but cannot stop recovery
+   * against the durable effective parent or observation of terminal PRs. */
+  private async observeTicketTarget(record: BuildRecord, state: BuildState, report: TickReport) {
+    try {
+      if (state.kind === 'node') await this.observeNodeParent(record, state, report)
+      else await this.observeWorkTarget(record, state, report)
+    } catch (error) {
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: ticket target observation failed — ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  private async clearParentRejection(record: BuildRecord, ticket: Ticket) {
+    const state = (await this.store.buildFacts(record.slug)).state
+    if (!state.nodeRestack?.parentRejection) return
+    await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'node.parent-rejection-cleared',
+      payload: { revision: ticket.revision, target: ticket.target ?? null },
+    })
+  }
+
   private async rejectParent(
     record: BuildRecord,
     ticket: Ticket,
@@ -2047,7 +2071,7 @@ export class Dispatcher {
   ) {
     const rejection = { revision: ticket.revision, target: ticket.target ?? null, reason }
     const state = (await this.store.buildFacts(record.slug)).state
-    if (JSON.stringify(state.nodeRestack?.parentRejection) !== JSON.stringify(rejection))
+    if (!sameParentRejection(state.nodeRestack?.parentRejection, rejection))
       await this.store.append(record.slug, {
         actor: DISPATCHER,
         type: 'node.parent-rejected',
@@ -2077,6 +2101,7 @@ export class Dispatcher {
         'changing a claimed work ticket target requires abort and re-dispatch',
         report,
       )
+    else await this.clearParentRejection(record, ticket)
   }
 
   /** Provider edits and interrupted caller writes converge through this same
@@ -2090,8 +2115,6 @@ export class Dispatcher {
         .state !== 'open'
     )
       return
-    const ticket = await this.deps.tickets.get(record.ticket.id)
-    if (!ticket) throw new Error('node ticket cannot be read; parent observation failed closed')
     const node = state.nodeRestack
     if (node?.parentChange) {
       // Replay is frozen until its receipt, including through reconcile and
@@ -2128,6 +2151,8 @@ export class Dispatcher {
       this.integrationPublicationInputs = undefined
       return
     }
+    const ticket = await this.deps.tickets.get(record.ticket.id)
+    if (!ticket) throw new Error('node ticket cannot be read; parent observation failed closed')
     const desired = ticket.target ?? null
     const request = node?.parentRequest
     const effective = state.target?.ticket.id
@@ -2135,7 +2160,10 @@ export class Dispatcher {
       effective && this.deps.config.tickets.source === 'hosted'
         ? ((await this.deps.tickets.get(effective))?.ref.id ?? effective)
         : effective
-    if (!request && desired === (canonical ?? null)) return
+    if (!request && desired === (canonical ?? null)) {
+      await this.clearParentRejection(record, ticket)
+      return
+    }
     // Settle the current writer before sampling any new destination.
     if (node?.active || state.sessions.open.length || this.hasLiveExecutionLease(record)) return
     const holder = this.deps.ids('parent-writer')

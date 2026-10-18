@@ -298,6 +298,10 @@ export const eventPayloadSchemas = {
   'node.parent-pr-retargeted': z.strictObject({ id: z.string().min(1), base: z.string().min(1) }),
   'node.parent-completed': z.strictObject({ id: z.string().min(1) }),
   'node.parent-cancelled': z.strictObject({ id: z.string().min(1), reason: z.string() }),
+  'node.parent-rejection-cleared': z.strictObject({
+    revision: z.string(),
+    target: z.string().nullable(),
+  }),
   'node.parent-rejected': z.strictObject({
     revision: z.string(),
     target: z.string().nullable(),

@@ -38,6 +38,7 @@ export const executionProgress = {
   'node.parent-pr-retargeted': 'progress',
   'node.parent-completed': 'progress',
   'node.parent-cancelled': 'bookkeeping',
+  'node.parent-rejection-cleared': 'bookkeeping',
   'node.parent-rejected': 'bookkeeping',
   'node.opened': 'progress',
   'node.compared': 'bookkeeping',
@@ -124,7 +125,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 4,
+  version: 5,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {
