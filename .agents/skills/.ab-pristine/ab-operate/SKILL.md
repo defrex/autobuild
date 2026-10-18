@@ -327,8 +327,11 @@ Treat every default-watch record as a call to act:
 
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
-- `build.merge-decision`: inspect the PR and current merge gate, then apply
-  the operator's merge policy or request the decision that is missing.
+- `build.consent-ready`: inspect the one consent queue, then land or hold the
+  selected candidate under the operator's policy. Unready or stale candidates
+  do not produce this observation.
+- `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
+  forge outcome. Consent and hold decisions use only `build.consent-ready`.
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
   the reported blocker.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
@@ -414,7 +417,8 @@ before retrying the node cycle.
 Watch for decisions and conflicts with `ab watch --json`; save its opaque cursor
 and resume with `ab watch --since <cursor> --json`. Default attention includes
 node landings, node item conflicts, conflicted leaf replays and derived
-`build.consent-ready` observations. Readiness is identified by its durable
+`build.consent-ready` observations, including already-ready landings on first
+repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or
 exit/re-entry can notify again. Explicit `--event` globs remain event-only.
 Use `ab wait --for consent --for node-landed --for restack-conflicted --json`

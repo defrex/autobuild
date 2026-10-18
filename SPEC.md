@@ -3436,3 +3436,10 @@ restart; a new candidate or exit/re-entry can wake again. Explicit event globs
 remain event-only. Wait adds `consent`, `node-landed`, `restack-conflicted`, and
 includes these in attention; current-state waits return immediately, backlog
 replay retains event ordering, including landing before terminal completion.
+
+Consent/hold readiness is signalled exclusively by `build.consent-ready`,
+including first discovery in a repository-wide watch. `build.merge-decision`
+reports current gate deferrals or unsafe forge outcomes, never a second consent
+or hold wake. Readiness observations and queue entries share the effective
+target shape `{kind, branch, ticket?, build?}`. Tree display labels are owned
+by the shared projection vocabulary and reused by terminal and CLI text.

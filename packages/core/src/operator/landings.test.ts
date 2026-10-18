@@ -3,11 +3,32 @@ import { MemoryBuildStore } from '../store/memory'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import { listOperatorLandings } from './landings'
 import { readBuildStreamSeed } from '../store/reduced-reads'
-import { consentIdentity } from '../cli/attention'
+import { consentIdentity, consentReady } from '../cli/attention'
 import { decodeCursor, encodeCursor } from '../cli/watch'
 
-async function ready(store: MemoryBuildStore, slug: string, repo = 'repo') {
-  await store.createBuild({ slug, repo, branch: `branch/${slug}` })
+async function ready(
+  store: MemoryBuildStore,
+  slug: string,
+  repo = 'repo',
+  ancestry?: {
+    baseBranch: string
+    target?: { ticket: { source: string; id: string }; build: string }
+  },
+) {
+  await store.createBuild({
+    slug,
+    repo,
+    branch: `branch/${slug}`,
+    ...(ancestry
+      ? {
+          created: {
+            actor: DISPATCHER,
+            type: 'build.created',
+            payload: { ticket: { source: 'file', id: slug }, repo, ...ancestry },
+          } as const,
+        }
+      : {}),
+  })
   await store.append(slug, {
     actor: KERNEL,
     type: 'runner.attached',
@@ -24,7 +45,7 @@ async function ready(store: MemoryBuildStore, slug: string, repo = 'repo') {
       base: { source: 'local', remoteError: 'offline', sha: 'base' },
     },
   })
-  await store.append(slug, {
+  const finalized = await store.append(slug, {
     actor: KERNEL,
     type: 'finalize.completed',
     payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
@@ -33,7 +54,7 @@ async function ready(store: MemoryBuildStore, slug: string, repo = 'repo') {
     actor: DISPATCHER,
     type: 'landing.decided',
     payload: {
-      candidate: { head: 'head', parent: 'base', cycle: '3' },
+      candidate: { head: 'head', parent: 'base', cycle: String(finalized.seq) },
       from: 'leaf',
       into: { kind: 'root' },
       labels: [],
@@ -131,4 +152,63 @@ test('terminal inventory is skipped without hydrating finished build facts', asy
   }
   expect(await listOperatorLandings({ store, repo: 'repo' })).toEqual([])
   expect(buildReads).toEqual([])
+})
+
+test.each(['root', 'node'] as const)(
+  'consent observations and queue entries share %s target shape',
+  async (kind) => {
+    const store = new MemoryBuildStore()
+    await ready(
+      store,
+      'ready',
+      'repo',
+      kind === 'root'
+        ? { baseBranch: 'main' }
+        : {
+            baseBranch: 'ab-node/recorded',
+            target: { ticket: { source: 'file', id: 'NODE' }, build: 'frozen-node' },
+          },
+    )
+    const [entry] = await listOperatorLandings({ store, repo: 'repo' })
+    const observation = consentReady(
+      (await readBuildStreamSeed(store, 'ready')).value,
+      new Date(0),
+    )!
+    expect(observation.target).toEqual(entry!.target)
+    expect(observation.target).toMatchObject({
+      kind,
+      branch: kind === 'root' ? 'main' : 'ab-node/recorded',
+    })
+    if (kind === 'node')
+      expect(observation.target).toMatchObject({
+        ticket: { source: 'file', id: 'NODE' },
+        build: 'frozen-node',
+      })
+  },
+)
+
+test('CLI queue text takes its labels from the shared vocabulary', async () => {
+  const { abLandings } = await import('../cli/landings')
+  const { treeVocabulary } = await import('../cli/dashboard/tree')
+  const original = { ...treeVocabulary }
+  const store = new MemoryBuildStore()
+  await ready(store, 'selected', '/repo')
+  const out: string[] = []
+  try {
+    Object.assign(treeVocabulary, { verify: 'CHECK', root: 'ROOT' })
+    await abLandings({
+      targetRepo: '/repo',
+      env: {},
+      openStore: () => store,
+      stdout: (line) => out.push(line),
+      exec: async (cmd) =>
+        cmd[1] === 'remote'
+          ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+          : { stdout: '/repo/.git\n/repo/.git\n/repo\n', stderr: '', exitCode: 0 },
+    })
+    expect(out.join('\n')).toContain('→ ROOT')
+    expect(out.join('\n')).toContain('CHECK no steps')
+  } finally {
+    Object.assign(treeVocabulary, original)
+  }
 })

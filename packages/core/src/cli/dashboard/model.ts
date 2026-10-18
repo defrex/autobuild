@@ -1,4 +1,4 @@
-import { projectTree, type TreeProjection } from './tree'
+import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 export { treeVocabulary, consentQueue } from './tree'
 import { landingAuthorized } from '../../kernel/landing-state'
 import {
@@ -1265,7 +1265,7 @@ export function buildVocabulary(state: BuildState): {
     | 'unverified landing'
 } {
   return {
-    kind: state.kind === 'node' ? 'integration' : 'work',
+    kind: state.kind === 'node' ? treeVocabulary.integrationKind : treeVocabulary.work,
     ...(state.target?.ticket.id || state.baseBranch
       ? { target: state.target?.ticket.id ?? state.baseBranch }
       : {}),
@@ -1289,8 +1289,8 @@ export function buildVocabulary(state: BuildState): {
                         ? !integrationCycleVerified(state)
                           ? 'verifying'
                           : landingAuthorized(state.landing)
-                            ? 'ready to land'
-                            : 'awaiting consent'
+                            ? treeVocabulary.readyToLand
+                            : `awaiting ${treeVocabulary.consent}`
                         : !state.nodeOpened
                           ? 'opening'
                           : !state.pr && (state.nodeComparison?.ahead ?? 0) === 0

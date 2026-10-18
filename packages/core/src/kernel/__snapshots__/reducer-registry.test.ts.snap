@@ -2427,7 +2427,6 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$.deferral.entries[]: object",
     "$.deferral: object",
     "$.mergeAttentionPrs: array",
-    "$.mergeAttentionPrs[]: number",
     "$.restack.completed.branch: string",
     "$.restack.completed.changeSha: string",
     "$.restack.completed.cycle: number",

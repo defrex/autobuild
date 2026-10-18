@@ -1,3 +1,4 @@
+import { consentQueue } from './tree'
 /** Pure stable-identity selection for every selectable dashboard row. */
 import type { DashboardModel, DashboardSelection } from './model'
 
@@ -6,13 +7,15 @@ import type { DashboardModel, DashboardSelection } from './model'
 export function dashboardSelections(
   model: Pick<DashboardModel, 'harvest' | 'builds'>,
 ): DashboardSelection[] {
+  const queue = consentQueue(model.builds)
+  const queued = new Set(queue.map((entry) => entry.slug))
   return [
     { kind: 'global' },
     ...(model.harvest !== undefined ? [{ kind: 'harvest' } as const] : []),
-    ...[
-      ...model.builds.filter((build) => build.tree?.consent),
-      ...model.builds.filter((build) => !build.tree?.consent),
-    ].map((build) => ({ kind: 'build' as const, slug: build.slug })),
+    ...[...queue, ...model.builds.filter((build) => !queued.has(build.slug))].map((build) => ({
+      kind: 'build' as const,
+      slug: build.slug,
+    })),
   ]
 }
 

@@ -16,7 +16,27 @@ export const treeVocabulary = {
   landing: 'landing',
   restack: 'restack',
   consent: 'consent',
+  queue: 'queue',
+  work: 'work',
+  integrationKind: 'integration',
+  branch: 'branch',
+  children: 'children',
+  verify: 'verify',
+  verification: 'verification',
+  current: 'current',
+  pending: 'pending',
+  readyToLand: 'ready to land',
+  notReady: 'not ready',
 } as const
+
+/** Frozen effective ancestry shared by queue entries and readiness observations. */
+export function effectiveTreeTarget(state: Pick<BuildState, 'target' | 'baseBranch'>) {
+  return {
+    kind: state.target ? ('node' as const) : ('root' as const),
+    branch: state.baseBranch,
+    ...(state.target ? { ticket: state.target.ticket, build: state.target.build } : {}),
+  }
+}
 
 export function projectTree(
   record: BuildRecord,
@@ -37,11 +57,7 @@ export function projectTree(
   const observation = state.integration?.observation
   return {
     kind: state.kind === 'node' ? ('node' as const) : ('work' as const),
-    target: {
-      kind: state.target ? ('node' as const) : ('root' as const),
-      branch: state.baseBranch,
-      ...(state.target ? { ticket: state.target.ticket, build: state.target.build } : {}),
-    },
+    target: effectiveTreeTarget(state),
     branch: record.branch ?? state.nodeOpening?.branch,
     candidate,
     restack:

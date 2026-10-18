@@ -1,3 +1,4 @@
+import { effectiveTreeTarget } from './dashboard/tree'
 import type { BuildStreamSeed } from '../kernel/read-facts'
 import { buildReducer } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
@@ -16,8 +17,8 @@ export interface MergeDecision {
   observedAt: string
 }
 
-/** Consent pending application is armed; only a current actionable deferral
- * or withdrawn consent needs a person. Currency is owned by the kernel. */
+/** Gate deferrals and unsafe forge outcomes remain merge attention.
+ * Consent and holds are represented exclusively by consent-ready. */
 export function mergeDecision(
   events: AbEvent[],
   now: Date,
@@ -72,7 +73,7 @@ export function consentReady(seed: BuildStreamSeed, observedAt: Date) {
   return {
     type: 'build.consent-ready' as const,
     observedAt: observedAt.toISOString(),
-    target: state.target ?? { branch: state.baseBranch },
+    target: effectiveTreeTarget(state),
     candidate: state.landing!.decision!.candidate,
     reason: state.landing?.command?.kind === 'hold' ? 'held' : 'consent required',
     branch: seed.branch ?? state.nodeOpening?.branch,

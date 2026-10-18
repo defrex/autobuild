@@ -1,3 +1,4 @@
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 /**
  * `ab watch` tests. The pure layer (globs, cursor codec, durations, cadence,
  * record projection, human lines) is tested without IO; the shell is tested
@@ -65,6 +66,23 @@ async function appendEscalation(store: MemoryBuildStore, slug: string): Promise<
     type: 'escalation.raised',
     payload: { ...ESCALATION },
   })
+}
+
+async function appendGateDeferral(store: MemoryBuildStore, slug: string, pr: number) {
+  const command = await store.append(slug, {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await store.append(
+    slug,
+    autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+      pr,
+      command.seq,
+      `gate-${command.seq}`,
+    ),
+  )
 }
 
 interface Harness {
@@ -2152,6 +2170,7 @@ test('merge decisions dedupe per PR across consent changes and new cursor resume
         rule: { default: true },
       },
     })
+    await appendGateDeferral(store, 'b1', 7)
   }
   let ticks = 0
   const h = harness(store, {
@@ -2180,8 +2199,13 @@ test('merge decisions dedupe per PR across consent changes and new cursor resume
   const resume = harness(store)
   await abWatch({ ...resume.base, slugs: ['b1'], since: first.cursor, timeout: '1' })
   expect(resume.out).toHaveLength(1)
-  // A genuine old cursor at finalize infers the already consumed decision.
-  const old = encodeCursor({ v: 1, store: `${REPO}/.autobuild`, repo: REPO, streams: { b1: 3 } })
+  // An old cursor after the gate receipt infers the already consumed gate attention.
+  const old = encodeCursor({
+    v: 1,
+    store: `${REPO}/.autobuild`,
+    repo: REPO,
+    streams: decodeCursor(first.cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams,
+  })
   const upgrade = harness(store)
   await abWatch({ ...upgrade.base, slugs: ['b1'], since: old, timeout: '1' })
   expect(upgrade.out).toHaveLength(1)
@@ -2372,6 +2396,7 @@ test('fresh watch baselines every historically eligible PR even when armed befor
           rule: { default: true },
         },
       })
+      await appendGateDeferral(store, 'baseline', pr)
     }
     await store.append('baseline', {
       actor: humanActor('human'),
@@ -2387,12 +2412,14 @@ test('fresh watch baselines every historically eligible PR even when armed befor
             type: 'build.auto-merge-cancelled',
             payload: {},
           })
-        if (tick === 2)
+        if (tick === 2) {
           await store.append('baseline', {
             actor: KERNEL,
             type: 'finalize.completed',
             payload: { pr: { number: 11, url: 'https://example.test/11', headSha: 'abc' } },
           })
+          await appendGateDeferral(store, 'baseline', 11)
+        }
       },
     })
     await abWatch({ ...h.base, ...(named ? { slugs: ['baseline'] } : {}), timeout: '3' })
@@ -2481,74 +2508,152 @@ test('forge failures reach default and repository watch with full remediation', 
   }
 })
 
-test('consent readiness is observed on discovery, resumes once, and wakes on held reentry', async () => {
-  const store = makeStore()
-  await store.createBuild({ slug: 'ready', repo: REPO, branch: 'preview/ready' })
-  await store.append('ready', {
-    actor: KERNEL,
-    type: 'runner.attached',
-    payload: { instance: 'runner', host: 'host' },
-  })
-  await store.append('ready', {
-    actor: KERNEL,
-    type: 'workspace.provisioned',
-    payload: {
-      provider: 'local',
-      ref: 'local',
+test.each([true, false])(
+  'consent readiness is observed on discovery and cursor reentry (named=%s)',
+  async (named) => {
+    const store = makeStore()
+    await store.createBuild({ slug: 'ready', repo: REPO, branch: 'preview/ready' })
+    await store.append('ready', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner', host: 'host' },
+    })
+    await store.append('ready', {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'local',
+        ref: 'local',
+        branch: 'preview/ready',
+        base: { source: 'local', sha: 'base', remoteError: 'offline' },
+      },
+    })
+    await store.append('ready', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+    })
+    await store.append('ready', {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+        candidate: { head: 'head', parent: 'base', cycle: '3' },
+      },
+    })
+    const first = harness(store, { ...(named ? { slugs: ['ready'] } : {}), timeout: '1s' })
+    await abWatch(first.base)
+    expect(first.out.slice(0, -1)).toHaveLength(1)
+    const record = JSON.parse(first.out[0]!)
+    expect(record.observation).toMatchObject({
+      type: 'build.consent-ready',
       branch: 'preview/ready',
-      base: { source: 'local', sha: 'base', remoteError: 'offline' },
-    },
-  })
-  await store.append('ready', {
-    actor: KERNEL,
-    type: 'finalize.completed',
-    payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
-  })
-  await store.append('ready', {
-    actor: DISPATCHER,
-    type: 'landing.decided',
-    payload: {
-      from: 'leaf',
-      into: { kind: 'root' },
-      labels: [],
-      mode: 'consent',
-      rule: { default: true },
-      candidate: { head: 'head', parent: 'base', cycle: '3' },
-    },
-  })
-  const first = harness(store, { slugs: ['ready'], count: 1 })
-  await abWatch(first.base)
-  const record = JSON.parse(first.out[0]!)
-  expect(record.observation).toMatchObject({
-    type: 'build.consent-ready',
-    branch: 'preview/ready',
-    position: 4,
-  })
-  const resumed = harness(store, { slugs: ['ready'], since: record.cursor, timeout: '1s' })
-  await abWatch(resumed.base)
-  expect(
-    resumed.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
-  ).toEqual([])
-  await store.append('ready', {
-    actor: humanActor('operator'),
-    type: 'build.land-requested',
-    payload: { decisionSeq: 4 },
-  })
-  await store.append('ready', {
-    actor: humanActor('operator'),
-    type: 'build.hold-requested',
-    payload: {},
-  })
-  const held = harness(store, { slugs: ['ready'], since: record.cursor, count: 1 })
-  await abWatch(held.base)
-  expect(JSON.parse(held.out[0]!).observation).toMatchObject({
-    type: 'build.consent-ready',
-    reason: 'held',
-    position: 6,
-  })
-  const eventsOnly = harness(store, { slugs: ['ready'], events: ['landing.*'], timeout: '1s' })
-  await abWatch(eventsOnly.base)
-  expect(
-    eventsOnly.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
-  ).toEqual([])
-})
+      position: 4,
+    })
+    const resumed = harness(store, { slugs: ['ready'], since: record.cursor, timeout: '1s' })
+    await abWatch(resumed.base)
+    expect(
+      resumed.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
+    ).toEqual([])
+    await store.append('ready', {
+      actor: humanActor('operator'),
+      type: 'build.land-requested',
+      payload: { decisionSeq: 4 },
+    })
+    await store.append('ready', {
+      actor: humanActor('operator'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    const held = harness(store, { slugs: ['ready'], since: record.cursor, count: 1 })
+    await abWatch(held.base)
+    expect(JSON.parse(held.out[0]!).observation).toMatchObject({
+      type: 'build.consent-ready',
+      reason: 'held',
+      position: 6,
+    })
+    const eventsOnly = harness(store, { slugs: ['ready'], events: ['landing.*'], timeout: '1s' })
+    await abWatch(eventsOnly.base)
+    expect(
+      eventsOnly.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
+    ).toEqual([])
+  },
+)
+
+test.each(['consent', 'held', 'stale', 'auto'] as const)(
+  'default watch uses one readiness signal for later %s landings',
+  async (mode) => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'later')
+    await store.append('later', {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'local',
+        ref: 'workspace',
+        branch: 'preview/later',
+        base: { source: 'local', sha: 'base', remoteError: 'offline' },
+      },
+    })
+    let tick = 0
+    let finalized = 0
+    const h = harness(store, {
+      timeout: '3s',
+      onTick: async () => {
+        tick++
+        if (tick === 1) {
+          finalized = (
+            await store.append('later', {
+              actor: KERNEL,
+              type: 'finalize.completed',
+              payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+            })
+          ).seq
+          if (mode === 'held')
+            await store.append('later', {
+              actor: humanActor('operator'),
+              type: 'build.hold-requested',
+              payload: {},
+            })
+        }
+        if (tick === 2)
+          await store.append('later', {
+            actor: DISPATCHER,
+            type: 'landing.decided',
+            payload: {
+              candidate: {
+                head: mode === 'stale' ? 'old-head' : 'head',
+                parent: 'base',
+                cycle: String(finalized),
+              },
+              from: 'leaf',
+              into: { kind: 'root' },
+              mode: mode === 'auto' ? 'auto' : 'consent',
+              rule: { default: true },
+              labels: [],
+            },
+          })
+        if (tick === 3)
+          await store.append('later', {
+            actor: KERNEL,
+            type: 'observation.recorded',
+            payload: { id: 'unrelated', kind: 'followup', summary: 'unrelated' },
+          })
+      },
+    })
+    await abWatch(h.base)
+    const observations = h.out.slice(0, -1).map((line) => JSON.parse(line).observation)
+    if (mode === 'stale' || mode === 'auto') expect(observations).toEqual([])
+    else {
+      expect(observations).toHaveLength(1)
+      expect(observations[0]).toMatchObject({
+        type: 'build.consent-ready',
+        reason: mode === 'held' ? 'held' : 'consent required',
+      })
+    }
+  },
+)

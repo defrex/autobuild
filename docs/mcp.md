@@ -141,3 +141,9 @@ cursor positions. `ab wait` supports `consent`, `node-landed` and
 `restack-conflicted`; current-state conditions return immediately. Explicit
 watch event globs emit durable events only. A readiness episode changes on a
 new candidate or exit/re-entry, and cursor resume suppresses its duplicate.
+
+Consent and hold readiness produce only `build.consent-ready`; merge attention is
+reserved for current gate deferrals and unsafe forge outcomes. Named and
+repository-wide watches report an already-ready landing on first discovery.
+Readiness observations use the same `{kind, branch, ticket?, build?}` effective
+target shape as queue entries.

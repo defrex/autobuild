@@ -1835,6 +1835,21 @@ test('already finalized merge decision satisfies attention with --since and pres
       rule: { default: true },
     },
   })
+  const { autoMergeDeferralObservation } = await import('../kernel/auto-merge')
+  const command = await store.append('b1', {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await store.append(
+    'b1',
+    autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+      9,
+      command.seq,
+      'gate',
+    ),
+  )
   const since = encodeCursor({
     v: 1,
     store: `${REPO}/.autobuild`,

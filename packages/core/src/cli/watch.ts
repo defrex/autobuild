@@ -888,6 +888,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           streams.set(record.slug, stream)
           baselineMerge(record.slug, current.value)
           positions[record.slug] = stream.lastSeq
+          checkConsent(stream)
+          if (stop) break
         }
       }
 

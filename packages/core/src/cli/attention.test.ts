@@ -231,7 +231,7 @@ test('merge attention respects consent, current deferral, changed heads, and ter
     type: 'build.auto-merge-cancelled',
     payload: {},
   })
-  expect(await read()).toMatchObject({ reason: 'Landing held' })
+  expect(await read()).toBeNull() // holds use consent-ready only when the candidate is ready
   await store.append('b', {
     actor: DISPATCHER,
     type: 'pr.conflicted',
