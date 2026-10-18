@@ -1,3 +1,4 @@
+import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { abDispatch } from '../packages/core/src/cli/dispatch'
@@ -41,6 +42,7 @@ export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 type CaptureScenario = 'mixed' | 'happy' | 'integration'
 
 export interface FrameSpec {
+  forgeReadiness?: boolean
   id: string
   scenario: CaptureScenario
   columns: number
@@ -160,6 +162,22 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  {
+    id: 'forge-readiness-wide',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 60,
+    forgeReadiness: true,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
+  },
+  {
+    id: 'forge-readiness-narrow',
+    scenario: 'mixed',
+    columns: 80,
+    rows: 70,
+    forgeReadiness: true,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
+  },
   {
     id: 'integration-wide',
     scenario: 'integration',
@@ -1115,6 +1133,14 @@ async function capturePaint(
     }
   }
 
+  const priorReadiness = harness.forge.readiness
+  if (spec.forgeReadiness) {
+    harness.forge.readiness = readinessChecks('pass', 'Permitted')
+    for (const check of harness.forge.readiness.slice(0, 2)) {
+      check.status = 'fail'
+      check.detail = `${check.check} merging is disabled.`
+    }
+  }
   await abDispatch({
     targetRepo: harness.origin,
     // The capture harness keys its store by the checkout path; pin the same
@@ -1142,13 +1168,17 @@ async function capturePaint(
         ...model,
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
-        ...(spec.scenario === 'happy'
-          ? warningLines.length > 0
-            ? { warningLines }
-            : { warningLines: undefined }
-          : spec.detail === undefined && spec.transcript === undefined && spec.session === undefined
-            ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
-            : {}),
+        ...(spec.forgeReadiness
+          ? {}
+          : spec.scenario === 'happy'
+            ? warningLines.length > 0
+              ? { warningLines }
+              : { warningLines: undefined }
+            : spec.detail === undefined &&
+                spec.transcript === undefined &&
+                spec.session === undefined
+              ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
+              : {}),
         ...(spec.detail !== undefined
           ? {
               view: {
@@ -1199,6 +1229,7 @@ async function capturePaint(
     },
   })
 
+  harness.forge.readiness = priorReadiness
   if (happyHarness) {
     harness.store.heartbeatRepo = originalHeartbeatRepo
     harness.store.claimRepoLease = originalClaimRepoLease

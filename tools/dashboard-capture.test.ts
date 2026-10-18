@@ -1,3 +1,4 @@
+import { captureEnvironment } from './capture-parity'
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -5,11 +6,7 @@ import { join } from 'node:path'
 import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
 import { stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
-import {
-  captureDashboardFrames,
-  type DashboardCaptureResult,
-  WEBSITE_HERO_COLUMNS,
-} from './dashboard-capture'
+import { type DashboardCaptureResult, WEBSITE_HERO_COLUMNS } from './dashboard-capture'
 
 let tmp: string
 
@@ -53,7 +50,25 @@ async function runCapture(name: string): Promise<Run> {
     'fixture',
   )
 
-  const result = await captureDashboardFrames({ workspacePath: workspace })
+  // Launch with the same explicit environment as pixel parity. Git provenance
+  // appears in detail frames and must not depend on when each fixture ran.
+  const child = Bun.spawn(
+    [
+      'bun',
+      '-e',
+      `import {captureDashboardFrames} from './tools/dashboard-capture'; const result = await captureDashboardFrames({workspacePath: process.argv[1]}); console.log(JSON.stringify(result, (key, value) => key === 'png' ? undefined : value));`,
+      workspace,
+    ],
+    { cwd: join(import.meta.dir, '..'), env: captureEnvironment(), stdout: 'pipe', stderr: 'pipe' },
+  )
+  const [output, error, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(code, error).toBe(0)
+  const result = JSON.parse(output) as DashboardCaptureResult
+  for (const frame of result.frames) frame.png = new Uint8Array(await readFile(frame.pngPath))
   return { result, status: await git(workspace, 'status', '--porcelain') }
 }
 
@@ -65,6 +80,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'forge-readiness-wide',
+    'forge-readiness-narrow',
     'integration-wide',
     'post-reconcile-policy',
     'headline-happy-wide',
@@ -107,6 +124,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('AUT-134')
       expect(frame.text).toContain('AUT-136')
       expect(frame.text).not.toContain('BLOCKED')
+    } else if (frame.id.startsWith('forge-readiness-')) {
+      expect(frame.text).toContain('Forge squash')
+      expect(frame.text).toContain('Forge rebase')
+      expect(frame.text).toContain('Allow squash merging')
+      expect(frame.text).toContain('Allow rebase merging')
     } else if (frame.id === 'integration-wide') {
       expect(frame.text).toContain('integration')
       expect(frame.text).toContain('target')

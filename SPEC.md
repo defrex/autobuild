@@ -179,6 +179,18 @@ and janitor completion; the same registration backs every source-agnostic
 lifecycle fields unchanged and own any further validation; credentials remain
 environment-only.
 
+Forge readiness is an optional read-only port capability, inspected on the host
+by init validation and once at dispatch startup after repository lease acquisition.
+It reports squash/rebase merge methods and kernel build/node/archive publication
+permissions as hard requirements, and protected-target linear history and root
+freshness as recommendations. Results are pass, fail, or unknown; incomplete
+inspection never proves permission. Local Git passes trivially; legacy plugins
+report unknown. Known hard failures fail init validation and produce one durable
+`dispatcher.forge-readiness-failed` repository fact per run/check. They do not
+add a dispatch admission gate. Repository attention watches (`ab watch`), dashboard
+warnings, and operator queries expose all failures and remediation for the run;
+`ab wait` remains build-only. No setting is changed and no probe ref is pushed.
+
 Forge selection is open through the root `forge` scalar (`github` by default).
 Two adapters ship: `github` publishes through GitHub/`gh`; `local-git` uses only
 the repository's shared local Git database and requires no remote, network, or

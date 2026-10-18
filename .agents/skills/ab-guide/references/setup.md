@@ -119,8 +119,8 @@ exits nonzero on failure. Then:
 5. Commit the config, setup files, lockfiles, and installed reference changes,
    then push them to `baseBranch`. A remote sandbox clones the authoritative
    GitHub revision; it cannot acquire local-only edits.
-6. Run `ab init --validate`. Fix every named failure and rerun until every check
-   passes. Only then use the installed grooming/ticket skills to create the
+6. Run `ab init --validate`. Fix every named failure, review warnings and unknowns, and rerun
+   validation. Only then use the installed grooming/ticket skills to create the
    first groomed Ready ticket and start `ab dispatch`.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a
@@ -473,3 +473,43 @@ To retain earlier names configure `triageState = "Backlog"`,
 `claimedState = "Doing"`, `doneState = "Done"`, and the desired `readyState`.
 Existing ticket rows are never renamed. Older combined-service clients continue
 using the uploaded dispatcher configuration until independent policy is published.
+
+## Forge readiness
+
+Validation inspects the configured forge once on the host, including when builds
+run in Vercel Sandbox. Forge credentials never enter the guest. Each setting is
+PASS, FAIL, WARN, or UNKNOWN; unknown never means permission was proved.
+
+For GitHub, enable **Allow squash merging** and **Allow rebase merging** in
+Settings → General. The kernel needs direct publication and force-push permission
+throughout `refs/heads/ab/` and `refs/heads/ab-node/`, including future branch
+names. It also publishes immutable `refs/autobuild/archive/` refs, a non-head
+namespace. Review protection rules, inherited organization rulesets, push rules,
+and actor restrictions for all three namespaces. GitHub's branch APIs cannot
+prove archive-domain access: manually verify it with your administrator without
+creating probe refs or overwriting archives. Autobuild never changes settings or
+performs test pushes.
+
+Require **linear history** on protected root and node target branches to prevent
+merge commits from GitHub's update-branch action. On the configured root, enable
+**Require branches to be up to date before merging**, with nonempty required
+checks enforced for all merge actors. This makes root node landings fenced;
+without it they are best-effort. Both are recommendations, so missing settings
+produce warnings rather than hard failures.
+
+Inspection needs **Metadata:read** for rulesets and **Administration:read** for
+classic protection; classic private-repository tokens need `repo` access.
+Publication separately needs **Contents:write**. Read access never proves write
+access. Insufficient scope, incomplete inventories, ambiguous patterns, or
+unproven actor bypass produce UNKNOWN with access/remediation guidance. Plugins
+without the optional readiness capability report UNKNOWN and need an adapter
+upgrade; local Git passes these hosted-policy checks trivially.
+
+Known hard failures make `ab init --validate` exit unsuccessfully. Warnings and
+unknowns preserve the workspace validation result and require operator review.
+Dispatch reports known hard failures once per invocation as durable
+`dispatcher.forge-readiness-failed` repository notices without adding an admission
+gate. External orchestrators follow these through `ab watch` with no slugs or an
+explicit repository watch; `ab wait` remains build-only. The dashboard and operator
+repository query retain all failures for that run. After correcting settings or
+access, revalidate and restart dispatch to refresh its startup diagnostics.
