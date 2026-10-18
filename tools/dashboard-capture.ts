@@ -163,22 +163,6 @@ export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
   {
-    id: 'forge-readiness-wide',
-    scenario: 'mixed',
-    columns: 140,
-    rows: 60,
-    forgeReadiness: true,
-    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
-  },
-  {
-    id: 'forge-readiness-narrow',
-    scenario: 'mixed',
-    columns: 80,
-    rows: 70,
-    forgeReadiness: true,
-    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
-  },
-  {
     id: 'integration-wide',
     scenario: 'integration',
     columns: 140,
@@ -325,6 +309,22 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'Dispatcher on standby: repository held by peer-run',
       'Build  plan-blocked-dashboard',
     ],
+  },
+  {
+    id: 'forge-readiness-wide',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 60,
+    forgeReadiness: true,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
+  },
+  {
+    id: 'forge-readiness-narrow',
+    scenario: 'mixed',
+    columns: 80,
+    rows: 70,
+    forgeReadiness: true,
+    requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
   },
 ]
 

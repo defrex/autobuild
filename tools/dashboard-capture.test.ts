@@ -80,8 +80,6 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
-    'forge-readiness-wide',
-    'forge-readiness-narrow',
     'integration-wide',
     'post-reconcile-policy',
     'headline-happy-wide',
@@ -94,6 +92,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'resume-prompt',
     'standby-list',
     'standby-detail',
+    'forge-readiness-wide',
+    'forge-readiness-narrow',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
