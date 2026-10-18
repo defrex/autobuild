@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test'
 import { randomBuildLog } from './generators/build-log'
 import { buildReadFactsReducer, buildStreamSeedReducer } from './read-facts'
 import { buildReducer, reduceBuild } from './reducer'
-import { currentDeferralObservationReducer } from './auto-merge'
+import { autoMergeDeferralObservation, currentDeferralObservationReducer } from './auto-merge'
 import { mergeDecision } from '../cli/attention'
 import { indexLog } from './log-index'
 import { publicationStateReducer } from '../processes/publication-state'
@@ -77,6 +77,20 @@ test('one persisted seed includes transient attention even when consent is armed
       rule: { default: true },
     },
   })
+  const gateCommand = await store.append('seed', {
+    actor: humanActor('human'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await store.append(
+    'seed',
+    autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'disabled' },
+      7,
+      gateCommand.seq,
+      'gate',
+    ),
+  )
   await store.append('seed', {
     actor: humanActor('human'),
     type: 'build.auto-merge-requested',

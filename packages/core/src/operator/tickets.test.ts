@@ -350,3 +350,24 @@ test('operator create and metadata-only patches preserve ticket kind, target and
   const listed = await listOperatorTickets({ ...common, state: 'Triage' })
   expect(listed.tickets.every((ticket) => ticket.kind !== undefined)).toBe(true)
 })
+
+test('tree service retains completed source tickets, diagnostics and invalid graph refusal', async () => {
+  const { readTicketTree, getOperatorTicketTree } = await import('./tickets')
+  const source = new FakeTicketSource()
+  const node = await source.create({ title: 'Node', body: 'spec', kind: 'node' })
+  const child = await source.create({ title: 'Child', body: 'spec', target: node.ref.id })
+  await source.transition(child.ref.id, 'Done')
+  const listAll = source.listAll.bind(source)
+  source.listAll = async () => ({ ...(await listAll()), diagnostics: ['provider diagnostic'] })
+  const direct = await readTicketTree(source, config.baseBranch)
+  const operator = await getOperatorTicketTree({
+    store: await configuredStore(),
+    repo,
+    backend: backend(source),
+  })
+  expect(operator).toEqual(direct)
+  expect(direct.children[0]!.children[0]!.ticket.state).toBe('Done')
+  expect(direct.diagnostics).toEqual(['provider diagnostic'])
+  source.listAll = async () => ({ tickets: [{ ...node, target: node.ref.id }], diagnostics: [] })
+  await expect(readTicketTree(source, 'main')).rejects.toThrow('cyclic')
+})

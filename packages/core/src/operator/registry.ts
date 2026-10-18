@@ -1,3 +1,5 @@
+import { listOperatorLandings } from './landings'
+import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 /**
@@ -475,6 +477,25 @@ function defineTool(
  * here and a row in `operator/annotations.ts`; the contract suite proves the
  * two stay in lockstep. */
 export const TOOLS: readonly ToolEntry[] = [
+  defineTool(
+    'landings.list',
+    'List ready landings awaiting consent or held, with frozen effective targets and verification evidence.',
+    repositoryStatusInput,
+    'JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.',
+    async (raw, ctx) => listOperatorLandings({ store: ctx.store, ...(raw as { repo: string }) }),
+  ),
+  defineTool(
+    'tickets.tree',
+    'Read the exhaustive source ticket tree, including completed tickets and empty nodes.',
+    repositoryStatusInput,
+    '{root, children, diagnostics}: source metadata ancestry, distinct from frozen build targets.',
+    async (raw, ctx) =>
+      getOperatorTicketTree({
+        store: ctx.store,
+        backend: ticketsOf(ctx),
+        ...(raw as { repo: string }),
+      }),
+  ),
   defineTool(
     'builds.list',
     'List one repository’s builds, newest first, with effective status derived from the build log.',

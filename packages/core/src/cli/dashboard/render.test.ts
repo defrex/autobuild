@@ -2985,3 +2985,45 @@ test('standby detail and session geometry leave the final body content reachable
   expect(lines).toContain('output 19')
   expect(lines).toContain('Keys:')
 })
+
+test('tree row, detail and queue labels use the shared vocabulary', async () => {
+  const { treeVocabulary, projectTree } = await import('./tree')
+  const { reduceBuild } = await import('../../kernel/reducer')
+  const original = { ...treeVocabulary }
+  try {
+    Object.assign(treeVocabulary, {
+      restack: 'REPLAY',
+      consent: 'DECISION',
+      children: 'CHILDREN',
+      verify: 'CHECK',
+      landing: 'LANDING',
+      readyToLand: 'READY',
+    })
+    const tree = {
+      ...projectTree(
+        { slug: 'tree', repo: 'repo', branch: 'preview', createdAt: '', updatedAt: '' },
+        { ...reduceBuild([]), kind: 'node' },
+        { gates: {} },
+      ),
+      consent: true,
+      ready: true,
+    }
+    const row = build({ slug: 'tree', kind: 'integration', tree })
+    const frame = model([row])
+    const text = rd(frame, WIDE).join('\n')
+    for (const label of [
+      'DECISION queue',
+      'REPLAY idle',
+      'CHECK pending',
+      'CHILDREN unknown',
+      'READY',
+    ])
+      expect(text).toContain(label)
+    frame.view = { kind: 'detail', slug: 'tree', scroll: 0 }
+    const detail = rd(frame, WIDE).join('\n')
+    for (const label of ['REPLAY idle', 'CHILDREN unknown', 'LANDING READY'])
+      expect(detail).toContain(label)
+  } finally {
+    Object.assign(treeVocabulary, original)
+  }
+})

@@ -140,3 +140,6 @@ export {
 export { ticketStateCreateRequestSchema } from './protocol'
 
 export { readBuildFacts } from '../store/reduced-reads'
+
+export { listOperatorLandings } from './landings'
+export { readTicketTree, getOperatorTicketTree } from './tickets'

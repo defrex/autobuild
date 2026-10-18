@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#647](https://github.com/defrex/autobuild/pull/647) — Show the integration tree and landing consent queue
 - [#646](https://github.com/defrex/autobuild/pull/646) — Make landing policy declarative with durable hold and land controls
 - [#645](https://github.com/defrex/autobuild/pull/645) — Check forge readiness before builds encounter incompatible settings
 - [#644](https://github.com/defrex/autobuild/pull/644) — Allow open integration nodes to move to a new parent

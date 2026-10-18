@@ -1,3 +1,4 @@
+import { landPreconditions } from '../kernel/landing-readiness'
 import { observeIntegration } from '../kernel/integration-completeness'
 import type { TicketSource } from '../ports/types'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -495,21 +496,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         if (opts.action.kind === 'land' && discardInFlight(current)) throw discardPending(opts.slug)
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
-          if (
-            !decision ||
-            current.status === 'paused' ||
-            current.currentPhase ||
-            current.openEscalations.length ||
-            current.pendingCommands.length ||
-            current.prState !== 'open' ||
-            (current.kind === 'node' ? current.integration?.cycle?.head : current.pr?.headSha) !==
-              decision.candidate.head ||
-            (current.kind !== 'node' &&
-              facts.log.restack.target &&
-              facts.log.restack.target.sha !== decision.candidate.parent) ||
-            facts.log.restack.active ||
-            current.nodeRestack?.active
-          )
+          if (!landPreconditions(current, facts.log.restack))
             throw new Error(
               'Landing is not ready; wait for current-base verification and finalize before running ab land',
             )
