@@ -163,6 +163,14 @@ export class RepoViewStore implements BuildStore {
   buildFacts(slug: string): Promise<CurrentBuildFacts> {
     return this.build(slug, async () => (await readBuildFacts(this.backing, slug)).value)
   }
+  getRepoChangePosition(repo: string): Promise<string> {
+    return this.backing.getRepoChangePosition(repo)
+  }
+
+  listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+    return this.backing.listBuildsForRepo(repo)
+  }
+
   async listBuilds(): Promise<BuildRecord[]> {
     if (!this.initialized) await this.refresh()
     return this.metaChain.run(async () => {

@@ -18,7 +18,7 @@ import { projectBuild, type DashboardBuild } from './model'
  * metadata decorates each row with its pinned pipeline source and revision
  * (SPEC §16.1). */
 export interface DashboardBuildReader {
-  listBuilds(): Promise<BuildRecord[]>
+  listBuildsForRepo(repo: string): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
   listStreams?(scope: StreamScope): Promise<StreamRecord[]>
   getArtifact?(slug: string, kind: string): Promise<Artifact | null>
@@ -81,7 +81,7 @@ function validateDelta(slug: string, sinceSeq: number, events: AbEvent[]): void 
 /**
  * Process-local, display-only acceleration for the interactive dispatch frame.
  *
- * Every refresh still discovers records with `listBuilds()`. A first-seen
+ * Every refresh still discovers records with `listBuildsForRepo(repo)`. A first-seen
  * stream is hydrated from seq 0; a cached dashboard-visible stream is read only
  * after its reduced `lastSeq`. Empty deltas preserve the exact reduction and
  * projected row, so phase timing is not recomputed. Only fully completed
@@ -180,8 +180,11 @@ export class DashboardBuildPollCache {
   refresh(
     config: Config = this.config,
     configRevision = this.configRevision,
+    fullEnrichment = false,
   ): Promise<DashboardPollSnapshot> {
-    const result = this.refreshTail.then(() => this.refreshNow(config, configRevision))
+    const result = this.refreshTail.then(() =>
+      this.refreshNow(config, configRevision, fullEnrichment),
+    )
     this.refreshTail = result.then(
       () => undefined,
       () => undefined,
@@ -189,9 +192,13 @@ export class DashboardBuildPollCache {
     return result
   }
 
-  private async refreshNow(config: Config, configRevision: number): Promise<DashboardPollSnapshot> {
+  private async refreshNow(
+    config: Config,
+    configRevision: number,
+    fullEnrichment: boolean,
+  ): Promise<DashboardPollSnapshot> {
     const configChanged = configRevision !== this.configRevision || config !== this.config
-    const records = (await this.reader.listBuilds()).filter((record) => record.repo === this.repo)
+    const records = await this.reader.listBuildsForRepo(this.repo)
     const next = new Map<string, PollEntry>()
 
     for (const record of records) {
@@ -206,12 +213,11 @@ export class DashboardBuildPollCache {
       validateDelta(record.slug, sinceSeq, delta)
 
       if (current !== undefined && delta.length === 0) {
-        // Dashboard rows derive from event streams and effective config only.
-        // Heartbeat and lease renewals are mutable record facts, so they leave
-        // both the cached reduction and projected row untouched.
+        // Preserve the reduction on empty deltas. Bounded full refreshes also
+        // reload mutable record, stream and artifact enrichment.
         next.set(
           record.slug,
-          configChanged || current.build?.ticketId !== record.ticket?.id
+          fullEnrichment || configChanged || current.build?.ticketId !== record.ticket?.id
             ? {
                 ...current,
                 build: await this.projectRow(record, current.state, current.events, config),

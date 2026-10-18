@@ -1,3 +1,4 @@
+import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
   DashboardRefresh,
   interactionRead,
@@ -32,7 +33,7 @@ import {
   type DashboardSelection,
   type DashboardView,
 } from './dashboard/model'
-import { DashboardBuildPollCache } from './dashboard/poll'
+import { DashboardBuildPollCache, type DashboardPollSnapshot } from './dashboard/poll'
 import {
   dashboardContentWidth,
   detailScrollLimit,
@@ -294,35 +295,63 @@ export class DispatchFrontend {
     return this.readFrame()
   }
 
+  private readonly repositoryPoll = new RepositoryPollCache<{
+    repositoryEvents: RepositoryEvent[]
+    status: DispatchStatus
+    config: Config
+    observationCount: number
+    snapshot: DashboardPollSnapshot
+  }>()
+
   private async readFrame(): Promise<void> {
     if (this.refresh !== undefined && !this.refresh.admitted) return
-    let repositoryEvents = await this.events()
-    let status = this.dispatchStatus
-    const ref = status.effectiveConfig
-    // No filesystem fallback: the first frame waits for the child's durable,
-    // run-correlated effective snapshot.
-    if (ref === undefined) {
-      if (status.health === 'failed' && status.warningNotice !== undefined) {
-        this.region.update([status.warningNotice])
-      }
-      return
-    }
-    const config = await this.loadConfig(ref.kind, ref.rev)
-    try {
-      this.observationCount = unclaimedObservationCount({
-        digests: await this.reader.getRepoBuildDigests(this.opts.repo),
-        harvestEvents: repositoryEvents,
-      })
-    } catch {
-      // Before the first successful sample there is no factual zero to place in
-      // a complete frame. Leave the prior frame untouched and retry on the next
-      // ordinary poll, without manufacturing a repository notice.
-      if (this.observationCount === undefined) return
-    }
-    this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
-    const snapshot = await this.cache.refresh(config, this.configRevision)
-    if (!this.cache.isCurrent(snapshot) || (this.refresh !== undefined && !this.refresh.admitted))
-      return
+    const frame = await this.repositoryPoll.refresh({
+      position: () => this.reader.getRepoChangePosition(this.opts.repo),
+      now: () => this.clock().getTime(),
+      revision: 0,
+      enabled: !this.opts.once,
+      valid: (frame) => this.cache?.isCurrent(frame.snapshot) ?? false,
+      admitted: () => this.refresh === undefined || this.refresh.admitted,
+      nextPollMs: this.refresh?.intervalMs ?? 0,
+      read: async ({ fullEnrichment }) => {
+        const repositoryEvents = await this.events()
+        const status = this.dispatchStatus
+        const ref = status.effectiveConfig
+        if (ref === undefined) {
+          if (status.health === 'failed' && status.warningNotice !== undefined)
+            this.region.update([status.warningNotice])
+          // Startup is incomplete: retry at the same position.
+          return undefined
+        }
+        const config = await this.loadConfig(ref.kind, ref.rev)
+        let observationCount: number
+        try {
+          observationCount = unclaimedObservationCount({
+            digests: await this.reader.getRepoBuildDigests(this.opts.repo),
+            harvestEvents: repositoryEvents,
+          })
+        } catch {
+          // Incomplete snapshots never acknowledge the sampled position.
+          this.syncControls()
+          this.paint()
+          return undefined
+        }
+        this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
+        const snapshot = await this.cache.refresh(config, this.configRevision, fullEnrichment)
+        if (!this.opts.once)
+          await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
+        await this.repositoryFeed.save()
+        if (!this.cache.isCurrent(snapshot)) return undefined
+        return { repositoryEvents, status, config, observationCount, snapshot }
+      },
+    })
+    if (frame === undefined) return
+    let { repositoryEvents, status } = frame
+    const { config, snapshot } = frame
+    const standby = this.opts.once
+      ? undefined
+      : this.standbyResolver.current(this.runId, status.yieldedHolder, this.clock())
+    this.observationCount = frame.observationCount
     this.refresh?.activity(snapshot.states.size > 0)
 
     if (this.resumePrompt !== undefined) {
@@ -346,9 +375,6 @@ export class DispatchFrontend {
       ...status.roleWarnings,
       ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
     ]
-    const standby = this.opts.once
-      ? undefined
-      : await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
     const projected = buildDashboardFromProjected(
       snapshot.builds,
       {
@@ -375,7 +401,6 @@ export class DispatchFrontend {
     ) {
       this.view = undefined
     }
-    await this.repositoryFeed.save()
     this.model = projected
     this.syncControls()
     this.paint()

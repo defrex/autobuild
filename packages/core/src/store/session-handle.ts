@@ -100,6 +100,12 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     getBuild(slug: string): Promise<BuildRecord | null> {
       return Promise.reject(new SessionScopeError(scope, 'getBuild', slug))
     },
+    listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
+      return Promise.reject(new SessionScopeError(scope, 'listBuildsForRepo', repo))
+    },
+    getRepoChangePosition(repo: string): Promise<string> {
+      return Promise.reject(new SessionScopeError(scope, 'getRepoChangePosition', repo))
+    },
     listBuilds(): Promise<BuildRecord[]> {
       return Promise.reject(new SessionScopeError(scope, 'listBuilds'))
     },

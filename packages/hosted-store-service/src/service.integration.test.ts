@@ -214,7 +214,11 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   if (dashboardRun?.type !== 'dispatcher.run-started') throw new Error('missing dashboard run')
   expect(dashboardRun.payload.pid).not.toBe(process.pid)
   expect(repoEvents.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
-  expect(dashboardRequests.some((entry) => entry.path === '/builds')).toBe(true)
+  expect(
+    dashboardRequests.some(
+      (entry) => entry.path === `/repos/${encodeURIComponent(h.origin)}/builds`,
+    ),
+  ).toBe(true)
   expect(
     dashboardRequests.some(
       (entry) =>

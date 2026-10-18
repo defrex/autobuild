@@ -212,6 +212,8 @@ const storeResourceRoutes = new Set([
   // server before the repo-existence gate, so an unknown repo is still
   // classified here and answers 200 from build records.
   'GET build-digests',
+  'GET change-position',
+  'GET builds',
   // The bounded repository-journal read (AUT-489); unlike build-digests this
   // route is served inside the repo-existence gate, exactly like `GET
   // events`. Without this classification `hostedBackend` answers the generic

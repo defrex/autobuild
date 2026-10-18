@@ -32,6 +32,8 @@ export async function readDispatcherLiveness(
  * always come from the current lease record and clock. Failed correlations are
  * negatively cached so a standby cannot repeatedly replay a large journal. */
 export class StandbyIdentityResolver {
+  private failed = false
+  private record: RepositoryRecord | null = null
   private readonly starts = new Map<string, RepositoryEvent>()
   private readonly attempted = new Set<string>()
   private readonly pending = new Map<string, Promise<void>>()
@@ -84,12 +86,23 @@ export class StandbyIdentityResolver {
     try {
       record = await this.store.getRepo(this.repo)
     } catch {
+      this.failed = true
       return yieldedHolder
     }
+    this.failed = false
+    this.record = record
+    const holder = record?.lease?.holder
+    if (holder !== undefined && holder !== run) await this.correlate(holder)
+    return this.current(run, yieldedHolder, now)
+  }
+
+  /** Reformat sampled liveness against the paint clock without store I/O. */
+  current(run: string, _yieldedHolder: string | undefined, now: Date): string | undefined {
+    if (this.failed) return _yieldedHolder
+    const record = this.record
     const holder = record?.lease?.holder
     if (holder === run) return undefined
-    if (holder === undefined) return yieldedHolder
-    await this.correlate(holder)
+    if (holder === undefined) return undefined
     if (!this.starts.has(holder)) return holder
     const projection = projectDispatcherLiveness(record, [...this.starts.values()], now)
     const identity = projection.holder ?? projection.expiredHolder

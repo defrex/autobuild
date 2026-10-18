@@ -124,6 +124,10 @@ export const repositoryEventEnvelopeWireSchema = z.object({
 export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSchema)
 
 /** `GET repos/:repo/high-water`: the journal's greatest assigned seq. */
+export const repoChangePositionSchema = z.object({
+  position: z.string().regex(/^(0|[1-9][0-9]*)$/),
+})
+
 export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })
 
 /** `GET builds|repos/:id/snapshots/:reducer?version=N`: the snapshot or `null`. */

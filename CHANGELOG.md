@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#639](https://github.com/defrex/autobuild/pull/639) — Open integration node branches and route targeted builds
+- [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
 - [#638](https://github.com/defrex/autobuild/pull/638) — Support node kinds and targets in hosted tickets
 - [#636](https://github.com/defrex/autobuild/pull/636) — Reconcile builds by replaying one change onto the refreshed base
 - [#633](https://github.com/defrex/autobuild/pull/633) — Add node tickets and source-local integration targets
