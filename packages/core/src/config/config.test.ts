@@ -102,6 +102,7 @@ function parseError(toml: string, source?: string): ConfigError {
 describe('parseConfig — complete flattened surface', () => {
   test('every field lands where expected', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
+      landing: [],
       baseBranch: 'main',
       capacity: 3,
       ticketScanIntervalSeconds: 60,
@@ -193,6 +194,7 @@ describe('parseConfig — defaults', () => {
 
   test('a minimal valid [tickets] yields every other default', () => {
     expect(parseConfig(READY)).toEqual({
+      landing: [],
       baseBranch: 'main',
       capacity: 1,
       ticketScanIntervalSeconds: 60,
@@ -1158,7 +1160,7 @@ alternates = []
     const root = parseError(`${READY}[polcy]\nstallRounds = 3\n`)
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
-    expect(root.message).toContain('known tables: store, pr, workspace, commands')
+    expect(root.message).toContain('known tables: store, landing, pr, workspace, commands')
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')
     expect(parseError(`${READY}[roles.default]\nmdel = "x"\n`).message).toContain('"mdel"')
@@ -1391,4 +1393,34 @@ test('hosted lifecycle roles may overlap and doneState must be nonblank', () => 
   expect(() => parseConfig(config.replace('doneState = "Shipped"', 'doneState = " "'))).toThrow(
     'doneState',
   )
+})
+
+describe('ordered landing configuration', () => {
+  test('normalizes absent rules and preserves written rule order', () => {
+    expect(parseConfig(READY).landing).toEqual([])
+    expect(
+      parseConfig(`${READY}
+[[landing]]
+into = "root"
+from = "node"
+label = "release"
+mode = "consent"
+[[landing]]
+mode = "auto"
+`).landing,
+    ).toEqual([{ into: 'root', from: 'node', label: 'release', mode: 'consent' }, { mode: 'auto' }])
+  })
+
+  test('rejects malformed rules with indexed diagnostics', () => {
+    for (const body of [
+      'mode = "manual"',
+      'mode = "auto"\nfrom = "build"',
+      'mode = "auto"\nlabel = " "',
+      'mode = "auto"\ninto = ""',
+      'mode = "auto"\nunknown = true',
+      'from = "leaf"',
+    ]) {
+      expect(() => parseConfig(`${READY}\n[[landing]]\n${body}`)).toThrow('landing[0]')
+    }
+  })
 })

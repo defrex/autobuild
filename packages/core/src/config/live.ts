@@ -19,6 +19,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
   forge: 'restart',
   plugins: 'restart',
   pr: 'hot',
+  landing: 'hot',
   workspace: {
     provider: 'restart',
     config: 'restart',

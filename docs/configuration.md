@@ -214,6 +214,7 @@ These fields hot-reload:
 | `ticketScanIntervalSeconds` | Next tick; evaluates elapsed time against the new interval. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
+| `[landing]` (ordered `[[landing]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
@@ -444,6 +445,29 @@ registration key is used for session event and transcript attribution. A
 runtime's optional one-shot capability serves slug naming and lazy upgrade
 conflict resolution; when absent, each caller retains its existing safe
 fallback.
+
+## `[[landing]]`
+
+An ordered list of strict landing rules. Predicates within one rule are ANDed;
+the first matching rule wins. Omitted predicates match everything. With no
+matching rule, leaves default to `auto` and nodes to `consent`.
+
+| Field | Meaning |
+|---|---|
+| `into` | Optional destination: `root`, any `node`, or an exact frozen destination node ticket id. |
+| `from` | Optional source kind: `leaf` or `node`. |
+| `label` | Optional exact, case-sensitive label on the source ticket. Blank labels are invalid. |
+| `mode` | Required `auto` or `consent`. |
+
+For example, put a rule with `into = "root"` and `mode = "consent"`
+before a catch-all rule with `mode = "auto"` to request consent only at the
+root. A catch-all placed first shadows every later rule. Specific-node rules
+match the build's frozen destination, rather than the ticket's current parent.
+
+A readiness decision retains the complete matched rule and index (or an explicit
+default), source kind, destination and sampled labels. Later policy edits do not
+rewrite this provenance. Landing policy belongs to the live dispatcher config;
+it is excluded from pinned pipeline settings and integration verification inputs.
 
 ## `[pr]`
 
