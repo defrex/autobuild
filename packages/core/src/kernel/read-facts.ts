@@ -123,6 +123,7 @@ export interface BuildReadAcc {
     AbEvent,
     { type: `reconcile.${string}` | 'workspace.provisioned' | 'phase.failed' }
   >[]
+  restackHistory: Extract<AbEvent, { type: `restack.${string}` }>[]
   gitTips: string[]
   reconcileTransaction?: import('../events/payloads').EventPayload<'reconcile.prepared'>
   reconcileReplay?: import('../events/payloads').EventPayload<'reconcile.replayed'>
@@ -189,6 +190,7 @@ export const buildReadFactsReducer = defineReducer({
     planFeedback: {},
     reconcileBases: {},
     reconcileHistory: [],
+    restackHistory: [],
     gitTips: [],
     maxPlanRevision: -1,
     seenTypes: [],
@@ -274,6 +276,8 @@ export const buildReadFactsReducer = defineReducer({
       if (event.type === 'verify.started')
         acc.feedback[JSON.stringify([`verify:${event.payload.step}`, event.payload.attempt])] =
           event.payload.feedback ?? null
+      if (event.type.startsWith('restack.'))
+        acc.restackHistory.push(event as Extract<AbEvent, { type: `restack.${string}` }>)
       for (const tip of referencedGitTips([event]))
         if (!acc.gitTips.includes(tip)) acc.gitTips.push(tip)
       if (
@@ -381,6 +385,7 @@ export const buildReadFactsReducer = defineReducer({
     feedback: structuredClone(acc.feedback),
     reconcileBases: { ...acc.reconcileBases },
     reconcileHistory: structuredClone(acc.reconcileHistory),
+    restackHistory: structuredClone(acc.restackHistory),
     gitTips: [...acc.gitTips],
     reconcileTransaction: acc.reconcileTransaction,
     reconcileReplay: acc.reconcileReplay,

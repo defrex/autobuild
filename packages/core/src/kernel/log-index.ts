@@ -1,3 +1,4 @@
+import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
 /**
  * The engine's raw-log index (see `LogIndex`): the projections `reduceBuild`
  * does not carry. Extracted from `engine.ts` as an incremental reducer.
@@ -78,7 +79,18 @@ export interface LoopIndex {
   findingsByRound: Finding[][]
 }
 
+export interface VerifyStartRecord {
+  seq: number
+  attempt: number
+  baseSha?: string
+  headSha?: string
+  restackId?: string
+}
+
 export interface VerifyRecord {
+  baseSha?: string
+  headSha?: string
+  restackId?: string
   seq: number
   step: string
   attempt: number
@@ -95,6 +107,7 @@ export interface GuidanceDelivery {
 }
 
 export interface ReconcileStartRecord {
+  restackId?: string
   seq: number
   attempt: number
   baseSha: string
@@ -112,6 +125,7 @@ export interface ReconcileProgressRecord {
 }
 
 export interface LogIndex {
+  restack: LeafRestackState
   /** Latest post-restart policy fact; authoritative only for its originating
    * reconcile completion, never for a newer review or reconcile cycle. */
   reconcilePolicy?: {
@@ -128,7 +142,7 @@ export interface LogIndex {
   /** Post-restart `verify.started` facts — a crashed step re-runs at the SAME
    * attempt (§15.6-C), so the current cycle's attempt must be readable from
    * its start events even before any completion lands. */
-  verifyStarted: { seq: number; attempt: number }[]
+  verifyStarted: VerifyStartRecord[]
   /**
    * Max verify attempt in any `verify.started`/`verify.completed` over the
    * FULL log. Attempt numbers continue monotonically across spec restarts and
@@ -173,7 +187,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 1
+export const LOG_INDEX_REDUCER_VERSION = 2
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
@@ -201,7 +215,7 @@ export type LogIndexCandidate =
       reason?: string
     }
   | { kind: 'implement-completed'; seq: number }
-  | { kind: 'verify-started'; seq: number; attempt: number }
+  | ({ kind: 'verify-started' } & VerifyStartRecord)
   | { kind: 'reconcile-policy'; seq: number; policy: NonNullable<LogIndex['reconcilePolicy']> }
   | { kind: 'verify-completed'; record: VerifyRecord }
   | { kind: 'finalize-completed'; seq: number }
@@ -209,6 +223,7 @@ export type LogIndexCandidate =
   | { kind: 'reconcile-completed'; seq: number }
 
 export interface LogIndexAcc {
+  restack: LeafRestackState
   /** Full-log running state. */
   restartSeq: number
   maxRoundEver: { plan: number; code: number }
@@ -228,6 +243,7 @@ export interface LogIndexAcc {
 
 function initialLogIndexAcc(): LogIndexAcc {
   return {
+    restack: { gates: {} },
     restartSeq: 0,
     maxRoundEver: { plan: 0, code: 0 },
     maxVerifyAttemptEver: 0,
@@ -252,6 +268,7 @@ function emptyLoop(): LoopIndex {
 }
 
 function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
+  acc.restack = leafRestackReducer.advance(acc.restack, events)
   const noteRound = (loop: LoopName, round: number): void => {
     if (round > acc.maxRoundEver[loop]) acc.maxRoundEver[loop] = round
   }
@@ -353,6 +370,9 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
         acc.maxVerifyAttemptEver = Math.max(acc.maxVerifyAttemptEver, event.payload.attempt)
         acc.candidates.push({
           kind: 'verify-started',
+          ...(event.payload.baseSha === undefined ? {} : { baseSha: event.payload.baseSha }),
+          ...(event.payload.headSha === undefined ? {} : { headSha: event.payload.headSha }),
+          ...(event.payload.restackId === undefined ? {} : { restackId: event.payload.restackId }),
           seq: event.seq,
           attempt: event.payload.attempt,
         })
@@ -380,6 +400,9 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
           kind: 'verify-completed',
           record: {
             seq: event.seq,
+            ...(result.baseSha === undefined ? {} : { baseSha: result.baseSha }),
+            ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
+            ...(result.restackId === undefined ? {} : { restackId: result.restackId }),
             step: result.step,
             attempt: result.attempt,
             outcome: result.outcome,
@@ -461,7 +484,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   code.maxRoundEver = acc.maxRoundEver.code
   const loops = { plan, code }
   const verifyCompleted: VerifyRecord[] = []
-  const verifyStarted: { seq: number; attempt: number }[] = []
+  const verifyStarted: VerifyStartRecord[] = []
   const finalizeStepsDone = new Set<string>()
   let reconcilePolicy: LogIndex['reconcilePolicy']
   let lastReconcileCompletedSeq = 0
@@ -532,7 +555,13 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
         lastImplementCompletedSeq = candidate.seq
         break
       case 'verify-started':
-        verifyStarted.push({ seq: candidate.seq, attempt: candidate.attempt })
+        verifyStarted.push({
+          seq: candidate.seq,
+          attempt: candidate.attempt,
+          ...(candidate.baseSha === undefined ? {} : { baseSha: candidate.baseSha }),
+          ...(candidate.headSha === undefined ? {} : { headSha: candidate.headSha }),
+          ...(candidate.restackId === undefined ? {} : { restackId: candidate.restackId }),
+        })
         break
       case 'reconcile-policy':
         reconcilePolicy = candidate.policy
@@ -604,6 +633,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
           .at(-1)
 
   return {
+    restack: structuredClone(acc.restack),
     restartSeq,
     plan,
     code,

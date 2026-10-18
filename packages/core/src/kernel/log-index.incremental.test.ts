@@ -1,3 +1,4 @@
+import { leafRestackReducer } from './leaf-restack-state'
 /**
  * Incremental contract for the engine's raw-log index over seeded generated
  * logs, checked against the original whole-array `indexLog` (kept verbatim
@@ -305,6 +306,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
           .at(-1)
 
   return {
+    restack: leafRestackReducer.reduce(events),
     restartSeq,
     plan,
     code,

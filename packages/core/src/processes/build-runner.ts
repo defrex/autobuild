@@ -1,4 +1,12 @@
-import { prepareRestack, requireRewrite } from '../kernel/reconcile-restack'
+import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
+import { isRemoteWorkspace } from '../events/workspace-remote'
+import { withBuildTrailer } from '../kernel/build-identity'
+import {
+  prepareRestack,
+  publishRestack,
+  retainReplay,
+  requireRewrite,
+} from '../kernel/reconcile-restack'
 import { reconcileHead, reconcileRewriteHead } from '../kernel/reconcile-head'
 import { readBuildFacts, readBuildSelector, readPhaseFailures } from '../store/reduced-reads'
 import { delegateCredential } from '../store/remote/credentials'
@@ -95,6 +103,8 @@ import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './ph
 export { publicationPending } from './publication-state'
 
 // ── Seams ────────────────────────────────────────────────────────────────────
+
+class AutomaticRewriteDeferred extends Error {}
 
 /** Another sandbox owns the build (§7.4): its lease is live, so this runner
  * must not execute. The dispatcher retries once the lease expires. */
@@ -436,7 +446,7 @@ export const setupStreakReducer = defineReducer<
   finish: (acc) => acc.failures.filter((seq) => seq > acc.boundary).length,
 })
 
-export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 3
+export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 4
 
 /** Latest event-checkpointed branch head that kernel plumbing published;
  * undefined while the build has none. */
@@ -451,6 +461,11 @@ export const publishedBranchHeadReducer = defineReducer<
     for (const event of events) {
       if (event.type === 'implement.completed') {
         acc.head = event.payload.commits.head
+      } else if (event.type === 'restack.rewritten' || event.type === 'restack.completed') {
+        acc.head =
+          event.type === 'restack.rewritten'
+            ? (event.payload.observedHead ?? event.payload.headSha)
+            : event.payload.headSha
       } else if (event.type === 'reconcile.rewritten') {
         acc.head = reconcileRewriteHead(event.payload)
       } else if (event.type === 'reconcile.completed') {
@@ -479,7 +494,7 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
-export const VERIFY_DIFF_BASE_REDUCER_VERSION = 1
+export const VERIFY_DIFF_BASE_REDUCER_VERSION = 2
 
 /**
  * The durable tree against which a conditional verifier evaluates the
@@ -499,6 +514,8 @@ export const verifyDiffBaseReducer = defineReducer<
     for (const event of events) {
       if (event.type === 'workspace.provisioned') {
         if (acc.provisioned === undefined) acc.provisioned = event.payload.base.sha
+      } else if (event.type === 'restack.completed') {
+        acc.promoted = event.payload.targetBase
       } else if (event.type === 'reconcile.started') {
         acc.pendingReconcileBase = event.payload.baseSha
       } else if (event.type === 'reconcile.completed') {
@@ -821,9 +838,14 @@ export class BuildRunner {
   async step(): Promise<Decision> {
     const config = await this.captureConfig()
     const { store, slug } = this.deps
+    await this.settleLocalReconcile()
+    await completeAutomaticReconcile(store, slug)
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
     switch (decision.kind) {
+      case 'restack':
+        await this.restack(decision)
+        return decision
       case 'capture-reconcile-policy':
         await store.append(slug, {
           actor: KERNEL,
@@ -893,18 +915,31 @@ export class BuildRunner {
       }
     }
     try {
+      await this.settleLocalReconcile()
       if (await this.refreshSummary())
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-      if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.publication.pending()) {
-        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-      }
       for (;;) {
         await this.ensureLease()
+        await this.settleLocalReconcile()
+        const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+        if (facts.publication.pending()) {
+          const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
+          // Inert controls cannot start more work under unsettled publication.
+          // A local paused resolver needs resume acknowledged before this
+          // runner can settle its publication; remote guests still park.
+          const localResume =
+            next.kind === 'acknowledge' &&
+            next.command === 'resume' &&
+            (facts.workspace === null || !isRemoteWorkspace(facts.workspace))
+          if (
+            next.kind !== 'acknowledge' ||
+            (next.command !== 'pause' && next.command !== 'abort' && !localResume)
+          )
+            break
+        }
         const decision = await this.step()
         if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
-        if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.publication.pending())
-          break
       }
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } finally {
@@ -1055,9 +1090,10 @@ export class BuildRunner {
         requireRewrite(this.deps.forge)
         const facts = (await readBuildFacts(store, slug)).value
         reconcileBaseSha =
-          facts.reconcileTransaction?.attempt === round
+          facts.log.restack.active?.targetBase ??
+          (facts.reconcileTransaction?.attempt === round
             ? facts.reconcileTransaction.targetBase
-            : await this.refreshReconcileBase()
+            : await this.refreshReconcileBase())
       } catch (error) {
         await this.failPhase(
           phase,
@@ -1069,6 +1105,34 @@ export class BuildRunner {
       }
     }
 
+    if (phase === 'reconcile') {
+      const facts = (await readBuildFacts(store, slug)).value
+      const active = facts.log.restack.active
+      if (active !== undefined && facts.reconcileTransaction?.restackId !== active.id) {
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.started',
+          payload: { attempt: round, baseSha: active.targetBase, restackId: active.id },
+        })
+        const {
+          trigger: _trigger,
+          cycle: _cycle,
+          observation: _observation,
+          message: _message,
+          ...transaction
+        } = active
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.prepared',
+          payload: { ...transaction, attempt: round, restackId: active.id },
+        })
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.replayed',
+          payload: { id: active.id, conflicted: true },
+        })
+      }
+    }
     if (
       phase !== 'reconcile' ||
       (await readBuildFacts(store, slug)).value.reconcileTransaction?.attempt !== round
@@ -1083,6 +1147,7 @@ export class BuildRunner {
           { ...this.deps },
           {
             attempt: round,
+            restackId: (await readBuildFacts(store, slug)).value.log.restack.active?.id,
             branch: this.deps.branch,
             oldBase,
             targetBase: reconcileBaseSha,
@@ -1112,16 +1177,264 @@ export class BuildRunner {
       priorFailures: failures.count,
       isTerminal: (event) => event.type === spec.terminalEvent && roundMatches(event, round),
     })
+    if (phase === 'reconcile') await this.settleLocalReconcile()
   }
 
-  /**
-   * Resolve the current remote tip of this build's immutable base branch.
-   *
-   * The fetch target is build-scoped and internal: concurrent worktrees share
-   * one Git common directory, so FETCH_HEAD or a shared remote-tracking ref
-   * would let another build overwrite the object this attempt resolves. The
-   * explicit ref also makes the fetched remote-only commit available locally.
-   */
+  /** Re-read durable ownership and controls at the actual rewrite boundary. */
+  private async assertAutomaticRewriteOwnership(allowPublication = false) {
+    const { store, slug, instance, clock } = this.deps
+    const record = await store.getBuild(slug)
+    if (record?.lease?.holder !== instance) throw new LeaseHeldError(slug, instance)
+    if (
+      new Date(record.lease.expiresAt).getTime() <= clock().getTime() &&
+      !(await store.claimLease(slug, instance, this.leaseTtlMs))
+    )
+      throw new LeaseHeldError(slug, instance)
+    const facts = (await readBuildFacts(store, slug)).value
+    if (facts.open !== null && facts.open.instance !== instance)
+      throw new LeaseHeldError(slug, instance)
+    if (
+      facts.state.sessions.open.length > 0 ||
+      facts.state.status === 'paused' ||
+      facts.state.status === 'blocked' ||
+      facts.state.status === 'done' ||
+      facts.state.status === 'aborted' ||
+      facts.state.pendingCommands.some(
+        (command) =>
+          (!allowPublication && command.command === 'pause') || command.command === 'abort',
+      ) ||
+      (!allowPublication && facts.publication.pending())
+    )
+      throw new AutomaticRewriteDeferred(
+        'automatic rewrite deferred until execution, control and publication settlement',
+      )
+  }
+
+  /** A resolver deposits intent while its turn is live. Publish after it ends. */
+  private async settleLocalReconcile() {
+    const { store, slug } = this.deps
+    const facts = (await readBuildFacts(store, slug)).value
+    if (facts.workspace !== null && isRemoteWorkspace(facts.workspace)) return
+    const request = facts.publication.latestUncompletedRequest()
+    if (
+      request?.payload.operation !== 'reconcile' ||
+      request.payload.rewrite === undefined ||
+      facts.publication.requestSettled(request)
+    )
+      return
+    if (
+      facts.state.sessions.open.length > 0 ||
+      facts.state.status === 'paused' ||
+      facts.state.status === 'blocked' ||
+      facts.state.status === 'aborted' ||
+      facts.state.status === 'done' ||
+      facts.state.pendingCommands.some((command) => command.command === 'abort')
+    )
+      return
+    await this.closeProducerSessions()
+    const rewriteId = request.payload.rewrite.id
+    const intent = facts.reconcileHistory.findLast(
+      (e) => e.type === 'reconcile.publish-intended' && e.payload.id === rewriteId,
+    )
+    if (
+      intent?.type !== 'reconcile.publish-intended' ||
+      intent.payload.headSha !== request.payload.sha
+    )
+      throw new Error('local reconcile request does not match durable intent')
+    const publicationDeps = {
+      ...this.deps,
+      beforeRewrite: () => this.assertAutomaticRewriteOwnership(true),
+    }
+    // A replacement workspace may still be checked out at the old branch tip.
+    // Restore the frozen resolved intent before the guarded branch update.
+    await prepareRestack(publicationDeps, {
+      attempt: intent.payload.attempt,
+      branch: intent.payload.branch,
+      oldBase: intent.payload.oldBase,
+      targetBase: intent.payload.targetBase,
+      id: intent.payload.id,
+      restackId: intent.payload.restackId,
+    })
+    const result = await publishRestack(publicationDeps, intent.payload)
+    if (result.kind === 'lease-mismatch') {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'reconcile.contended',
+        payload: { id: intent.payload.id, request: request.seq, actual: result.actual },
+      })
+      return
+    }
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'reconcile.completed',
+      payload: {
+        headSha: request.payload.sha,
+        rewriteId: intent.payload.id,
+        artifact: request.payload.artifact,
+      },
+    })
+    await completeAutomaticReconcile(store, slug)
+  }
+
+  private async restack(decision: Extract<Decision, { kind: 'restack' }>): Promise<void> {
+    const { store, slug } = this.deps
+    let facts = (await readBuildFacts(store, slug)).value
+    if (facts.state.sessions.open.length > 0 || facts.publication.pending())
+      throw new Error('automatic restack deferred until session and publication settlement')
+    await this.closeProducerSessions()
+    const round = facts.state.reconcileAttempts + 1
+    const failures = await readPhaseFailures(store, slug, 'reconcile', round)
+    if (failures.count >= this.maxPhaseAttempts) {
+      await this.raisePolicyExhausted('reconcile', round, failures)
+      return
+    }
+    try {
+      await this.assertAutomaticRewriteOwnership()
+      let transaction = facts.log.restack.active
+      let automatic: Pick<
+        EventPayload<'restack.prepared'>,
+        'trigger' | 'cycle' | 'observation' | 'message'
+      >
+      let id: string
+      let targetBase: string
+      if (transaction === undefined) {
+        targetBase = await this.refreshReconcileBase()
+        const branch = facts.lastCreated?.payload.baseBranch
+        if (branch === undefined) throw new Error('missing frozen target')
+        if (facts.log.restack.target?.sha !== targetBase) {
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch, sha: targetBase },
+          })
+          facts = (await readBuildFacts(store, slug)).value
+        }
+        const description = await store.getArtifact(slug, 'pr-description')
+        const title =
+          facts.lastCreated?.payload.ticket.title ?? facts.lastCreated?.payload.ticket.id ?? slug
+        const message = withBuildTrailer(
+          description === null ? title : new TextDecoder().decode(description.content),
+          slug,
+          { includesSubject: true },
+        )
+        automatic = {
+          trigger: decision.trigger,
+          cycle: decision.cycle,
+          observation: facts.log.restack.target!.seq,
+          message,
+        }
+        id = this.deps.ids('restack').replaceAll('_', '-')
+      } else {
+        automatic = {
+          trigger: transaction.trigger,
+          cycle: transaction.cycle,
+          observation: transaction.observation,
+          message: transaction.message,
+        }
+        targetBase = transaction.targetBase
+        id = transaction.id
+      }
+      const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
+      if (oldBase === undefined) throw new Error('missing contribution base')
+      // A resolver already published one canonical change on this exact base.
+      // Reuse that transaction as the entry gate without replaying it again.
+      const canonical = facts.reconcileTransaction
+      const completed = facts.log.lastReconcileCompleted
+      if (
+        transaction === undefined &&
+        canonical !== undefined &&
+        completed?.completedSeq === decision.cycle &&
+        canonical.targetBase === targetBase
+      ) {
+        const { attempt: _attempt, restackId: _restackId, ...replay } = canonical
+        const headSha = await readBuildSelector(store, slug, 'publishedBranchHead')
+        if (headSha === undefined) throw new Error('missing canonical reconcile head')
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.completed',
+          payload: { ...replay, ...automatic, headSha },
+        })
+        return
+      }
+      await this.assertAutomaticRewriteOwnership()
+      const deps = {
+        ...this.deps,
+        automatic,
+        beforeRewrite: () => this.assertAutomaticRewriteOwnership(),
+      }
+      const prepared = await prepareRestack(deps, {
+        attempt: 1,
+        branch: this.deps.branch,
+        oldBase,
+        targetBase,
+        id,
+      })
+      facts = (await readBuildFacts(store, slug)).value
+      transaction = facts.log.restack.active
+      if (transaction === undefined) throw new Error('missing prepared automatic restack')
+      if (facts.log.restack.replay?.conflicted) return
+      const result = await this.deps.exec(['git', 'rev-parse', 'HEAD'], {
+        cwd: this.deps.workspacePath,
+      })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      const headSha = result.stdout.trim()
+      if (facts.log.restack.intent !== undefined && facts.log.restack.intent.headSha !== headSha)
+        throw new Error('recovered automatic replay differs from its frozen publication intent')
+      await retainReplay(deps, headSha, transaction.targetBase)
+      const intent = { ...transaction, headSha }
+      if (facts.log.restack.intent === undefined)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.publish-intended',
+          payload: intent,
+        })
+      if (facts.workspace !== null && isRemoteWorkspace(facts.workspace)) {
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.requested',
+          payload: {
+            operation: 'restack',
+            branch: transaction.branch,
+            sha: headSha,
+            rewrite: intent,
+          },
+        })
+        return
+      }
+      const published = await publishRestack(deps, {
+        ...prepared,
+        headSha,
+        conflicted: false,
+        artifact: { kind: 'restack', rev: 0 },
+      })
+      if (published.kind === 'lease-mismatch') {
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.contended',
+          payload: {
+            id: transaction.id,
+            request: facts.restackHistory.at(-1)!.seq,
+            actual: published.actual,
+          },
+        })
+        throw new Error(
+          `automatic restack publication contended at ${published.actual ?? '(deleted)'}`,
+        )
+      }
+      await store.append(slug, { actor: KERNEL, type: 'restack.completed', payload: intent })
+    } catch (error) {
+      if (error instanceof LeaseHeldError) throw error
+      if (error instanceof AutomaticRewriteDeferred) return
+      await this.failPhase(
+        'reconcile',
+        round,
+        failures.count,
+        `automatic restack failed: ${errorMessage(error)}`,
+      )
+    }
+  }
+
+  /** Snapshot the frozen target in a build-private ref without tracking-ref updates. */
   private async refreshReconcileBase(): Promise<string> {
     const baseBranch = await readBuildSelector(this.deps.store, this.deps.slug, 'baseBranch')
     if (baseBranch === undefined) {
@@ -1151,6 +1464,7 @@ export class BuildRunner {
       'fetch',
       '--no-tags',
       '--no-write-fetch-head',
+      '--refmap=',
       'origin',
       `+${sourceRef}:${targetRef}`,
     ]
@@ -1218,12 +1532,22 @@ export class BuildRunner {
 
   /** Shared writer for every deterministic exclusion mechanism. A skip is a
    * queryable two-fact phase occurrence and launches no command or session. */
+  private async verifyEvidence() {
+    const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+    const cycle = Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq)
+    const gate = facts.log.restack.gates[String(cycle)]
+    if (gate !== undefined)
+      return { baseSha: gate.targetBase, headSha: gate.headSha, restackId: gate.id }
+    return {}
+  }
+
   private async skipVerify(decision: SkipVerifyDecision): Promise<void> {
     const { store, slug } = this.deps
+    const evidence = await this.verifyEvidence()
     await store.append(slug, {
       actor: KERNEL,
       type: 'verify.started',
-      payload: { step: decision.step, attempt: decision.attempt },
+      payload: { ...evidence, step: decision.step, attempt: decision.attempt },
     } satisfies EventWrite<'verify.started'>)
     await store.append(slug, {
       actor: KERNEL,
@@ -1231,6 +1555,7 @@ export class BuildRunner {
       payload: {
         step: decision.step,
         attempt: decision.attempt,
+        ...evidence,
         outcome: 'skipped',
         reason: decision.reason,
         ...(decision.skipCause !== undefined ? { skipCause: decision.skipCause } : {}),
@@ -1243,10 +1568,11 @@ export class BuildRunner {
   private async runCheck(decision: RunCheckDecision): Promise<void> {
     const { store, slug, exec, workspacePath } = this.deps
     const { step, command, attempt } = decision
+    const evidence = await this.verifyEvidence()
     await store.append(slug, {
       actor: KERNEL,
       type: 'verify.started',
-      payload: { step, attempt },
+      payload: { ...evidence, step, attempt },
     } satisfies EventWrite<'verify.started'>)
 
     const result = await exec(['sh', '-c', command], { cwd: workspacePath })
@@ -1254,7 +1580,7 @@ export class BuildRunner {
       await store.append(slug, {
         actor: KERNEL,
         type: 'verify.completed',
-        payload: { step, attempt, outcome: 'pass' },
+        payload: { ...evidence, step, attempt, outcome: 'pass' },
       } satisfies EventWrite<'verify.completed'>)
       return
     }
@@ -1281,6 +1607,7 @@ export class BuildRunner {
           payload: {
             step,
             attempt,
+            ...evidence,
             outcome: 'fail',
             report: { kind: meta.kind, rev: meta.revision },
           },
@@ -1293,6 +1620,7 @@ export class BuildRunner {
   private async runAgentVerify(decision: RunAgentVerifyDecision): Promise<void> {
     const { store, slug } = this.deps
     const { step, skill, attempt, feedback } = decision
+    const evidence = await this.verifyEvidence()
     const phase = verifyPhase(step)
 
     // D5 guard, extended to agent-verify (see module doc): keyed by
@@ -1310,7 +1638,7 @@ export class BuildRunner {
     await store.append(slug, {
       actor: KERNEL,
       type: 'verify.started',
-      payload: { step, attempt, ...(feedback !== undefined ? { feedback } : {}) },
+      payload: { ...evidence, step, attempt, ...(feedback !== undefined ? { feedback } : {}) },
     } satisfies EventWrite<'verify.started'>)
 
     await this.executeSession({

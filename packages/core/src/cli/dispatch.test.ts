@@ -1000,7 +1000,7 @@ describe('abDispatch guards', () => {
   async function pumpUntil(predicate: () => boolean, what: string): Promise<void> {
     for (let i = 0; i < 10_000; i++) {
       if (predicate()) return
-      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setTimeout(resolve, 1))
     }
     throw new Error(`timed out pumping the event loop waiting for ${what}`)
   }
@@ -10988,6 +10988,20 @@ for (const selected of [false, true]) {
         await cli.run(['done'])
       }
     }
+    handlers.implement = async (cli) => {
+      await cli.run(['context'])
+      await writeFile(join(cli.ws, 'ok.marker'), 'ok\n')
+      const toml = await Bun.file(join(cli.ws, 'autobuild.toml')).text()
+      await writeFile(
+        join(cli.ws, 'autobuild.toml'),
+        toml.replace('steps = ["unit"]', 'steps = ["unit"] # leaf contribution'),
+      )
+      await git(['add', 'ok.marker', 'autobuild.toml'], cli.ws)
+      await git([...GIT_ID, 'commit', '-qm', 'implement leaf configuration'], cli.ws)
+      const notes = join(cli.ws, '.ab/implement-notes.md')
+      await writeFile(notes, 'Implemented the leaf configuration.\n')
+      await cli.run(['done', '--notes', notes])
+    }
     const clock = manualClock()
     const fx = await makeFixture(
       readyTicket('T-reconcile-pin'),
@@ -11003,6 +11017,11 @@ for (const selected of [false, true]) {
       '\n[verify.new]\nkind = "check"\ncommand = "test"\nalways = true\n'
     handlers.reconcile = async (cli) => {
       await cli.run(['context'])
+      // Both branches changed the same verify declaration; resolve the actual
+      // replay conflict so this exercises the conflicted policy path.
+      await writeFile(join(cli.ws, 'autobuild.toml'), nextToml)
+      await git(['add', 'autobuild.toml'], cli.ws)
+      await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
       // The kernel has already replayed the change on the captured base.
       await fx.store.append(slug!, {
         actor: humanActor('operator'),
@@ -11031,7 +11050,20 @@ for (const selected of [false, true]) {
                 slug !== undefined &&
                 (await fx.store.getEvents(slug)).some((e) => e.type === 'finalize.completed')
               )
-            }, 10_000)
+            }, 10_000).catch(async (error) => {
+              const evidence =
+                slug === undefined
+                  ? []
+                  : (await fx.store.getEvents(slug)).filter(
+                      (e) =>
+                        e.type === 'phase.failed' ||
+                        e.type === 'escalation.raised' ||
+                        e.type === 'execution.ended',
+                    )
+              throw new Error(JSON.stringify({ errors: fx.err, cli: fx.cliErrors, evidence }), {
+                cause: error,
+              })
+            })
             await writeFile(join(fx.checkout, 'autobuild.toml'), nextToml)
             await git(['add', 'autobuild.toml'], fx.checkout)
             await git([...GIT_ID, 'commit', '-qm', 'add mandatory verify'], fx.checkout)
@@ -11043,7 +11075,19 @@ for (const selected of [false, true]) {
             await waitFor(
               async () => (await fx.store.getEvents(slug!)).some((e) => e.type === 'build.paused'),
               10_000,
-            )
+            ).catch(async (error) => {
+              const evidence = (await fx.store.getEvents(slug!)).filter(
+                (e) => e.type !== 'session.ended',
+              )
+              throw new Error(
+                JSON.stringify({
+                  errors: fx.err,
+                  cli: fx.cliErrors,
+                  evidence: evidence.slice(-18),
+                }),
+                { cause: error },
+              )
+            })
             fx.forge.setPrState(1, { state: 'open', mergeable: true })
             await fx.store.append(slug!, {
               actor: humanActor('operator'),

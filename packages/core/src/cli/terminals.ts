@@ -1,9 +1,4 @@
-import {
-  prepareRestack,
-  publishRestack,
-  requireRewrite,
-  validateRestack,
-} from '../kernel/reconcile-restack'
+import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
@@ -515,6 +510,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         )
       const restack = { ...deps, slug: env.build }
       await validateRestack(restack, transaction, head)
+      await retainReplay(restack, head, transaction.targetBase)
       const conflicted =
         events.reconcileReplay?.id === transaction.id && events.reconcileReplay.conflicted
       const { event: intended } = await store.appendWithArtifacts(
@@ -526,56 +522,17 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
           payload: { ...transaction, headSha: head, conflicted, artifact: refOf(deposited[0]) },
         }),
       )
-      if (remotePublication(events)) {
-        return store.append(env.build, {
-          actor,
-          type: 'publication.requested',
-          payload: {
-            operation: 'reconcile',
-            branch: transaction.branch,
-            sha: head,
-            artifact: intended.payload.artifact,
-            rewrite: { ...transaction, conflicted },
-          },
-        })
-      }
-      const result = await publishRestack(restack, intended.payload)
-      if (result.kind === 'lease-mismatch') {
-        if (result.actual === null)
-          throw new Error('build branch was deleted; operator resolution is required')
-        const capability = requireRewrite(deps.forge)
-        const observed = await capability.snapshot({
-          workspacePath: deps.workspacePath,
-          branch: transaction.branch,
-          destinationRef: `refs/autobuild/reconcile/${env.build}/head`,
-        })
-        const descendant = await deps.exec(['git', 'merge-base', '--is-ancestor', head, observed], {
-          cwd: deps.workspacePath,
-        })
-        const compatible = await deps.exec(
-          ['git', 'merge-base', '--is-ancestor', transaction.oldHead, observed],
-          { cwd: deps.workspacePath },
-        )
-        if (descendant.exitCode !== 0 && compatible.exitCode !== 0)
-          throw new Error(
-            `build branch diverged to ${observed}; preserve its history and request operator resolution`,
-          )
-        await prepareRestack(restack, {
-          attempt: env.round,
-          branch: transaction.branch,
-          oldBase: descendant.exitCode === 0 ? transaction.targetBase : transaction.oldBase,
-          targetBase: transaction.targetBase,
-          oldHead: observed,
-          id: deps.ids('rewrite').replaceAll('_', '-'),
-        })
-        throw new Error(
-          'build branch changed during publication; its complete change has been replayed onto the same frozen base. Inspect the new replay, resolve any conflicts, then retry ab done',
-        )
-      }
+      // All resolver publications wait until the agent turn has ended.
       return store.append(env.build, {
         actor,
-        type: 'reconcile.completed',
-        payload: { headSha: head, rewriteId: transaction.id, artifact: intended.payload.artifact },
+        type: 'publication.requested',
+        payload: {
+          operation: 'reconcile',
+          branch: transaction.branch,
+          sha: head,
+          artifact: intended.payload.artifact,
+          rewrite: { ...transaction, conflicted },
+        },
       })
     }
 
@@ -809,6 +766,15 @@ async function agentVerifyVerdict(
   }
   const step = verifyStep(env.phase)
   const reportKind = verifyReportKind(step)
+  const facts = (await readBuildFacts(store, env.build)).value
+  const start =
+    facts.log.restack.gates[
+      String(Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq))
+    ]
+  const evidence =
+    start === undefined
+      ? {}
+      : { baseSha: start.targetBase, headSha: start.headSha, restackId: start.id }
 
   if (opts.verdict === 'pass') {
     // Optional --notes are deposited as the step's report kind and the event
@@ -822,6 +788,7 @@ async function agentVerifyVerdict(
           actor,
           type: 'verify.completed',
           payload: {
+            ...evidence,
             step,
             attempt: env.round,
             outcome: 'pass',
@@ -835,7 +802,7 @@ async function agentVerifyVerdict(
       await store.append(env.build, {
         actor,
         type: 'verify.completed',
-        payload: { step, attempt: env.round, outcome: 'pass' },
+        payload: { ...evidence, step, attempt: env.round, outcome: 'pass' },
       }),
     ]
   }
@@ -852,7 +819,7 @@ async function agentVerifyVerdict(
       await store.append(env.build, {
         actor,
         type: 'verify.completed',
-        payload: { step, attempt: env.round, outcome: 'skipped', reason },
+        payload: { ...evidence, step, attempt: env.round, outcome: 'skipped', reason },
       }),
     ]
   }
@@ -872,6 +839,7 @@ async function agentVerifyVerdict(
       actor,
       type: 'verify.completed',
       payload: {
+        ...evidence,
         step,
         attempt: env.round,
         outcome: 'fail',

@@ -58,6 +58,13 @@ function stripStreamFields(events: AbEvent[], tmp: string): unknown[] {
           void _stream
           return { type: event.type, payload }
         }
+        if (event.type === 'restack.rewritten') {
+          // Unique object count can differ when two Git commands straddle a
+          // wall-clock second; normalized identities, not archive cardinality,
+          // are the engine evidence compared here.
+          const { archives, ...payload } = event.payload
+          return { type: event.type, payload, archived: archives.length > 0 }
+        }
         return { type: event.type, payload: event.payload }
       }),
     )

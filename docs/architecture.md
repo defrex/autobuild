@@ -370,7 +370,7 @@ selection (applied at the planner's `ab done` in `packages/core/src/cli/terminal
 snapshotted by the engine at approval), and
 `packages/core/src/kernel/verify-applicability.ts` matches changed paths against a step's
 selectors, resolved by the build runner via `git diff` against the initial
-branch-cut base (or the refreshed base promoted by a completed reconcile).
+branch-cut base (or the effective base promoted by successful restack/reconcile publication).
 This verify-only base is deliberately independent from implementation's
 focused review range. All narrowing mechanisms produce the ordinary
 queryable skipped outcome; Git failure is infrastructure and fails closed,
@@ -1102,11 +1102,12 @@ Opening intent retains the sampled SHA across retries; adoption requires that
 commit in the existing branch's history. Comparison uses reachability, so an
 advanced parent never makes an empty node nonempty. The janitor opens PRs lazily
 and reuses terminal cleanup without leaf reconcile or auto-merge.
-### Reconcile restacking
+
+### Leaf and reconcile restacking
 
 The kernel prepares a detached replay of one net build change on the base frozen
 by `reconcile.started`. The contribution baseline is the initial branch-cut base
-or latest successfully reconciled base. The resolver continues that one replay;
+or latest successfully published restack/reconcile base. The resolver continues that one replay;
 completion requires one parent at the frozen base and the build identity trailer.
 Historical merge completions retain their original shape and semantics.
 
@@ -1117,6 +1118,23 @@ GitHub uses explicit Git transport leases; local-git uses shared-database
 replacement after guest teardown; it never uses ordinary append-only publication
 for restacks. Prepared, replayed, intended and rewritten facts support recovery.
 A contended rewrite preserves the observed work and retries on the same base.
+
+`kernel/leaf-restack-state.ts` projects target observations, frozen transactions
+and cycle gates into the log index and persisted build facts. The engine selects
+automatic kernel work before any verify action and after finalize post-steps when
+the target moves. `reconcile-restack.ts` shares collapse, detached replay,
+archive-before-replacement and expected-head publication mechanics. Automatic
+transactions emit `restack.*`; clean completion never starts a reconcile cycle.
+Pre-PR conflicts adopt the prepared replay through ordinary reconcile. Initial
+verification remains mandatory; waiting conflicts use post-reconcile policy.
+
+The dispatcher observes targets without changing workspaces; execution ownership
+and session settlement fence mutation. Transaction targets stay frozen while
+later moves coalesce. `publication.requested` carries automatic transaction
+identity through trusted remote teardown and publication. The runner settles
+local resolver intent only after its session ends. Verification facts
+cite the cycle's base/head, and clean waiting rewrites preserve those results.
+Object packs retain newly introduced replay trees/blobs as well as commit bytes.
 
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
 `ports/forge/github.live.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an

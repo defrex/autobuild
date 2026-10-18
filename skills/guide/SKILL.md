@@ -2139,6 +2139,30 @@ build phase, which is the criterion for membership (§16.3): `ab-spec` and
 read-only reference including the setup handoff guidance, and `ab-operate` is
 the manual for the orchestrator role, which any agent may take on.
 
+## Leaf restacking and verification bases
+
+The kernel collapses each leaf contribution into one change and restacks it onto
+the frozen target's current head before a fresh verify cycle. Failed verification
+returns to implementation; subsequent commits append to that change until the next
+approved cycle. Plan, implement and code-review never rewrite the branch, and
+recorded ranges remain immutable. Each later review loop starts from the effective
+base established by the preceding successful restack; the initial cut remains
+provenance.
+
+Target observations are durable `target.moved` facts, including while an agent
+runs. After finalize and its post-steps, target movement schedules another restack.
+Moves coalesce onto the newest snapshot after the active transaction finishes.
+Clean restacks start no agent; clean waiting restacks preserve verification.
+Conflicts use the prepared replay in reconcile, including before a PR exists.
+Initial verification cannot be skipped through post-reconcile settings.
+
+`restack.*` records preparation, replay, intent, archived replacement, contention
+and confirmed publication. Remote guests park for trusted publication after
+teardown. New verify facts cite their actual cycle base/head; path selection uses
+the successful restack's base and excludes upstream-only paths. A later clean
+waiting rewrite does not change those historical citations.
+
+
 ## Revision-checked ticket writes
 
 Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`

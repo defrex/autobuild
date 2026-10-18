@@ -1,3 +1,4 @@
+import { leafRestackLog } from './generators/leaf-restack-log'
 import { describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
 import type { RegisteredReducer } from './reducer-registry'
@@ -32,6 +33,7 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
  * the union of the shapes it reaches is fingerprinted. */
 function corpora(): unknown[][] {
   return [
+    leafRestackLog(),
     [
       {
         type: 'build.created',
@@ -133,7 +135,7 @@ describe('reducer registry', () => {
         "build": 4,
         "buildDelegation": 1,
         "buildDigest": 5,
-        "buildReadFacts": 31,
+        "buildReadFacts": 34,
         "buildStreamSeed": 6,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
@@ -152,7 +154,8 @@ describe('reducer registry', () => {
         "infrastructureFailureReset": 1,
         "journalView": 4,
         "lastExecutionOutcome": 1,
-        "logIndex": 1,
+        "leafRestack": 1,
+        "logIndex": 2,
         "openBuildWorkspace": 1,
         "openExecution": 1,
         "openHarvestExecutions": 1,
@@ -162,12 +165,12 @@ describe('reducer registry', () => {
         "phaseFailures": 1,
         "pinnedAssets": 2,
         "provisionMarker": 1,
-        "publicationState": 4,
-        "publishedBranchHead": 3,
-        "publishedBranchHeadValue": 3,
+        "publicationState": 5,
+        "publishedBranchHead": 4,
+        "publishedBranchHeadValue": 4,
         "recordedBaseSha": 1,
         "recordedBaseShaValue": 1,
-        "recoveryCheckpoint": 3,
+        "recoveryCheckpoint": 4,
         "repositoryAttention": 1,
         "repositoryReadFacts": 14,
         "repositoryStateEvents": 4,
@@ -178,8 +181,8 @@ describe('reducer registry', () => {
         "summaryRequests": 1,
         "terminalGuard": 1,
         "ticketSourceHealth": 2,
-        "verifyDiffBase": 1,
-        "verifyDiffBaseValue": 1,
+        "verifyDiffBase": 2,
+        "verifyDiffBaseValue": 2,
       }
     `)
   })

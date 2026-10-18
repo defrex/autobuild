@@ -72,3 +72,5 @@ export {
   countHistoricalRows,
   type ReducedReadCosts,
 } from './reduced-read-budget'
+
+export { gitRewrite } from '../ports/forge/git-rewrite'

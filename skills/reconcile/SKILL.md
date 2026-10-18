@@ -15,7 +15,8 @@ the kernel retains the published branch until guarded publication succeeds.
 1. Run `ab context`. Read the printed manifest and its `materialized` paths for
    the spec, approved plan, implement-notes, and any `.ab/guidance.json` guidance. `replay` names the
    original head, old contribution base, single change, frozen target base and
-   whether replay conflicted. Never fetch, merge, rebase, select another base,
+   whether replay conflicted. A replay may originate at verify entry before any
+   PR exists; `restackId` identifies an adopted automatic transaction. Never fetch, merge, rebase, select another base,
    or move the named branch yourself. Missing replay inputs require escalation.
 2. Inspect `git status` and the prepared replay. If conflicts remain, resolve
    them with the explicit charge to regress against neither side:
@@ -38,9 +39,10 @@ the kernel retains the published branch until guarded publication succeeds.
    onto the same frozen base. Read context again, inspect and resolve that replay,
    run checks, update notes, then retry completion. Never push yourself.
 
-A remote publication success message parks this turn for trusted publication;
+A publication success message parks this turn for kernel publication;
 do not repeat `ab done` after success. Post-reconcile verification follows the
-captured policy and begins a fresh cycle after confirmed publication.
+captured policy and begins a fresh cycle after confirmed publication. A conflict
+at initial verify entry still requires initial checks regardless of that policy.
 
 ## When not to resolve
 

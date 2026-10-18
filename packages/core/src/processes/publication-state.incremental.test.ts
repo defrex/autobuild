@@ -95,6 +95,12 @@ const oracle = {
     return events.some((e) => {
       if (e.seq <= request.seq) return false
       const p = request.payload
+      if (p.operation === 'restack')
+        return (
+          e.type === 'restack.completed' &&
+          e.payload.id === p.rewrite.id &&
+          e.payload.headSha === p.sha
+        )
       if (p.operation === 'implement')
         return (
           e.type === 'implement.completed' &&
@@ -217,7 +223,7 @@ function generated(seed: number): AbEvent[] {
 
 describe('publicationStateReducer', () => {
   test('version includes cancelled rewrite requests', () => {
-    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(4)
+    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(5)
   })
 
   test('counterexample: an irrelevant event between workspace facts is a scan barrier', () => {

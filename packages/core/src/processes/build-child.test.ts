@@ -1,3 +1,4 @@
+import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -260,6 +261,18 @@ test('build child captures the deposited repository opt-out and skips check and 
       },
     ]
     for (const write of writes) await store.append(slug, write)
+    // Policy selection follows the mandatory entry gate; Git mechanics are
+    // covered by the real-workspace restack suite.
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'restack.completed',
+      payload: {
+        ...leafTransaction,
+        branch: `ab/${slug}`,
+        cycle: writes.length,
+        headSha: 'e'.repeat(40),
+      },
+    })
     const config = parseConfig(`forge = "local-git"
 [roles.default]
 runtime = "pi"
@@ -325,6 +338,9 @@ skill = "must-never-launch"
         .map((event) => event.payload),
     ).toEqual(
       ['check', 'agent'].map((step) => ({
+        baseSha: leafTransaction.targetBase,
+        headSha: 'e'.repeat(40),
+        restackId: leafTransaction.id,
         step,
         attempt: 2,
         outcome: 'skipped',

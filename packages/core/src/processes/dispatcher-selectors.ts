@@ -92,7 +92,7 @@ export const provisionMarkerReducer = defineReducer<
   finish: (acc) => (acc.marker === null ? undefined : { ...acc.marker }),
 })
 
-export const RECOVERY_CHECKPOINT_REDUCER_VERSION = 3
+export const RECOVERY_CHECKPOINT_REDUCER_VERSION = 4
 
 /** The commit a recovered workspace is re-cut from: the latest settled
  * publication head, else the first provisioned base. */
@@ -109,6 +109,11 @@ export const recoveryCheckpointReducer = defineReducer<
         acc.original = event.payload.base.sha
       } else if (event.type === 'implement.completed') {
         acc.settled = event.payload.commits.head
+      } else if (event.type === 'restack.rewritten' || event.type === 'restack.completed') {
+        acc.settled =
+          event.type === 'restack.rewritten'
+            ? (event.payload.observedHead ?? event.payload.headSha)
+            : event.payload.headSha
       } else if (event.type === 'reconcile.rewritten') {
         acc.settled = reconcileRewriteHead(event.payload)
       } else if (event.type === 'reconcile.completed') {

@@ -1,3 +1,4 @@
+import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
 import { readBuildFacts, readPhaseFailures } from '../store/reduced-reads'
 import type { IdSource } from '../ids'
 import { DISPATCHER, KERNEL } from '../events/envelope'
@@ -35,9 +36,83 @@ export async function settlePendingPublication(
 ): Promise<void> {
   const publication = deps.publication
   if (publication === undefined) return
+  await completeAutomaticReconcile(deps.store, slug)
   let events = (await readBuildFacts(deps.store, slug)).value
   const request = events.publication.latestUncompletedRequest()
   if (request === undefined) return
+
+  if (request.payload.operation === 'restack') {
+    const record = await deps.store.getBuild(slug)
+    const clock = deps.clock ?? systemClock
+    if (
+      events.state.sessions.open.length > 0 ||
+      (events.open !== null &&
+        record?.lease !== undefined &&
+        new Date(record.lease.expiresAt).getTime() > clock().getTime())
+    )
+      return
+    if (publication.rewrite === undefined)
+      throw new Error('workspace provider lacks trusted restack publication')
+    const ref = events.workspace?.ref
+    if (ref === undefined) throw new Error('restack publication requires its retained workspace')
+    const transaction = request.payload.rewrite
+    const active = events.log.restack.active
+    const intended = events.log.restack.intent
+    if (
+      transaction.headSha !== request.payload.sha ||
+      active?.id !== transaction.id ||
+      intended?.id !== transaction.id ||
+      intended.headSha !== request.payload.sha ||
+      intended.targetBase !== transaction.targetBase ||
+      intended.oldHead !== transaction.oldHead ||
+      intended.branch !== request.payload.branch
+    )
+      throw new Error('restack publication request does not match its durable intent')
+    const archives = [...new Set([...events.gitTips, request.payload.sha])].map((sha) => ({
+      ref: `refs/autobuild/archive/${slug}/${sha}`,
+      sha,
+    }))
+    const result = await publication.rewrite({
+      ref,
+      sha: request.payload.sha,
+      branch: transaction.branch,
+      expected: transaction.oldHead,
+      localExpected: transaction.localBranchHead,
+      archives,
+    })
+    const latest = (await readBuildFacts(deps.store, slug)).value
+    if (
+      (result.kind === 'published' || result.rewritten === true) &&
+      !latest.restackHistory.some(
+        (e) => e.type === 'restack.rewritten' && e.payload.id === transaction.id,
+      )
+    )
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'restack.rewritten',
+        payload: {
+          ...transaction,
+          archives,
+          ...(result.kind === 'lease-mismatch' ? { observedHead: result.actual } : {}),
+        },
+      })
+    if (result.kind === 'lease-mismatch') {
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'restack.contended',
+        payload: { id: transaction.id, request: request.seq, actual: result.actual },
+      })
+      return
+    }
+    const settled = await readBuildFacts(deps.store, slug)
+    if (!settled.value.publication.requestCompleted(request))
+      await deps.store.appendIfCurrent(slug, settled.cursor, {
+        actor: DISPATCHER,
+        type: 'restack.completed',
+        payload: transaction,
+      })
+    return
+  }
 
   if (request.payload.operation === 'reconcile' && request.payload.rewrite !== undefined) {
     const record = await deps.store.getBuild(slug)
@@ -122,6 +197,7 @@ export async function settlePendingPublication(
           artifact: request.payload.artifact,
         },
       })
+    await completeAutomaticReconcile(deps.store, slug)
     return
   }
 

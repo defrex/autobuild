@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#640](https://github.com/defrex/autobuild/pull/640) — Restack leaf builds at verify entry and while awaiting landing
 - [#639](https://github.com/defrex/autobuild/pull/639) — Open integration node branches and route targeted builds
 - [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
 - [#638](https://github.com/defrex/autobuild/pull/638) — Support node kinds and targets in hosted tickets

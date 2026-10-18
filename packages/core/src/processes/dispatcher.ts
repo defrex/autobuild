@@ -1,6 +1,6 @@
 import { hasBuildTrailer } from '../kernel/build-identity'
 import { readBuildDigests } from '../store/reduced-reads'
-import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
+import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
@@ -1204,6 +1204,11 @@ export class Dispatcher {
     if ((await this.store.buildFacts(slug)).state.kind === 'node') return 'already-active'
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
+    const facts = (await readBuildFacts(this.store, slug)).value
+    if (facts.log.restack.target === undefined && facts.lastCreated !== undefined) {
+      const branch = facts.lastCreated.payload.baseBranch
+      await this.observeTarget(slug, branch, undefined, report)
+    }
     if (
       !(await ensureExecutionProgress(
         this.store,
@@ -1770,7 +1775,7 @@ export class Dispatcher {
         // Once a record is known, contain its complete janitor path: loading
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
         // Existing partial facts leave the same work due on the next tick.
-        const { state, workspace } = await this.store.buildFacts(record.slug)
+        let { state, workspace, log } = await this.store.buildFacts(record.slug)
         const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Raw history, read at most once and only by a branch that acts on it:
         // the facts above answer every quiet-path question without it.
@@ -1845,6 +1850,15 @@ export class Dispatcher {
           await this.cleanupAborted(record, await history(), report)
           continue
         }
+        if (state.status !== 'aborted' && state.status !== 'queued') {
+          const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
+          if (branch !== undefined) {
+            if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+          }
+        }
         if (state.pr) {
           await this.checkPr(
             record,
@@ -1861,6 +1875,29 @@ export class Dispatcher {
         report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
       }
     }
+  }
+
+  private async observeTarget(
+    slug: string,
+    branch: string,
+    previous: string | undefined,
+    report: TickReport,
+  ): Promise<boolean> {
+    let sha: string
+    try {
+      sha = await this.baseSha(branch)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      report.janitorDiagnostics.push(`build ${slug}: target observation failed — ${message}`)
+      return false
+    }
+    if (sha === previous) return false
+    await this.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch, sha },
+    })
+    return true
   }
 
   private forgeWorkspacePath(events: CurrentBuildFacts): string {

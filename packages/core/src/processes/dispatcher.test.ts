@@ -60,7 +60,7 @@ import {
 import type { DependencyState } from '../ports/types'
 
 const REPO = '/repos/origin'
-const BASE_SHA = 'base-sha-42'
+const BASE_SHA = 'a'.repeat(40)
 
 /** Conforming per the spec standard's checkable core (docs/spec-standard.md). */
 const CONFORMING_BODY = [
@@ -158,7 +158,7 @@ function harness(
   const workspaces = new FakeWorkspaceProvider({
     root: '/ws',
     mode: 'logical',
-    ...(opts.workspaceBase ? { base: opts.workspaceBase } : {}),
+    base: opts.workspaceBase ?? { source: 'remote', sha: BASE_SHA },
   })
   const forge =
     opts.forge ??
@@ -242,6 +242,7 @@ async function seedBuild(
      * absent so unmodified seeds keep exercising the legacy fallback. */
     workspaceRemote?: boolean
     attached?: boolean
+    targetObserved?: boolean
     pr?: { number: number; url: string; headSha: string }
   } = {},
 ): Promise<string> {
@@ -280,7 +281,7 @@ async function seedBuild(
         ...(opts.workspacePath !== undefined ? { path: opts.workspacePath } : {}),
         ...(opts.workspaceRemote !== undefined ? { remote: opts.workspaceRemote } : {}),
         branch: `ab/${slug}`,
-        base: { source: 'remote', sha: 'fake-base-sha' },
+        base: { source: 'remote', sha: BASE_SHA },
       },
     })
   }
@@ -289,6 +290,13 @@ async function seedBuild(
     type: 'spec.imported',
     payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
   })
+  if (opts.targetObserved !== false) {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: BASE_SHA },
+    })
+  }
   if (opts.attached !== false) {
     await h.store.append(slug, {
       actor: KERNEL,
@@ -721,6 +729,7 @@ describe('Dispatcher dispatch', () => {
       'workspace.provisioned',
       'spec.imported',
       'dispatch.comment-posted',
+      'target.moved',
     ])
     expect(events[0]?.actor).toEqual({ kind: 'dispatcher' })
     expect(events[0]?.payload).toEqual({
@@ -734,7 +743,7 @@ describe('Dispatcher dispatch', () => {
       path: '/ws/ab/add-rate-limiting',
       remote: false,
       branch: 'ab/add-rate-limiting',
-      base: { source: 'remote', sha: 'fake-base-sha' },
+      base: { source: 'remote', sha: BASE_SHA },
     })
     expect(events[2]?.payload).toEqual({
       artifact: { kind: 'spec', rev: 0 },
@@ -878,6 +887,7 @@ releaseId = 42
       'workspace.provisioned',
       'spec.imported',
       'dispatch.comment-posted',
+      'target.moved',
     ])
     expect(events[0]?.payload).toMatchObject({ autoMergeRequestedBy: 'dispatch-op' })
     expect(launchSnapshot).toEqual(events.map((event) => event.type))
@@ -899,6 +909,7 @@ releaseId = 42
       'workspace.provisioned',
       'spec.imported',
       'dispatch.comment-posted',
+      'target.moved',
     ])
   })
 
@@ -1366,6 +1377,7 @@ readyState = "Ready"
       'workspace.provisioned',
       'spec.authored',
       'dispatch.comment-posted',
+      'target.moved',
     ])
     expect(events[2]?.actor).toEqual({ kind: 'agent', role: 'spec', session: 's_1' })
     expect(events[2]?.payload).toEqual({
@@ -3055,6 +3067,7 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
       'workspace.provisioned',
       'spec.imported',
       'dispatch.comment-posted',
+      'target.moved',
     ])
   })
 
@@ -4199,7 +4212,9 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
 
     // baseSha comes from `git ls-remote <repo> refs/heads/<base>` (§15.7).
-    expect(h.execCalls).toEqual([['git', 'ls-remote', REPO, 'refs/heads/main']])
+    expect(h.execCalls).toEqual(
+      Array.from({ length: 2 }, () => ['git', 'ls-remote', REPO, 'refs/heads/main']),
+    )
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('pr.conflicted')
     expect(events.at(-1)?.payload).toEqual({ baseSha: BASE_SHA })
@@ -4234,7 +4249,9 @@ describe('Dispatcher janitor', () => {
 
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
-    expect(h.execCalls).toEqual([['git', 'ls-remote', '/repos/checkout', 'refs/heads/main']])
+    expect(h.execCalls).toEqual(
+      Array.from({ length: 2 }, () => ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main']),
+    )
   })
 
   test('conflicted re-entry records replacement provisioning failures durably', async () => {
@@ -4312,7 +4329,7 @@ describe('Dispatcher janitor', () => {
       remoteBranchSha?: (branch: string) => Promise<string>
     }
     forgeWithCapability.remoteBranchSha = async (branch) =>
-      branch === 'main' ? 'remote-base-sha' : Promise.reject(new Error('absent'))
+      branch === 'main' ? 'b'.repeat(40) : Promise.reject(new Error('absent'))
 
     const h = harness({
       forge: forgeWithCapability,
@@ -4326,7 +4343,7 @@ describe('Dispatcher janitor', () => {
     await h.dispatcher.tick()
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('pr.conflicted')
-    expect(events.at(-1)?.payload).toEqual({ baseSha: 'remote-base-sha' })
+    expect(events.at(-1)?.payload).toEqual({ baseSha: 'b'.repeat(40) })
   })
 
   test.each([
@@ -5268,7 +5285,7 @@ describe('Dispatcher lease sweep', () => {
           ref: 'sandbox-g1',
           path: '/remote/workspace',
           branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
         }
       },
       async release(handle) {
@@ -5376,7 +5393,7 @@ describe('Dispatcher lease sweep', () => {
     // whose tail re-attaches the runner once the workspace exists.
     await h.dispatcher.drainProvisioning()
     expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
-    expect(recoveredRevision).toBe('fake-base-sha')
+    expect(recoveredRevision).toBe(BASE_SHA)
     expect(recoveredGeneration).toBe(1)
     expect(h.launches).toEqual([slug])
     const events = await h.store.getEvents(slug)
@@ -5882,7 +5899,7 @@ describe('Dispatcher durable supervision', () => {
           ref: 'sandbox-g1',
           path: '/remote/workspace',
           branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
         }
       },
       async release() {},
@@ -5906,7 +5923,7 @@ describe('Dispatcher durable supervision', () => {
           ref: 'sandbox-g1',
           path: '/remote/workspace',
           branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
         }
       },
       async release() {},
@@ -6080,7 +6097,7 @@ describe('Dispatcher durable supervision', () => {
           ref: 'sandbox-g1',
           path: '/remote/workspace',
           branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
         }
       },
       async release() {},
@@ -6184,7 +6201,7 @@ describe('Dispatcher durable supervision', () => {
       ref: 'sandbox-g1',
       path: '/remote/workspace',
       branch: `ab/${slug}`,
-      base: { source: 'existing', sha: 'fake-base-sha' },
+      base: { source: 'existing', sha: BASE_SHA },
     })
     await h.dispatcher.drainProvisioning()
     const events = await h.store.getEvents(slug)
@@ -8094,7 +8111,7 @@ describe('Dispatcher over reducer snapshots', () => {
             ref: 'sandbox-g1',
             path: '/remote/workspace',
             branch: opts.branch,
-            base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+            base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
           }
         },
         async release() {},
@@ -9263,6 +9280,81 @@ test('acknowledged unchanged native maintenance does not refresh consent or load
   ).toHaveLength(1)
 })
 
+test('target observations persist during a live implementation session without touching the branch', async () => {
+  const h = harness()
+  const slug = await seedBuild(h)
+  await h.store.append(slug, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'live-implement',
+      role: 'implement',
+      runner: 'scripted',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  await h.store.claimLease(slug, 'live-runner', 3_600_000)
+  const branch = `ab/${slug}`
+  const original = 'd'.repeat(40)
+  h.forge.remoteBranches.set(branch, original)
+  for (const sha of ['b'.repeat(40), 'c'.repeat(40), BASE_SHA]) {
+    h.forge.remoteBranches.set('main', sha)
+    await h.dispatcher.tick()
+  }
+  await h.dispatcher.tick()
+  const facts = await h.store.getEvents(slug)
+  expect(facts.filter((e) => e.type === 'target.moved').map((e) => e.payload.sha)).toEqual([
+    BASE_SHA,
+    'b'.repeat(40),
+    'c'.repeat(40),
+    BASE_SHA,
+  ])
+  expect(h.forge.rewrites).toEqual([])
+  expect(h.forge.remoteBranches.get(branch)).toBe(original)
+  expect(h.launches).toEqual([])
+})
+
+test('failed target observation does not prevent merged PR settlement', async () => {
+  const h = harness({
+    exec: async () => ({ stdout: '', stderr: 'target unavailable', exitCode: 1 }),
+  })
+  const slug = await seedAwaitingPr(h)
+  h.forge.remoteBranchSha = async () => {
+    throw new Error('forge unavailable')
+  }
+  h.forge.setPrState(1, { state: 'merged', sha: 'landed' })
+  const report = await h.dispatcher.tick()
+  expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(true)
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('target observation failed')),
+  ).toBe(true)
+  expect(report.janitorFailed).toBe(0)
+})
+
+test('failed initial target observation does not spend dispatch budget and retries later', async () => {
+  let unavailable = true
+  const h = harness({
+    exec: async () =>
+      unavailable
+        ? { stdout: '', stderr: 'target unavailable', exitCode: 1 }
+        : { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 },
+  })
+  const slug = await seedBuild(h, { attached: false, targetObserved: false })
+  h.forge.remoteBranchSha = async () => {
+    throw new Error('forge unavailable')
+  }
+  const report = await h.dispatcher.tick()
+  expect(h.launches).toEqual([slug])
+  expect(report.dispatchFailed).toBe(0)
+  expect((await h.store.getEvents(slug)).filter((e) => e.type === 'dispatch.failed')).toEqual([])
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('target observation failed')),
+  ).toBe(true)
+  unavailable = false
+  await h.dispatcher.tick()
+  expect((await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')).toHaveLength(1)
+})
 describe('integration node dispatch', () => {
   test('empty node opens without workspace, runner, lease or PR and accepts nested targets', async () => {
     const h = harness({

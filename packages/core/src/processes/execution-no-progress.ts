@@ -9,6 +9,13 @@ import type { RepoViewStore } from './repo-view'
 
 /** Every new event must explicitly choose whether it advances build work. */
 export const executionProgress = {
+  'target.moved': 'bookkeeping',
+  'restack.prepared': 'progress',
+  'restack.replayed': 'progress',
+  'restack.publish-intended': 'progress',
+  'restack.rewritten': 'progress',
+  'restack.contended': 'progress',
+  'restack.completed': 'progress',
   'build.created': 'progress',
   'node.opening': 'progress',
   'node.opened': 'progress',

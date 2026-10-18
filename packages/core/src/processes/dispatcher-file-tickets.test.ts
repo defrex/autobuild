@@ -34,7 +34,7 @@ import { manualClock } from '../testing/fixed'
 import { Dispatcher, emptyTickReport } from './dispatcher'
 
 const REPO = '/repos/origin'
-const BASE_SHA = 'base-sha-42'
+const BASE_SHA = 'a'.repeat(40)
 
 const CONFORMING_BODY = [
   'Login attempts are currently unlimited; throttle repeated failures.',

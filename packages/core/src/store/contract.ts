@@ -1237,6 +1237,109 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('named reducer value reads', () => {
+      test('automatic restack identity, publication settlement and base-pinned evidence survive persisted reads', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'automatic-restack-values'
+          const old = 'a'.repeat(40),
+            base = 'b'.repeat(40),
+            head = 'c'.repeat(40)
+          await store.createBuild(sampleBuildInput(slug))
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'workspace.provisioned',
+            payload: {
+              provider: 'git-worktree',
+              ref: '/worktree',
+              branch: `ab/${slug}`,
+              base: { source: 'remote', sha: old },
+            },
+          })
+          const observed = await store.append(slug, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch: 'main', sha: base },
+          })
+          const transaction = {
+            id: 'automatic-1',
+            trigger: 'verify-entry' as const,
+            cycle: 1,
+            observation: observed.seq,
+            branch: `ab/${slug}`,
+            oldHead: old,
+            oldBase: old,
+            targetBase: base,
+            changeSha: 'd'.repeat(40),
+            workspaceHead: old,
+            localBranchHead: old,
+            message: `Change\n\nAutobuild-Build: ${slug}\n`,
+          }
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'restack.prepared',
+            payload: transaction,
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'restack.replayed',
+            payload: { id: transaction.id, conflicted: false },
+          })
+          const intent = { ...transaction, headSha: head }
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'restack.publish-intended',
+            payload: intent,
+          })
+          const request = await store.append(slug, {
+            actor: KERNEL,
+            type: 'publication.requested',
+            payload: {
+              operation: 'restack',
+              branch: transaction.branch,
+              sha: head,
+              rewrite: intent,
+            },
+          })
+          let facts = (await readBuildFacts(store, slug)).value
+          expect(facts.log.restack.active).toEqual(transaction)
+          expect(facts.publication.pending()).toBe(true)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'restack.rewritten',
+            payload: {
+              ...intent,
+              archives: [{ ref: `refs/autobuild/archive/${slug}/${old}`, sha: old }],
+            },
+          })
+          expect(await readBuildSelector(store, slug, 'publishedBranchHead')).toBe(head)
+          expect(await readBuildSelector(store, slug, 'verifyDiffBase')).toBe(old)
+          await store.append(slug, { actor: KERNEL, type: 'restack.completed', payload: intent })
+          expect(await readBuildSelector(store, slug, 'verifyDiffBase')).toBe(base)
+          const evidence = {
+            step: 'unit',
+            attempt: 1,
+            baseSha: base,
+            headSha: head,
+            restackId: transaction.id,
+          }
+          await store.append(slug, { actor: KERNEL, type: 'verify.started', payload: evidence })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'verify.completed',
+            payload: { ...evidence, outcome: 'pass' },
+          })
+          facts = (await readBuildFacts(store, slug)).value
+          expect(facts.log.restack.active).toBeUndefined()
+          expect(facts.log.restack.gates['1']).toEqual(intent)
+          expect(facts.publication.requestCompleted(request)).toBe(true)
+          expect(facts.log.verifyStarted.at(-1)).toMatchObject({
+            baseSha: base,
+            headSha: head,
+            restackId: transaction.id,
+          })
+          expect(facts.state.verify.results.at(-1)).toMatchObject({ ...evidence, outcome: 'pass' })
+        })
+      })
+
       test.each([false, true])(
         'rewrite receipts round-trip and promote verification only on completion (overtaken=%s)',
         async (overtaken) => {
