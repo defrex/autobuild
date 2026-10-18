@@ -447,3 +447,118 @@ for (const command of ['abort', 'pause'] as const) {
     }
   }, 30_000)
 }
+
+for (const checkout of ['scratch', 'absent'] as const) {
+  test(`origin-mode ${checkout} checkout supports node cascades and guarded child landing`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { mkdir } = await import('node:fs/promises')
+    const { Dispatcher } = await import('../processes/dispatcher')
+    const { gitRewrite } = await import('../ports/forge/git-rewrite')
+    const { spawnExec } = await import('../ports/workspace/git-worktree')
+    const { humanActor } = await import('../events/envelope')
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Origin destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Origin child' }), target: 'NODE' },
+      ],
+    })
+    try {
+      // The local harness owns runner setup. The checkout-less dispatcher below
+      // uses Git transport for every node mutation, as a hosted forge does.
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+      const scratch = join(h.tmp, 'dispatch-scratch')
+      await mkdir(scratch)
+      const remoteRewrite = gitRewrite(spawnExec, false)
+      const apiMethods = new Set([
+        'getPrState',
+        'inspectLandingPr',
+        'setAutoMerge',
+        'closePr',
+        'commentOnPr',
+        'containsBuild',
+        'readCommitMessage',
+      ])
+      const forge = new Proxy(h.forgeAdapter, {
+        get(target, key) {
+          if (key === 'rewrite') return remoteRewrite
+          if (key === 'snapshotBase')
+            return async (input: {
+              workspacePath: string
+              base: string
+              destinationRef: string
+            }) => {
+              await git(
+                [
+                  'fetch',
+                  '--no-tags',
+                  'origin',
+                  `+refs/heads/${input.base}:${input.destinationRef}`,
+                ],
+                input.workspacePath,
+              )
+              return git(['rev-parse', input.destinationRef], input.workspacePath)
+            }
+          if (key === 'openPr')
+            return (input: Parameters<NonNullable<typeof target.openPr>>[0]) =>
+              target.openPr({ ...input, workspacePath: h.origin })
+          const value = Reflect.get(target, key, target)
+          if (typeof value !== 'function') return value
+          // API observations live at the served origin, independently of cwd.
+          return apiMethods.has(String(key))
+            ? (...args: unknown[]) => Reflect.apply(value, target, [h.origin, ...args.slice(1)])
+            : value.bind(target)
+        },
+      })
+      const dispatcher = new Dispatcher({
+        store: h.store,
+        tickets: h.tickets,
+        workspaces: h.workspaces,
+        forge,
+        config: h.config,
+        repo: h.origin,
+        repoOrigin: h.origin,
+        ...(checkout === 'scratch' ? { checkout: scratch } : {}),
+        exec: spawnExec,
+        ids: h.ids,
+        clock: h.clock,
+        launchRunner: async () => {
+          throw new Error('clean origin cascade launched an agent')
+        },
+      })
+      const original = await git(['rev-parse', node.branch!], h.origin)
+      await Bun.write(join(h.origin, 'origin-upstream'), 'upstream')
+      const root = await commitAll(h.origin, 'Origin parent movement')
+      expect((await dispatcher.tick()).janitorFailed).toBe(0)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(root)
+      expect(ofType(await h.events(node.slug), 'node.rewritten')).toHaveLength(1)
+      expect(original).not.toBe(root)
+      expect(
+        (await spawnExec(['git', 'rev-parse', '--git-dir'], { cwd: scratch })).exitCode,
+      ).not.toBe(0)
+
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'CHILD')!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      expect((await dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      expect(ofType(await h.events(child.slug), 'pr.auto-merge-enabled')).toHaveLength(0)
+      expect(ofType(await h.events(node.slug), 'node.writer-settled').at(-1)?.payload.outcome).toBe(
+        'completed',
+      )
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}

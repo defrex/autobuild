@@ -3739,17 +3739,27 @@ export class Dispatcher {
     })
   }
 
+  private async kernelRepository(root: string): Promise<string> {
+    const checkout = this.deps.checkout ?? this.deps.repo
+    if (!this.deps.repoOrigin) return checkout
+    // Origin-mode CLI wiring supplies a scratch checkout path too. Only an
+    // actual Git repository can provide the kernel's local object database.
+    if (this.deps.checkout) {
+      const probe = await this.deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: checkout })
+      if (probe.exitCode === 0) return checkout
+    }
+    const path = join(root, 'repository.git')
+    const clone = await this.deps.exec(['git', 'clone', '--bare', this.deps.repoOrigin, path], {
+      cwd: root,
+    })
+    if (clone.exitCode !== 0) throw new Error(clone.stderr)
+    return path
+  }
+
   private async withKernelRepository<T>(run: (path: string) => Promise<T>): Promise<T> {
-    if (!this.deps.repoOrigin || this.deps.checkout)
-      return run(this.deps.checkout ?? this.deps.repo)
     const root = await mkdtemp(join(tmpdir(), 'autobuild-node-transport-'))
     try {
-      const path = join(root, 'repository.git')
-      const clone = await this.deps.exec(['git', 'clone', '--bare', this.deps.repoOrigin, path], {
-        cwd: root,
-      })
-      if (clone.exitCode !== 0) throw new Error(clone.stderr)
-      return await run(path)
+      return await run(await this.kernelRepository(root))
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -3812,14 +3822,7 @@ export class Dispatcher {
           },
         })
       }
-      if (this.deps.repoOrigin && !this.deps.checkout) {
-        checkout = join(root, 'repository.git')
-        const clone = await this.deps.exec(
-          ['git', 'clone', '--bare', this.deps.repoOrigin, checkout],
-          { cwd: root },
-        )
-        if (clone.exitCode !== 0) throw new Error(clone.stderr)
-      }
+      checkout = await this.kernelRepository(root)
       const result = await this.deps.exec(
         ['git', 'worktree', 'add', '--detach', workspacePath, 'HEAD'],
         { cwd: checkout },
