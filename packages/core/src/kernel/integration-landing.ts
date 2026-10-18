@@ -36,7 +36,12 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
   }
   try {
     let state = (await readBuildFacts(store, slug)).value.state
-    if (state.integration?.landing) return
+    if (
+      state.integration?.landing ||
+      state.nodeRestack?.parentRequest ||
+      state.nodeRestack?.parentChange
+    )
+      return
     const existing = state.integration?.intent
     let landed: string | undefined
     if (existing) {

@@ -520,6 +520,9 @@ export interface Forge {
     number: number,
   ): Promise<{ base: string; head: string; headSha: string; open: boolean }>
 
+  /** Change only an existing open review's base, preserving its identity.
+   * Implementations acknowledge only a matching inspected base/head. */
+  retargetPr?(workspacePath: string, number: number, base: string): Promise<void>
   readonly rewrite?: ForgeRewrite
   /** Create once at sha; retries adopt only descendants of that opening commit. */
   createNodeBranch?(branch: string, sha: string): Promise<string>

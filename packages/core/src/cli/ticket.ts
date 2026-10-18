@@ -1,3 +1,5 @@
+import { updateTicketTarget } from '../kernel/node-parent'
+import { createForge } from '../ports/forge/create'
 import {
   compatibleTicketSource,
   projectTicketTree,
@@ -352,7 +354,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
 
 export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
   const body = opts.bodyFile === undefined ? undefined : await readBody(opts.bodyFile)
-  const { source } = await resolveTicketCommand(opts, 'update')
+  const { source, config } = await resolveTicketCommand(opts, 'update')
   const patch: TicketUpdate = {
     ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
     ...(opts.target !== undefined ? { target: opts.target } : {}),
@@ -360,13 +362,35 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(body !== undefined ? { body } : {}),
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
   }
-  if (opts.json === true) {
-    const updated = await updateTicket(source, opts.id, patch, true, opts.expectedRevision)
-    if (updated !== null) emitTicketJson(opts, updated)
-    return
-  }
-  await updateTicket(source, opts.id, patch, false, opts.expectedRevision)
-  opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
+  const updated =
+    patch.target === undefined
+      ? await updateTicket(source, opts.id, patch, opts.json === true, opts.expectedRevision)
+      : await withTicketStore(opts, ({ store, repo }) =>
+          updateTicketTarget(
+            {
+              store,
+              repo,
+              source,
+              root: config.baseBranch,
+              configuredSource: config.tickets.source,
+              supportsRetarget: async () => {
+                const registry = await loadPlugins(config.plugins, opts.targetRepo)
+                const forge = await createForge({
+                  name: config.forge,
+                  registry,
+                  env: opts.env,
+                  repoRoot: opts.targetRepo,
+                })
+                return !!forge.retargetPr && !!forge.inspectLandingPr
+              },
+            },
+            opts.id,
+            patch,
+            opts.expectedRevision,
+          ),
+        )
+  if (opts.json === true && updated !== null) emitTicketJson(opts, updated)
+  else opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
 }
 
 export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {

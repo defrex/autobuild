@@ -1,3 +1,5 @@
+import { sameParentRejection } from '../kernel/node-restack-state'
+import { validateNodeParent, nodeParentBusy, type ParentContext } from '../kernel/node-parent'
 import { landIntegrationRoot, auditIntegrationLanding } from '../kernel/integration-landing'
 import {
   observeIntegration,
@@ -687,9 +689,9 @@ export class Dispatcher {
   private async integrationClaimKey(slug: string): Promise<string> {
     const children = []
     for (const { record, digest } of await this.repoBuildDigests()) {
-      // Frozen targets are immutable build metadata. Discover each claim once;
-      // only this node's children can invalidate its periodic source schedule.
-      if (!this.integrationTargets.has(record.slug)) {
+      // Work targets are frozen. Node relationships can change, so refresh
+      // those edges before computing this parent's scheduling key.
+      if (!this.integrationTargets.has(record.slug) || digest.kind === 'node') {
         const state = (await this.store.buildFacts(record.slug)).state
         if (state.lastSeq > 0) this.integrationTargets.set(record.slug, state.target?.build)
       }
@@ -1923,6 +1925,11 @@ export class Dispatcher {
               await this.cleanupAborted(record, await history(), report)
             continue
           }
+          if (state.nodeOpened) {
+            await this.observeTicketTarget(record, state, report)
+            loaded = undefined
+            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+          }
           if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) continue
           if (state.nodeOpened && state.baseBranch) {
             if (
@@ -1992,6 +1999,8 @@ export class Dispatcher {
           await this.cleanupAborted(record, await history(), report)
           continue
         }
+        if (state.kind !== 'node' && state.status !== 'aborted')
+          await this.observeTicketTarget(record, state, report)
         if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
           const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
           if (branch !== undefined) {
@@ -2016,6 +2025,211 @@ export class Dispatcher {
         report.janitorFailed += 1
         report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
       }
+    }
+  }
+
+  private parentContext(): ParentContext {
+    return {
+      store: this.store,
+      source: this.deps.tickets,
+      repo: this.deps.repo,
+      root: this.deps.config.baseBranch,
+      configuredSource: this.deps.config.tickets.source,
+      supportsRetarget: async () =>
+        !!this.deps.forge.retargetPr && !!this.deps.forge.inspectLandingPr,
+    }
+  }
+
+  /** Tracker observation can withhold a new parent, but cannot stop recovery
+   * against the durable effective parent or observation of terminal PRs. */
+  private async observeTicketTarget(record: BuildRecord, state: BuildState, report: TickReport) {
+    try {
+      if (state.kind === 'node') await this.observeNodeParent(record, state, report)
+      else await this.observeWorkTarget(record, state, report)
+    } catch (error) {
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: ticket target observation failed — ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  private async clearParentRejection(record: BuildRecord, ticket: Ticket) {
+    const state = (await this.store.buildFacts(record.slug)).state
+    if (!state.nodeRestack?.parentRejection) return
+    await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'node.parent-rejection-cleared',
+      payload: { revision: ticket.revision, target: ticket.target ?? null },
+    })
+  }
+
+  private async rejectParent(
+    record: BuildRecord,
+    ticket: Ticket,
+    reason: string,
+    report: TickReport,
+  ) {
+    const rejection = { revision: ticket.revision, target: ticket.target ?? null, reason }
+    const state = (await this.store.buildFacts(record.slug)).state
+    if (!sameParentRejection(state.nodeRestack?.parentRejection, rejection))
+      await this.store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'node.parent-rejected',
+        payload: rejection,
+      })
+    report.janitorDiagnostics.push(`build ${record.slug}: ${reason}`)
+  }
+
+  private async observeWorkTarget(record: BuildRecord, state: BuildState, report: TickReport) {
+    if (!record.ticket || record.ticket.source !== this.deps.tickets.name) return
+    const ticket = await this.deps.tickets.get(record.ticket.id)
+    if (!ticket) {
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: claimed ticket cannot be read; frozen work target retained`,
+      )
+      return
+    }
+    const effective = state.target?.ticket.id
+    const canonical =
+      effective && this.deps.config.tickets.source === 'hosted'
+        ? ((await this.deps.tickets.get(effective))?.ref.id ?? effective)
+        : effective
+    if (ticket.target !== canonical)
+      await this.rejectParent(
+        record,
+        ticket,
+        'changing a claimed work ticket target requires abort and re-dispatch',
+        report,
+      )
+    else await this.clearParentRejection(record, ticket)
+  }
+
+  /** Provider edits and interrupted caller writes converge through this same
+   * durable path, independently of ticket readiness or caller liveness. */
+  private async observeNodeParent(record: BuildRecord, state: BuildState, report: TickReport) {
+    if (!record.ticket || record.ticket.source !== this.deps.tickets.name) return
+    if (nodeParentBusy(state)) return
+    if (
+      state.pr &&
+      (await this.deps.forge.getPrState(this.deps.checkout ?? this.deps.repo, state.pr.number))
+        .state !== 'open'
+    )
+      return
+    const node = state.nodeRestack
+    if (node?.parentChange) {
+      // Replay is frozen until its receipt, including through reconcile and
+      // lease loss. Later source edits wait for both Git and PR acknowledgement.
+      const move = node.parentChange
+      if (node.parentReplay !== move.id) return
+      const forge = this.deps.forge
+      if (state.pr && node.parentPr !== move.id) {
+        const path = this.deps.checkout ?? this.deps.repo
+        if ((await forge.getPrState(path, state.pr.number)).state !== 'open') return
+        const cancelled = await forge.setAutoMerge(path, state.pr.number, false)
+        if (cancelled.kind !== 'applied') return
+        await forge.retargetPr!(path, state.pr.number, move.next.branch)
+        const inspected = await forge.inspectLandingPr!(path, state.pr.number)
+        if (
+          !inspected.open ||
+          inspected.base !== move.next.branch ||
+          inspected.head !== record.branch ||
+          inspected.headSha !== node.inventory?.head
+        )
+          throw new Error('parent PR acknowledgement disagrees with effective target')
+        await this.store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'node.parent-pr-retargeted',
+          payload: { id: move.id, base: move.next.branch },
+        })
+      }
+      await this.store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'node.parent-completed',
+        payload: { id: move.id },
+      })
+      this.integrationInputs = undefined
+      this.integrationPublicationInputs = undefined
+      return
+    }
+    const ticket = await this.deps.tickets.get(record.ticket.id)
+    if (!ticket) throw new Error('node ticket cannot be read; parent observation failed closed')
+    const desired = ticket.target ?? null
+    const request = node?.parentRequest
+    const effective = state.target?.ticket.id
+    const canonical =
+      effective && this.deps.config.tickets.source === 'hosted'
+        ? ((await this.deps.tickets.get(effective))?.ref.id ?? effective)
+        : effective
+    if (!request && desired === (canonical ?? null)) {
+      await this.clearParentRejection(record, ticket)
+      return
+    }
+    // Settle the current writer before sampling any new destination.
+    if (node?.active || state.sessions.open.length || this.hasLiveExecutionLease(record)) return
+    const holder = this.deps.ids('parent-writer')
+    if (!(await this.store.claimNodeWriter(record.slug, holder, 60_000))) return
+    try {
+      state = (await this.store.buildFacts(record.slug)).state
+      if (
+        nodeParentBusy(state) ||
+        state.nodeRestack?.active ||
+        state.nodeRestack?.parentChange ||
+        state.nodeRestack?.parentRequest?.id !== request?.id
+      )
+        return
+      if (request && desired !== (request.next.target?.ticket.id ?? null)) {
+        await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+          actor: DISPATCHER,
+          type: 'node.parent-cancelled',
+          payload: { id: request.id, reason: 'source readback does not confirm requested target' },
+        })
+        return
+      }
+      let next: EventPayload<'node.parent-accepted'>['next']
+      try {
+        next = await validateNodeParent(this.parentContext(), record, ticket)
+        if (
+          request &&
+          (next.branch !== request.next.branch || next.target?.build !== request.next.target?.build)
+        )
+          throw new Error('destination generation changed; retry target update')
+      } catch (error) {
+        if (request)
+          await this.store.append(record.slug, {
+            actor: DISPATCHER,
+            type: 'node.parent-cancelled',
+            payload: { id: request.id, reason: String(error) },
+          })
+        await this.rejectParent(
+          record,
+          ticket,
+          error instanceof Error ? error.message : String(error),
+          report,
+        )
+        return
+      }
+      if (state.pr) {
+        const path = this.deps.checkout ?? this.deps.repo
+        if ((await this.deps.forge.getPrState(path, state.pr.number)).state !== 'open') return
+        if ((await this.deps.forge.setAutoMerge(path, state.pr.number, false)).kind !== 'applied')
+          return
+      }
+      if (!(await this.store.renewNodeWriter(record.slug, holder))) return
+      const move = {
+        id: request?.id ?? this.deps.ids('node-parent'),
+        old: { target: state.target ?? null, branch: state.baseBranch! },
+        next,
+        revision: ticket.revision,
+      }
+      await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'node.parent-accepted',
+        payload: move,
+      })
+      this.integrationInputs = undefined
+      this.integrationPublicationInputs = undefined
+    } finally {
+      await this.store.releaseNodeWriter(record.slug, holder)
     }
   }
 
@@ -4125,6 +4339,12 @@ export class Dispatcher {
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
+    if (state.nodeRestack?.parentRequest && !state.nodeRestack.active) return
+    if (
+      state.nodeRestack?.parentChange &&
+      state.nodeRestack.parentReplay === state.nodeRestack.parentChange.id
+    )
+      return
     const forge = this.kernelForge()
     const settled = (await readBuildFacts(this.store, record.slug)).value
     if (
@@ -4153,7 +4373,12 @@ export class Dispatcher {
       return
     // The forge API can prove an unchanged inventory without downloading Git
     // history. Active work and hand pushes still enter the transaction path.
-    if (!state.nodeRestack?.active && state.sessions.open.length === 0 && forge.remoteBranchSha) {
+    if (
+      !state.nodeRestack?.active &&
+      !state.nodeRestack?.parentChange &&
+      state.sessions.open.length === 0 &&
+      forge.remoteBranchSha
+    ) {
       const [parent, head] = await Promise.all([
         forge.remoteBranchSha(state.baseBranch),
         forge.remoteBranchSha(record.branch),
@@ -4412,7 +4637,9 @@ export class Dispatcher {
       state.openEscalations.length ||
       state.prState === 'merged' ||
       state.prState === 'closed' ||
-      state.integration?.intent
+      state.integration?.intent ||
+      state.nodeRestack?.parentRequest ||
+      state.nodeRestack?.parentChange
     )
       return
     const forge = this.kernelForge()
@@ -4477,7 +4704,13 @@ export class Dispatcher {
       if (!(await this.store.claimNodeWriter(record.slug, holder, 60_000))) return
       try {
         const current = (await this.store.buildFacts(record.slug)).state
-        if (current.nodeRestack?.active || current.pendingCommands.length) return
+        if (
+          current.nodeRestack?.active ||
+          current.nodeRestack?.parentRequest ||
+          current.nodeRestack?.parentChange ||
+          current.pendingCommands.length
+        )
+          return
         const exact = await forge.compareBranches(state.baseBranch!, record.branch!)
         if (exact.parentSha !== comparison.parentSha || exact.headSha !== comparison.headSha) return
         await this.withKernelRepository(async (path) => {

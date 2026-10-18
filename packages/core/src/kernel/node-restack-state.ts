@@ -2,9 +2,27 @@ import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { defineReducer } from './incremental'
 
+/** JSONB persistence does not preserve object key order. These diagnostics
+ * are identified by their observed fields, never by serialized object bytes. */
+export function sameParentRejection(
+  previous: EventPayload<'node.parent-rejected'> | undefined,
+  next: EventPayload<'node.parent-rejected'>,
+): boolean {
+  return (
+    previous?.revision === next.revision &&
+    previous.target === next.target &&
+    previous.reason === next.reason
+  )
+}
+
 /** Reservations outlive writer leases and disposable replay workspaces. A new
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
+  parentRequest?: EventPayload<'node.parent-requested'>
+  parentChange?: EventPayload<'node.parent-accepted'>
+  parentReplay?: string
+  parentPr?: string
+  parentRejection?: EventPayload<'node.parent-rejected'>
   contributionBoundaries?: Record<string, string>
   droppedIdentities?: string[]
   foreignAliases?: Record<string, string>
@@ -23,6 +41,32 @@ export interface NodeRestackState {
 export function advanceNodeRestack(state: NodeRestackState, events: readonly AbEvent[]) {
   for (const event of events) {
     switch (event.type) {
+      case 'node.parent-requested':
+        state.parentRequest = event.payload
+        break
+      case 'node.parent-accepted':
+        state.parentChange = event.payload
+        delete state.parentRequest
+        delete state.parentReplay
+        delete state.parentPr
+        delete state.parentRejection
+        delete state.observedParent
+        break
+      case 'node.parent-cancelled':
+        if (state.parentRequest?.id === event.payload.id) delete state.parentRequest
+        break
+      case 'node.parent-rejection-cleared':
+        delete state.parentRejection
+        break
+      case 'node.parent-rejected':
+        state.parentRejection = event.payload
+        break
+      case 'node.parent-pr-retargeted':
+        state.parentPr = event.payload.id
+        break
+      case 'node.parent-completed':
+        if (state.parentChange?.id === event.payload.id) delete state.parentChange
+        break
       case 'target.moved':
         if (state.contributionBase !== undefined) state.observedParent = event.payload
         break
@@ -115,6 +159,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
                 state.foreignAliases[item.head] = state.foreignAliases[change.sha] ?? change.sha
             }
             state.droppedIdentities = [...dropped].sort()
+            if (state.parentChange) state.parentReplay = state.parentChange.id
             state.contributionBase = state.active.parent
           }
         }
@@ -139,7 +184,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 3,
+  version: 5,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

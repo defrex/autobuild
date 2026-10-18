@@ -33,6 +33,13 @@ export const executionProgress = {
   'node.writer-settled': 'progress',
   'node.contribution-recorded': 'bookkeeping',
   'node.inventory': 'bookkeeping',
+  'node.parent-requested': 'bookkeeping',
+  'node.parent-accepted': 'progress',
+  'node.parent-pr-retargeted': 'progress',
+  'node.parent-completed': 'progress',
+  'node.parent-cancelled': 'bookkeeping',
+  'node.parent-rejection-cleared': 'bookkeeping',
+  'node.parent-rejected': 'bookkeeping',
   'node.opened': 'progress',
   'node.compared': 'bookkeeping',
   'pr.opened': 'progress',
@@ -118,7 +125,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 3,
+  version: 5,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {

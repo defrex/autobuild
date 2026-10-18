@@ -25,6 +25,9 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
       case 'finalize.completed':
         state.finalizedAt = event.seq
         break
+      case 'node.parent-accepted':
+        delete state.target
+        break
       case 'target.moved':
         state.target = { seq: event.seq, ...event.payload }
         break
@@ -63,7 +66,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 2,
+  version: 3,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

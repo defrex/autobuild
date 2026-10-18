@@ -112,6 +112,15 @@ export async function buildMcpTicketBackend(
     ),
   ]
   return {
+    supportsNodeRetarget: async () => {
+      const forge = await createForge({
+        name: config.forge,
+        registry: plugins,
+        env: opts.env,
+        repoRoot: opts.checkout,
+      })
+      return !!forge.retargetPr && !!forge.inspectLandingPr
+    },
     sourceFor: async (context) => {
       if ((config.tickets.teamKey ?? '') !== context.teamKey) {
         throw new Error(
