@@ -1,3 +1,8 @@
+import { landIntoNode, settleClosedNode, preflightNodeLanding } from '../kernel/node-landing'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { runNodeTransaction } from '../kernel/node-restack-transaction'
 import { hasBuildTrailer } from '../kernel/build-identity'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
@@ -1201,7 +1206,8 @@ export class Dispatcher {
     launched: Set<string>,
     report: TickReport = emptyTickReport(),
   ): Promise<LaunchRunnerResult> {
-    if ((await this.store.buildFacts(slug)).state.kind === 'node') return 'already-active'
+    const launchState = (await this.store.buildFacts(slug)).state
+    if (launchState.kind === 'node' && !launchState.nodeRestack?.conflict) return 'already-active'
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
@@ -1796,7 +1802,7 @@ export class Dispatcher {
         if (state.kind === 'node' && state.status !== 'aborted') {
           const command =
             state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(0)
-          if (command !== undefined) {
+          if (command !== undefined && !executionLeaseLive) {
             await this.store.append(record.slug, {
               actor: DISPATCHER,
               type:
@@ -1812,6 +1818,31 @@ export class Dispatcher {
             continue
           }
           if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) continue
+          if (state.nodeOpened && state.baseBranch) {
+            if (
+              await this.observeTarget(
+                record.slug,
+                state.baseBranch,
+                log.restack.target?.sha,
+                report,
+              )
+            ) {
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+          }
+          if (
+            state.nodeOpened &&
+            state.status !== 'paused' &&
+            state.status !== 'blocked' &&
+            state.prState !== 'merged' &&
+            state.prState !== 'closed' &&
+            !executionLeaseLive
+          ) {
+            await this.cascadeNode(record, state, report, launched, opts)
+            loaded = undefined
+            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+          }
           if (state.nodeOpened !== undefined && state.pr === undefined) {
             await this.pollEmptyNode(record, state)
             continue
@@ -1850,7 +1881,7 @@ export class Dispatcher {
           await this.cleanupAborted(record, await history(), report)
           continue
         }
-        if (state.status !== 'aborted' && state.status !== 'queued') {
+        if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
           const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
           if (branch !== undefined) {
             if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
@@ -1930,6 +1961,51 @@ export class Dispatcher {
     const store = this.store
     const { tickets, forge } = this.deps
     const branch = record.branch
+    if (events.state.target && branch && events.state.pr) {
+      const target = await store.getBuild(events.state.target.build)
+      if (target?.branch) {
+        const active = (await store.buildFacts(target.slug)).state.nodeRestack?.active
+        if (active?.operation === 'landing' && active.source === record.slug) {
+          await this.withKernelRepository((workspacePath) =>
+            landIntoNode({
+              store,
+              forge: this.kernelForge(),
+              exec: forge.kernelExec ?? this.deps.exec,
+              workspacePath,
+              slug: record.slug,
+              node: target.slug,
+              branch,
+              destination: target.branch!,
+              pr: events.state.pr!.number,
+              holder: this.deps.ids('node-writer'),
+              id: active.id,
+              eligible: async () => false,
+            }),
+          )
+          if (
+            (await store.buildFacts(target.slug)).state.nodeRestack?.active?.source === record.slug
+          )
+            return
+          Object.assign(events, (await readBuildFacts(store, record.slug)).value)
+        }
+      }
+    }
+    if (
+      events.state.kind === 'node' &&
+      branch &&
+      !(await this.withKernelRepository((workspacePath) =>
+        settleClosedNode({
+          store,
+          forge: this.kernelForge(),
+          exec: forge.kernelExec ?? this.deps.exec,
+          workspacePath,
+          slug: record.slug,
+          branch,
+          holder: this.deps.ids('node-writer'),
+        }),
+      ))
+    )
+      return
     // Whether this build ever owned a local checkout workspace, judged on the
     // provisioned facts (not the open one, which is null when the build never
     // provisioned or already released — only the former must skip the
@@ -2164,14 +2240,34 @@ export class Dispatcher {
     // Forge calls run from the workspace when it still exists (it does until
     // the build completes); fall back to the repo itself for odd logs.
     const workspacePath = this.forgeWorkspacePathOf(source.workspace)
-    const prState = await forge.getPrState(workspacePath, pr.number)
     const integration = state.kind === 'node'
+    const nodeTarget = !integration && state.target !== undefined
+    const target = nodeTarget ? await store.getBuild(state.target!.build) : null
+    const reservation = target
+      ? (await store.buildFacts(target.slug)).state.nodeRestack?.active
+      : undefined
+    const recoverLanding =
+      reservation?.operation === 'landing' && reservation.source === record.slug
+    let prState: Awaited<ReturnType<typeof forge.getPrState>>
+    try {
+      prState = await forge.getPrState(workspacePath, pr.number)
+    } catch (error) {
+      if (!recoverLanding && state.prState !== 'merged') throw error
+      prState = { state: 'open', mergeable: null }
+    }
+    if (state.prState === 'merged' && state.mergedSha)
+      prState = { state: 'merged', sha: state.mergedSha }
+    if (nodeTarget && prState.state === 'open' && !recoverLanding) {
+      const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+      if (cancelled.kind !== 'applied')
+        throw new Error('node-target native auto-merge cancellation unconfirmed')
+    }
     const autoMerge = !integration && prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
     // Revoking consent takes priority even while the PR is conflicted. A live
     // native request could otherwise merge immediately after reconcile pushes
     // and checks pass, before the next janitor poll gets a chance to cancel it.
-    if (autoMerge?.enabled === false) {
+    if (autoMerge?.enabled === false && !recoverLanding) {
       const result = await forge.setAutoMerge(workspacePath, pr.number, false)
       if (result.kind !== 'applied') {
         throw new Error(`forge returned ${result.kind} while disabling native auto-merge`)
@@ -2186,7 +2282,12 @@ export class Dispatcher {
     // A positive conflict re-enters reconcile before any enable attempt. In
     // particular, an ungated fallback can never race ahead of the conflict
     // event and its full post-reconcile verification cycle.
-    if (!integration && prState.state === 'open' && prState.mergeable === false) {
+    if (
+      !integration &&
+      !recoverLanding &&
+      prState.state === 'open' &&
+      prState.mergeable === false
+    ) {
       // Dedupe: a reduced prState of 'conflicted' means reconcile is already
       // pending (a `reconcile.completed` returns it to 'open').
       if (state.prState === 'conflicted') return
@@ -2233,6 +2334,74 @@ export class Dispatcher {
       )
     }
     if (
+      nodeTarget &&
+      (recoverLanding ||
+        (prState.state === 'open' && state.autoMerge.requested && commandSeq !== undefined)) &&
+      !executionLeaseLive &&
+      record.branch
+    ) {
+      if (target?.branch && target.branch === state.baseBranch) {
+        if (!recoverLanding && !(await canApply())) return
+        const preflight = recoverLanding
+          ? undefined
+          : await preflightNodeLanding(
+              this.kernelForge(),
+              workspacePath,
+              pr.number,
+              record.branch,
+              target.branch,
+            )
+        const reason =
+          preflight ??
+          (await this.withKernelRepository((kernelPath) =>
+            landIntoNode({
+              store,
+              forge: this.kernelForge(),
+              exec: forge.kernelExec ?? this.deps.exec,
+              workspacePath: kernelPath,
+              slug: record.slug,
+              node: target.slug,
+              branch: record.branch!,
+              destination: target.branch!,
+              pr: pr.number,
+              holder: this.deps.ids('node-writer'),
+              id: this.deps.ids('node-landing').replaceAll('_', '-'),
+              eligible: canApply,
+            }),
+          ))
+        if (reason && commandSeq !== undefined)
+          await recordAutoMergeDeferralObservation(
+            store,
+            record.slug,
+            reason,
+            pr.number,
+            commandSeq,
+            this.deps.ids('obs'),
+          )
+        if ((await store.buildFacts(target.slug)).state.nodeRestack?.active?.source === record.slug)
+          return
+        await store.refreshBuild(record.slug)
+        state = (await store.buildFacts(record.slug)).state
+        if (state.prState === 'merged') {
+          if (state.mergedSha) prState = { state: 'merged', sha: state.mergedSha }
+        }
+      } else if (commandSeq !== undefined) {
+        await recordAutoMergeDeferralObservation(
+          store,
+          record.slug,
+          {
+            code: 'unproven-gate-state',
+            detail:
+              'Frozen destination node generation is unavailable or disagrees with its branch. Native landing is withheld; human action required.',
+          },
+          pr.number,
+          commandSeq,
+          this.deps.ids('obs'),
+        )
+      }
+    }
+    if (
+      !nodeTarget &&
       prState.state === 'open' &&
       state.autoMerge.requested === true &&
       commandSeq !== undefined &&
@@ -2293,6 +2462,27 @@ export class Dispatcher {
       }
     }
 
+    if (
+      integration &&
+      (prState.state === 'merged' || prState.state === 'closed') &&
+      record.branch &&
+      !executionLeaseLive
+    ) {
+      if (
+        !(await this.withKernelRepository((kernelPath) =>
+          settleClosedNode({
+            store,
+            forge: this.kernelForge(),
+            exec: forge.kernelExec ?? this.deps.exec,
+            workspacePath: kernelPath,
+            slug: record.slug,
+            branch: record.branch!,
+            holder: this.deps.ids('node-writer'),
+          }),
+        ))
+      )
+        return
+    }
     switch (prState.state) {
       case 'merged': {
         if (executionLeaseLive) return
@@ -3138,6 +3328,7 @@ export class Dispatcher {
       const decision = await this.decideBuild(record.slug, state, facts.log, report)
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
+      if (state.kind === 'node' && decision.kind !== 'wait') continue // cascade owns node runner admission
       // Raw history, read at most once and only by a branch that acts on it.
       let loaded: CurrentBuildFacts | undefined
       const history = async (): Promise<CurrentBuildFacts> => {
@@ -3268,7 +3459,11 @@ export class Dispatcher {
     const activeRefs: TicketRef[] = []
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (digest.terminal === undefined) {
-        if (digest.kind !== 'node') active += 1
+        if (
+          digest.kind !== 'node' ||
+          (await this.store.buildFacts(record.slug)).state.nodeRestack?.conflict
+        )
+          active += 1
         if (record.ticket) activeRefs.push(record.ticket)
       }
     }
@@ -3557,6 +3752,320 @@ export class Dispatcher {
       type: 'node.opened',
       payload: { sha },
     })
+  }
+
+  private kernelForge(): Forge {
+    const forge = this.deps.forge
+    if (!forge.kernelRewrite) return forge
+    return new Proxy(forge, {
+      get(target, key) {
+        if (key === 'rewrite') return target.kernelRewrite
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+  }
+
+  private async kernelRepository(root: string): Promise<string> {
+    const checkout = this.deps.checkout ?? this.deps.repo
+    if (!this.deps.repoOrigin) return checkout
+    // Origin-mode CLI wiring supplies a scratch checkout path too. Only an
+    // actual Git repository can provide the kernel's local object database.
+    if (this.deps.checkout) {
+      const probe = await this.deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: checkout })
+      if (probe.exitCode === 0) return checkout
+    }
+    const path = join(root, 'repository.git')
+    const clone = await (this.deps.forge.kernelExec ?? this.deps.exec)(
+      ['git', 'clone', '--bare', this.deps.repoOrigin, path],
+      {
+        cwd: root,
+      },
+    )
+    if (clone.exitCode !== 0) throw new Error(clone.stderr)
+    return path
+  }
+
+  private async withKernelRepository<T>(run: (path: string) => Promise<T>): Promise<T> {
+    const root = await mkdtemp(join(tmpdir(), 'autobuild-node-transport-'))
+    try {
+      return await run(await this.kernelRepository(root))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  private async cascadeNode(
+    record: BuildRecord,
+    state: BuildState,
+    report: TickReport,
+    launched: Set<string>,
+    opts: TickOpts,
+  ): Promise<void> {
+    const forge = this.kernelForge()
+    const settled = (await readBuildFacts(this.store, record.slug)).value
+    if (
+      settled.publication.pending() ||
+      (settled.open !== null &&
+        (settled.open.commandId !== undefined || this.hasLiveExecutionLease(record)))
+    )
+      return
+    if (
+      state.pr &&
+      (await forge.getPrState(this.deps.checkout ?? this.deps.repo, state.pr.number)).state !==
+        'open'
+    )
+      return
+    if (state.nodeRestack?.active?.operation === 'landing') return
+    if (
+      !record.branch ||
+      !state.baseBranch ||
+      !forge.rewrite ||
+      (!forge.snapshotBase && !forge.kernelExec)
+    )
+      return
+    // The forge API can prove an unchanged inventory without downloading Git
+    // history. Active work and hand pushes still enter the transaction path.
+    if (!state.nodeRestack?.active && state.sessions.open.length === 0 && forge.remoteBranchSha) {
+      const [parent, head] = await Promise.all([
+        forge.remoteBranchSha(state.baseBranch),
+        forge.remoteBranchSha(record.branch),
+      ])
+      if (
+        parent === state.nodeRestack?.contributionBase &&
+        head === state.nodeRestack?.inventory?.head
+      )
+        return
+    }
+    const holder = this.deps.ids('node-writer')
+    const root = await mkdtemp(join(tmpdir(), 'autobuild-node-'))
+    const workspacePath = join(root, 'replay')
+    let checkout = this.deps.checkout ?? this.deps.repo
+    let added = false
+    let claimed = false
+    try {
+      // Repository download is read-only and may exceed the writer lease TTL.
+      // Acquire writer authority only after it completes.
+      checkout = await this.kernelRepository(root)
+      claimed = await this.store.claimNodeWriter(record.slug, holder, 60_000)
+      if (!claimed) return
+      const latest = (await readBuildFacts(this.store, record.slug)).value
+      if (latest.publication.pending()) return
+      if (latest.open !== null) {
+        const refreshed = await this.store.getBuild(record.slug)
+        if (
+          latest.open.commandId !== undefined ||
+          (refreshed && this.hasLiveExecutionLease(refreshed))
+        )
+          return
+        await this.store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: {
+            instance: latest.open.instance,
+            workspaceRef: latest.open.workspaceRef,
+            outcome: 'lost',
+          },
+        })
+      }
+      state = (await this.store.buildFacts(record.slug)).state
+      // An ended execution may have died between an item's atomic receipt and
+      // its phase/session acknowledgements. Reclaim only after supervision has
+      // settled the complete execution, before any public stack rewrite.
+      for (const session of state.sessions.open) {
+        await this.store.append(record.slug, {
+          actor: KERNEL,
+          type: 'session.ended',
+          payload: {
+            session: session.session,
+            outcome: 'reclaimed',
+            reclaimedBy: { instance: holder, resumedFromSeq: state.lastSeq },
+          },
+        })
+      }
+      if (
+        !state.nodeRestack?.conflict &&
+        state.currentPhase?.phase === 'reconcile' &&
+        state.nodeRestack?.active &&
+        state.nodeRestack.items.length > 0
+      ) {
+        const notes = await this.store.getArtifact(record.slug, 'reconcile-notes')
+        if (!notes) throw new Error('missing source build identity resolution notes')
+        await this.store.append(record.slug, {
+          actor: KERNEL,
+          type: 'reconcile.completed',
+          payload: {
+            headSha: state.nodeRestack.items.at(-1)!.head,
+            rewriteId: state.nodeRestack.active.id,
+            artifact: { kind: notes.meta.kind, rev: notes.meta.revision },
+          },
+        })
+      }
+      const result = await this.deps.exec(
+        ['git', 'worktree', 'add', '--detach', workspacePath, 'HEAD'],
+        { cwd: checkout },
+      )
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      added = true
+      const parentHead = forge.remoteBranchSha
+        ? await forge.remoteBranchSha(state.baseBranch!)
+        : undefined
+      if (state.nodeRestack?.active || parentHead !== state.nodeRestack?.contributionBase) {
+        // Upgrade recovery: an old dispatcher may have left a native request
+        // armed. Cancel every targeting leaf before admitting a node rewrite.
+        for (const child of await this.repoBuildDigests()) {
+          if (child.digest.terminal || child.digest.kind === 'node') continue
+          const childState = (await this.store.buildFacts(child.record.slug)).state
+          if (
+            childState.target?.build !== record.slug ||
+            !childState.pr ||
+            childState.prState !== 'open'
+          )
+            continue
+          const cancelled = await forge.setAutoMerge(checkout, childState.pr.number, false)
+          if (cancelled.kind !== 'applied')
+            throw new Error(
+              `node restack waits for native auto-merge cancellation on ${child.record.slug}`,
+            )
+        }
+      }
+      const outcome = await runNodeTransaction(
+        {
+          store: this.store,
+          slug: record.slug,
+          forge,
+          exec: forge.kernelExec ?? this.deps.exec,
+          workspacePath,
+          holder,
+          canWrite: async () => {
+            if (this.outOfBudget(opts)) return false
+            if (state.pr && (await forge.getPrState(checkout, state.pr.number)).state !== 'open')
+              return false
+            await this.store.refreshBuild(record.slug)
+            const current = (await this.store.buildFacts(record.slug)).state
+            return (
+              current.status !== 'done' &&
+              current.status !== 'aborted' &&
+              current.status !== 'paused' &&
+              current.status !== 'blocked' &&
+              current.prState !== 'merged' &&
+              current.prState !== 'closed' &&
+              current.pendingCommands.length === 0 &&
+              current.sessions.open.length === 0
+            )
+          },
+        },
+        {
+          branch: record.branch,
+          parentBranch: state.baseBranch!,
+          id: this.deps.ids('node-restack').replaceAll('_', '-'),
+        },
+      )
+      if (outcome === 'completed') {
+        const completed = (await readBuildFacts(this.store, record.slug)).value
+        if (openWorkspace(completed)) await this.releaseWorkspace(record.slug, completed)
+      }
+      if (outcome === 'conflict') {
+        const facts = (await readBuildFacts(this.store, record.slug)).value
+        const node = facts.state.nodeRestack!
+        const conflict = node.conflict!
+        const change = node.active!.changes[conflict.index]!
+        if (change.build) {
+          if (!(await this.store.getBuild(change.build)))
+            throw new Error(`missing source build identity ${change.build}`)
+          const source = (await readBuildFacts(this.store, change.build)).value.state
+          if (
+            source.specRev === undefined ||
+            source.plan.artifactRev === undefined ||
+            !source.plan.approved ||
+            source.implement.artifactRev === undefined
+          )
+            throw new Error(`missing source build identity context for ${change.build}`)
+          for (const [kind, revision] of [
+            ['spec', source.specRev],
+            ['plan', source.plan.artifactRev],
+            ['implement-notes', source.implement.artifactRev],
+          ] as const) {
+            const contextKind = `node-source-${node.active!.id}-${conflict.index}-${kind}`
+            if (await this.store.getArtifact(record.slug, contextKind)) continue
+            const artifact = await this.store.getArtifact(change.build, kind, revision)
+            if (!artifact)
+              throw new Error(`missing source build identity context ${kind} for ${change.build}`)
+            await this.store.putArtifact(record.slug, {
+              kind: contextKind,
+              content: artifact.content,
+            })
+          }
+        }
+
+        let occupied = 0
+        for (const other of await this.repoBuildDigests()) {
+          if (other.record.slug === record.slug || other.digest.terminal) continue
+          if (
+            other.digest.kind !== 'node' ||
+            (await this.store.buildFacts(other.record.slug)).state.nodeRestack?.conflict
+          )
+            occupied++
+        }
+        if (occupied >= this.deps.config.capacity) return
+        if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
+          const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
+          if (kicked === 'kicked') report.provisioning += 1
+        } else {
+          if (openWorkspace(facts) === null) {
+            const handle = await this.deps.workspaces.provision({
+              repo: checkout,
+              baseBranch: state.baseBranch!,
+              branch: record.branch!,
+            })
+            await this.store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'workspace.provisioned',
+              payload: {
+                provider: handle.provider,
+                ref: handle.ref,
+                path: handle.path,
+                localPath: handle.localPath,
+                remote: false,
+                branch: handle.branch,
+                base: handle.base,
+              },
+            })
+          }
+          await this.launch(record.slug, launched, report)
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // Safety refusals require human judgment. Infrastructure failures remain
+      // retryable dispatch failures and retain their active reservation.
+      if (
+        message.includes('node restack refused') ||
+        message.includes('contribution base') ||
+        message.includes('build identity')
+      ) {
+        await this.store.refreshBuild(record.slug)
+        const current = (await this.store.buildFacts(record.slug)).state
+        if (!current.openEscalations.length)
+          await this.store.append(record.slug, {
+            actor: KERNEL,
+            type: 'escalation.raised',
+            payload: {
+              id: this.deps.ids('esc'),
+              phase: 'reconcile',
+              source: 'agent',
+              question: message,
+            },
+          })
+      } else throw error
+    } finally {
+      if (added)
+        await this.deps.exec(['git', 'worktree', 'remove', '--force', workspacePath], {
+          cwd: checkout,
+        })
+      await rm(root, { recursive: true, force: true })
+      if (claimed) await this.store.releaseNodeWriter(record.slug, holder)
+    }
   }
 
   private async pollEmptyNode(record: BuildRecord, state: BuildState): Promise<void> {

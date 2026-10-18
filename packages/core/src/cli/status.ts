@@ -98,6 +98,7 @@ export interface BuildSummary {
   kind?: 'integration' | 'work'
   target?: string
   integration?: 'opening' | 'empty' | 'collecting'
+  nodeRestack?: BuildState['nodeRestack']
   slug: string
   ticket?: TicketRef
   /** The reducer's effective status (§15.5) — never mixed with lease health. */
@@ -233,6 +234,7 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    ...(state.kind === 'node' ? { nodeRestack: state.nodeRestack } : {}),
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
     ...(record.ticket !== undefined ? { ticket: record.ticket } : {}),
@@ -533,6 +535,30 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(
       `  ${d.kind ?? 'work'} · target ${d.target}${d.integration ? ` · ${d.integration}` : ''}`,
     )
+  if (d.nodeRestack) {
+    const node = d.nodeRestack
+    if (node.inventory) {
+      lines.push(`  node head: ${node.inventory.head}`)
+      lines.push(`  build changes: ${node.inventory.builds.join(', ') || 'none'}`)
+      lines.push(`  foreign changes (node-owned): ${node.inventory.foreign.join(', ') || 'none'}`)
+    }
+    if (!node.active && node.observedParent && node.observedParent.sha !== node.contributionBase)
+      lines.push(`  node restack pending: parent ${node.observedParent.sha}`)
+    if (node.active) {
+      lines.push(
+        `  node ${node.active.operation}: ${node.active.id} · ${node.items.length}/${node.active.changes.length} changes · parent ${node.active.parent}`,
+      )
+      if (node.conflict) {
+        const change = node.active.changes[node.conflict.index]!
+        lines.push(
+          `  conflict item ${node.conflict.index + 1}: ${change.sha} · ${change.build ?? 'foreign'}`,
+        )
+      }
+      for (const proof of node.active.merges)
+        if (proof.missing.length || proof.build)
+          lines.push(`  unsafe merge ${proof.sha}: ${proof.missing.join(', ') || proof.build}`)
+    }
+  }
   lines.push(`  status:   ${d.status}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
   if (d.reviewRoundCeilings !== undefined) {

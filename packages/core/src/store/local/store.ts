@@ -187,6 +187,9 @@ export const BOOTSTRAP_DDL = [
     lease_holder TEXT,
     lease_expires_at TEXT,
     lease_ttl_ms INTEGER,
+    node_writer_holder TEXT,
+    node_writer_expires_at TEXT,
+    node_writer_ttl_ms INTEGER,
     heartbeat_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS events (
@@ -376,6 +379,14 @@ export class SqliteBuildStore implements BuildStore {
     }>
     if (!columns.some((column) => column.name === 'repo_origin')) {
       this.sqlite.exec('ALTER TABLE builds ADD COLUMN repo_origin TEXT')
+    }
+    for (const [name, type] of [
+      ['node_writer_holder', 'TEXT'],
+      ['node_writer_expires_at', 'TEXT'],
+      ['node_writer_ttl_ms', 'INTEGER'],
+    ]) {
+      if (!columns.some((column) => column.name === name))
+        this.sqlite.exec(`ALTER TABLE builds ADD COLUMN ${name} ${type}`)
     }
     // Stores created before session-scoped streams existed keep working: add
     // the streams.session column idempotently when a pre-existing table lacks
@@ -858,6 +869,69 @@ export class SqliteBuildStore implements BuildStore {
       .orderBy(asc(artifacts.kind), asc(artifacts.revision))
       .all()
     return rows.map((row) => this.toMeta(row))
+  }
+
+  async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
+    return this.writeTx(() => {
+      const row = this.requireBuild(slug)
+      const now = this.clock().getTime()
+      const heldByOther =
+        row.nodeWriterHolder !== null &&
+        row.nodeWriterHolder !== holder &&
+        row.nodeWriterExpiresAt !== null &&
+        Date.parse(row.nodeWriterExpiresAt) > now
+      if (heldByOther) return false
+      this.db
+        .update(builds)
+        .set({
+          nodeWriterHolder: holder,
+          nodeWriterExpiresAt: new Date(now + ttlMs).toISOString(),
+          nodeWriterTtlMs: ttlMs,
+          updatedAt: new Date(now).toISOString(),
+        })
+        .where(eq(builds.slug, slug))
+        .run()
+      return true
+    })
+  }
+
+  async renewNodeWriter(slug: string, holder: string): Promise<boolean> {
+    return this.writeTx(() => {
+      const row = this.requireBuild(slug)
+      const now = this.clock().getTime()
+      const holds =
+        row.nodeWriterHolder === holder &&
+        row.nodeWriterExpiresAt !== null &&
+        Date.parse(row.nodeWriterExpiresAt) > now
+      if (!holds) return false
+      const nowIso = new Date(now).toISOString()
+      this.db
+        .update(builds)
+        .set({
+          nodeWriterExpiresAt: new Date(now + (row.nodeWriterTtlMs ?? 0)).toISOString(),
+          updatedAt: nowIso,
+        })
+        .where(eq(builds.slug, slug))
+        .run()
+      return true
+    })
+  }
+
+  async releaseNodeWriter(slug: string, holder: string): Promise<void> {
+    this.writeTx(() => {
+      const row = this.requireBuild(slug)
+      if (row.nodeWriterHolder !== holder) return
+      this.db
+        .update(builds)
+        .set({
+          nodeWriterHolder: null,
+          nodeWriterExpiresAt: null,
+          nodeWriterTtlMs: null,
+          updatedAt: this.now(),
+        })
+        .where(eq(builds.slug, slug))
+        .run()
+    })
   }
 
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {

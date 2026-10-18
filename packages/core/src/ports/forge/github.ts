@@ -16,7 +16,8 @@ import { findSummaryMarker } from './summary-marker'
  * exception on the API side is that probe; `pushBranch` remains `git push`
  * from the workspace — it is only ever called from worktree-side terminals
  * and contract fixtures; `vercel-sandbox` builds publish through the
- * sandbox's receive-pack proxy and the host never pushes.
+ * sandbox's receive-pack proxy. Integration-node plumbing uses a separate
+ * trusted kernel Git transport, with credentials scoped to this repository.
  *
  * Native auto-merge is the one operation GitHub exposes only through its
  * GraphQL schema (no REST route exists), so its enable/disable mutations
@@ -25,7 +26,7 @@ import { findSummaryMarker } from './summary-marker'
  * Repository coordinates (owner/name) resolve lazily and memoized: explicit
  * constructor option → `AB_REPOSITORY` (normalized) → `git remote get-url
  * origin` in `repoRoot` (checkout mode) → hard error at first use. In origin
- * mode the dispatcher exports `AB_REPOSITORY`, so no git call ever runs.
+ * mode the dispatcher exports `AB_REPOSITORY`, so coordinate discovery needs no Git call.
  */
 import { z } from 'zod'
 import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
@@ -72,6 +73,7 @@ export const bunExec: Exec = async (cmd, opts) => {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
+    ...(opts.env === undefined ? {} : { env: { ...process.env, ...opts.env } }),
   })
   const abort = (): void => {
     try {
@@ -206,6 +208,19 @@ const requiredCodeScanningRuleParameters = z
   .passthrough()
 const mergeQueueRuleParameters = z.object({}).passthrough()
 
+// Constraints on writes must not be bypassed by a privileged direct landing.
+const CONTROLLED_WRITE_RULE_TYPES = new Set([
+  'update',
+  'commit_message_pattern',
+  'commit_author_email_pattern',
+  'committer_email_pattern',
+  'branch_name_pattern',
+  'tag_name_pattern',
+  'file_path_restriction',
+  'max_file_path_length',
+  'file_extension_restriction',
+  'max_file_size',
+])
 const STRUCTURAL_RULE_TYPES = new Set([
   'creation',
   'update',
@@ -539,13 +554,57 @@ export class GitHubForge implements Forge {
   get rewrite() {
     return gitRewrite(this.exec, false)
   }
+  get kernelRewrite() {
+    return gitRewrite(this.kernelExec, false)
+  }
+  /** Credentials exist only in the trusted subprocess environment, never in
+   * argv, repository config, remote URLs, or the resolving agent's environment. */
+  readonly kernelExec: Exec = async (cmd, opts) => {
+    const repo = await this.repoCoordinates()
+    if (!repo) throw new Error('kernel Git requires explicit GitHub repository coordinates')
+    const credential = typeof this.token === 'function' ? await this.token() : this.token
+    const token = typeof credential === 'string' ? credential : credential?.token
+    if (!token) throw new Error('kernel Git requires a GitHub token')
+    const encoded = Buffer.from(`x-access-token:${token}`).toString('base64')
+    const url = `https://github.com/${repo.owner}/${repo.name}`
+    const redact = (value: string) =>
+      value.replaceAll(token, '[redacted]').replaceAll(encoded, '[redacted]')
+    try {
+      const result = await this.exec(cmd, {
+        ...opts,
+        env: {
+          ...opts.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_CONFIG_COUNT: '7',
+          GIT_CONFIG_KEY_0: 'http.extraHeader',
+          GIT_CONFIG_VALUE_0: '',
+          GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader',
+          GIT_CONFIG_VALUE_1: '',
+          GIT_CONFIG_KEY_2: `http.${url}.extraHeader`,
+          GIT_CONFIG_VALUE_2: '',
+          GIT_CONFIG_KEY_3: `http.${url}.git.extraHeader`,
+          GIT_CONFIG_VALUE_3: '',
+          GIT_CONFIG_KEY_4: `http.${url}.extraHeader`,
+          GIT_CONFIG_VALUE_4: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_5: `http.${url}.git.extraHeader`,
+          GIT_CONFIG_VALUE_5: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_6: 'credential.helper',
+          GIT_CONFIG_VALUE_6: '',
+        },
+      })
+      return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
+    } catch (error) {
+      throw new Error(redact(error instanceof Error ? error.message : String(error)))
+    }
+  }
   readonly name = 'github'
   readonly prAttachments: PrAttachmentHosting
 
   private readonly transport: GitHubRequest
-  /** Only `pushBranch` still runs a local command (`git push` from the
-   * workspace); every API operation goes through the transport. */
+  /** Subprocess seam for workspace pushes and trusted kernel Git operations;
+   * every API operation goes through the HTTP transport. */
   private readonly exec: Exec
+  private readonly token: GitHubTokenSource
   private readonly explicitRepository?: string
   private readonly repoRoot?: string
   private readonly env: Readonly<Record<string, string | undefined>>
@@ -584,6 +643,7 @@ export class GitHubForge implements Forge {
   ) {
     this.exec = opts.exec ?? bunExec
     this.env = opts.env ?? {}
+    this.token = opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec)
     // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
     // stored login, probed lazily through this adapter's exec seam on the
     // first request. A request that still goes out anonymously carries the
@@ -591,7 +651,7 @@ export class GitHubForge implements Forge {
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
-        token: opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec),
+        token: this.token,
       })
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository
@@ -839,6 +899,28 @@ export class GitHubForge implements Forge {
     return state
   }
 
+  async inspectLandingPr(_workspacePath: string, number: number) {
+    const { owner, name } = await this.requireCoordinates()
+    const response = await this.request(
+      'GET',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+    )
+    const schema = z.object({
+      state: z.enum(['open', 'closed']),
+      merged: z.boolean(),
+      draft: z.boolean(),
+      base: z.object({ ref: z.string() }),
+      head: z.object({ ref: z.string(), sha: z.string() }),
+    })
+    const pr = this.parse(schema, response, `node landing PR #${number}`)
+    return {
+      base: pr.base.ref,
+      head: pr.head.ref,
+      headSha: pr.head.sha,
+      open: pr.state === 'open' && !pr.merged && !pr.draft,
+    }
+  }
+
   async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
     const before = await this.getPrState(workspacePath, number)
     if (before.state === 'merged' || before.state === 'closed') return before
@@ -895,6 +977,14 @@ export class GitHubForge implements Forge {
     return { enabled: view.auto_merge !== null, nodeId: view.node_id }
   }
 
+  async inspectLandingGate(branch: string): Promise<import('../types').LandingGateInspection> {
+    const result = await this.mergeGatePresence(branch, false, true)
+    if (result.kind === 'deferred') return { kind: 'unproven', reason: result.reason.detail }
+    return result.presence === 'absent'
+      ? { kind: 'proved-ungated' }
+      : { kind: 'gated', reason: `Branch ${branch} has merge-blocking protection or rules` }
+  }
+
   /** Probe both GitHub gate systems for the PR's exact base branch. The one
    * non-success ruleset response that proves absence is GitHub's documented
    * account-plan limitation; even then classic protection must independently
@@ -903,6 +993,7 @@ export class GitHubForge implements Forge {
   private async mergeGatePresence(
     baseRefName: string,
     requireIdentity = false,
+    controlledLanding = false,
   ): Promise<
     | { kind: 'proved'; presence: MergeGatePresence }
     | { kind: 'deferred'; reason: AutoMergeDeferralReason }
@@ -923,7 +1014,7 @@ export class GitHubForge implements Forge {
     }
     const { owner, name } = coordinates
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-    const branchPath = `${repoPath}/branches/${baseRefName}`
+    const branchPath = `${repoPath}/branches/${encodeURIComponent(baseRefName)}`
 
     let classicGate: boolean | undefined
     let classicError: string | undefined
@@ -941,7 +1032,13 @@ export class GitHubForge implements Forge {
         }
         const classic = classifyClassicProtection(protection)
         if (classic.kind === 'unproven') throw new Error(classic.detail)
-        classicGate = classic.gate
+        classicGate =
+          classic.gate ||
+          (controlledLanding &&
+            typeof protection === 'object' &&
+            protection !== null &&
+            'required_pull_request_reviews' in protection &&
+            protection.required_pull_request_reviews !== null)
       }
     } catch (error) {
       classicError = errorMessage(error)
@@ -949,17 +1046,40 @@ export class GitHubForge implements Forge {
 
     let rulesetGate = false
     let planLimited = false
+    let rulesPagesRead = 0
     try {
-      const rules = await this.request('GET', `${repoPath}/rules/branches/${baseRefName}`)
-      const parsed = this.parse(restRulesetRules, rules, 'ruleset probe')
+      const parsed: import('zod').infer<typeof restRulesetRules> = []
+      // Exhaust effective rules, including organization rules. A truncated
+      // first page cannot prove absence, even for a bypass-capable token.
+      for (let page = 1; ; page++) {
+        if (page > 1000) throw new Error('ruleset pagination did not terminate')
+        const rules = await this.request(
+          'GET',
+          `${repoPath}/rules/branches/${encodeURIComponent(baseRefName)}`,
+          { query: { per_page: '100', page: String(page) } },
+        )
+        if (rules.status !== 200) throw new Error('incomplete ruleset response')
+        const batch = this.parse(restRulesetRules, rules, 'ruleset probe')
+        rulesPagesRead++
+        parsed.push(...batch)
+        const more = rules.headers.link?.includes('rel="next"') === true
+        if (batch.length < 100 && !more) break
+        if (batch.length === 0) throw new Error('incomplete ruleset pagination')
+      }
       if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
         return unproven(
           'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
         )
       }
-      rulesetGate = rulesetsHaveMergeGate(parsed)
+      rulesetGate =
+        rulesetsHaveMergeGate(parsed) ||
+        (controlledLanding &&
+          parsed.some(
+            (rule) => rule.type === 'pull_request' || CONTROLLED_WRITE_RULE_TYPES.has(rule.type),
+          ))
     } catch (error) {
       if (
+        rulesPagesRead === 0 &&
         error instanceof GitHubApiError &&
         error.status === 403 &&
         restPlanLimitation.safeParse(error.body).success

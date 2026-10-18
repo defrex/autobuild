@@ -516,3 +516,80 @@ test('node opening adopts advanced history and reachability distinguishes a movi
   await git(f.root, 'update-ref', 'refs/heads/ab-node/collision', unrelated)
   await expect(forge.createNodeBranch('ab-node/collision', opening)).rejects.toThrow('collision')
 })
+
+for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
+  test(`controlled node landing uses guarded identity-preserving fast-forward: ${mode}`, async () => {
+    const { MemoryBuildStore } = await import('../../store/memory')
+    const { sampleBuildInput } = await import('../../store/contract')
+    const { readBuildFacts } = await import('../../store/reduced-reads')
+    const { DISPATCHER } = await import('../../events/envelope')
+    const { landIntoNode } = await import('../../kernel/node-landing')
+    const h = await fixture()
+    const slug = h.head.slice(3)
+    const destination = 'ab-node/target'
+    const base = await git(h.workspace, 'rev-parse', 'HEAD^')
+    await h.forge.createNodeBranch(destination, base)
+    await git(h.workspace, 'commit', '--amend', '-m', `Feature\n\nAutobuild-Build: ${slug}`)
+    const candidate = await git(h.workspace, 'rev-parse', 'HEAD')
+    const pr = await h.forge.openPr({
+      workspacePath: h.workspace,
+      head: h.head,
+      base: destination,
+      title: 'Feature',
+      body: 'Feature',
+    })
+    const store = new MemoryBuildStore()
+    await store.createBuild(sampleBuildInput('target'))
+    await store.createBuild(sampleBuildInput(slug))
+    await store.append('target', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.append(slug, { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
+    if (mode === 'gated')
+      h.forge.inspectLandingGate = async () => ({ kind: 'gated', reason: 'Required checks' })
+    if (mode === 'unknown')
+      h.forge.inspectLandingGate = async () => ({ kind: 'unproven', reason: 'Policy unavailable' })
+    const deps = {
+      store,
+      forge: h.forge,
+      exec: bunExec,
+      workspacePath: h.workspace,
+      slug,
+      node: 'target',
+      branch: h.head,
+      destination,
+      pr: pr.number,
+      holder: 'writer',
+      id: 'landing',
+      eligible: async () => true,
+    }
+    if (mode === 'crash-after-push') {
+      const original = store.appendIfCurrent.bind(store)
+      let crash = true
+      store.appendIfCurrent = async (...args) => {
+        if (args[2].type === 'node.rewritten' && crash) {
+          crash = false
+          throw new Error('crash after push')
+        }
+        return original(...args)
+      }
+      await expect(landIntoNode(deps)).rejects.toThrow('crash after push')
+      expect(await git(h.root, 'rev-parse', destination)).toBe(candidate)
+    }
+    const reason = await landIntoNode(deps)
+    if (mode === 'gated' || mode === 'unknown') {
+      expect(reason?.code).toBe(mode === 'gated' ? 'gated-node-destination' : 'unproven-gate-state')
+      expect(await git(h.root, 'rev-parse', destination)).toBe(base)
+      expect(
+        (await readBuildFacts(store, 'target')).value.state.nodeRestack?.active,
+      ).toBeUndefined()
+      expect((await readBuildFacts(store, slug)).value.state.prState).toBe('open')
+    } else {
+      expect(reason).toBeUndefined()
+      expect(await git(h.root, 'rev-parse', destination)).toBe(candidate)
+      expect((await readBuildFacts(store, slug)).value.state.mergedSha).toBe(candidate)
+      expect(
+        (await readBuildFacts(store, 'target')).value.state.nodeRestack?.active,
+      ).toBeUndefined()
+      expect((await h.forge.getPrState(h.workspace, pr.number)).state).toBe('closed')
+    }
+  })
+}

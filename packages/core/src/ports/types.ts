@@ -384,6 +384,7 @@ export type ClosePrResult = { state: 'closed' } | { state: 'merged'; sha: string
 export type AutoMergeDeferralCode =
   | 'github-plan-limitation'
   | 'repository-auto-merge-disabled'
+  | 'gated-node-destination'
   | 'unproven-gate-state'
   /** A persistent, definite state — GitHub has computed merge conflicts with
    * the base branch. Recovery is updating the branch or resolving the
@@ -405,6 +406,7 @@ export type AutoMergeDeferralClass = 'pipeline-resolved' | 'human-actionable'
 export const autoMergeDeferralClasses = {
   'github-plan-limitation': 'human-actionable',
   'repository-auto-merge-disabled': 'human-actionable',
+  'gated-node-destination': 'human-actionable',
   'unproven-gate-state': 'human-actionable',
   'merge-conflicts': 'pipeline-resolved',
   'mergeability-uncomputed': 'pipeline-resolved',
@@ -485,7 +487,26 @@ export interface ForgeRewrite {
   }): Promise<RewriteResult>
 }
 
+/** Read-only proof for controlled landing into an exact destination branch.
+ * Bypass privileges are never evidence that a branch is ungated. */
+export type LandingGateInspection =
+  | { kind: 'proved-ungated' }
+  | { kind: 'gated'; reason: string }
+  | { kind: 'unproven'; reason: string }
+
 export interface Forge {
+  /** Trusted kernel-only Git execution, with forge credentials scoped to its
+   * origin. Never pass this capability or its environment to agent sessions. */
+  readonly kernelExec?: import('./workspace/git-worktree').Exec
+  /** Credentialed rewrite transport for dispatcher-owned node work. Workspace
+   * replay retains its existing provider-controlled transport. */
+  readonly kernelRewrite?: ForgeRewrite
+  inspectLandingGate?(branch: string): Promise<LandingGateInspection>
+  inspectLandingPr?(
+    workspacePath: string,
+    number: number,
+  ): Promise<{ base: string; head: string; headSha: string; open: boolean }>
+
   readonly rewrite?: ForgeRewrite
   /** Create once at sha; retries adopt only descendants of that opening commit. */
   createNodeBranch?(branch: string, sha: string): Promise<string>

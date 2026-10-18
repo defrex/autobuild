@@ -123,8 +123,6 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
   if (state.status === 'done') return { kind: 'wait', reason: 'done' }
 
-  if (state.kind === 'node') return { kind: 'wait', reason: 'awaiting-pr' }
-
   // ── 2. Operator commands (D2, §15.2.7) ─────────────────────────────────────
   // Requests queue in the log; the kernel acknowledges with fact events, and a
   // dead runner receives its commands on resume. Abort wins over everything
@@ -146,6 +144,21 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).
   if (state.openEscalations.length > 0) return { kind: 'wait', reason: 'blocked' }
+  if (state.kind === 'node') {
+    if (state.nodeRestack?.conflict) {
+      const attempt =
+        state.currentPhase?.phase === 'reconcile'
+          ? (state.currentPhase.attempt ?? state.reconcileAttempts)
+          : state.reconcileAttempts + 1
+      return {
+        kind: 'run-phase',
+        phase: 'reconcile',
+        round: attempt,
+        reconcile: { attempt },
+      }
+    }
+    return { kind: 'wait', reason: 'awaiting-pr' }
+  }
   // revise-spec: park until the human lands spec rev N+1 (§6.3); the
   // spec.revised event's seq becomes the restart boundary used everywhere
   // below. guidance and dismiss-finding resolutions do not decide anything
@@ -460,7 +473,9 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // completes the build; the engine only ever runs reconcile here.
   if (
     log.restack.target !== undefined &&
-    log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase)
+    (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
+      (state.target !== undefined &&
+        (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
   ) {
     return { kind: 'restack', trigger: 'awaiting-landing', cycle: cycleBoundary }
   }

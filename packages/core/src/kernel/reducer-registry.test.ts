@@ -1,3 +1,4 @@
+import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import { describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
@@ -34,6 +35,14 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
 function corpora(): unknown[][] {
   return [
     leafRestackLog(),
+    [
+      {
+        type: 'finalize.step-completed',
+        seq: 1,
+        payload: { step: 'post', ok: true, headSha: 'a'.repeat(40) },
+      },
+    ],
+    nodeRestackLog(),
     [
       {
         type: 'build.created',
@@ -132,11 +141,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 1,
         "baseBranchValue": 1,
-        "build": 4,
+        "build": 6,
         "buildDelegation": 1,
         "buildDigest": 5,
-        "buildReadFacts": 34,
-        "buildStreamSeed": 6,
+        "buildReadFacts": 37,
+        "buildStreamSeed": 8,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 1,
@@ -154,8 +163,9 @@ describe('reducer registry', () => {
         "infrastructureFailureReset": 1,
         "journalView": 4,
         "lastExecutionOutcome": 1,
-        "leafRestack": 1,
-        "logIndex": 2,
+        "leafRestack": 2,
+        "logIndex": 3,
+        "nodeRestack": 2,
         "openBuildWorkspace": 1,
         "openExecution": 1,
         "openHarvestExecutions": 1,

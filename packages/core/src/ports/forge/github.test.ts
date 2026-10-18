@@ -1892,3 +1892,319 @@ test('GitHub no-commits classification reads nested validation messages only', a
   ])
   await expect(unrelated.forge.openPr(opts)).rejects.toBeInstanceOf(GitHubApiError)
 })
+
+describe('GitHubForge.inspectLandingGate', () => {
+  test('proves an exact node branch ungated using only reads', async () => {
+    const { forge, calls } = makeForge([{ json: { protected: false } }, { json: [] }])
+    expect(await forge.inspectLandingGate('ab-node/a')).toEqual({ kind: 'proved-ungated' })
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/branches/ab-node%2Fa',
+      'GET repos/acme/app/rules/branches/ab-node%2Fa',
+    ])
+    expect(calls[1]?.opts?.query).toEqual({ per_page: '100', page: '1' })
+  })
+
+  for (const rule of [
+    ...[
+      'update',
+      'file_path_restriction',
+      'max_file_size',
+      'commit_message_pattern',
+      'commit_author_email_pattern',
+      'committer_email_pattern',
+      'branch_name_pattern',
+      'tag_name_pattern',
+      'max_file_path_length',
+      'file_extension_restriction',
+    ].map((type) => ({ type })),
+    { type: 'merge_queue', parameters: {} },
+    {
+      type: 'pull_request',
+      parameters: {
+        required_approving_review_count: 1,
+        require_code_owner_review: false,
+        require_last_push_approval: false,
+        required_review_thread_resolution: false,
+      },
+    },
+    { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } },
+  ]) {
+    test(`refuses ${rule.type} without a mutation or bypass probe`, async () => {
+      const { forge, calls } = makeForge([{ json: { protected: false } }, { json: [rule] }])
+      expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+      expect(calls.every((call) => call.method === 'GET')).toBe(true)
+    })
+  }
+
+  test('a gate on a later rules page prevents a false ungated proof', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      { json: [{ type: 'merge_queue', parameters: {} }] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+    expect(calls[2]?.opts?.query).toEqual({ per_page: '100', page: '2' })
+  })
+
+  test('follows a provider next link even on a short page', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: [{ type: 'required_linear_history' }], headers: { link: '<next>; rel="next"' } },
+      { json: [{ type: 'merge_queue', parameters: {} }] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+    expect(calls).toHaveLength(3)
+  })
+
+  test('a failed later page leaves policy unproven', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      { status: 403, json: { message: 'Forbidden' } },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+
+  test('a plan-limitation error after a partial page cannot prove absence', async () => {
+    const { forge } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      {
+        status: 403,
+        json: {
+          message: 'Upgrade to GitHub Pro or make this repository public to enable this feature.',
+          documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
+        },
+      },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+  })
+
+  test('a zero-review pull-request requirement still blocks controlled pushes', async () => {
+    const { forge } = makeForge([
+      { json: { protected: false } },
+      {
+        json: [
+          {
+            type: 'pull_request',
+            parameters: {
+              required_approving_review_count: 0,
+              require_code_owner_review: false,
+              require_last_push_approval: false,
+              required_review_thread_resolution: false,
+            },
+          },
+        ],
+      },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+  })
+
+  test('classic pull-request protection blocks controlled pushes even with zero reviews', async () => {
+    const { forge } = makeForge([
+      {
+        json: {
+          protected: true,
+          protection: {
+            required_status_checks: null,
+            restrictions: null,
+            required_pull_request_reviews: {
+              required_approving_review_count: 0,
+              require_code_owner_reviews: false,
+              require_last_push_approval: false,
+            },
+          },
+        },
+      },
+      { json: [] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+  })
+
+  test('unreadable classic protection with no effective rule remains unproven', async () => {
+    const { forge } = makeForge([{ status: 403 }, { json: [] }])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+  })
+})
+
+test('node landing PR inspection refreshes exact base/head through a read-only request', async () => {
+  const { forge, calls } = makeForge([
+    {
+      json: {
+        ...PR_REF,
+        state: 'open',
+        merged: false,
+        draft: false,
+        base: { ref: 'ab-node/target' },
+      },
+    },
+  ])
+  expect(await forge.inspectLandingPr('/work', 123)).toEqual({
+    base: 'ab-node/target',
+    head: 'ab/fix-login',
+    headSha: 'abc123def',
+    open: true,
+  })
+  expect(paths(calls)).toEqual(['GET repos/acme/app/pulls/123'])
+})
+
+test('node push acknowledgement comments with the landed SHA and closes an unacknowledged review', async () => {
+  const { acknowledgeNodeLanding } = await import('../../kernel/node-landing')
+  const open = { merged: false, state: 'open', mergeable: true, merge_commit_sha: null }
+  const { forge, calls } = makeForge([
+    { json: open },
+    { json: {} },
+    { json: open },
+    { json: {} },
+    { json: { ...open, state: 'closed' } },
+  ])
+  await acknowledgeNodeLanding(forge, '/work', 123, 'a'.repeat(40))
+  expect(paths(calls)).toEqual([
+    'GET repos/acme/app/pulls/123',
+    'POST repos/acme/app/issues/123/comments',
+    'GET repos/acme/app/pulls/123',
+    'PATCH repos/acme/app/pulls/123',
+    'GET repos/acme/app/pulls/123',
+  ])
+  expect(calls[1]?.opts?.body).toEqual({ body: expect.stringContaining('a'.repeat(40)) })
+  expect(calls[3]?.opts?.body).toEqual({ state: 'closed' })
+})
+
+test('node push acknowledgement observes a merged review and tolerates provider failure', async () => {
+  const { acknowledgeNodeLanding } = await import('../../kernel/node-landing')
+  const merged = makeForge([
+    { json: { merged: true, state: 'closed', mergeable: true, merge_commit_sha: 'a'.repeat(40) } },
+  ])
+  await acknowledgeNodeLanding(merged.forge, '/work', 123, 'a'.repeat(40))
+  expect(paths(merged.calls)).toEqual(['GET repos/acme/app/pulls/123'])
+  const unavailable = makeForge([{ status: 503 }])
+  await expect(
+    acknowledgeNodeLanding(unavailable.forge, '/work', 123, 'a'.repeat(40)),
+  ).resolves.toBeUndefined()
+  expect(paths(unavailable.calls)).toEqual(['GET repos/acme/app/pulls/123'])
+})
+
+describe('trusted kernel Git credentials', () => {
+  test('clears inherited host and repository authorization headers without editing config', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const root = await mkdtemp(join(tmpdir(), 'kernel-headers-'))
+    const initialized = Bun.spawn(['git', 'init', '-q', root], { stdout: 'pipe', stderr: 'pipe' })
+    expect(await initialized.exited).toBe(0)
+    const config = join(root, '.git', 'config')
+    const before =
+      '[http "https://github.com/"]\nextraHeader = Authorization: Basic stale-host\n' +
+      '[http "https://github.com/acme/private"]\nextraHeader = Authorization: Basic stale-repo\n' +
+      '[http "https://github.com/acme/private.git"]\nextraHeader = Authorization: Basic stale-dotgit\n'
+    await Bun.write(config, before)
+    try {
+      const forge = new GitHubForge({ repository: 'acme/private', token: 'fresh-token' })
+      for (const url of [
+        'https://github.com/acme/private',
+        'https://github.com/acme/private.git',
+      ]) {
+        const result = await forge.kernelExec(
+          ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+          {
+            cwd: root,
+            env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+          },
+        )
+        expect(result.exitCode).toBe(0)
+        expect(
+          result.stdout.split('\n').filter((line) => line.startsWith('Authorization:')),
+        ).toEqual(['Authorization: Basic [redacted]'])
+        expect(result.stdout).not.toContain('stale-')
+      }
+      expect(await Bun.file(config).text()).toBe(before)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('real Git receives scoped ephemeral headers for normalized and .git origins', async () => {
+    const { tmpdir } = await import('node:os')
+    const forge = new GitHubForge({ repository: 'acme/private', token: 'kernel-secret' })
+    for (const url of ['https://github.com/acme/private', 'https://github.com/acme/private.git']) {
+      const result = await forge.kernelExec(
+        ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+        {
+          cwd: tmpdir(),
+          env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+        },
+      )
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.trim()).toBe('Authorization: Basic [redacted]')
+    }
+    for (const url of ['https://github.com/acme/other', 'https://elsewhere.invalid/acme/private']) {
+      const result = await forge.kernelExec(
+        ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+        {
+          cwd: tmpdir(),
+          env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+        },
+      )
+      expect(result.stdout.trim()).toBe('')
+    }
+  })
+  test('scopes ephemeral credentials to the repository and redacts transport diagnostics', async () => {
+    const token = 'kernel-secret'
+    const encoded = Buffer.from(`x-access-token:${token}`).toString('base64')
+    const cmd = ['git', 'clone', '--bare', 'https://github.com/acme/private', '/tmp/repo.git']
+    const forge = new GitHubForge({
+      repository: 'acme/private',
+      token,
+      exec: async (argv, opts) => {
+        expect(argv).toEqual(cmd)
+        expect(opts.env).toMatchObject({
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_CONFIG_COUNT: '7',
+          GIT_CONFIG_KEY_0: 'http.extraHeader',
+          GIT_CONFIG_VALUE_0: '',
+          GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader',
+          GIT_CONFIG_VALUE_1: '',
+          GIT_CONFIG_KEY_2: 'http.https://github.com/acme/private.extraHeader',
+          GIT_CONFIG_VALUE_2: '',
+          GIT_CONFIG_KEY_3: 'http.https://github.com/acme/private.git.extraHeader',
+          GIT_CONFIG_VALUE_3: '',
+          GIT_CONFIG_KEY_4: 'http.https://github.com/acme/private.extraHeader',
+          GIT_CONFIG_VALUE_4: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_5: 'http.https://github.com/acme/private.git.extraHeader',
+          GIT_CONFIG_VALUE_5: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_6: 'credential.helper',
+          GIT_CONFIG_VALUE_6: '',
+        })
+        return { stdout: token, stderr: encoded, exitCode: 128 }
+      },
+    })
+    expect(await forge.kernelExec(cmd, { cwd: '/tmp' })).toEqual({
+      stdout: '[redacted]',
+      stderr: '[redacted]',
+      exitCode: 128,
+    })
+  })
+
+  test('fails before spawning when no token is available and redacts thrown failures', async () => {
+    let spawned = false
+    const forge = new GitHubForge({
+      repository: 'acme/private',
+      token: async () => undefined,
+      exec: async () => {
+        spawned = true
+        throw new Error('unexpected spawn')
+      },
+    })
+    await expect(forge.kernelExec(['git', 'clone'], {})).rejects.toThrow('requires a GitHub token')
+    expect(spawned).toBe(false)
+    const failing = new GitHubForge({
+      repository: 'acme/private',
+      token: 'secret-token',
+      exec: async () => {
+        throw new Error('failed with secret-token')
+      },
+    })
+    await expect(failing.kernelExec(['git', 'fetch'], {})).rejects.toThrow('failed with [redacted]')
+  })
+})

@@ -45,6 +45,9 @@ export class LocalGitForge implements Forge {
   get rewrite() {
     return gitRewrite(this.exec, true)
   }
+  async inspectLandingGate(_branch: string): Promise<import('../types').LandingGateInspection> {
+    return { kind: 'proved-ungated' }
+  }
   readonly name = 'local-git'
   private readonly exec: Exec
   /** The repository the optional checkout-less read seam reads from. The
@@ -381,6 +384,16 @@ export class LocalGitForge implements Forge {
     const checkout = await this.checkedOutBase(cwd, baseRef)
     if (checkout === undefined) return true
     return (await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)).ok
+  }
+
+  async inspectLandingPr(workspacePath: string, number: number) {
+    const { record } = await this.readRecord(workspacePath, number)
+    return {
+      base: record.base,
+      head: record.head,
+      headSha: await this.sha(`refs/heads/${record.head}`, workspacePath),
+      open: record.status === 'open',
+    }
   }
 
   async getPrState(workspacePath: string, number: number): Promise<PrState> {

@@ -15,8 +15,8 @@ integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
 A ready node ticket opens an integration build on `ab-node/<slug>`, cut
 from its parent's sampled head. Opening intent and acknowledgement are durable;
-the branch is open to targeting tickets immediately, without a PR. Integration
-builds use no workspace, runner, lease, or dispatch capacity while collecting.
+the branch is open to targeting tickets immediately, without a PR. Idle integration
+builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
@@ -30,8 +30,26 @@ falls back to an older open one. Blockers remain a separate graph.
 Humans land node PRs. The janitor records landing and completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Node verification, automatic landing, restacking and reparenting are not provided
-by this increment. A forge plugin needs node branch creation, comparison and
+Node verification, automatic node landing and reparenting are not provided.
+Parent movement automatically restacks every open descendant node, including
+empty nodes, without clean-path agents. Node restacks replay ordered individual
+changes above their last completed contribution boundary, preserving source
+identities and node-owned foreign commits; inherited foreign history is excluded
+from the owned count. An identity already reachable upstream is dropped.
+Foreign merges flatten only when every side-history identity is already present
+in the sampled parent; unsafe or ambiguous histories leave the node untouched
+and escalate. A conflict runs reconcile for that source change with its own spec,
+plan and implement-notes, or foreign metadata/diff. Status shows node inventory,
+active operation, conflict item and unsafe merge evidence.
+
+A separate node writer lease plus durable reservation serializes restacks and
+child landings; every node replacement uses exact expected-head CAS and archives
+displaced history. Lease expiry resumes the reserved operation. Native auto-merge
+is cancelled for node targets. Only authoritative proof of an ungated destination
+permits the canonical child's guarded fast-forward; gated or unproven branches
+remain open with human-actionable diagnostics. The successful push proves landing,
+and forge PR acknowledgement is best-effort (comment with landed SHA and close
+an unacknowledged open review). Root landings retain squash behavior. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then

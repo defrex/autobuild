@@ -138,6 +138,15 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     listArtifacts(slug: string, _kind?: string): Promise<ArtifactMeta[]> {
       return Promise.reject(new SessionScopeError(scope, 'listArtifacts', slug))
     },
+    async claimNodeWriter(slug: string, _holder: string, _ttlMs: number): Promise<boolean> {
+      return Promise.reject(new SessionScopeError(scope, 'claimNodeWriter', slug))
+    },
+    async renewNodeWriter(slug: string, _holder: string): Promise<boolean> {
+      return Promise.reject(new SessionScopeError(scope, 'renewNodeWriter', slug))
+    },
+    async releaseNodeWriter(slug: string, _holder: string): Promise<void> {
+      return Promise.reject(new SessionScopeError(scope, 'releaseNodeWriter', slug))
+    },
     claimLease(slug: string, _holder: string, _ttlMs: number): Promise<boolean> {
       return Promise.reject(new SessionScopeError(scope, 'claimLease', slug))
     },

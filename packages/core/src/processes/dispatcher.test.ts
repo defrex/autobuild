@@ -9496,7 +9496,7 @@ describe('integration crash boundaries', () => {
 
 describe('integration review regressions', () => {
   test.each(['present', 'absent'] as const)(
-    'targeted leaf automatic landing uses frozen node base (%s)',
+    'targeted leaf with unavailable frozen node defers and cancels native landing (%s)',
     async (gate) => {
       const h = harness()
       const nodeBase = 'ab-node/parent'
@@ -9522,8 +9522,10 @@ describe('integration review regressions', () => {
         return squash(...args)
       }
       await h.dispatcher.tick()
-      expect(nativeBases).toEqual([nodeBase])
-      expect(squashBases).toEqual(gate === 'absent' ? [nodeBase] : [])
+      expect(nativeBases).toEqual([undefined])
+      expect(h.forge.autoMergeCalls.every((call) => !call.enabled)).toBe(true)
+      expect(squashBases).toEqual([])
+      expect(h.forge.rewrites).toEqual([])
     },
   )
 

@@ -1,3 +1,5 @@
+import { replayNodeChange } from '../kernel/node-restack'
+import { restoreReplay } from '../kernel/reconcile-restack'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import { withBuildTrailer } from '../kernel/build-identity'
@@ -721,8 +723,9 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<AttachmentResult> {
-    if ((await readBuildFacts(this.deps.store, this.deps.slug)).value.state.kind === 'node')
-      throw new Error('integration builds are owned by the dispatcher and cannot attach runners')
+    const attaching = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    if (attaching.kind === 'node' && !attaching.nodeRestack?.conflict)
+      throw new Error('integration runners require a reserved node conflict')
     const config = await this.captureConfig()
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
@@ -907,7 +910,7 @@ export class BuildRunner {
    */
   async run(): Promise<BuildState> {
     const initial = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    if (initial.kind === 'node') return initial
+    if (initial.kind === 'node' && !initial.nodeRestack?.conflict) return initial
     if (!this.attached) {
       const attachment = await this.attach()
       if (attachment.kind === 'control-acknowledged') {
@@ -1068,6 +1071,12 @@ export class BuildRunner {
     const { store, slug } = this.deps
     const { phase, round } = decision
 
+    const node = (await readBuildFacts(store, slug)).value.state.nodeRestack
+    if (node?.conflict && node.active && phase === 'reconcile') {
+      await this.runNodeConflict(round)
+      return
+    }
+
     // D5 RETRY GUARD first: at the cap, escalate instead of running — a
     // failing phase must never loop forever.
     const failures = await readPhaseFailures(this.deps.store, this.deps.slug, phase, round)
@@ -1178,6 +1187,101 @@ export class BuildRunner {
       isTerminal: (event) => event.type === spec.terminalEvent && roundMatches(event, round),
     })
     if (phase === 'reconcile') await this.settleLocalReconcile()
+  }
+
+  private async runNodeConflict(round: number): Promise<void> {
+    const { store, slug } = this.deps
+    const state = (await readBuildFacts(store, slug)).value.state
+    const node = state.nodeRestack!
+    const active = node.active!
+    const conflict = node.conflict!
+    const change = active.changes[conflict.index]!
+    try {
+      for (const sha of [active.expected, active.parent]) {
+        const exists = await this.deps.exec(['git', 'cat-file', '-e', `${sha}^{commit}`], {
+          cwd: this.deps.workspacePath,
+        })
+        if (exists.exitCode !== 0) {
+          const fetched = await this.deps.exec(
+            ['git', 'fetch', '--no-tags', 'origin', `refs/autobuild/archive/${slug}/${sha}`],
+            { cwd: this.deps.workspacePath },
+          )
+          if (fetched.exitCode !== 0) throw new Error(`missing archived node input ${sha}`)
+        }
+      }
+      if (change.build) {
+        for (const kind of ['spec', 'plan', 'implement-notes']) {
+          if (
+            !(await store.getArtifact(slug, `node-source-${active.id}-${conflict.index}-${kind}`))
+          )
+            throw new Error(`missing ${kind} for source build ${change.build}`)
+        }
+      } else {
+        const result = await this.deps.exec(
+          [
+            'git',
+            'show',
+            '--format=fuller',
+            ...(change.mainline ? ['-m', '--first-parent'] : []),
+            change.sha,
+          ],
+          {
+            cwd: this.deps.workspacePath,
+          },
+        )
+        if (result.exitCode !== 0) throw new Error(`missing foreign commit ${change.sha}`)
+        await store.putArtifact(slug, {
+          kind: `node-source-${active.id}-${conflict.index}-foreign`,
+          content: result.stdout,
+        })
+      }
+      for (const item of node.items) if (!item.dropped) await restoreReplay(this.deps, item.head)
+      await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
+      const reset = await this.deps.exec(['git', 'checkout', '--detach', conflict.base], {
+        cwd: this.deps.workspacePath,
+      })
+      if (reset.exitCode !== 0) throw new Error(reset.stderr)
+      const result = await replayNodeChange(
+        this.deps,
+        { ...active, oldHead: active.expected },
+        conflict.index,
+        conflict.base,
+      )
+      if (result.kind !== 'conflict')
+        throw new Error('reserved conflict no longer reproduces from frozen inputs')
+    } catch (error) {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: this.deps.ids('esc'),
+          phase: 'reconcile',
+          source: 'agent',
+          question: `Cannot prepare node change ${change.sha}: ${errorMessage(error)}`,
+        },
+      })
+      return
+    }
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: round, baseSha: conflict.base },
+    })
+    const failures = await readPhaseFailures(store, slug, 'reconcile', round)
+    if (failures.count >= this.maxPhaseAttempts) {
+      await this.raisePolicyExhausted('reconcile', round, failures)
+      return
+    }
+    await this.executeSession({
+      phase: 'reconcile',
+      round,
+      role: 'reconcile',
+      skill: PHASE_SPECS.reconcile.skill,
+      abPhase: `reconcile@${round}`,
+      producerPhase: 'reconcile',
+      priorFailures: failures.count,
+      isTerminal: (event) => event.type === 'reconcile.completed',
+    })
   }
 
   /** Re-read durable ownership and controls at the actual rewrite boundary. */
@@ -1337,13 +1441,14 @@ export class BuildRunner {
       const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
       if (oldBase === undefined) throw new Error('missing contribution base')
       // A resolver already published one canonical change on this exact base.
-      // Reuse that transaction as the entry gate without replaying it again.
+      // Reuse it only while no later finalize publication has extended it.
       const canonical = facts.reconcileTransaction
       const completed = facts.log.lastReconcileCompleted
       if (
         transaction === undefined &&
         canonical !== undefined &&
         completed?.completedSeq === decision.cycle &&
+        (facts.log.restack.postStepAt ?? 0) <= completed.completedSeq &&
         canonical.targetBase === targetBase
       ) {
         const { attempt: _attempt, restackId: _restackId, ...replay } = canonical

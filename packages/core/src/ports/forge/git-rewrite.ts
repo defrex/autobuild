@@ -7,7 +7,7 @@ function object(value: string): void {
   if (!oid.test(value)) throw new Error(`rewrite requires an exact object id: ${value}`)
 }
 function branchRef(branch: string): string {
-  if (!isValidGitBranchName(branch) || !branch.startsWith('ab/'))
+  if (!isValidGitBranchName(branch) || !/^(?:ab|ab-node)\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(branch))
     throw new Error(`rewrite requires a build branch: ${branch}`)
   return `refs/heads/${branch}`
 }
@@ -125,7 +125,7 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
         // Reattach only its exact workspace result; explicit-source callers may
         // legitimately publish an object other than their checked-out HEAD.
         const workspaceHead = await git(input.workspacePath, ['rev-parse', 'HEAD'])
-        if (workspaceHead.stdout.trim() === input.sha)
+        if (!input.branch.startsWith('ab-node/') && workspaceHead.stdout.trim() === input.sha)
           await git(input.workspacePath, ['checkout', '--no-guess', input.branch])
         return { kind: 'published' }
       }
@@ -146,7 +146,7 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
             (await git(input.workspacePath, ['cat-file', '-e', `${observed}^{commit}`], true))
               .exitCode !== 0
           ) {
-            const fetchedRef = `refs/autobuild/reconcile/${input.branch.slice(3)}/rewrite-observed`
+            const fetchedRef = `refs/autobuild/reconcile/${input.branch.replace(/^(?:ab|ab-node)\//, '')}/rewrite-observed`
             await git(input.workspacePath, [
               'fetch',
               '--no-tags',

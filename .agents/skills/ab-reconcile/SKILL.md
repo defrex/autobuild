@@ -11,6 +11,17 @@ it onto a frozen refreshed base. Your job is to preserve both the build's intent
 and the behavior already landed upstream. Work on the prepared detached HEAD;
 the kernel retains the published branch until guarded publication succeeds.
 
+For a node conflict, `nodeChange` names the integration owner, transaction,
+current item, source SHA and optional source build. The prepared replay is only
+that change, not the whole node. The materialized spec, plan and implement-notes
+belong to the source build. For a foreign item, inspect `foreign-change.patch`
+and preserve foreign status without adding an identity; escalate if its intent
+cannot be established. Missing source context requires escalation. The replay
+base is `conflict.baseSha`; preserve the source build's trailer rather than the
+integration owner's. `ab done` retains the item and records its receipt; trusted
+kernel plumbing advances the remaining stack after the session ends. Do not
+publish, collapse the node, choose another item, or rewrite the public branch.
+
 ## Session shape
 
 1. Run `ab context`. Read the printed manifest and its `materialized` paths for
@@ -18,7 +29,7 @@ the kernel retains the published branch until guarded publication succeeds.
    original head, old contribution base, single change, frozen target base and
    whether replay conflicted. A replay may originate at verify entry before any
    PR exists; `restackId` identifies an adopted automatic transaction. Never fetch, merge, rebase, select another base,
-   or move the named branch yourself. Missing replay inputs require escalation.
+   or move the named branch yourself. Missing replay inputs require escalation, except a node item uses `nodeChange` and `conflict.baseSha` instead of `replay`.
 2. Inspect `git status` and the prepared replay. If conflicts remain, resolve
    them with the explicit charge to regress against neither side:
    - Preserve the behavior the spec and approved plan require.
@@ -28,8 +39,10 @@ the kernel retains the published branch until guarded publication succeeds.
    --allow-empty --no-edit`; never skip away the build's identity. A clean
    replay already has its commit and still needs inspection and checks.
 3. Run the repository's required checks. The result must be exactly one commit
-   with exactly one parent equal to `replay.targetBase` and exactly one terminal
-   `Autobuild-Build: <build>` trailer. Do not create a merge commit.
+   with exactly one parent equal to `replay.targetBase` (or `conflict.baseSha` for a
+   node item) and exactly one terminal
+   `Autobuild-Build: <build>` trailer. For node items use the source identity in
+   `nodeChange.build`; a foreign item must have no build trailer. Do not create a merge commit.
 4. Write the manifest's `notesPath`: what collided, how each resolution preserves
    both sides, and the checks run. Never commit notes or any other `.ab/` path.
    Legacy tracked scratch may be inherited unchanged from either input; do not

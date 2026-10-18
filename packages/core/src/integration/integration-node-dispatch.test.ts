@@ -98,3 +98,683 @@ test('nodes open at full work capacity and abort immediately closes admission', 
     await h.cleanup()
   }
 })
+
+test('root movement cascades through nested nodes with owned foreign history and no agent sessions', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { join } = await import('node:path')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' },
+      { ...readyTicket('B', { title: 'Node beta' }), kind: 'node', target: 'A' },
+      { ...readyTicket('C', { title: 'Node gamma' }), kind: 'node', target: 'B' },
+    ],
+  })
+  try {
+    for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+    const nodes = (await h.store.listBuilds()).filter((r) => r.branch?.startsWith('ab-node/'))
+    expect(nodes).toHaveLength(3)
+    const a = nodes.find((r) => r.ticket?.id === 'A')!
+    const b = nodes.find((r) => r.ticket?.id === 'B')!
+    const c = nodes.find((r) => r.ticket?.id === 'C')!
+    const foreign = async (branch: string, filename: string) => {
+      const ws = join(h.tmp, filename)
+      await git(['worktree', 'add', ws, branch], h.origin)
+      await Bun.write(join(ws, filename), filename)
+      await commitAll(ws, `Foreign ${filename}`)
+      await git(['worktree', 'remove', ws], h.origin)
+    }
+    await foreign(a.branch!, 'foreign-a')
+    for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+    await foreign(b.branch!, 'foreign-b')
+    for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+    const before = new Map(nodes.map((r) => [r.slug, reduceBuild([]).pr]))
+    for (const r of nodes) before.set(r.slug, reduceBuild(await h.events(r.slug)).pr)
+    for (const round of [1, 2]) {
+      await Bun.write(join(h.origin, `upstream-${round}`), `upstream ${round}`)
+      const root = await commitAll(h.origin, `Root movement ${round}`)
+      for (let i = 0; i < 5; i++) await h.dispatcher.tick()
+      expect(
+        ofType(await h.events(a.slug), 'target.moved').filter(
+          (event) => event.payload.sha === root,
+        ),
+      ).toHaveLength(1)
+      for (const r of nodes) {
+        expect(await git(['merge-base', '--is-ancestor', root, r.branch!], h.origin)).toBe('')
+        expect(await git(['show', `${r.branch}:foreign-a`], h.origin)).toBe('foreign-a')
+        expect(reduceBuild(await h.events(r.slug)).pr?.number).toBe(before.get(r.slug)?.number)
+      }
+      expect(await git(['show', `${c.branch}:foreign-b`], h.origin)).toBe('foreign-b')
+      expect(reduceBuild(await h.events(a.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
+      expect(reduceBuild(await h.events(b.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
+      expect(reduceBuild(await h.events(c.slug)).nodeRestack?.inventory?.foreign).toHaveLength(0)
+    }
+    expect(h.launched).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('node conflict runner resolves the source build with its own spec and plan', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { join } = await import('node:path')
+  let sourceSlug = ''
+  let ownerSlug = ''
+  let sourceSpec = ''
+  let resolved = 0
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 1'),
+    handlers: {
+      ...happyHandlers(),
+      reconcile: async (cli) => {
+        await cli.run(['context'])
+        const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+        expect(manifest.nodeChange).toMatchObject({
+          owner: ownerSlug,
+          build: sourceSlug,
+          foreign: false,
+        })
+        expect(await Bun.file(join(cli.ws, '.ab/spec.md')).text()).toBe(sourceSpec)
+        expect(await Bun.file(join(cli.ws, '.ab/plan.md')).text()).toContain('Add rate-limit.txt')
+        await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve root and source intent\n')
+        await git(['add', 'rate-limit.txt'], cli.ws)
+        await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
+        await Bun.write(join(cli.ws, '.ab/reconcile-notes.md'), 'Preserved both sides.\n')
+        await cli.run(['done', '--notes', join(cli.ws, '.ab/reconcile-notes.md')])
+        resolved++
+      },
+    },
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Node owner' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Child source' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const records = await h.store.listBuilds()
+    const owner = records.find((r) => r.ticket?.id === 'NODE')!
+    const source = records.find((r) => r.ticket?.id === 'CHILD')!
+    sourceSpec = new TextDecoder().decode((await h.store.getArtifact(source.slug, 'spec'))!.content)
+    sourceSlug = source.slug
+    ownerSlug = owner.slug
+    await h.runLatest()
+    const child = reduceBuild(await h.events(source.slug))
+    await h.forgeAdapter.squashMerge(h.origin, child.pr!.number, child.pr!.headSha, {
+      buildSlug: source.slug,
+    })
+    await h.dispatcher.tick()
+    h.tickets.add(readyTicket('BUSY', { title: 'Occupy the runner slot' }))
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const busy = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'BUSY')!
+    await Bun.write(join(h.origin, 'rate-limit.txt'), 'new root behavior\n')
+    await commitAll(h.origin, 'Root conflicts with source')
+    await h.dispatcher.tick()
+    const conflictState = reduceBuild(await h.events(owner.slug))
+    expect(conflictState.nodeRestack?.conflict).toBeDefined()
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    h.clock.advance(180_000)
+    await h.dispatcher.tick()
+    expect(h.launched.filter((entry) => entry.slug === owner.slug)).toHaveLength(0)
+    expect(ofType(await h.events(owner.slug), 'workspace.provisioned')).toHaveLength(0)
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: busy.slug,
+      action: { kind: 'abort' },
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    expect(h.launched.at(-1)?.slug).toBe(owner.slug)
+    await h.runLatest()
+    expect(resolved).toBe(1)
+    // A dead local supervisor can leave execution.started after the resolver
+    // receipt; no provider command id exists to settle it out of process.
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { DISPATCHER } = await import('../events/envelope')
+    const facts = (await readBuildFacts(h.store, owner.slug)).value
+    await h.store.append(owner.slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        instance: 'crashed-local',
+        provider: 'git-worktree',
+        workspaceRef: facts.workspace!.ref,
+      },
+    })
+    h.clock.advance(120_000)
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+    expect((await readBuildFacts(h.store, owner.slug)).value.open).toBeNull()
+    expect(ofType(await h.events(owner.slug), 'execution.ended').at(-1)?.payload.outcome).toBe(
+      'lost',
+    )
+    const state = reduceBuild(await h.events(owner.slug))
+    expect(state.nodeRestack?.active).toBeUndefined()
+    expect(state.nodeRestack?.inventory?.builds).toContain(source.slug)
+    expect(await git(['show', `${owner.branch}:rate-limit.txt`], h.origin)).toBe(
+      'preserve root and source intent',
+    )
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('node-target consent lands the canonical leaf without native auto-merge', async () => {
+  const { git } = await import('./harness')
+  const { humanActor } = await import('../events/envelope')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Destination node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Consenting child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const records = await h.store.listBuilds()
+    const owner = records.find((r) => r.ticket?.id === 'NODE')!
+    const child = records.find((r) => r.ticket?.id === 'CHILD')!
+    await h.store.append(child.slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.runLatest()
+    expect(ofType(await h.events(child.slug), 'pr.auto-merge-enabled')).toHaveLength(0)
+    const canonical = await git(['rev-parse', child.branch!], h.origin)
+    await h.dispatcher.tick()
+    const state = reduceBuild(await h.events(child.slug))
+    expect(state.status).toBe('done')
+    expect(state.mergedSha).toBe(canonical)
+    expect(await git(['rev-parse', owner.branch!], h.origin)).toBe(canonical)
+    expect(ofType(await h.events(owner.slug), 'node.writer-reserved')[0]?.payload.operation).toBe(
+      'landing',
+    )
+    expect(reduceBuild(await h.events(owner.slug)).status).toBe('collecting')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('unsafe foreign merge escalates once without moving the node and an authorized retry resamples upstream', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { humanActor } = await import('../events/envelope')
+  const { join } = await import('node:path')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('NODE', { title: 'Foreign merge node' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    const ws = join(h.tmp, 'foreign-merge')
+    await git(['worktree', 'add', ws, node.branch!], h.origin)
+    await Bun.write(join(ws, 'owned'), 'owned')
+    await commitAll(ws, 'Owned foreign')
+    await git(['checkout', '-b', 'side-identity', 'main'], ws)
+    await Bun.write(join(ws, 'side'), 'side')
+    const side = await commitAll(ws, 'Side\n\nAutobuild-Build: missing-side')
+    await git(['checkout', node.branch!], ws)
+    await git(
+      [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@test.invalid',
+        '-c',
+        'commit.gpgsign=false',
+        'merge',
+        '--no-ff',
+        'side-identity',
+        '-m',
+        'Foreign merge',
+      ],
+      ws,
+    )
+    const original = await git(['rev-parse', 'HEAD'], ws)
+    await git(['worktree', 'remove', ws], h.origin)
+    await Bun.write(join(h.origin, 'root-move'), 'root moved')
+    await commitAll(h.origin, 'Move root')
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    const blocked = reduceBuild(await h.events(node.slug))
+    expect(blocked.status).toBe('blocked')
+    expect(blocked.openEscalations).toHaveLength(1)
+    expect(blocked.openEscalations[0]?.question).toContain(original)
+    expect(blocked.openEscalations[0]?.question).toContain('missing-side')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(original)
+    await git(
+      [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@test.invalid',
+        '-c',
+        'commit.gpgsign=false',
+        'cherry-pick',
+        side,
+      ],
+      h.origin,
+    )
+    await h.store.append(node.slug, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: blocked.openEscalations[0]!.id,
+        answer: 'The missing identity is now upstream; retry the proof.',
+        resolution: 'guidance',
+      },
+    })
+    await h.dispatcher.tick()
+    const completed = reduceBuild(await h.events(node.slug))
+    expect(completed.nodeRestack?.active).toBeUndefined()
+    expect(completed.nodeRestack?.inventory?.builds).toContain('missing-side')
+    expect(completed.nodeRestack?.inventory?.foreign).toHaveLength(2)
+    expect(h.launched).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+for (const command of ['abort', 'pause'] as const) {
+  test(`a live node conflict runner owns ${command} acknowledgement until its turn ends`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { access } = await import('node:fs/promises')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { KERNEL } = await import('../events/envelope')
+    let nodeSlug = ''
+    let resolverPath = ''
+    let lateReceipt: import('../events/payloads').EventPayload<'node.item-replayed'> | undefined
+    let turns = 0
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: {
+        ...happyHandlers(),
+        reconcile: async (cli) => {
+          turns++
+          resolverPath = cli.ws
+          const before = (await readBuildFacts(h.store, nodeSlug)).value.state
+          const lease = (await h.store.getBuild(nodeSlug))!.lease!
+          expect(lease).toBeDefined()
+          const node = before.nodeRestack!
+          lateReceipt = {
+            id: node.active!.id,
+            index: node.conflict!.index,
+            base: node.conflict!.base,
+            head: 'e'.repeat(40),
+            dropped: false,
+          }
+          await controlBuild({
+            store: h.store,
+            repo: h.origin,
+            slug: nodeSlug,
+            action: { kind: command },
+          })
+          const report = await h.dispatcher.tick()
+          expect(report.janitorFailed).toBe(0)
+          const during = (await readBuildFacts(h.store, nodeSlug)).value.state
+          expect(during.pendingCommands.some((intent) => intent.command === command)).toBe(true)
+          expect(during.status).toBe('collecting')
+          expect(during.nodeRestack?.active?.id).toBe(node.active!.id)
+          expect((await h.store.getBuild(nodeSlug))!.lease?.holder).toBe(lease.holder)
+          await access(cli.ws)
+          // Return the live turn without completing its item: the runner's next
+          // engine decision acknowledges the pending command before another phase.
+        },
+      },
+      tickets: [{ ...readyTicket('NODE', { title: 'Controlled conflict node' }), kind: 'node' }],
+    })
+    try {
+      await h.dispatcher.tick()
+      const record = (await h.store.listBuilds())[0]!
+      nodeSlug = record.slug
+      const ws = join(h.tmp, 'foreign-control')
+      await git(['worktree', 'add', ws, record.branch!], h.origin)
+      await Bun.write(join(ws, 'collision'), 'node intent\n')
+      await commitAll(ws, 'Foreign node change')
+      await git(['worktree', 'remove', ws], h.origin)
+      await h.dispatcher.tick()
+      await Bun.write(join(h.origin, 'collision'), 'parent intent\n')
+      await commitAll(h.origin, 'Conflicting root change')
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(h.launched.at(-1)?.slug).toBe(nodeSlug)
+      await h.runLatest()
+      expect(turns).toBe(1)
+      expect((await readBuildFacts(h.store, nodeSlug)).value.state.status).toBe(
+        command === 'abort' ? 'aborted' : 'paused',
+      )
+      const report = await h.dispatcher.tick()
+      expect(report.janitorFailed).toBe(0)
+      if (command === 'abort') {
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.active,
+        ).toBeUndefined()
+        await expect(access(resolverPath)).rejects.toThrow()
+        // Old logs may already contain the pre-fix settlement/late-receipt
+        // race. Both direct and persisted reductions must remain readable.
+        await h.store.append(nodeSlug, {
+          actor: KERNEL,
+          type: 'node.item-replayed',
+          payload: lateReceipt!,
+        })
+        expect(reduceBuild(await h.events(nodeSlug)).nodeRestack?.active).toBeUndefined()
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.active,
+        ).toBeUndefined()
+      } else {
+        await access(resolverPath)
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.conflict,
+        ).toBeDefined()
+      }
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
+
+for (const checkout of ['scratch', 'absent'] as const) {
+  test(`origin-mode ${checkout} checkout supports node cascades and guarded child landing`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { mkdir } = await import('node:fs/promises')
+    const { Dispatcher } = await import('../processes/dispatcher')
+    const { GitHubForge } = await import('../ports/forge/github')
+    const { spawnExec } = await import('../ports/workspace/git-worktree')
+    const { humanActor } = await import('../events/envelope')
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Origin destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Origin child' }), target: 'NODE' },
+      ],
+    })
+    try {
+      // The local harness owns runner setup. The checkout-less dispatcher below
+      // uses Git transport for every node mutation, as a hosted forge does.
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+      const scratch = join(h.tmp, 'dispatch-scratch')
+      await mkdir(scratch)
+      const origin = 'https://github.com/acme/private-repo'
+      const token = 'fixture-private-token'
+      const activity: string[] = []
+      const claimWriter = h.store.claimNodeWriter.bind(h.store)
+      h.store.claimNodeWriter = async (...args) => {
+        activity.push('claim')
+        return claimWriter(...args)
+      }
+      const transport = new GitHubForge({
+        repository: origin,
+        token,
+        exec: async (cmd, opts) => {
+          // Fail every credential-less host transport attempt, including
+          // clone, fetch, archive push, readback and destination CAS.
+          expect(opts.env?.GIT_CONFIG_VALUE_4).toBe(
+            `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+          )
+          expect(opts.env?.GIT_CONFIG_KEY_4).toBe(`http.${origin}.extraHeader`)
+          expect(cmd.join(' ')).not.toContain(token)
+          activity.push(cmd[1]!)
+          if (cmd[1] === 'clone') {
+            // A download slower than the writer TTL must still converge.
+            h.clock.advance(65_000)
+          }
+          // The fixture models the credentialed HTTPS endpoint with real Git
+          // transport to a local repository only after validating credentials.
+          return spawnExec(
+            cmd.map((arg) => (arg === origin ? h.origin : arg)),
+            opts,
+          )
+        },
+      })
+      const apiMethods = new Set([
+        'getPrState',
+        'inspectLandingPr',
+        'setAutoMerge',
+        'closePr',
+        'commentOnPr',
+        'containsBuild',
+        'readCommitMessage',
+      ])
+      const forge = new Proxy(h.forgeAdapter, {
+        get(target, key) {
+          if (key === 'kernelExec') return transport.kernelExec
+          if (key === 'kernelRewrite') return transport.kernelRewrite
+          if (key === 'rewrite') return transport.rewrite
+          if (key === 'snapshotBase') return undefined
+          if (key === 'openPr')
+            return (input: Parameters<NonNullable<typeof target.openPr>>[0]) =>
+              target.openPr({ ...input, workspacePath: h.origin })
+          const value = Reflect.get(target, key, target)
+          if (typeof value !== 'function') return value
+          // API observations live at the served origin, independently of cwd.
+          return apiMethods.has(String(key))
+            ? (...args: unknown[]) => Reflect.apply(value, target, [h.origin, ...args.slice(1)])
+            : value.bind(target)
+        },
+      })
+      const dispatcher = new Dispatcher({
+        store: h.store,
+        tickets: h.tickets,
+        workspaces: h.workspaces,
+        forge,
+        config: h.config,
+        repo: h.origin,
+        repoOrigin: origin,
+        ...(checkout === 'scratch' ? { checkout: scratch } : {}),
+        exec: async (cmd, opts) => {
+          if (['clone', 'fetch', 'push', 'ls-remote'].includes(cmd[1]!))
+            throw new Error('uncredentialed host Git transport')
+          return spawnExec(cmd, opts)
+        },
+        ids: h.ids,
+        clock: h.clock,
+        launchRunner: async () => {
+          throw new Error('clean origin cascade launched an agent')
+        },
+      })
+      const original = await git(['rev-parse', node.branch!], h.origin)
+      await Bun.write(join(h.origin, 'origin-upstream'), 'upstream')
+      const root = await commitAll(h.origin, 'Origin parent movement')
+      expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(root)
+      expect(ofType(await h.events(node.slug), 'node.rewritten')).toHaveLength(1)
+      expect(original).not.toBe(root)
+      expect(activity.indexOf('clone')).toBeLessThan(activity.indexOf('claim'))
+      const idleActivity = activity.length
+      for (let i = 0; i < 2; i++)
+        expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      expect(activity).toHaveLength(idleActivity)
+      expect(
+        (await spawnExec(['git', 'rev-parse', '--git-dir'], { cwd: scratch })).exitCode,
+      ).not.toBe(0)
+
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'CHILD')!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const writerFacts = ofType(await h.events(node.slug), 'node.writer-reserved').length
+      const beforeDeferral = activity.length
+      const ungated = h.forgeAdapter.inspectLandingGate!.bind(h.forgeAdapter)
+      for (const kind of ['gated', 'unproven'] as const) {
+        h.forgeAdapter.inspectLandingGate = async () => ({ kind, reason: 'Repository policy' })
+        for (let i = 0; i < 3; i++)
+          expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      }
+      expect(activity).toHaveLength(beforeDeferral)
+      expect(ofType(await h.events(node.slug), 'node.writer-reserved')).toHaveLength(writerFacts)
+      h.forgeAdapter.inspectLandingGate = ungated
+      expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      expect(ofType(await h.events(child.slug), 'pr.auto-merge-enabled')).toHaveLength(0)
+      expect(ofType(await h.events(node.slug), 'node.writer-settled').at(-1)?.payload.outcome).toBe(
+        'completed',
+      )
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
+
+for (const conflict of [false, true]) {
+  test(`node-target finalize commits are collapsed before guarded landing (reconciled: ${conflict})`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { humanActor } = await import('../events/envelope')
+    const configToml = `${CONFIG_TOML.replace(
+      'test = "test -f ok.marker"',
+      'test = "test -f ok.marker"\npost = "touch post.marker && git add post.marker && git commit -m post"',
+    )}\n[finalize]\nsteps = ["post"]\n[finalize.post]\nkind = "check"\ncommand = "post"\n`
+    const happy = happyHandlers()
+    let nodeBranch = ''
+    let reconciliations = 0
+    const h = await makeHarness({
+      localGitForge: true,
+      configToml,
+      handlers: {
+        ...happy,
+        implement: async (cli) => {
+          await happy.implement!(cli)
+          if (conflict) {
+            const ws = join(h.tmp, 'node-movement')
+            await git(['worktree', 'add', ws, nodeBranch], h.origin)
+            await Bun.write(join(ws, 'rate-limit.txt'), 'upstream node behavior\n')
+            await commitAll(ws, 'Move node before leaf verify entry')
+            await git(['worktree', 'remove', ws], h.origin)
+          }
+        },
+        reconcile: async (cli) => {
+          reconciliations++
+          await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve upstream and child behavior\n')
+          await git(['add', 'rate-limit.txt'], cli.ws)
+          await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
+          const notes = join(cli.ws, '.ab/reconcile-notes.md')
+          await Bun.write(notes, 'Preserved upstream and child behavior.\n')
+          await cli.run(['done', '--notes', notes])
+        },
+      },
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Finalize destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Finalize child' }), target: 'NODE' },
+      ],
+    })
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const node = records.find((record) => record.ticket?.id === 'NODE')!
+      const child = records.find((record) => record.ticket?.id === 'CHILD')!
+      nodeBranch = node.branch!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      expect(reconciliations).toBe(conflict ? 1 : 0)
+      const postStep = ofType(await h.events(child.slug), 'finalize.step-completed')[0]?.payload
+      expect(postStep?.ok && postStep.headSha).toBeTruthy()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const parent = await git(['rev-parse', `${child.branch}^`], h.origin)
+      expect(parent).toBe(await git(['rev-parse', node.branch!], h.origin))
+      expect(await git(['show', `${child.branch}:post.marker`], h.origin)).toBe('')
+      const message = await git(['show', '-s', '--format=%B', canonical], h.origin)
+      expect(message.match(/Autobuild-Build:/g)).toHaveLength(1)
+      expect(message).toContain(`Autobuild-Build: ${child.slug}`)
+      if (conflict)
+        expect(await git(['show', `${child.branch}:rate-limit.txt`], h.origin)).toBe(
+          'preserve upstream and child behavior',
+        )
+      const observations = ofType(await h.events(child.slug), 'target.moved').length
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      expect(ofType(await h.events(child.slug), 'target.moved')).toHaveLength(observations)
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
+
+for (const providerState of ['merged', 'closed'] as const) {
+  test(`node landing settles its reservation before completing a ${providerState} leaf inside writer TTL`, async () => {
+    const { git } = await import('./harness')
+    const { humanActor } = await import('../events/envelope')
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Crash destination' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Crash leaf' }), target: 'NODE' },
+      ],
+    })
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const node = records.find((record) => record.ticket?.id === 'NODE')!
+      const child = records.find((record) => record.ticket?.id === 'CHILD')!
+      await h.store.append(child.slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await h.runLatest()
+      const canonical = await git(['rev-parse', child.branch!], h.origin)
+      const append = h.store.appendIfCurrent.bind(h.store)
+      let crash = true
+      h.store.appendIfCurrent = async (...args) => {
+        if (args[0] === node.slug && args[2].type === 'node.rewritten' && crash) {
+          crash = false
+          throw new Error('dispatcher dies after push')
+        }
+        return append(...args)
+      }
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+      expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
+      // The crashed process's writer lease has not expired on restart.
+      expect(await h.store.claimNodeWriter(node.slug, 'dead-dispatcher', 60_000)).toBe(true)
+      const childPr = reduceBuild(await h.events(child.slug)).pr!.number
+      const getPr = h.forgeAdapter.getPrState.bind(h.forgeAdapter)
+      h.forgeAdapter.getPrState = async (cwd, number) =>
+        number === childPr
+          ? providerState === 'merged'
+            ? { state: 'merged', sha: canonical }
+            : { state: 'closed' }
+          : getPr(cwd, number)
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(child.slug)).status).not.toBe('done')
+      expect(reduceBuild(await h.events(node.slug)).nodeRestack?.active?.source).toBe(child.slug)
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect(reduceBuild(await h.events(node.slug)).nodeRestack?.active).toBeUndefined()
+      expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
+      expect(reduceBuild(await h.events(child.slug)).status).toBe('done')
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}

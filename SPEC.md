@@ -376,6 +376,9 @@ This is kernel work within the fixed grammar, not another phase. A verify failur
 returns to implementation; its new commits append to the canonical change, and
 the next approved cycle collapses and restacks again. While waiting to land after
 finalize and its post-steps, an observed target move also schedules a restack.
+For a node-targeted leaf, published finalize-step commits also schedule one
+waiting restack, even when the target SHA is unchanged, so guarded landing
+preserves one canonical build identity.
 Clean waiting restacks retain existing verification; conflicts use reconcile and
 its captured post-reconcile policy. A conflict before initial verification cannot
 skip initial checks through that policy.
@@ -476,7 +479,8 @@ roles:
 
 ```
 builds       id/slug, ticket ref, repo, branch, status (derived), created/updated,
-             lease + heartbeat (mutable liveness columns — §15.2.6, never events)
+             runner lease + heartbeat; independent node writer lease
+             (mutable liveness columns — §15.2.6, never events)
 events       build_id, seq, timestamp, actor, type, payload (JSON)   — append-only
 artifacts    build_id, kind, revision, blobRef, metadata
 repo_streams repo, created/updated, lease + heartbeat, bounded tick observation
@@ -697,6 +701,14 @@ concurrent processors; the event stream remains authoritative, with no
 snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
 ordinary event validation, unknown builds reject, and a comparison miss leaves
 the log and build timestamps untouched.
+Node branch writers use separate `claimNodeWriter`, `renewNodeWriter`, and
+`releaseNodeWriter` operations. Claim permits an absent, expired, or same-holder
+lease; renewal requires the same unexpired holder, and release is holder-checked.
+The memory, SQLite, Postgres, and HTTP stores enforce the same contract. These
+leases neither grant nor renew runner authority. Delegated execution credentials
+cannot acquire node writer authority. The active operation remains a durable
+build-stream reservation across expiry, not mutable lease data.
+
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
 and read methods, plus a repository lease. Ticket assets (§7.1) add
 `putTicketAsset`, `getTicketAsset` (latest live revision, or an explicit
@@ -1899,8 +1911,8 @@ integration point. The optional `target` is a node ticket id in the same source;
 omission means the configured `baseBranch` root. Nodes may target other nodes.
 A ready node ticket opens an integration build on `ab-node/<slug>`, cut
 from its parent's sampled head. Opening intent and acknowledgement are durable;
-the branch is open to targeting tickets immediately, without a PR. Integration
-builds use no workspace, runner, lease, or dispatch capacity while collecting.
+the branch is open to targeting tickets immediately, without a PR. Idle integration
+builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
@@ -1914,9 +1926,70 @@ falls back to an older open one. Blockers remain a separate graph.
 Humans land node PRs. The janitor records landing and completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Node verification, automatic landing, restacking and reparenting are not provided
-by this increment. A forge plugin needs node branch creation, comparison and
+Node verification, automatic node landing and reparenting are not provided. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
+
+**Descendant cascade and node writers.** Every open node observes its frozen
+parent branch and its own authoritative head. Parent movement schedules a
+multi-change restack, including for an empty node with no PR. Publications flow
+down the tree on subsequent dispatcher polls, to arbitrary depth; clean replay
+starts no agent and consumes no runner capacity. Observations coalesce after the
+active frozen transaction completes. Leaf children retain their verify-entry and
+awaiting-landing restack rules. Existing integration PR numbers and bases survive
+rewrites; an empty node never creates a placeholder PR.
+
+Node branches have one writer at a time. A distinct mutable node writer lease
+(serialized independently of runner execution leases) guards both restacks and
+controlled child landings. A revision-checked `node.writer-reserved` fact freezes
+the operation, original expected head, parent snapshot, previous contribution
+boundary, immutable archives, ordered changes, and merge proofs. Expiry permits
+recovery of that reservation, never an incompatible operation. Each change has
+prepared, conflicted, or replayed receipts. Resolved objects are retained in the
+BuildStore before their receipts. `node.publish-intended`, `node.rewritten`, and
+`node.writer-settled` distinguish intent, proven effect, and completion. Exact
+expected-head replacement and immutable archive refs preserve displaced history;
+contention retains the previous contribution boundary and retries the complete
+observed contribution. An untagged commit, including an empty commit, is foreign.
+`node.inventory` reports reachable build identities separately from node-owned
+foreign commits above the durable boundary; inherited foreign history is excluded
+from the owned count.
+
+Only a conflicted replay item attaches the integration build's reconcile runner.
+Its context names the integration owner separately from the original source
+build and supplies that source's pinned spec, approved plan and implement-notes.
+Missing source artifacts or invalid identities escalate. Foreign conflicts supply
+commit metadata and a diff, with escalation when intent is unclear. Completion
+validates exactly one commit on that item's replay base, retaining its original
+identity or foreign status. The agent never publishes the stack; the dispatcher
+resumes only after session and execution settlement. Node verification and
+automatic node landing remain outside this grammar.
+
+**Foreign merge safety for node replay.** A node contribution is enumerated
+oldest first along first-parent history above its durable previous contribution
+base (initially the opening SHA). Parent movement never makes inherited foreign
+commits into node-owned contributions. The boundary advances only on confirmed
+restack completion.
+
+Before replaying any contribution or publishing a replacement, preflight every
+merge against the frozen new parent's full reachable build identity set. For
+each merge, inspect the union reachable from every non-first parent but not the
+first parent, including nested side history. Flattening is allowed only when
+the merge itself has no terminal `Autobuild-Build` trailer and every side-history
+identity is already reachable through the sampled parent, regardless of commit
+SHA. The safe merge becomes one linear foreign change carrying its first-parent
+delta, including merge-resolution content and an empty result when necessary;
+its side identities remain inherited from the parent.
+
+A merge carrying its own identity is anomalous: the kernel never creates merges,
+and legacy reconcile merges were squashed at landing. It is refused regardless
+of side-history safety. Never strip, move or reinterpret its identity trailer.
+An absent upstream side identity, ambiguous or malformed identity, or an
+identity-bearing merge refuses the entire restack before replay or publication.
+Leave the public node branch untouched and escalate on the integration build,
+naming each offending merge and its missing or own build identities. The kernel
+never preserves merge topology or automatically decomposes a foreign merge.
+Refusal never promotes the contribution boundary; an authorized later retry
+samples the parent anew and repeats the proof.
 
 Use `ab ticket create "Integration" --body spec.md --kind node`, then
 `ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
@@ -2259,6 +2332,16 @@ only positive ahead counts permit creating a PR. `pr.opened {pr}` records its
 identity without a fabricated finalize completion. All four facts are
 dispatcher-authored. Existing merged/closed PR, abort and completion facts close admission.
 
+Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
+`node.item-conflicted`, `node.item-replayed`, `node.publish-intended`,
+`node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
+cascade). It retains the previous contribution boundary, latest parent
+observation, complete replay prefix, active source item and merge proofs.
+A rewrite receipt alone never promotes the boundary; only completed settlement
+does. CLI status exposes pending/active work, reachable build identities and
+node-owned foreign changes. A node stays `collecting` while its narrow reconcile
+runner is attached; it does not acquire a leaf pipeline.
+
 `status ∈ queued | running | collecting | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
 lastEvent}`. `blocked` ≡ an `escalation.raised` without a matching
@@ -2545,7 +2628,7 @@ trusted rewrite/archive capability only after execution teardown. Contention is
 recorded durably and uses the existing runner-failure bound, without spending
 unchanged-base no-progress budget before completion.
 
-**Stable landed identity.** A kernel landing remains one squash commit and
+**Stable landed identity.** A root-target kernel landing remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
 identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
 Implementation commits and deposited PR descriptions are unchanged. The janitor
@@ -2554,6 +2637,14 @@ including human landings. True and false are successful observations; historical
 logs, unsupported inspection, and transient read failures leave evidence absent.
 A failed inspection records an actionable observation and never blocks merge
 completion. This evidence does not change reduction or display semantics.
+
+A node-target child landing instead fast-forwards its already canonical
+single-change commit, preserving exactly one terminal source-build identity.
+The guarded destination write is authoritative: its pushed SHA and identity
+produce the durable landing receipt independently of forge PR state. PR
+acknowledgement is best-effort: observe a provider-reported merge, or comment
+with the landed SHA and close a still-open review. Acknowledgement failure never
+retries or fails the landing.
 
 GitHub uses its authoritative viewer squash headline and body with an expected
 head guard. Native auto-merge messages are checked against fresh server defaults
@@ -2580,6 +2671,16 @@ effect: a ruleset probe that proves merge-blocking rules settles presence even
 when the classic protection response is incomplete, while an incomplete classic
 response with no proven ruleset gate still fails closed with a reason naming
 the missing subsection.
+
+Serialized node-target landing has a stricter path: native auto-merge is
+cancelled and cancellation confirmed, never enabled. Under the destination
+writer reservation, refresh the PR's actual base and head and inspect gates on
+that exact frozen destination immediately before mutation. Only proved-ungated
+branches permit the guarded fast-forward, regardless of token bypass privileges.
+Gated branches defer with `gated-node-destination`; unknown or unreadable policy
+defers with `unproven-gate-state`. Both leave the PR open with actionable human
+guidance, and every later attempt obtains fresh proof. No native fallback can
+participate in node serialization. Human node landing remains observable.
 
 Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
 creation failure: finalize still records the open PR and completes, and consent
