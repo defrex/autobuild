@@ -84,6 +84,9 @@ export type MergeSha = string | ((number: number) => string)
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
+  async inspectLandingGate(_branch: string): Promise<import('../types').LandingGateInspection> {
+    return { kind: 'proved-ungated' }
+  }
   readonly name = 'fake'
   readonly archives = new Map<string, string>()
   readonly rewrites: { branch: string; expected: string; sha: string }[] = []

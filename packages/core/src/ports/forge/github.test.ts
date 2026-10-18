@@ -1892,3 +1892,126 @@ test('GitHub no-commits classification reads nested validation messages only', a
   ])
   await expect(unrelated.forge.openPr(opts)).rejects.toBeInstanceOf(GitHubApiError)
 })
+
+describe('GitHubForge.inspectLandingGate', () => {
+  test('proves an exact node branch ungated using only reads', async () => {
+    const { forge, calls } = makeForge([{ json: { protected: false } }, { json: [] }])
+    expect(await forge.inspectLandingGate('ab-node/a')).toEqual({ kind: 'proved-ungated' })
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/branches/ab-node%2Fa',
+      'GET repos/acme/app/rules/branches/ab-node%2Fa',
+    ])
+    expect(calls[1]?.opts?.query).toEqual({ per_page: '100', page: '1' })
+  })
+
+  for (const rule of [
+    { type: 'merge_queue', parameters: {} },
+    {
+      type: 'pull_request',
+      parameters: {
+        required_approving_review_count: 1,
+        require_code_owner_review: false,
+        require_last_push_approval: false,
+        required_review_thread_resolution: false,
+      },
+    },
+    { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } },
+  ]) {
+    test(`refuses ${rule.type} without a mutation or bypass probe`, async () => {
+      const { forge, calls } = makeForge([{ json: { protected: false } }, { json: [rule] }])
+      expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+      expect(calls.every((call) => call.method === 'GET')).toBe(true)
+    })
+  }
+
+  test('a gate on a later rules page prevents a false ungated proof', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      { json: [{ type: 'merge_queue', parameters: {} }] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+    expect(calls[2]?.opts?.query).toEqual({ per_page: '100', page: '2' })
+  })
+
+  test('follows a provider next link even on a short page', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: [{ type: 'required_linear_history' }], headers: { link: '<next>; rel="next"' } },
+      { json: [{ type: 'merge_queue', parameters: {} }] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+    expect(calls).toHaveLength(3)
+  })
+
+  test('a failed later page leaves policy unproven', async () => {
+    const { forge, calls } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      { status: 403, json: { message: 'Forbidden' } },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+
+  test('a plan-limitation error after a partial page cannot prove absence', async () => {
+    const { forge } = makeForge([
+      { json: { protected: false } },
+      { json: Array.from({ length: 100 }, () => ({ type: 'required_linear_history' })) },
+      {
+        status: 403,
+        json: {
+          message: 'Upgrade to GitHub Pro or make this repository public to enable this feature.',
+          documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
+        },
+      },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+  })
+
+  test('a zero-review pull-request requirement still blocks controlled pushes', async () => {
+    const { forge } = makeForge([
+      { json: { protected: false } },
+      {
+        json: [
+          {
+            type: 'pull_request',
+            parameters: {
+              required_approving_review_count: 0,
+              require_code_owner_review: false,
+              require_last_push_approval: false,
+              required_review_thread_resolution: false,
+            },
+          },
+        ],
+      },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+  })
+
+  test('classic pull-request protection blocks controlled pushes even with zero reviews', async () => {
+    const { forge } = makeForge([
+      {
+        json: {
+          protected: true,
+          protection: {
+            required_status_checks: null,
+            restrictions: null,
+            required_pull_request_reviews: {
+              required_approving_review_count: 0,
+              require_code_owner_reviews: false,
+              require_last_push_approval: false,
+            },
+          },
+        },
+      },
+      { json: [] },
+    ])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'gated' })
+  })
+
+  test('unreadable classic protection with no effective rule remains unproven', async () => {
+    const { forge } = makeForge([{ status: 403 }, { json: [] }])
+    expect(await forge.inspectLandingGate('ab-node/a')).toMatchObject({ kind: 'unproven' })
+  })
+})

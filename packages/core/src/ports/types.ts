@@ -485,7 +485,15 @@ export interface ForgeRewrite {
   }): Promise<RewriteResult>
 }
 
+/** Read-only proof for controlled landing into an exact destination branch.
+ * Bypass privileges are never evidence that a branch is ungated. */
+export type LandingGateInspection =
+  | { kind: 'proved-ungated' }
+  | { kind: 'gated'; reason: string }
+  | { kind: 'unproven'; reason: string }
+
 export interface Forge {
+  inspectLandingGate?(branch: string): Promise<LandingGateInspection>
   readonly rewrite?: ForgeRewrite
   /** Create once at sha; retries adopt only descendants of that opening commit. */
   createNodeBranch?(branch: string, sha: string): Promise<string>

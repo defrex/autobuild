@@ -895,6 +895,14 @@ export class GitHubForge implements Forge {
     return { enabled: view.auto_merge !== null, nodeId: view.node_id }
   }
 
+  async inspectLandingGate(branch: string): Promise<import('../types').LandingGateInspection> {
+    const result = await this.mergeGatePresence(branch, false, true)
+    if (result.kind === 'deferred') return { kind: 'unproven', reason: result.reason.detail }
+    return result.presence === 'absent'
+      ? { kind: 'proved-ungated' }
+      : { kind: 'gated', reason: `Branch ${branch} has merge-blocking protection or rules` }
+  }
+
   /** Probe both GitHub gate systems for the PR's exact base branch. The one
    * non-success ruleset response that proves absence is GitHub's documented
    * account-plan limitation; even then classic protection must independently
@@ -903,6 +911,7 @@ export class GitHubForge implements Forge {
   private async mergeGatePresence(
     baseRefName: string,
     requireIdentity = false,
+    controlledLanding = false,
   ): Promise<
     | { kind: 'proved'; presence: MergeGatePresence }
     | { kind: 'deferred'; reason: AutoMergeDeferralReason }
@@ -923,7 +932,7 @@ export class GitHubForge implements Forge {
     }
     const { owner, name } = coordinates
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-    const branchPath = `${repoPath}/branches/${baseRefName}`
+    const branchPath = `${repoPath}/branches/${encodeURIComponent(baseRefName)}`
 
     let classicGate: boolean | undefined
     let classicError: string | undefined
@@ -941,7 +950,13 @@ export class GitHubForge implements Forge {
         }
         const classic = classifyClassicProtection(protection)
         if (classic.kind === 'unproven') throw new Error(classic.detail)
-        classicGate = classic.gate
+        classicGate =
+          classic.gate ||
+          (controlledLanding &&
+            typeof protection === 'object' &&
+            protection !== null &&
+            'required_pull_request_reviews' in protection &&
+            protection.required_pull_request_reviews !== null)
       }
     } catch (error) {
       classicError = errorMessage(error)
@@ -949,17 +964,37 @@ export class GitHubForge implements Forge {
 
     let rulesetGate = false
     let planLimited = false
+    let rulesPagesRead = 0
     try {
-      const rules = await this.request('GET', `${repoPath}/rules/branches/${baseRefName}`)
-      const parsed = this.parse(restRulesetRules, rules, 'ruleset probe')
+      const parsed: import('zod').infer<typeof restRulesetRules> = []
+      // Exhaust effective rules, including organization rules. A truncated
+      // first page cannot prove absence, even for a bypass-capable token.
+      for (let page = 1; ; page++) {
+        if (page > 1000) throw new Error('ruleset pagination did not terminate')
+        const rules = await this.request(
+          'GET',
+          `${repoPath}/rules/branches/${encodeURIComponent(baseRefName)}`,
+          { query: { per_page: '100', page: String(page) } },
+        )
+        if (rules.status !== 200) throw new Error('incomplete ruleset response')
+        const batch = this.parse(restRulesetRules, rules, 'ruleset probe')
+        rulesPagesRead++
+        parsed.push(...batch)
+        const more = rules.headers.link?.includes('rel="next"') === true
+        if (batch.length < 100 && !more) break
+        if (batch.length === 0) throw new Error('incomplete ruleset pagination')
+      }
       if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
         return unproven(
           'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
         )
       }
-      rulesetGate = rulesetsHaveMergeGate(parsed)
+      rulesetGate =
+        rulesetsHaveMergeGate(parsed) ||
+        (controlledLanding && parsed.some((rule) => rule.type === 'pull_request'))
     } catch (error) {
       if (
+        rulesPagesRead === 0 &&
         error instanceof GitHubApiError &&
         error.status === 403 &&
         restPlanLimitation.safeParse(error.body).success

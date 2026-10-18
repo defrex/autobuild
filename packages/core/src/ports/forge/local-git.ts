@@ -45,6 +45,9 @@ export class LocalGitForge implements Forge {
   get rewrite() {
     return gitRewrite(this.exec, true)
   }
+  async inspectLandingGate(_branch: string): Promise<import('../types').LandingGateInspection> {
+    return { kind: 'proved-ungated' }
+  }
   readonly name = 'local-git'
   private readonly exec: Exec
   /** The repository the optional checkout-less read seam reads from. The
