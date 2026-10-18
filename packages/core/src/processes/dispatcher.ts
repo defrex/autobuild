@@ -2654,12 +2654,21 @@ export class Dispatcher {
         )
       }
     }
+    const native = state.landing?.native
+    const retry =
+      native?.retry &&
+      native.decisionSeq === state.landing?.decision?.seq &&
+      native.commandSeq === state.landing?.command?.seq &&
+      sameLandingCandidate(native.candidate, state.landing?.decision?.candidate)
+        ? native.retry
+        : undefined
     if (
       !integration &&
       !nodeTarget &&
       prState.state === 'open' &&
       landingAuthorized(state.landing) &&
       (!nativeLandingApplied(state.landing) || !!state.landing?.nativeEnablePending) &&
+      (!retry || Date.parse(retry.after) <= this.deps.clock().getTime()) &&
       commandSeq !== undefined &&
       (await canApply())
     ) {
@@ -2667,6 +2676,31 @@ export class Dispatcher {
       // The provider checks eligibility immediately before mutating. Inspection
       // deferrals therefore leave no uncertainty facts on quiet polls.
       let enableSeq = state.landing?.nativeEnablePending
+      const settleFailedEnable = async () => {
+        if (enableSeq === undefined) return
+        const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+        if (cancelled.kind !== 'applied')
+          throw new Error('Native landing cancellation unconfirmed; retrying')
+        const attempt = (retry?.attempt ?? 0) + 1
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'landing.native-applied',
+          payload: {
+            enabled: false,
+            enableSeq,
+            candidate: decision.candidate,
+            decisionSeq: decision.seq,
+            ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
+            retry: {
+              attempt,
+              after: new Date(
+                this.deps.clock().getTime() +
+                  Math.min(300_000, 30_000 * 2 ** Math.min(attempt - 1, 4)),
+              ).toISOString(),
+            },
+          },
+        })
+      }
       const result = await forge
         .setAutoMerge(workspacePath, pr.number, true, {
           buildSlug: record.slug,
@@ -2685,29 +2719,12 @@ export class Dispatcher {
           },
         })
         .catch(async (error: unknown) => {
-          if (enableSeq !== undefined) {
-            const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
-            if (cancelled.kind === 'applied')
-              await store.append(record.slug, {
-                actor: DISPATCHER,
-                type: 'landing.native-applied',
-                payload: { enabled: false, enableSeq },
-              })
-          }
+          await settleFailedEnable()
           throw error
         })
-      // A provider may return a deferral after an uncertain mutation. Confirm
-      // cancellation before resolving that attempt; never infer disabled.
-      if (result.kind !== 'applied' && enableSeq !== undefined) {
-        const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
-        if (cancelled.kind !== 'applied')
-          throw new Error('Native landing cancellation unconfirmed; retrying')
-        await store.append(record.slug, {
-          actor: DISPATCHER,
-          type: 'landing.native-applied',
-          payload: { enabled: false, enableSeq },
-        })
-      }
+      // Only an attempt that reached the mutation guard needs cancellation.
+      // Persist retry timing with its receipt so restart cannot reset backoff.
+      if (result.kind !== 'applied') await settleFailedEnable()
       if (result.kind === 'applied') {
         const latest = (await store.buildFacts(record.slug)).state
         if (await canApply()) {

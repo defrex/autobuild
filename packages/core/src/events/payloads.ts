@@ -629,6 +629,12 @@ export const eventPayloadSchemas = {
     overrodeHold: z.boolean(),
   }),
   'landing.native-applied': z.strictObject({
+    retry: z
+      .strictObject({
+        attempt: z.number().int().positive(),
+        after: z.string().datetime(),
+      })
+      .optional(),
     enableSeq: z.number().int().positive().optional(),
     enabled: z.boolean(),
     candidate: landingCandidateSchema.optional(),

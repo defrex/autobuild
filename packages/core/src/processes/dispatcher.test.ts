@@ -9398,6 +9398,59 @@ describe('declarative landing reconciliation', () => {
       expect((await h.state()).landing?.nativeEnablePending).toBeUndefined()
     }
   })
+  test.each(['deferred', 'error'] as const)(
+    'post-mutation %s failures persist bounded retry timing without quiet-poll writes',
+    async (outcome) => {
+      const h = await candidate('auto')
+      const set = h.forge.setAutoMerge.bind(h.forge)
+      let attempts = 0
+      h.forge.setAutoMerge = async (cwd, pr, enabled, options) => {
+        if (!enabled) return set(cwd, pr, false)
+        await options?.canApply?.()
+        attempts++
+        if (outcome === 'error') throw new Error('permission denied')
+        return { kind: 'deferred' }
+      }
+      await h.poll()
+      const first = (await h.state()).landing!.native!
+      expect(first.retry?.attempt).toBe(1)
+      const before = await h.store.getEvents(h.slug)
+      // A new dispatcher reconstructs the durable retry receipt.
+      const deps = (
+        h.dispatcher as unknown as { deps: ConstructorParameters<typeof Dispatcher>[0] }
+      ).deps
+      const restarted = new Dispatcher(deps)
+      for (let i = 0; i < 3; i++) await restarted.tick({ acceptNewWork: false })
+      expect(attempts).toBe(1)
+      expect(await h.store.getEvents(h.slug)).toEqual(before)
+      h.clock.advance(30_000)
+      await h.poll()
+      expect(attempts).toBe(2)
+      expect((await h.state()).landing?.native?.retry?.attempt).toBe(2)
+      const after = await h.store.getEvents(h.slug)
+      h.clock.advance(30_000)
+      await h.poll()
+      expect(await h.store.getEvents(h.slug)).toEqual(after)
+      const decision = (await h.state()).landing!.decision!
+      await h.store.append(h.slug, {
+        actor: humanActor('operator'),
+        type: 'build.land-requested',
+        payload: { decisionSeq: decision.seq },
+      })
+      await h.poll()
+      expect(attempts).toBe(3)
+      await h.store.append(h.slug, {
+        actor: humanActor('operator'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+      await h.poll()
+      expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+      expect((await h.state()).landing?.acknowledgedSeq).toBe(
+        (await h.state()).landing?.command?.seq,
+      )
+    },
+  )
   test('unrelated cancellation preserves an indeterminate enable without repeating receipts', async () => {
     const h = await candidate()
     await h.poll()

@@ -15,7 +15,7 @@ export const executionProgress = {
   'landing.command-acknowledged': 'progress',
   'landing.native-enable-started': 'bookkeeping',
   'landing.forge-merged': 'progress',
-  'landing.native-applied': 'progress',
+  'landing.native-applied': 'bookkeeping',
   'target.moved': 'bookkeeping',
   'restack.prepared': 'progress',
   'restack.replayed': 'progress',
@@ -125,7 +125,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 4,
+  version: 5,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {
