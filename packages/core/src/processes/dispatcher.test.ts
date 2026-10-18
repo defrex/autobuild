@@ -3588,7 +3588,9 @@ describe('Dispatcher janitor', () => {
     await h.dispatcher.tick()
 
     expect(h.forge.autoMergeCalls.at(-1)).toMatchObject({ enabled: false, changed: true })
-    const applied = (await h.store.getEvents(slug)).at(-1)
+    const writes = await h.store.getEvents(slug)
+    const applied = writes.findLast((event) => event.type === 'landing.native-applied')
+    expect(writes.at(-1)?.type).toBe('landing.command-acknowledged')
     expect(applied?.type).toBe('landing.native-applied')
     expect(applied?.payload).toEqual({ enabled: false })
   })
@@ -3867,7 +3869,9 @@ describe('Dispatcher janitor', () => {
     await cancelled.store.claimLease(cancelledSlug, 'runner-live', 60_000)
     await cancelled.dispatcher.tick()
     expect(cancelled.forge.squashMergeCalls).toEqual([])
-    const applied = (await cancelled.store.getEvents(cancelledSlug)).at(-1)
+    const writes = await cancelled.store.getEvents(cancelledSlug)
+    const applied = writes.findLast((event) => event.type === 'landing.native-applied')
+    expect(writes.at(-1)?.type).toBe('landing.command-acknowledged')
     expect(applied?.type).toBe('landing.native-applied')
     expect(applied?.payload).toEqual({ enabled: false })
   })
@@ -4148,11 +4152,12 @@ describe('Dispatcher janitor', () => {
       },
     ])
     const events = await h.store.getEvents(slug)
-    expect(events.map((event) => event.type).slice(-2)).toEqual([
+    expect(events.map((event) => event.type).slice(-3)).toEqual([
       'landing.native-applied',
+      'landing.command-acknowledged',
       'pr.conflicted',
     ])
-    expect(events.at(-2)?.payload).toEqual({ enabled: false })
+    expect(events.at(-3)?.payload).toEqual({ enabled: false })
   })
 
   test('a cancellation arriving during an existing conflict is applied without waiting for reconcile', async () => {
@@ -4185,8 +4190,9 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
     const events = await h.store.getEvents(slug)
-    expect(events.at(-1)?.type).toBe('landing.native-applied')
-    expect(events.at(-1)?.payload).toEqual({ enabled: false })
+    expect(events.at(-1)?.type).toBe('landing.command-acknowledged')
+    expect(events.at(-2)?.type).toBe('landing.native-applied')
+    expect(events.at(-2)?.payload).toEqual({ enabled: false })
     expect(events.filter((event) => event.type === 'pr.conflicted')).toHaveLength(1)
   })
 
