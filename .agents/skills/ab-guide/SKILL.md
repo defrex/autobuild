@@ -8,109 +8,17 @@ description: Authoritative reference for the autobuild system as installed in th
 Reference material for an agent working on a repository that uses autobuild.
 This skill describes the *system*. It drives no phase and changes no files.
 
-## Node tickets and targets
+## The integration tree
 
-Tickets have `kind = "work"` by default, or `kind = "node"` for a named
-integration point. The optional `target` is a node ticket id in the same source;
-omission means the configured `baseBranch` root. Nodes may target other nodes.
-A ready node ticket opens an integration build on `ab-node/<slug>`, cut
-from its parent's sampled head. Opening intent and acknowledgement are durable;
-the branch is open to targeting tickets immediately, without a PR. Idle integration
-builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
-An empty node has no PR and reports `integration`, `target`, and `empty`.
-Once it holds commits its current parent lacks, the dispatcher opens or adopts
-its PR. No placeholder commit is created; parent-only advancement is still empty.
+The configured `baseBranch` is the root. Work tickets are leaves; finite node
+builds collect child contributions, verify their exact head and parent, and land
+under ordered policy. Targets freeze at claim; blockers are a separate graph.
+Idle nodes consume no runner capacity and empty nodes have no PR.
 
-Claims targeting an open node freeze its build identity and branch as their base.
-Their PR, landing and reconcile all use that frozen base, even after source
-metadata changes. Missing, unopened, landed, closed or aborted targets remain
-queued with a diagnostic. The newest generation wins; a closed generation never
-falls back to an older open one. Blockers remain a separate graph.
-
-Nodes collect until every targeting ticket is natively resolved (done or
-cancelled), frozen child claims have settled, and at least one contribution has
-landed. Status names open children. Exhaustive listing failures keep a node
-incomplete. The kernel runs all configured verify steps against the exact head
-and parent; any head or parent movement requires verification again.
-
-A verification failure blocks the integration build. File a repair child targeting
-the node; its landing allows a new cycle. A complete, verified node lands under
-its recorded policy decision: consent mode requires `ab land <slug>`, while auto
-mode authorizes landing automatically. `ab hold <slug>` withdraws consent and
-suppresses automatic landing, including before readiness. Node parents and
-local-git roots use exact-parent guarded fast-forwards. GitHub roots use PR rebase
-merge and report fenced or unfenced provenance; unfenced results are audited for
-tree mismatch, with operator attention on an unverified result. Gates are never
-bypassed. Human forge merges remain an explicit escape hatch, recorded with
-whether the actual head was verified. The janitor completes the node ticket.
-Closing without merge or aborting closes admission and returns the ticket to
-triage; children already claimed retain their frozen base. Nested nodes work.
-Landing follows the ordered declarative policy described below.
-Parent movement automatically restacks every open descendant node, including
-empty nodes, without clean-path agents. Node restacks replay ordered individual
-changes above their last completed contribution boundary, preserving source
-identities and node-owned foreign commits; inherited foreign history is excluded
-from the owned count. An identity already reachable upstream is dropped.
-Foreign merges flatten only when every side-history identity is already present
-in the sampled parent; unsafe or ambiguous histories leave the node untouched
-and escalate. A conflict runs reconcile for that source change with its own spec,
-plan and implement-notes, or foreign metadata/diff. Status shows node inventory,
-active operation, conflict item and unsafe merge evidence.
-
-A separate node writer lease plus durable reservation serializes restacks and
-child landings; every node replacement uses exact expected-head CAS and archives
-displaced history. Lease expiry resumes the reserved operation. Native auto-merge
-is cancelled for node targets. Only authoritative proof of an ungated destination
-permits the canonical child's guarded fast-forward; gated or unproven branches
-remain open with human-actionable diagnostics. The successful push proves landing,
-and forge PR acknowledgement is best-effort (comment with landed SHA and close
-an unacknowledged open review). Root landings retain squash behavior. A forge plugin needs node branch creation, comparison and
-head-read capabilities to admit node tickets.
-
-Use `ab ticket create "Integration" --body spec.md --kind node`, then
-`ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
-reset kind with `--kind work`. Omitted fields preserve existing values.
-`ab ticket show <id> [--json]` exposes both fields; `ab ticket tree [--json]`
-shows the configured root and every ticket, including completed work and empty
-nodes, nested by target with state. Siblings are sorted by id. Invalid external
-graphs and listing diagnostics are reported explicitly.
-
-Changing an open node target re-parents its branch and existing PR; `--no-target`
-moves it to the configured root. The dispatcher confirms source metadata, replays
-only node-owned contributions onto the new parent, then retargets the same review.
-Children follow through the ordinary cascade; conflicts use normal source-aware
-reconcile. Pending moves block verification and landing. Cycles, non-open parents,
-landing/closing nodes and unsupported forge retargeting are refused with a reason.
-Busy operations must settle first.
-
-Accepted node re-parenting revokes prior land consent through the recorded
-`node.parent-accepted` fact. Holds survive. Readiness evaluates landing policy
-against the new effective parent before another landing can proceed.
-
-Changing a claimed work target is refused before any combined patch is written: abort and re-dispatch instead. Direct provider edits
-are observed too; invalid edits leave effective ancestry unchanged with a durable
-diagnostic. Status shows effective ancestry; ticket tree shows source metadata.
-
-Targets must exist and be nodes in the configured source. Self-targeting,
-ancestor cycles and demoting a node with targeting tickets are refused before
-any part of the requested update is written, regardless of ticket state.
-Clear or reparent its children before demotion. File frontmatter persists the
-fields; `ab ticket edit` displays them read-only. Change them through update.
-Kind and target participate in content revisions and revision-checked writes.
-File writes retain their existing best-effort, unlocked concurrency semantics.
-
-Linear uses the exact `node` issue label for kind and the parent relation for
-target, only when the parent carries that label. Ordinary grouping parents do
-not impose targets and survive unrelated updates. Explicit target clear clears
-the parent relation. Label replacements can demote nodes and receive the same
-guards; explicit kind and label instructions must agree about `node`. Label
-and parent connections are fully paginated. Linear still refuses guarded writes.
-
-Hosted sources support kind and target with project-scoped transactional validation.
-Existing tickets default to work with no target. Metadata changes increment the
-revision once; equivalent aliases and unchanged values do not. Node demotion
-checks all targeting tickets, including completed work. Legacy plugins without
-integrationTree support read as work with no target and refuse metadata writes.
+- [Nodes, targets and the operating model](references/integration-tree.md)
+- [Landing policy, examples and forge requirements](references/landing-policy.md)
+- [Restacking, identity and recovery](references/restacking.md)
+- [Migration from 0.x](references/migration-1.0.md)
 
 ## How to use this skill
 
@@ -154,7 +62,7 @@ choose, not this project's to correct.
 
 ## The lifecycle
 
-A groomed ticket becomes a build, and the build walks a **fixed pipeline**:
+A groomed work ticket becomes a leaf build and walks a **fixed pipeline**:
 
 ```text
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize
@@ -194,10 +102,15 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   PR. `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
   the runner regular-pushes a descendant head to extend the open PR branch.
-- **Epilogue.** If main moves and the PR conflicts, `pr.conflicted` sends the
-  build to `reconcile` (replay its single change onto the refreshed base), then
-  back through `verify:*`. This can repeat. The build terminates **merged** or
-  **closed**.
+- **Restacking and epilogue.** The kernel replays one net leaf change at verify
+  entry and when its destination moves while awaiting landing. Clean replay
+  starts no agent; conflicts enter `reconcile`, then verification. The leaf
+  terminates **merged** or **closed**. See the [replay reference](references/restacking.md).
+
+Integration builds use collect → verify → land → close, with descendant cascade,
+repair children and source-aware reconcile as needed. Their exact-head/parent
+verification differs from clean waiting leaf rewrites. See the
+[node lifecycle](references/integration-tree.md#collect-verify-and-land).
 
 **Review severity is proportion to the spec.** Both review loops rate a
 finding by what the defect costs against the spec's acceptance criteria and
@@ -1079,6 +992,9 @@ repository-journal fact naming the operator, the session, the branch, the
 commit, and the PR; a refused or failed attempt is journaled too.
 
 ## Setup and upgrades
+
+For 0.x upgrades, first read the [migration reference](references/migration-1.0.md):
+landing-policy conversion and resumed-build behavior are part of adoption.
 
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a
 repo path, needs no `AB_*` environment, and is safe to re-run. It:
@@ -2216,30 +2132,6 @@ build phase, which is the criterion for membership (§16.3): `ab-spec` and
 `ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is
 read-only reference including the setup handoff guidance, and `ab-operate` is
 the manual for the orchestrator role, which any agent may take on.
-
-## Leaf restacking and verification bases
-
-The kernel collapses each leaf contribution into one change and restacks it onto
-the frozen target's current head before a fresh verify cycle. Failed verification
-returns to implementation; subsequent commits append to that change until the next
-approved cycle. Plan, implement and code-review never rewrite the branch, and
-recorded ranges remain immutable. Each later review loop starts from the effective
-base established by the preceding successful restack; the initial cut remains
-provenance.
-
-Target observations are durable `target.moved` facts, including while an agent
-runs. After finalize and its post-steps, target movement schedules another restack.
-Moves coalesce onto the newest snapshot after the active transaction finishes.
-Clean restacks start no agent; clean waiting restacks preserve verification.
-Conflicts use the prepared replay in reconcile, including before a PR exists.
-Initial verification cannot be skipped through post-reconcile settings.
-
-`restack.*` records preparation, replay, intent, archived replacement, contention
-and confirmed publication. Remote guests park for trusted publication after
-teardown. New verify facts cite their actual cycle base/head; path selection uses
-the successful restack's base and excludes upstream-only paths. A later clean
-waiting rewrite does not change those historical citations.
-
 
 ## Revision-checked ticket writes
 
