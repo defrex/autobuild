@@ -223,9 +223,8 @@ Small, independently runnable, crash-safe:
   `build.created` from the immutable record (only records an older dispatcher
   left with an empty stream: new claims write it atomically with the record), executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
-  `dispatch.failed`. `build.created` retains any claim-time auto-merge
-  attribution and the sampled default fact's seq until the human-authored
-  command fact is materialized, while
+  `dispatch.failed`. New claims do not seed landing consent or materialize
+  historical auto-merge defaults; policy is sampled at readiness. Meanwhile,
   `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
@@ -2312,7 +2311,8 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -2442,9 +2442,9 @@ finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.com
 
 **Interrupted dispatch:** if the log stops after `build.created`, a later
 ordinary dispatcher tick provisions the workspace, atomically imports the spec,
-posts the ticket notice once, and launches the runner. Claim-time auto-merge
-attribution retained by `build.created` is materialized as the ordinary
-human-authored request before launch. A failed boundary appends `dispatch.failed
+posts the ticket notice once, and launches the runner. New claims do not
+materialize auto-merge-default attribution as a human request. Landing policy
+is recorded at readiness; consent is an explicit land command. A failed boundary appends `dispatch.failed
 {stage,attempt,error}` and stays queued for another tick until its budget is
 exhausted. Dispatch failures share a `[policy].maxDispatchAttempts` budget
 (default 3) across
@@ -2736,6 +2736,14 @@ in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
 configuration or unavailable journals fail with recovery guidance. Fresh init
 uses the no-rules fallback.
 
+A native-enable failure after the provider's mutation guard requires confirmed
+cancellation. Its disabled receipt records the candidate, authorization, retry
+attempt and next eligible time. Retries back off from 30 seconds exponentially
+to a five-minute maximum interval, surviving dispatcher restarts. A new
+candidate or land command resets this delay; hold and cancellation never wait
+for it. Quiet polls append no attempt facts. Native application receipts are
+bookkeeping, not pipeline execution progress.
+
 Native auto-merge is reconciled on every janitor poll against durable desired
 landing state. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
@@ -2899,6 +2907,18 @@ The dispatcher emits an actionable operator notice without repeating it for the
 same failure. Restoring a valid `autobuild.toml` clears the rejection and
 ordinary boundary reload resumes.
 
+Landing policy is an ordered `[[landing]]` array. Each rule requires
+`mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,
+`from = "leaf" | "node"`, and an exact, case-sensitive `label`. Predicates
+within a rule are ANDed; omitted predicates are wildcards; first match wins.
+The destination is the frozen target identity, and labels are sampled when
+readiness is recorded. No matching rule, including no rules, means leaf auto /
+node consent. Policy is hot dispatcher-owned configuration, not pinned build
+execution settings; each ready candidate retains its immutable `landing.decided`
+rule snapshot and mode after config edits. Historical `build.auto-merge-requested`
+and default-attribution fields remain replay-compatible but are not new controls.
+
+
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
@@ -3011,7 +3031,7 @@ decide where a build's effective configuration is composed from:
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
-| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
