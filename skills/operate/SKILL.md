@@ -386,3 +386,39 @@ for the exceptions above.
   and a message that arrives mid-turn is answered after the current turn ends.
 - Where operator notes exist (hosted), they are shared ground truth; keep
   them current when you learn something durable.
+
+## Drive the tree through one consent queue
+
+The root is the configured base branch. A node is a named integration point;
+its integration build collects child contributions on its recorded branch.
+A target is the destination of a contribution. `ab ticket tree --json` (MCP
+`tickets.tree`) shows exhaustive source metadata, including completed tickets
+and empty nodes. A claimed build freezes its effective target; use build status
+or queue entries for landing ancestry after a source ticket changes.
+
+Start with `ab landings --json` (MCP `landings.list`). This is the one queue of
+ready landings needing a decision: consent-policy candidates and held ready
+candidates. Entries include the target, branch preview, candidate head/parent,
+verification receipts and node children/completeness. Unknown completeness is
+not zero children. A changed head or parent must regain current verification;
+unfinished or automatically authorized candidates do not ask for attention.
+
+Select a queue build in the terminal and use `l land` or `o hold`, or run
+`ab land <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `land`
+or `hold`. Hold is available before readiness and suppresses automatic landing.
+Land rechecks readiness and live node completeness, so act on failures by
+refreshing the facts. Open children keep a node collecting. When integration
+verification fails, file a repair child targeting that node and let it land
+before retrying the node cycle.
+
+Watch for decisions and conflicts with `ab watch --json`; save its opaque cursor
+and resume with `ab watch --since <cursor> --json`. Default attention includes
+node landings, node item conflicts, conflicted leaf replays and derived
+`build.consent-ready` observations. Readiness is identified by its durable
+entry position: resuming suppresses the same episode, while a new candidate or
+exit/re-entry can notify again. Explicit `--event` globs remain event-only.
+Use `ab wait --for consent --for node-landed --for restack-conflicted --json`
+for one wake; state waits return immediately when already satisfied. `--for
+attention` also includes consent readiness and landing/conflict attention.
+Resume event backlogs with `--since <cursor>`; keep handling emitted records
+before interpreting terminal completion.

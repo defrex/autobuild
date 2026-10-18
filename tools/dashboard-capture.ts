@@ -43,6 +43,7 @@ export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 type CaptureScenario = 'mixed' | 'happy' | 'integration'
 
 export interface FrameSpec {
+  selection?: DashboardModel['selection']
   forgeReadiness?: boolean
   id: string
   scenario: CaptureScenario
@@ -164,10 +165,20 @@ export const WEBSITE_HERO_COLUMNS = 133
 export const FRAME_SPECS: readonly FrameSpec[] = [
   {
     id: 'integration-wide',
+    selection: { kind: 'build', slug: 'queue-held' },
     scenario: 'integration',
     columns: 140,
-    rows: 44,
-    requires: ['integration', 'target', 'empty', 'NODE-3'],
+    rows: 80,
+    requires: [
+      'consent queue',
+      'held',
+      'conflicted',
+      'incomplete',
+      'integration',
+      'target',
+      'empty',
+      'NODE-3',
+    ],
   },
 
   {
@@ -488,6 +499,153 @@ async function prepareIntegrationScenario(): Promise<E2eHarness> {
     if (label === 'aborted')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
   }
+  for (const [index, label] of [
+    'ready-leaf',
+    'ready-node',
+    'held',
+    'incomplete',
+    'active',
+    'conflict',
+    'stale',
+  ].entries()) {
+    const slug = `queue-${label}`
+    const node = label !== 'ready-leaf'
+    const parent = 'a'.repeat(40)
+    const head = `head-${label}`
+    await harness.store.createBuild({
+      slug,
+      repo: harness.origin,
+      branch: `preview/${label}`,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: `QUEUE-${index}` },
+          repo: harness.origin,
+          kind: node ? 'node' : 'work',
+          baseBranch: 'ab-node/integration-with-pr',
+          target: { ticket: { source: 'fake', id: 'NODE-2' }, build: 'integration-with-pr' },
+        },
+      },
+    })
+    if (!node)
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'local',
+          ref: 'capture',
+          branch: `preview/${label}`,
+          base: { source: 'local', sha: parent, remoteError: 'capture' },
+        },
+      })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opening',
+      payload: { branch: `preview/${label}`, parent: 'ab-node/integration-with-pr', sha: parent },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: parent },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.compared',
+      payload: { headSha: head, parentSha: parent, ahead: 1 },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: {
+        openChildren: label === 'incomplete' ? ['OPEN-CHILD'] : [],
+        diagnostics: [],
+        contributions: ['child-contribution'],
+      },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.prepared',
+      payload: {
+        id: `cycle-${label}`,
+        head,
+        parent,
+        config: JSON.stringify({ verify: { steps: [] } }),
+      },
+    })
+    if (!node)
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'capture', host: 'capture' },
+      })
+    const finalized = await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 100 + index, url: `https://example.test/pr/${100 + index}`, headSha: head },
+      },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: {
+          head,
+          parent,
+          cycle: node ? `cycle-${label}` : String(finalized.seq),
+        },
+        from: node ? 'node' : 'leaf',
+        into: { kind: 'node', ticket: 'NODE-2' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    if (label === 'held')
+      await harness.store.append(slug, {
+        actor: { kind: 'human', user: 'capture' },
+        type: 'build.hold-requested',
+        payload: {},
+      })
+    if (label === 'stale')
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.compared',
+        payload: { headSha: head, parentSha: 'new-parent', ahead: 1 },
+      })
+    if (label === 'active' || label === 'conflict') {
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.writer-reserved',
+        payload: {
+          id: label,
+          operation: 'restack',
+          expected: head,
+          parent,
+          oldBase: parent,
+          archive: 'archive',
+          changes: [{ sha: 'change' }],
+          upstreamBuilds: [],
+          merges: [],
+        },
+      })
+      if (label === 'conflict')
+        await harness.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'node.item-prepared',
+          payload: { id: label, index: 0, base: parent },
+        })
+      if (label === 'conflict')
+        await harness.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'node.item-conflicted',
+          payload: { id: label, index: 0, base: parent },
+        })
+    }
+    await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
+  }
+  harness.forge.remoteBranches.set('ab-node/integration-with-pr', 'a'.repeat(40))
   return harness
 }
 
@@ -1186,6 +1344,7 @@ async function capturePaint(
           : []
       const presented = {
         ...model,
+        ...(spec.selection ? { selection: spec.selection } : {}),
         // Runtime commits include generated fixture bytes; keep their visible
         // provenance stable just like the scripted clock and repository name.
         builds: model.builds.map((build) => ({

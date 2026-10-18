@@ -123,3 +123,21 @@ The endpoint requires no additional variables beyond the hosted service's
 existing web/auth set. Note that consent renders when the client sends
 `prompt=consent`; a client that omits it gets a code directly (the plugin's
 designed behavior).
+
+### Tree and consent reads
+
+`landings.list` takes `{repo}` and returns slug-sorted ready consent or held
+landings, with effective target, source branch, candidate, verification receipts
+and node completeness/children. It reads reduced durable state; `builds.control`
+with `land` rechecks readiness and live completeness. `hold` remains available
+before readiness. `tickets.tree` takes `{repo}` and returns `{root, children,
+diagnostics}` from exhaustive configured-source enumeration. Source ancestry is
+separate from frozen build ancestry. Both tools are read-only and repository scoped.
+
+The CLI equivalents are `ab landings [--json] [--store <ref>]` and
+`ab ticket tree [--json]`. Default `ab watch` attention includes node landings,
+restack conflicts and derived `build.consent-ready` observations with durable
+cursor positions. `ab wait` supports `consent`, `node-landed` and
+`restack-conflicted`; current-state conditions return immediately. Explicit
+watch event globs emit durable events only. A readiness episode changes on a
+new candidate or exit/re-entry, and cursor resume suppresses its duplicate.
