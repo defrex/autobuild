@@ -40,6 +40,10 @@ export interface EventWrite<T extends EventType = EventType> {
  * catalog tables in SPEC §15.3.
  */
 export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
+  'node.opening': ['dispatcher'],
+  'node.opened': ['dispatcher'],
+  'node.compared': ['dispatcher'],
+  'pr.opened': ['dispatcher'],
   'build.created': ['dispatcher', 'human'],
   'build.completed': ['dispatcher'],
   'runner.attached': ['kernel'],
@@ -73,8 +77,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.auto-merge-requested': ['human'],
   'build.auto-merge-cancelled': ['human'],
   'build.auto-merge-default-observed': ['dispatcher'],
-  'build.paused': ['kernel'],
-  'build.resumed': ['kernel'],
+  'build.paused': ['kernel', 'dispatcher'],
+  'build.resumed': ['kernel', 'dispatcher'],
   'build.aborted': ['kernel', 'dispatcher'],
 
   'spec.imported': ['dispatcher'],

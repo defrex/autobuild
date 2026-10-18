@@ -31,7 +31,7 @@ import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { LinearTicketSource } from '../ports/tickets/linear'
-import { TicketSourceRateLimitError } from '../ports/types'
+import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
 import type { Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -81,6 +81,8 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   return {
     revision: 'fixture',
     ref: { source: 'fake', id, title },
+    ...(over.kind !== undefined ? { kind: over.kind } : {}),
+    ...(over.target !== undefined ? { target: over.target } : {}),
     ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
     body: over.body ?? CONFORMING_BODY,
@@ -227,6 +229,7 @@ async function seedBuild(
   h: Harness,
   opts: {
     slug?: string
+    baseBranch?: string
     ticketId?: string
     ticketSource?: string
     repo?: string
@@ -258,7 +261,14 @@ async function seedBuild(
   await h.store.append(slug, {
     actor: DISPATCHER,
     type: 'build.created',
-    payload: { ticket, repo, baseBranch: 'main' },
+    payload: {
+      ticket,
+      repo,
+      baseBranch: opts.baseBranch ?? 'main',
+      ...(opts.baseBranch
+        ? { target: { ticket: { source: 'fake', id: 'NODE' }, build: 'node-build' } }
+        : {}),
+    },
   })
   if (opts.workspace !== false) {
     await h.store.append(slug, {
@@ -397,8 +407,12 @@ async function seedInterrupted(
 }
 
 /** Seed a fully green build parked in the post-PR epilogue. */
-async function seedAwaitingPr(h: Harness, slug = 'auth-limit'): Promise<string> {
-  await seedBuild(h, { slug })
+async function seedAwaitingPr(
+  h: Harness,
+  slug = 'auth-limit',
+  baseBranch?: string,
+): Promise<string> {
+  await seedBuild(h, { slug, baseBranch })
   await seedLoopsApproved(h, slug)
   await h.store.append(slug, {
     actor: KERNEL,
@@ -2203,7 +2217,7 @@ describe('Dispatcher in-flight creation gate', () => {
     const creationKey = crypto.randomUUID()
     const h = harness({
       tickets: [
-        readyTicket('T-held', { title: 'Held generated work', creationKey }),
+        readyTicket('T-held', { title: 'Held generated work', creationKey, target: 'UNCLAIMED' }),
         readyTicket('T-next', { title: 'Independent work' }),
       ],
     })
@@ -9248,3 +9262,262 @@ test('acknowledged unchanged native maintenance does not refresh consent or load
     (await h.store.getEvents(slug)).filter((event) => event.type === 'pr.auto-merge-enabled'),
   ).toHaveLength(1)
 })
+
+describe('integration node dispatch', () => {
+  test('empty node opens without workspace, runner, lease or PR and accepts nested targets', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N', { kind: 'node', title: 'Root node' }),
+        readyTicket('CHILD', { target: 'N', title: 'Child work' }),
+        readyTicket('NESTED', { kind: 'node', target: 'N', title: 'Nested node' }),
+      ],
+    })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    let records = await h.store.listBuilds()
+    const root = records.find((r) => r.ticket?.id === 'N')!
+    expect(root.branch).toStartWith('ab-node/')
+    expect(root.lease).toBeUndefined()
+    const state = reduceBuild(await h.store.getEvents(root.slug))
+    expect(state.status).toBe('collecting')
+    expect(state.nodeOpened?.sha).toBe(BASE_SHA)
+    expect(h.launches).not.toContain(root.slug)
+    expect(
+      (await h.store.getEvents(root.slug)).some((e) => e.type === 'workspace.provisioned'),
+    ).toBe(false)
+    expect(h.forge.opened).toHaveLength(0)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    records = await h.store.listBuilds()
+    for (const id of ['CHILD', 'NESTED']) {
+      const record = records.find((r) => r.ticket?.id === id)!
+      const child = reduceBuild(await h.store.getEvents(record.slug))
+      expect(child.target?.build).toBe(root.slug)
+      expect(child.baseBranch).toBe(root.branch)
+    }
+    const nested = records.find((r) => r.ticket?.id === 'NESTED')!
+    expect(h.launches).not.toContain(nested.slug)
+    expect(h.forge.opened).toHaveLength(0)
+  })
+
+  test('node PR opens lazily, never auto-merges, and human landing completes ticket', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(0)
+    h.forge.remoteBranches.set(node.branch!, 'child-commit')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(h.forge.opened[0]?.base).toBe('main')
+    const state = reduceBuild(await h.store.getEvents(node.slug))
+    expect(state.pr).toBeDefined()
+    await h.dispatcher.tick()
+    expect(h.forge.autoMergeCalls).toHaveLength(0)
+    expect(h.forge.squashMergeCalls).toHaveLength(0)
+    expect(h.launches).toHaveLength(0)
+    h.forge.setPrState(state.pr!.number, { state: 'merged', sha: 'merged-node' })
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe('done')
+  })
+
+  test('unclaimed and aborted target nodes stay queued with a diagnostic', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N', { kind: 'node', title: 'Root node' }),
+        readyTicket('CHILD', { target: 'MISSING', title: 'Child work' }),
+      ],
+    })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    const first = await h.dispatcher.tick()
+    expect(first.dependencyDiagnostics.join(' ')).toContain('MISSING')
+    const node = (await h.store.listBuilds())[0]!
+    await h.store.append(node.slug, {
+      actor: humanActor('test'),
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    expect(h.launches).toHaveLength(0)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe('done')
+  })
+})
+
+describe('integration crash boundaries', () => {
+  test('opening response loss retries the durable SHA and adopts child commits without a runner', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    const create = h.forge.createNodeBranch.bind(h.forge)
+    let fail = true
+    h.forge.createNodeBranch = async (branch, sha) => {
+      const head = await create(branch, sha)
+      if (fail) {
+        fail = false
+        h.forge.remoteBranches.set(branch, 'advanced-child')
+        h.forge.nodeAncestors.set('advanced-child', new Set([sha]))
+        throw new Error('response lost after opening')
+      }
+      return head
+    }
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    expect(reduceBuild(await h.store.getEvents(node.slug)).nodeOpened).toBeUndefined()
+    h.forge.remoteBranches.set('main', 'parent-moved')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.dispatcher.tick({ resumeCurrent: true })
+    const state = reduceBuild(await h.store.getEvents(node.slug))
+    expect(state.nodeOpening?.sha).toBe(BASE_SHA)
+    expect(state.nodeOpened?.sha).toBe('advanced-child')
+    expect(h.forge.remoteBranches.get(node.branch!)).toBe('advanced-child')
+    expect(h.forge.nodeOpenings.map((open) => open.sha)).toEqual([BASE_SHA, BASE_SHA])
+    expect(h.launches).toHaveLength(0)
+    expect((await h.store.getBuild(node.slug))?.lease).toBeUndefined()
+  })
+
+  test('PR publication followed by append failure adopts the same PR on retry', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    h.forge.remoteBranches.set(node.branch!, 'child')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    const append = h.store.append.bind(h.store)
+    let fail = true
+    h.store.append = (async (slug, event) => {
+      if (event.type === 'pr.opened' && fail) {
+        fail = false
+        throw new Error('lost PR append')
+      }
+      return append(slug, event)
+    }) as typeof h.store.append
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr).toBeUndefined()
+    await h.dispatcher.tick()
+    expect(h.forge.opened).toHaveLength(1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr?.number).toBe(1)
+    expect(h.launches).toHaveLength(0)
+  })
+})
+
+describe('integration review regressions', () => {
+  test.each(['present', 'absent'] as const)(
+    'targeted leaf automatic landing uses frozen node base (%s)',
+    async (gate) => {
+      const h = harness()
+      const nodeBase = 'ab-node/parent'
+      const slug = await seedAwaitingPr(h, 'targeted-child', nodeBase)
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      h.forge.setPrState(1, { state: 'open', mergeable: true })
+      h.forge.setPrHeadSha(1, PR.headSha)
+      h.forge.setGatePresence(1, gate)
+      const native = h.forge.setAutoMerge.bind(h.forge)
+      const squash = h.forge.squashMerge.bind(h.forge)
+      const nativeBases: (string | undefined)[] = []
+      const squashBases: (string | undefined)[] = []
+      h.forge.setAutoMerge = async (...args) => {
+        nativeBases.push(args[3]?.baseBranch)
+        return native(...args)
+      }
+      h.forge.squashMerge = async (...args) => {
+        squashBases.push(args[3]?.baseBranch)
+        return squash(...args)
+      }
+      await h.dispatcher.tick()
+      expect(nativeBases).toEqual([nodeBase])
+      expect(squashBases).toEqual(gate === 'absent' ? [nodeBase] : [])
+    },
+  )
+
+  test('a waiting target clears dependency-source degradation without being claimed', async () => {
+    const h = harness({ tickets: [readyTicket('CHILD', { target: 'UNCLAIMED' })] })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-source-degraded',
+      payload: {
+        source: 'fake',
+        operation: 'dependency-check',
+        cause: 'rate-limited',
+        message: 'temporary limit',
+        resetAt: '2026-07-15T13:00:00.000Z',
+      },
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyCheckFailed).toBe(0)
+    expect(h.tickets.claims).toEqual([])
+    expect(
+      (await h.store.getRepoEvents(REPO)).some(
+        (e) => e.type === 'dispatcher.ticket-source-recovered',
+      ),
+    ).toBe(true)
+  })
+
+  test('full work capacity preserves the root-only dependency preflight fast path', async () => {
+    const h = harness({ tickets: [readyTicket('WAITING', { blockedBy: ['EXTERNAL'] })] })
+    await seedBuild(h, { slug: 'occupied' })
+    let reads = 0
+    h.tickets.dependencyStates = async () => {
+      reads += 1
+      throw new Error('must not query at capacity')
+    }
+    const report = await h.dispatcher.tick()
+    expect(reads).toBe(0)
+    expect(report).toMatchObject({ queued: 1, dependencyBlocked: 0, dependencyCheckFailed: 0 })
+  })
+
+  test.each([
+    ['pause', 'resume', 'collecting'],
+    ['resume', 'pause', 'paused'],
+  ] as const)(
+    'node commands %s then %s respect the newest intent',
+    async (first, second, expected) => {
+      const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+      h.forge.remoteBranches.set('main', BASE_SHA)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds())[0]!
+      for (const command of [first, second])
+        await h.store.append(node.slug, {
+          actor: humanActor('operator'),
+          type: command === 'pause' ? 'build.pause-requested' : 'build.resume-requested',
+          payload: {},
+        })
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe(expected)
+      expect(reduceBuild(await h.store.getEvents(node.slug)).pendingCommands).toEqual([])
+      expect(h.launches).toEqual([])
+    },
+  )
+})
+
+test.each([true, false])(
+  'node PR race refreshes emptiness only for classified no-commits errors (%s)',
+  async (classified) => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    h.forge.remoteBranches.set(node.branch!, 'child')
+    h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    h.forge.openPr = async () => {
+      h.forge.nodeComparisons.set(`main...${node.branch}`, 0)
+      throw classified
+        ? new NoCommitsBetweenBranchesError('No commits between main and node')
+        : new Error('permission denied')
+    }
+    const report = await h.dispatcher.tick()
+    expect(report.janitorFailed).toBe(classified ? 0 : 1)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).pr).toBeUndefined()
+    expect(reduceBuild(await h.store.getEvents(node.slug)).nodeComparison?.ahead).toBe(
+      classified ? 0 : 1,
+    )
+  },
+)

@@ -34,6 +34,28 @@ function corpora(): unknown[][] {
   return [
     [
       {
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: 'N' },
+          repo: 'repo',
+          baseBranch: 'ab-node/parent',
+          kind: 'node',
+          target: { ticket: { source: 'fake', id: 'P' }, build: 'parent' },
+        },
+      },
+      {
+        type: 'node.opening',
+        payload: { branch: 'ab-node/n', parent: 'ab-node/parent', sha: 'opening' },
+      },
+      { type: 'node.opened', payload: { sha: 'opening' } },
+      { type: 'node.compared', payload: { parentSha: 'opening', headSha: 'child', ahead: 1 } },
+      {
+        type: 'pr.opened',
+        payload: { pr: { number: 1, url: 'https://example/pr/1', headSha: 'child' } },
+      },
+    ],
+    [
+      {
         type: 'dispatcher.ticket-source-degraded',
         payload: {
           source: 'fake',
@@ -108,11 +130,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 1,
         "baseBranchValue": 1,
-        "build": 3,
+        "build": 4,
         "buildDelegation": 1,
-        "buildDigest": 3,
-        "buildReadFacts": 29,
-        "buildStreamSeed": 5,
+        "buildDigest": 5,
+        "buildReadFacts": 31,
+        "buildStreamSeed": 6,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 1,
@@ -122,7 +144,7 @@ describe('reducer registry', () => {
         "dispatchStatus": 2,
         "dispatcherRunFacts": 2,
         "effectiveConfig": 1,
-        "executionNoProgress": 1,
+        "executionNoProgress": 2,
         "frozenPrImageHost": 1,
         "harvest": 1,
         "harvestDelegation": 1,

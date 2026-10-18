@@ -1085,6 +1085,23 @@ File/fake/Linear adapters validate metadata at write boundaries; `operations.ts`
 and CLI/operator source opening wrap injected or plugin sources with the same
 compatibility facade. Metadata is excluded from hosted persistence/protocols.
 
+
+### Integration node dispatch
+
+The product dispatcher owns the workspace-free node lifecycle:
+spec → node.opening → node.opened → collecting → human landing/close or abort.
+The ordinary work pipeline is unchanged. `build.created` freezes kind, target
+ticket/build identity and resolved parent in `baseBranch`. Integration facts
+are projected by the shared reducer and digests, including collecting/empty
+state. Admission resolves same-source targets through repository read facts;
+integration identities remain active for deduplication but consume no work slot.
+
+Optional Forge node branch creation and comparison capabilities let GitHub
+operate without a checkout and local-git operate directly on its shared refs.
+Opening intent retains the sampled SHA across retries; adoption requires that
+commit in the existing branch's history. Comparison uses reachability, so an
+advanced parent never makes an empty node nonempty. The janitor opens PRs lazily
+and reuses terminal cleanup without leaf reconcile or auto-merge.
 ### Reconcile restacking
 
 The kernel prepares a detached replay of one net build change on the base frozen

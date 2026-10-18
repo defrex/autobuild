@@ -73,12 +73,18 @@ export const WAIT_USAGE =
 /** Default poll cadence and wait horizon — identical to `ab watch`. */
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
 
-const NONTERMINAL_STATUSES: readonly BuildStatus[] = ['queued', 'running', 'paused', 'blocked']
+const NONTERMINAL_STATUSES: readonly BuildStatus[] = [
+  'queued',
+  'running',
+  'collecting',
+  'paused',
+  'blocked',
+]
 const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 
 /** The `--for` condition vocabulary, in the order the help documents it. */
 const CONDITION_VOCABULARY =
-  'blocked, paused, running, done, aborted, terminal, pr=open, pr=merged, pr=closed, ' +
+  'blocked, paused, running, collecting, done, aborted, terminal, pr=open, pr=merged, pr=closed, ' +
   'pr=conflicted, phase=<phase> (a core phase or verify:<step>), attention'
 
 // ── Conditions ───────────────────────────────────────────────────────────────
@@ -148,6 +154,7 @@ export function parseConditions(
       status === 'blocked' ||
       status === 'paused' ||
       status === 'running' ||
+      status === 'collecting' ||
       status === 'done' ||
       status === 'aborted'
     ) {

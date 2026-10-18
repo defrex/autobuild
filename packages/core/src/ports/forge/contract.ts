@@ -90,6 +90,26 @@ async function pushAndOpen(harness: ForgeContractHarness): Promise<{
  */
 export function describeForgeContract(name: string, factory: ForgeContractFactory): void {
   describe(`Forge contract: ${name}`, () => {
+    test('optional node refs open empty without a PR and retries preserve their head', async () => {
+      await withForge(factory, undefined, async (h) => {
+        const forge = h.forge
+        if (!forge.createNodeBranch || !forge.compareBranches || !forge.remoteBranchSha) return
+        await forge.pushBranch(h.workspacePath, h.head)
+        const opening = await forge.remoteBranchSha(h.head)
+        const branch = `ab-node/contract-${crypto.randomUUID()}`
+        try {
+          expect(await forge.createNodeBranch(branch, opening)).toBe(opening)
+          expect(await forge.createNodeBranch(branch, opening)).toBe(opening)
+          expect(await forge.compareBranches(h.head, branch)).toEqual({
+            parentSha: opening,
+            headSha: opening,
+            ahead: 0,
+          })
+        } finally {
+          if (forge.deleteBranch) await forge.deleteBranch(h.workspacePath, branch)
+        }
+      })
+    })
     test('optional rewrite snapshots the authoritative head and refuses a stale lease', async () => {
       await withForge(factory, undefined, async (harness) => {
         const capability = harness.forge.rewrite

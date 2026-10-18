@@ -122,6 +122,8 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
   if (state.status === 'done') return { kind: 'wait', reason: 'done' }
 
+  if (state.kind === 'node') return { kind: 'wait', reason: 'awaiting-pr' }
+
   // ── 2. Operator commands (D2, §15.2.7) ─────────────────────────────────────
   // Requests queue in the log; the kernel acknowledges with fact events, and a
   // dead runner receives its commands on resume. Abort wins over everything

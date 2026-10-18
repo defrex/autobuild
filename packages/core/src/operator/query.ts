@@ -359,7 +359,7 @@ async function dashboardFromView(
     // Reduced status is `done`/`aborted` exactly when a terminal fact exists,
     // so `terminal === undefined` is exactly the old active test — no history
     // read needed for the count.
-    if (digest.terminal === undefined) activeCount += 1
+    if (digest.terminal === undefined && digest.kind !== 'node') activeCount += 1
     if (digest.terminal === 'done') continue
     // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
     // snapshot, AUT-496 detail query): a build that projects no row —

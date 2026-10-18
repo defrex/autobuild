@@ -17,6 +17,9 @@ import type { BuildDigest } from './types'
  * rows to exactly these, so a per-build type-filtered index keeps the scan's
  * cost growing with the actual signal, not with total history. */
 export const DIGEST_EVENT_TYPES = [
+  'build.created',
+  'node.opened',
+  'pr.closed',
   'build.completed',
   'build.aborted',
   'observation.recorded',
@@ -31,6 +34,7 @@ export const DIGEST_EVENT_TYPES = [
  * `pr-attachment.reclaimed` rows and `instance` for `execution.started` /
  * `execution.ended` rows instead of whole payloads. */
 export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
+  kind?: 'work' | 'node'
   hostedSeq?: number
   instance?: string
 }
@@ -45,6 +49,9 @@ export type DigestEvent = DigestEventRow
 
 /** The carried accumulator for `reduceBuildDigest`. */
 export interface DigestAcc {
+  kind?: 'work' | 'node'
+  nodeOpened?: true
+  prClosed?: true
   readinessChangeSeq?: number
   terminal?: BuildDigest['terminal']
   merged?: string
@@ -58,7 +65,7 @@ export interface DigestAcc {
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 3
+export const BUILD_DIGEST_REDUCER_VERSION = 5
 
 export const buildDigestReducer: IncrementalReducer<
   DigestAcc,
@@ -69,8 +76,15 @@ export const buildDigestReducer: IncrementalReducer<
   initial: (): DigestAcc => ({ observations: [], hosted: [], reclaimed: [], openInstance: null }),
   fold(acc, events) {
     for (const event of events) {
-      if (['pr.merged', 'build.completed', 'build.aborted'].includes(event.type))
+      if (
+        ['node.opened', 'pr.closed', 'pr.merged', 'build.completed', 'build.aborted'].includes(
+          event.type,
+        )
+      )
         acc.readinessChangeSeq = event.seq
+      if (event.type === 'build.created') acc.kind = event.kind
+      if (event.type === 'node.opened') acc.nodeOpened = true
+      if (event.type === 'pr.closed') acc.prClosed = true
       if (event.type === 'build.completed') acc.terminal = 'done'
       else if (event.type === 'build.aborted') acc.terminal = 'aborted'
       else if (event.type === 'pr.merged') acc.merged = event.ts
@@ -88,6 +102,9 @@ export const buildDigestReducer: IncrementalReducer<
     }
   },
   finish: ({
+    kind,
+    nodeOpened,
+    prClosed,
     readinessChangeSeq,
     terminal,
     merged,
@@ -99,6 +116,9 @@ export const buildDigestReducer: IncrementalReducer<
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
     return {
+      ...(kind !== undefined ? { kind } : {}),
+      ...(nodeOpened ? { nodeOpened } : {}),
+      ...(prClosed ? { prClosed } : {}),
       observations: [...observations],
       ...(readinessChangeSeq !== undefined ? { readinessChangeSeq } : {}),
       ...(merged !== undefined ? { merged } : {}),

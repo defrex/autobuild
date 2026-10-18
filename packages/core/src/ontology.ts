@@ -245,7 +245,15 @@ export const buildOutcomeSchema = z.enum(['merged', 'closed-unmerged', 'abandone
 export type BuildOutcome = z.infer<typeof buildOutcomeSchema>
 
 /** Derived status — a reduction of events, never stored (SPEC §15.5). */
-export const BUILD_STATUSES = ['queued', 'running', 'paused', 'blocked', 'done', 'aborted'] as const
+export const BUILD_STATUSES = [
+  'queued',
+  'running',
+  'collecting',
+  'paused',
+  'blocked',
+  'done',
+  'aborted',
+] as const
 export type BuildStatus = (typeof BUILD_STATUSES)[number]
 
 export const commitRangeSchema = z.strictObject({

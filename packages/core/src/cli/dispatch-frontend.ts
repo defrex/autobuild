@@ -57,7 +57,7 @@ import {
 } from './dispatch-process'
 
 const PAINT_MS = 250
-const ABORTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'blocked'])
+const ABORTABLE_STATUSES = new Set(['queued', 'running', 'collecting', 'paused', 'blocked'])
 
 function validAbortConfirmation(state: BuildState | undefined): boolean {
   return (
@@ -382,7 +382,7 @@ export class DispatchFrontend {
         ...(standby !== undefined ? { standby } : {}),
         queued: status.queued ?? 0,
         activeCount: [...snapshot.states.values()].filter(
-          (state) => state.status !== 'done' && state.status !== 'aborted',
+          (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: config.capacity,
         observationCount: this.observationCount,

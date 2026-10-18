@@ -38,7 +38,7 @@ import {
 
 export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 
-type CaptureScenario = 'mixed' | 'happy'
+type CaptureScenario = 'mixed' | 'happy' | 'integration'
 
 export interface FrameSpec {
   id: string
@@ -160,6 +160,14 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  {
+    id: 'integration-wide',
+    scenario: 'integration',
+    columns: 140,
+    rows: 44,
+    requires: ['integration', 'target', 'empty', 'NODE-3'],
+  },
+
   {
     id: 'post-reconcile-policy',
     scenario: 'mixed',
@@ -389,6 +397,80 @@ function captureHandlers(): SkillHandlers {
     return happyImplement(cli)
   }
   return handlers
+}
+
+async function prepareIntegrationScenario(): Promise<E2eHarness> {
+  const harness = await makeHarness({
+    handlers: happyHandlers(),
+    configToml: CAPTURE_CONFIG_TOML,
+    tickets: [],
+  })
+  await harness.store.ensureRepo(harness.origin)
+  harness.forge.remoteBranches.set('main', 'opening-sha')
+  harness.forge.setPrState(91, { state: 'open', mergeable: null })
+  for (const [index, label] of ['empty', 'with-pr', 'nested', 'aborted'].entries()) {
+    const slug = `integration-${label}`
+    harness.forge.remoteBranches.set(
+      `ab-node/${slug}`,
+      label === 'with-pr' ? 'child-sha' : 'opening-sha',
+    )
+    if (label === 'nested')
+      harness.forge.nodeComparisons.set(
+        'ab-node/integration-with-pr...ab-node/integration-nested',
+        0,
+      )
+    await harness.store.createBuild({
+      slug,
+      repo: harness.origin,
+      branch: `ab-node/${slug}`,
+      ticket: { source: 'fake', id: `NODE-${index + 1}` },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: `NODE-${index + 1}` },
+          repo: harness.origin,
+          kind: 'node',
+          baseBranch: label === 'nested' ? 'ab-node/integration-with-pr' : 'main',
+          ...(label === 'nested'
+            ? { target: { ticket: { source: 'fake', id: 'NODE-2' }, build: 'integration-with-pr' } }
+            : {}),
+        },
+      },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opening',
+      payload: {
+        branch: `ab-node/${slug}`,
+        parent: 'main',
+        sha: 'opening-sha',
+      },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: 'opening-sha' },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.compared',
+      payload: {
+        parentSha: 'opening-sha',
+        headSha: label === 'with-pr' ? 'child-sha' : 'opening-sha',
+        ahead: label === 'with-pr' ? 1 : 0,
+      },
+    })
+    if (label === 'with-pr')
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'pr.opened',
+        payload: { pr: { number: 91, url: 'https://example.test/pr/91', headSha: 'child-sha' } },
+      })
+    if (label === 'aborted')
+      await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+  }
+  return harness
 }
 
 export async function prepareScenario(): Promise<E2eHarness> {
@@ -944,18 +1026,20 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   }
   const text = plain.join('\n')
   const commonEvidence =
-    spec.scenario === 'happy'
-      ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
-      : spec.transcript !== undefined
-        ? ['Transcript', 'complete-dashboard-evidence']
-        : spec.session !== undefined
-          ? ['Session', spec.session.slug]
-          : spec.detail === undefined
-            ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-            : [
-                `Build  ${spec.detail.slug}`,
-                ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
-              ]
+    spec.scenario === 'integration'
+      ? ['integration', 'target', 'empty']
+      : spec.scenario === 'happy'
+        ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
+        : spec.transcript !== undefined
+          ? ['Transcript', 'complete-dashboard-evidence']
+          : spec.session !== undefined
+            ? ['Session', spec.session.slug]
+            : spec.detail === undefined
+              ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+              : [
+                  `Build  ${spec.detail.slug}`,
+                  ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
+                ]
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
@@ -1116,7 +1200,9 @@ async function capturePaint(
     throw new Error(`dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`)
   }
   if (capturedModel === undefined)
-    throw new Error(`dashboard capture ${spec.id}: model was not projected`)
+    throw new Error(
+      `dashboard capture ${spec.id}: model was not projected: ${terminal.writes.join(' ')}`,
+    )
   return { lines: validateCapturedFrame(spec, captured), model: capturedModel }
 }
 
@@ -1141,10 +1227,12 @@ export async function captureDashboardFrames(
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
   const mixedHarness = await prepareScenario()
+  const integrationHarness = await prepareIntegrationScenario()
   let happy: HappyScenario
   try {
     happy = await prepareHappyScenario()
   } catch (error) {
+    await integrationHarness.cleanup()
     await mixedHarness.cleanup()
     throw error
   }
@@ -1152,7 +1240,12 @@ export async function captureDashboardFrames(
   try {
     const frames: CapturedDashboardFrame[] = []
     for (const spec of FRAME_SPECS) {
-      const harness = spec.scenario === 'happy' ? happy.harness : mixedHarness
+      const harness =
+        spec.scenario === 'happy'
+          ? happy.harness
+          : spec.scenario === 'integration'
+            ? integrationHarness
+            : mixedHarness
       const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,
@@ -1286,7 +1379,11 @@ export async function captureDashboardFrames(
       },
     }
   } finally {
-    await Promise.all([mixedHarness.cleanup(), happy.harness.cleanup()])
+    await Promise.all([
+      integrationHarness.cleanup(),
+      mixedHarness.cleanup(),
+      happy.harness.cleanup(),
+    ])
   }
 }
 
