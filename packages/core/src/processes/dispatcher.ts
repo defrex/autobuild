@@ -4374,14 +4374,15 @@ export class Dispatcher {
         if (!forge.remoteBranchSha || (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite))
           throw new Error('forge cannot snapshot destination presence')
         const head = await forge.remoteBranchSha(branch)
-        const evidence = JSON.stringify(
-          [
+        const evidence = JSON.stringify({
+          version: 2,
+          revisions: [
             ...inputs.entries
               .filter(({ digest }) => digest.mergedSha || digest.nodeContribution)
               .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq]),
             ...[...inputs.states].map(([slug, state]) => [slug, state.lastSeq]),
           ].sort(),
-        )
+        })
         const cached = this.store.repositoryFacts().presence[destination]
         if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
           observed = cached

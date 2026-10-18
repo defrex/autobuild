@@ -294,6 +294,26 @@ for (const blocked of [false, true]) {
           payload: { outcome: 'merged' },
         })
       }
+      if (blocked) {
+        // A legacy observation can have identical evidence revisions but an
+        // incomplete identity set. The upgraded derivation must not reuse it.
+        const digests = await h.store.getRepoBuildDigests(h.origin)
+        const evidence = JSON.stringify(
+          [...digests].map(([slug, digest]) => [slug, digest.readinessChangeSeq]).sort(),
+        )
+        await h.store.ensureRepo(h.origin)
+        await h.store.appendRepo(h.origin, {
+          actor: DISPATCHER,
+          type: 'change-presence.observed',
+          payload: {
+            branch: 'main',
+            destination: 'root:main',
+            head: sha,
+            evidence,
+            identities: [],
+          },
+        })
+      }
       reads.length = 0
       await h.dispatcher.tick()
       expect(h.tickets.claims).toContain('DEP')
