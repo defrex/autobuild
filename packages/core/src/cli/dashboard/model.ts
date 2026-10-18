@@ -894,7 +894,11 @@ export function projectBuildFromFacts(
                   : !state.integration?.cycle ||
                       !integrationHeadVerified(state, state.integration.cycle.head)
                     ? 'integration awaits verification'
-                    : !state.autoMerge.requested
+                    : !(
+                          state.autoMerge.requested &&
+                          state.autoMerge.explicitCommandSeq !== undefined &&
+                          state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
+                        )
                       ? 'integration awaits explicit per-build consent'
                       : 'integration awaits guarded landing',
             }),
@@ -1266,7 +1270,9 @@ export function buildVocabulary(state: BuildState): {
                     : integrationCurrent(state) && integrationComplete(state)
                       ? !integrationHeadVerified(state, state.integration!.cycle!.head)
                         ? 'verifying'
-                        : state.autoMerge.requested
+                        : state.autoMerge.requested &&
+                            state.autoMerge.explicitCommandSeq !== undefined &&
+                            state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
                           ? 'ready to land'
                           : 'awaiting consent'
                       : !state.nodeOpened
