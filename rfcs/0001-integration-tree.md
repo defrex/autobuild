@@ -1,8 +1,18 @@
 # RFC 0001 — The integration tree (Autobuild 1.0)
 
-**Status:** proposed, 2026-10-17. Nothing here is decided design until the
-ticket that builds it amends `SPEC.md`. Where this document and `SPEC.md`
-disagree, `SPEC.md` describes the system as it runs today.
+**Status:** accepted, 2026-10-18. The series is implemented; this document
+preserves the proposal's history. The running design lives in
+[SPEC](../SPEC.md#131-node-tickets-and-targets), with adopter references for
+[integration trees](../docs/integration-tree.md), [landing](../docs/landing-policy.md),
+[restacking](../docs/restacking.md), and [migration](../docs/migration-1.0.md).
+Cutting the 1.0 release remains a separate maintainer action.
+
+**Implementation disposition:** §13's proposed in-flight compatibility promise
+was superseded by [SPEC §15.7](../SPEC.md#157-post-pr-lifecycle-d1--confirmed):
+historical merge reconciliations retain meaning and establish later replay
+bases, while resumed builds use current engine routing at newly reached
+boundaries. There is no claim-version compatibility switch. See the migration
+reference before upgrading. The §14 questions are resolved below.
 
 **Hat:** product. Every change proposed here ships to every user. Nothing in it
 encodes this repository's configuration.
@@ -473,8 +483,9 @@ part of why this is 1.0.
   `ab upgrade` translates the repository's auto-merge default into an
   equivalent `[[landing]]` rule set (on → leaves `auto`; off → leaves
   `consent`), and explains it.
-- **Builds in flight at upgrade** finish under the old merge standard. The
-  model applies to builds claimed by a 1.0 dispatcher.
+- **Builds in flight at upgrade (superseded proposal).** The original promise
+  that these finish under the old merge standard was not implemented; see the
+  implementation disposition above and the migration reference.
 - **Skills.** `ab-reconcile` is rewritten around resolving one change's replay.
   `ab-spec` and `ab-tickets` learn node tickets and targets, `ab-operate` learns
   the consent queue, and `ab-guide` documents the model and the landing
@@ -485,28 +496,28 @@ part of why this is 1.0.
   with this rationale, the pipeline grammar in §5 gains the integration
   grammar, and §4 gains the ontology terms.
 
-## 14. Open questions
+## 14. Question dispositions
 
-1. **Persistent nodes.** Should a node be able to land repeatedly and stay open,
-   as a permanent `staging`? Fast-forward landings plus identity-based dropping
-   make it mechanically possible. The proposal starts with finite nodes and an
-   out-of-tree release step.
-2. **Linear representation** of `kind` and `target`: a parent/sub-issue relation
-   gated by a node label, a label convention, or a custom field.
-3. **Node verification.** Are a node's verify steps the repository's ordinary
-   steps, or a separately configured list? Should an integration build run an
-   agent check of the node head against the node spec's acceptance criteria?
-4. **Cascade cadence.** Eager restack is the design. Do busy roots need a
-   per-node throttle, or a rule that defers conflicted node restacks until the
-   node is complete?
-5. **Default landing policy** for a fresh `ab init`, and whether it differs
-   when no node has ever been opened.
-6. **Consent on an incomplete node.** The proposal requires completeness, with
-   remaining tickets moved out explicitly. Should consent be allowed to imply
-   "move the rest to the parent"?
-7. **Archive-ref retention**, folded into spec §18's retention thread.
-8. **Release outside the tree.** Should cutting a release (this repository's
-   `release` skill pattern) eventually be a first-class tree operation?
+1. **Persistent nodes:** finite nodes are the decided model; landing closes
+   admission and completes the ticket ([SPEC §13.1](../SPEC.md#131-node-tickets-and-targets)).
+   Perpetual staging nodes are not part of this design.
+2. **Linear representation:** exact `node` label plus the parent relation only
+   when the parent is a node ([ticket metadata](../docs/integration-tree.md#tickets-and-admission)).
+3. **Node verification:** all ordinary configured verify steps with normal path
+   applicability; no separate implicit agent check
+   ([node lifecycle](../docs/integration-tree.md#collect-verify-and-land)).
+4. **Cascade cadence:** eager, coalesced after the active transaction, with no
+   new throttle or completeness deferral ([restacking](../docs/restacking.md#timing-and-evidence)).
+5. **Defaults:** leaf auto, node consent, whether or not a node has opened
+   ([landing policy](../docs/landing-policy.md)).
+6. **Incomplete consent:** refused with open children named; move remaining
+   tickets explicitly rather than interpreting consent as a metadata mutation
+   ([node lifecycle](../docs/integration-tree.md#collect-verify-and-land)).
+7. **Archive retention:** refs remain indefinite; a future retention policy is
+   carried in [SPEC §18](../SPEC.md#18-open-threads), item 2.
+8. **Release:** remains outside the tree as a maintainer operation; a first-class
+   release operation is not part of this design
+   ([node lifecycle](../docs/integration-tree.md#collect-verify-and-land)).
 
 ## 15. Delivery plan
 

@@ -1,0 +1,117 @@
+# Integration trees
+
+Autobuild organizes work as a tree rooted at the configured `baseBranch`.
+Work tickets are leaves; node tickets are finite integration points that collect
+children before landing into their parent. Nodes can nest. An omitted target
+means the root, so repositories can continue sending every leaf directly there.
+Blockers form a separate graph. In repositories with nodes, a blocker with a
+build resolves only when its change identity is present in the dependent's
+sampled destination, regardless of source completion. Without nodes, or for a
+blocker without a build, native done-state resolution remains in effect.
+See [restacking](restacking.md) for change identity and replay.
+
+Presence is checked only at claim, never to interrupt existing work. The newest
+build generation supplies evidence; ambiguous or unavailable evidence leaves the
+dependent queued. Confirmed landing SHA reachability can prove presence without
+a trailer, and a landed node transports its whole owned contribution. Empty
+completed nodes contribute nothing. Sibling work waits for landing into the common
+ancestor and cascade; same-node landings satisfy presence directly.
+
+## Tickets and admission
+
+Tickets default to `kind = "work"` with no `target`. A target is a node ticket
+id in the same source. Targets must exist and be nodes; self-targets and ancestor
+cycles are refused. A node with targeting tickets cannot be demoted, even when
+those children are completed. Clear or reparent its children first.
+
+File tickets persist kind and target in frontmatter. Hosted tickets validate
+changes transactionally within the project. Linear uses the exact `node` label
+for kind and the parent relation for target only when that parent has the node
+label. Ordinary grouping parents remain grouping and survive unrelated edits;
+explicit target clear clears the parent relation. Label replacement can demote a
+node and receives the same guards; explicit kind and labels must agree. Linear
+label and parent connections are fully paginated and guarded writes are refused.
+Kind and target participate in content revisions; file writes retain their
+best-effort unlocked semantics. `ab ticket edit` displays these fields read-only.
+
+A ready node opens `ab-node/<slug>` at its parent's sampled head. Opening intent
+and acknowledgement are durable. Its branch admits children immediately, with
+no placeholder commit or PR. Idle nodes need no provisioned workspace, runner,
+execution lease or dispatch capacity. A PR opens or is adopted when the node
+has commits its current parent lacks; parent-only advancement remains empty.
+
+Claims freeze the destination build generation and branch. Missing, unopened,
+landed, closed or aborted targets leave work queued with diagnostics. The newest
+generation wins; a closed generation never falls back to an older open one.
+Source metadata and effective ancestry are different: `ab ticket tree` shows
+source targets, while build status shows the effective destination.
+
+## Collect, verify and land
+
+Create a node and direct work into it (replace ids with those returned by your
+source):
+
+```sh
+ab ticket create "Release candidate" --body candidate.md --kind node
+ab ticket update WORK-2 --target NODE-1
+ab ticket tree
+ab ticket tree --json
+```
+
+Use the ordinary native ticket lifecycle and ready gate to dispatch the node
+and children. The tree includes completed work and empty nodes, sorted by id
+among siblings; invalid external graphs and listing diagnostics remain explicit.
+Each leaf runs the normal spec, plan/review, implement/review, verify and finalize
+pipeline against its frozen destination.
+
+A node collects until every ticket targeting it is natively done or cancelled,
+all frozen child claims have settled, and at least one contribution has landed.
+Triage, backlog and ready children keep it incomplete. Exhaustive enumeration
+failures fail closed. Completeness is sampled again before verification and
+publication; tracker edits cannot be transactional with a forge write.
+
+The kernel runs all configured verify steps with normal path applicability on
+the exact node head and parent. Either moving invalidates eligibility, even a
+clean restack. Failed verification blocks the node: file a repair child targeting
+it; the repaired landed head permits a new cycle. Historical reports keep their
+actual head/base citations. Integration grammar is collect → verify → land →
+close, with restacking and repair cycles along the way.
+
+[Landing policy](landing-policy.md) defaults nodes to consent. Once complete and
+verified, `ab land <slug>` authorizes landing; it refuses incomplete nodes and
+names open children. `ab hold <slug>` works before readiness and withdraws
+consent. Automatic authorization still requires every readiness and merge gate.
+A landed node completes its ticket and closes admission; it is not a perpetual
+staging branch. Releases remain separate maintainer operations.
+
+Human forge merges are an explicit escape hatch, including while incomplete,
+paused or unverified. The janitor records human provenance and whether the actual
+merged head was verified, then completes the ticket. Closing without merge or
+aborting closes admission and returns the ticket to triage; already claimed
+children retain their frozen destination.
+
+## Changing a parent
+
+`ab ticket update NODE-1 --target NODE-2` reparents an open node;
+`--no-target` moves it to the root. Omitted fields preserve existing values;
+`--kind work` resets kind when valid. Only owned contributions replay onto the
+new parent, then the same PR is retargeted. Empty and same-head moves need no
+new commit or PR. Descendants follow through the normal cascade.
+
+The request is durable before the provider write. Source readback accepts the
+new effective ancestry; branch publication, PR retargeting and completion have
+separate receipts. Pending moves fence verification and landing and keep both
+parents incomplete. Reparenting revokes land consent; holds survive. Policy is
+sampled again for the new parent, including when both parents have the same SHA.
+
+Cycles, unopened/terminal parents, landing or closing nodes, unsupported PR
+retargeting and busy writer operations refuse or defer the move with a reason.
+Invalid direct provider edits leave effective ancestry unchanged and produce
+durable diagnostics; restoring it clears the current refusal. Missing source
+reads withhold acceptance, while an accepted operation can finish its reserved
+Git/PR effects without the tracker. Ambiguous writes are reread on recovery.
+Changing a claimed work ticket's target is refused before any combined patch is
+written: abort and re-dispatch instead.
+
+See [forge requirements](landing-policy.md#forge-requirements),
+[restacking](restacking.md), and [migration from 0.x](migration-1.0.md).
