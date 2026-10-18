@@ -208,6 +208,20 @@ test('an unfenced tree mismatch raises durable attention after completion and au
     })
     await h.store.append(node.slug, {
       actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 1, url: 'https://forge/pr/1', headSha: head } },
+    })
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'landing.native-applied',
+      payload: { enabled: false, operation: 'node-restack' },
+    })
+    // Terminal audit work must not re-enter PR settlement or probe the forge.
+    h.forgeAdapter.getPrState = async () => {
+      throw new Error('terminal PR must not be reprobed')
+    }
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
@@ -227,6 +241,11 @@ test('an unfenced tree mismatch raises durable attention after completion and au
     expect(
       (await h.store.getRepoBuildDigests(h.origin)).get(node.slug)?.integrationAuditPending,
     ).toBeUndefined()
+    await h.dispatcher.tick()
+    expect((await h.events(node.slug)).filter((e) => e.type === 'build.completed')).toHaveLength(1)
+    expect(
+      (await h.events(node.slug)).filter((e) => e.type === 'integration.audited'),
+    ).toHaveLength(1)
     await auditIntegrationLanding(deps)
     await auditIntegrationLanding(deps)
     const state = reduceBuild(await h.events(node.slug))

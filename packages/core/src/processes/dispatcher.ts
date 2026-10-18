@@ -1815,7 +1815,13 @@ export class Dispatcher {
         }
         // A replacement head is followed first by a forge read and cancellation,
         // ahead of node cascade, controls, or any other action for this build.
-        if (state.pr && state.landing?.native?.operation) {
+        if (
+          state.status !== 'done' &&
+          state.status !== 'aborted' &&
+          state.prState === 'open' &&
+          state.pr &&
+          state.landing?.native?.operation
+        ) {
           const path = this.forgeWorkspacePathOf(workspace)
           const observed = await this.deps.forge.getPrState(path, state.pr.number)
           if (observed.state !== 'open') {

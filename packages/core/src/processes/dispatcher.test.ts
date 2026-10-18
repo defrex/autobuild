@@ -4988,6 +4988,39 @@ describe('Dispatcher janitor', () => {
     }
   })
 
+  test.each(['merged', 'closed'] as const)(
+    'a %s replacement PR retries reclamation without repeating completion',
+    async (outcome) => {
+      const h = harness({ prAttachments: true })
+      const slug = await seedBuild(h, { slug: `replacement-${outcome}`, pr: PR })
+      await seedHostedPrAttachment(h, slug)
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'landing.native-applied',
+        payload: { enabled: false, operation: 'replacement' },
+      })
+      h.forge.setPrState(
+        1,
+        outcome === 'merged' ? { state: 'merged', sha: 'landed' } : { state: 'closed' },
+      )
+      h.forge.failNextPrAttachmentReclaim('temporary delete outage')
+      await h.dispatcher.tick()
+      const transitions = [...h.tickets.transitions]
+      const comments = [...h.tickets.comments]
+      expect(
+        (await h.store.getEvents(slug)).filter((e) => e.type === 'build.completed'),
+      ).toHaveLength(1)
+      expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+      expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+      const events = await h.store.getEvents(slug)
+      expect(events.filter((e) => e.type === 'build.completed')).toHaveLength(1)
+      expect(events.filter((e) => e.type === 'pr-attachment.reclaimed')).toHaveLength(1)
+      expect(h.forge.prAttachmentReclaims).toHaveLength(2)
+      expect(h.tickets.transitions).toEqual(transitions)
+      expect(h.tickets.comments).toEqual(comments)
+    },
+  )
+
   test('a done build retries transient reclamation, records attempts, and becomes idempotent', async () => {
     const h = harness({ prAttachments: true })
     const slug = await seedBuild(h, {
