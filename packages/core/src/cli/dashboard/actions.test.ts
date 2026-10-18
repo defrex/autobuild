@@ -48,3 +48,34 @@ describe('shared dashboard action availability', () => {
     expect(repositoryActionAvailability(model)).toMatchObject({ bulkPause: true, bulkResume: true })
   })
 })
+
+test.each(['collecting', 'verification failed'] as const)(
+  'integration consent remains revocable while %s',
+  (integration) => {
+    for (const autoMerge of ['requested', 'enabled', 'cancelling'] as const)
+      expect(
+        buildActionAvailability({
+          ...row('collecting'),
+          kind: 'integration',
+          integration,
+          autoMerge,
+        }).autoMerge,
+      ).toBe(true)
+    expect(
+      buildActionAvailability({
+        ...row('collecting'),
+        kind: 'integration',
+        integration,
+        autoMerge: 'off',
+      }).autoMerge,
+    ).toBe(false)
+    expect(
+      buildActionAvailability({
+        ...row('aborting'),
+        kind: 'integration',
+        integration,
+        autoMerge: 'requested',
+      }).autoMerge,
+    ).toBe(false)
+  },
+)

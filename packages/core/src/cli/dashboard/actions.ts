@@ -44,6 +44,7 @@ export function buildActionAvailability(build: DashboardBuild): DashboardActionA
     autoMerge:
       !['aborting', 'cleaning'].includes(build.status) &&
       (build.kind !== 'integration' ||
+        build.autoMerge !== 'off' ||
         ['awaiting consent', 'ready to land', 'verifying'].includes(build.integration ?? '')),
     answer: build.blockers.length > 0,
   }
