@@ -142,6 +142,7 @@ const restPrState = z
   .object({
     state: z.enum(['open', 'closed']),
     merged: z.boolean(),
+    auto_merge: z.object({}).passthrough().nullable().optional(),
     mergeable: z.boolean().nullable(),
     merge_commit_sha: z.string().min(1).nullable(),
     head: z.object({ sha: z.string().min(1) }).optional(),
@@ -885,7 +886,11 @@ export class GitHubForge implements Forge {
           state = { state: 'closed' }
           break
         case 'open':
-          state = { state: 'open', mergeable: view.mergeable }
+          state = {
+            state: 'open',
+            mergeable: view.mergeable,
+            ...(view.auto_merge !== undefined ? { nativeAutoMerge: view.auto_merge !== null } : {}),
+          }
       }
     }
     const etag = response.headers.etag

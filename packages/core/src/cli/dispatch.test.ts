@@ -1,3 +1,4 @@
+import { reduceBuild } from '../kernel/reducer'
 import { gitRewrite } from '../ports/forge/git-rewrite'
 /**
  * `ab dispatch` (src/cli/dispatch.ts): the operator entry into the outer loop.
@@ -123,6 +124,9 @@ readyLabels = ["autobuild"]
 # tickets default to state "Ready", so the gate names that state verbatim — the
 # file source's canonicalization is exercised in dispatcher-file-tickets.test.ts.
 readyState = "Ready"
+
+[[landing]]
+mode = "consent"
 `
 
 async function initOrigin(dir: string, toml = DISPATCH_CONFIG_TOML): Promise<void> {
@@ -1618,9 +1622,8 @@ describe('dispatcher run identity without a kernelRunId', () => {
       // The writing dispatcher is identifiable from the setting facts, while
       // the operator intent stays a human actor.
       expect(intake?.actor.kind).toBe('human')
-      expect(autoMerge?.actor.kind).toBe('human')
+      expect(autoMerge).toBeUndefined()
       expect(intake?.payload).toEqual({ enabled: false, run: started!.payload.run })
-      expect(autoMerge?.payload).toEqual({ enabled: true, run: started!.payload.run })
     } finally {
       await fx.cleanup()
     }
@@ -1740,7 +1743,7 @@ describe('abDispatch long-running view (AUT-647)', () => {
         (await fx.store.getEvents(second!.slug)).some(
           (event) => event.type === 'build.auto-merge-requested',
         ),
-      ).toBe(true)
+      ).toBe(false)
     } finally {
       stop.abort()
       await fx.cleanup()
@@ -1900,89 +1903,31 @@ triageState = "Triage"
     }
   }, 30_000)
 
-  test('claim-time auto-merge is visible immediately, survives a no-flag restart, and explicit off persists', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-auto-default', { title: 'Automatic landing' }),
-      happyHandlers(),
-    )
-    const firstTerminal = fakeTerminal(true, { columns: 180 })
+  test('retired launch default does not seed builds or write repository policy', async () => {
+    const fx = await makeFixture(readyTicket('T-policy'), happyHandlers())
     try {
       await abDispatch({
         targetRepo: fx.checkout,
-        env: { USER: 'dispatch-op' },
+        env: {},
         exec: spawnExec,
         stdout: () => {},
-        stderr: (line) => fx.err.push(line),
+        stderr: () => {},
         once: true,
         defaultAutoMerge: true,
         wire: fx.wire,
-        terminal: firstTerminal,
       })
-
       const [record] = await fx.store.listBuilds()
       expect(record).toBeDefined()
-      const events = await fx.store.getEvents(record!.slug)
-      const types = events.map((event) => event.type)
-      expect(types.indexOf('build.auto-merge-requested')).toBeGreaterThan(
-        types.indexOf('build.created'),
-      )
-      expect(types.indexOf('build.auto-merge-requested')).toBeLessThan(
-        types.indexOf('workspace.provisioned'),
-      )
-      const request = events.find((event) => event.type === 'build.auto-merge-requested')
-      expect(request?.actor).toEqual({ kind: 'human', user: 'dispatch-op' })
-
-      const firstBuildFrame = firstTerminal.frames.find((frame) =>
-        stripAnsi(frame).includes(record!.slug),
-      )
-      expect(firstBuildFrame).toBeDefined()
-      expect(stripAnsi(firstBuildFrame!)).toContain('auto merge')
-      expect(stripAnsi(firstTerminal.all())).toContain('auto merge ON')
-
-      const beforeRestart = await fx.store.getEvents(record!.slug)
-      const restartTerminal = fakeTerminal(true, { columns: 180 })
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'another-op' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-        terminal: restartTerminal,
-      })
-
-      expect(await fx.store.getEvents(record!.slug)).toEqual(beforeRestart)
-      const restarted = stripAnsi(restartTerminal.all())
-      expect(restarted).toContain('auto merge ON')
-      expect(restarted).toContain('auto merge')
       expect(
-        (await fx.store.getEvents(record!.slug)).filter(
+        (await fx.store.getEvents(record!.slug)).some(
           (event) => event.type === 'build.auto-merge-requested',
         ),
-      ).toHaveLength(1)
-
-      const overrideTerminal = fakeTerminal(true, { columns: 180 })
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'override-op' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        defaultAutoMerge: false,
-        wire: fx.wire,
-        terminal: overrideTerminal,
-      })
-      expect(stripAnsi(overrideTerminal.all())).toContain('auto merge OFF')
+      ).toBe(false)
       expect(
-        (await fx.store.getRepoEvents(fx.origin))
-          .filter((event) => event.type === 'dispatcher.auto-merge-default-set')
-          .map((event) => ({ actor: event.actor, enabled: event.payload.enabled })),
-      ).toEqual([
-        { actor: { kind: 'human', user: 'dispatch-op' }, enabled: true },
-        { actor: { kind: 'human', user: 'override-op' }, enabled: false },
-      ])
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'dispatcher.auto-merge-default-set',
+        ),
+      ).toBe(false)
     } finally {
       await fx.cleanup()
     }
@@ -4618,6 +4563,8 @@ type FakeInputKey =
   | 'home'
   | 'end'
   | 'auto-merge'
+  | 'hold'
+  | 'land'
   | 'intake'
   | 'pause'
   | 'resume'
@@ -4630,10 +4577,26 @@ type FakeInputKey =
   | 'backspace'
   | 'escape'
 
+function controlHistory(events: Awaited<ReturnType<BuildStore['getEvents']>>) {
+  return events.filter(
+    (event) =>
+      ![
+        'landing.native-applied',
+        'landing.native-enable-started',
+        'landing.decided',
+        'landing.command-acknowledged',
+      ].includes(event.type),
+  )
+}
+
 function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
   switch (key) {
     case 'auto-merge':
       return { type: 'text', text: 'm' }
+    case 'hold':
+      return { type: 'text', text: 'o' }
+    case 'land':
+      return { type: 'text', text: 'l' }
     case 'intake':
       return { type: 'text', text: 'i' }
     case 'pause':
@@ -6143,7 +6106,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(
         () =>
           latestDashboardFrame(termA).includes('intake ON') &&
-          latestDashboardFrame(termB).includes('auto merge OFF'),
+          latestDashboardFrame(termB).includes('intake ON'),
       )
 
       inputA.press('intake')
@@ -6154,27 +6117,11 @@ describe('abDispatch interactive keyboard controls', () => {
       )
       await waitFor(() => latestDashboardFrame(termB).includes('intake OFF'))
 
-      inputA.press('auto-merge')
-      await waitFor(
-        async () =>
-          reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-      )
-      await waitFor(() => latestDashboardFrame(termB).includes('auto merge ON'))
-
-      // B started from intake ON / auto-merge OFF. It must invert A's newer
-      // values, not those stale startup views.
       inputB.press('intake')
       await waitFor(
         async () => reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
       )
       await waitFor(() => latestDashboardFrame(termA).includes('intake ON'))
-      inputB.press('auto-merge')
-      await waitFor(
-        async () =>
-          !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-      )
-      await waitFor(() => latestDashboardFrame(termA).includes('auto merge OFF'))
-
       // Turn intake off once more, add work only after both processes have
       // observed it, and allow several ticks in each process. Neither may
       // claim from a value cached at startup or from its prior tick.
@@ -6219,9 +6166,7 @@ describe('abDispatch interactive keyboard controls', () => {
           ]),
       ).toEqual([
         ['operator-a', 'dispatcher.intake-set', false, true],
-        ['operator-a', 'dispatcher.auto-merge-default-set', true, true],
         ['operator-b', 'dispatcher.intake-set', true, true],
-        ['operator-b', 'dispatcher.auto-merge-default-set', false, true],
         ['operator-a', 'dispatcher.intake-set', false, true],
       ])
 
@@ -6299,58 +6244,6 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => stripAnsi(term.all()).includes('> Autobuild'))
 
-      // Global p/r are the bulk pause/resume controls, covered by their own
-      // test; this one stays on the toggles, so m is both the serialized
-      // synchronization point and the only action that may append a fact.
-      input.press('auto-merge')
-      await waitFor(
-        async () =>
-          reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-      )
-      await waitFor(() => latestDashboardFrame(term).includes('auto merge ON'))
-      input.press('auto-merge')
-      await waitFor(
-        async () =>
-          !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-      )
-      await waitFor(() => latestDashboardFrame(term).includes('auto merge OFF'))
-      expect(
-        (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length).map((event) => ({
-          actor: event.actor,
-          type: event.type,
-          payload: event.payload,
-        })),
-      ).toEqual([
-        // The loop journals its run boundary unconditionally — the run id is
-        // synthesized for plain dispatchers — then yields the repository lease
-        // to the standing holder; the yield is its only durable tick record.
-        {
-          actor: { kind: 'dispatcher' },
-          type: 'dispatcher.run-started',
-          payload: {
-            run: expect.stringMatching(/-dispatch-/),
-            pid: expect.any(Number),
-            host: expect.any(String),
-            effectiveConfig: { kind: 'dispatcher-effective-config', rev: expect.any(Number) },
-            roleWarnings: [],
-          },
-        },
-        {
-          actor: { kind: 'dispatcher' },
-          type: 'dispatcher.tick-yielded',
-          payload: { run: expect.stringMatching(/-dispatch-/), holder: 'other-dispatcher' },
-        },
-        {
-          actor: { kind: 'human', user: 'harvest-op' },
-          type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: true, run: expect.stringMatching(/-dispatch-/) },
-        },
-        {
-          actor: { kind: 'human', user: 'harvest-op' },
-          type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: false, run: expect.stringMatching(/-dispatch-/) },
-        },
-      ])
       for (const slug of ['alpha-work', 'beta-work']) {
         expect(await fx.store.getEvents(slug)).toEqual(beforeBuilds.get(slug)!)
       }
@@ -6419,13 +6312,11 @@ describe('abDispatch interactive keyboard controls', () => {
         },
       ])
       expect(repoAdded.slice(2).map((event) => event.type)).toEqual([
-        'dispatcher.auto-merge-default-set',
-        'dispatcher.auto-merge-default-set',
         'harvest.pause-requested',
         'harvest.resume-requested',
         'harvest.resumed',
       ])
-      for (const event of repoAdded.slice(2, 6)) {
+      for (const event of repoAdded.slice(2, 4)) {
         expect(event.actor).toEqual({
           kind: 'human',
           user: 'harvest-op',
@@ -6440,12 +6331,12 @@ describe('abDispatch interactive keyboard controls', () => {
       const repoBeforeBuildKeys = (await fx.store.getRepoEvents(fx.origin)).length
       input.press('intake')
       input.press('harvest-gate')
-      input.press('auto-merge')
+      input.press('hold')
       input.press('pause')
       await waitFor(async () => {
         const events = await fx.store.getEvents('alpha-work')
         return (
-          events.some((event) => event.type === 'build.auto-merge-requested') &&
+          events.some((event) => event.type === 'build.hold-requested') &&
           events.some((event) => event.type === 'build.pause-requested')
         )
       })
@@ -6457,7 +6348,7 @@ describe('abDispatch interactive keyboard controls', () => {
         (event) => event.actor.kind === 'human',
       )
       expect(human.slice(-2).map((event) => event.type)).toEqual([
-        'build.auto-merge-requested',
+        'build.hold-requested',
         'build.pause-requested',
       ])
       expect(
@@ -6542,156 +6433,33 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('global default fans out onto in-flight builds, seeds later claims, and a per-build cancel stands until the default moves again', async () => {
-    const scanClock = manualClock()
+  test('legacy repository defaults never seed an in-flight build', async () => {
     const fx = await makeFixture(
-      readyTicket('T-existing-default', { title: 'Existing work' }),
+      readyTicket('T-existing', { title: 'Existing work' }),
       happyHandlers(),
-      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 3'),
-      scanClock,
     )
-    let run: Promise<void> | undefined
-    const input = fakeInput()
-    const term = fakeTerminal(true, { columns: 180 })
     try {
-      // Establish an in-flight build before this dispatch process chooses its
-      // default. The ON toggle must fan out onto it, and the OFF toggle must
-      // withdraw — the global row describes what current builds will do.
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: { kind: 'human', user: 'legacy' },
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      })
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
-        stderr: (line) => fx.err.push(line),
+        stderr: () => {},
         once: true,
         wire: fx.wire,
       })
-      // (Snapshot premise removed: the fan-out now writes to this build.)
-
-      let sleeps = 0
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'default-op' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 1,
-        sleep: async () => {
-          scanClock.advance(60_000)
-          sleeps += 1
-          if (sleeps === 1) {
-            input.press('auto-merge')
-            await waitFor(
-              async () =>
-                reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-            )
-            await waitFor(() => latestDashboardFrame(term).includes('auto merge ON'))
-            fx.tickets.add(readyTicket('T-seeded-default', { title: 'Seeded work' }))
-            return
-          }
-          if (sleeps === 2) {
-            await waitFor(async () =>
-              (await fx.store.getEvents('seeded-work')).some(
-                (event) => event.type === 'build.auto-merge-requested',
-              ),
-            )
-            await waitFor(() => /^ {3}.*seeded-work.*RUNNING/m.test(stripAnsi(term.all())))
-
-            // Global → existing-work → seeded-work. Cancelling this seeded
-            // build is authoritative even while the global default stays on.
-            input.press('down')
-            await waitFor(() => /^ > .*existing-work/m.test(stripAnsi(term.all())))
-            input.press('down')
-            await waitFor(() => /^ > .*seeded-work/m.test(stripAnsi(term.all())))
-            input.press('auto-merge')
-            await waitFor(async () =>
-              (await fx.store.getEvents('seeded-work')).some(
-                (event) => event.type === 'build.auto-merge-cancelled',
-              ),
-            )
-
-            // Return to global and turn the claim-time default off. This must
-            // not emit another build cancellation.
-            input.press('up')
-            input.press('up')
-            input.press('auto-merge')
-            await waitFor(
-              async () =>
-                !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
-            )
-            await waitFor(() => latestDashboardFrame(term).includes('auto merge OFF'))
-            fx.tickets.add(readyTicket('T-unseeded-default', { title: 'Unseeded work' }))
-            return
-          }
-          if (sleeps === 3) {
-            await waitFor(async () =>
-              (await fx.store.getEvents('unseeded-work')).some(
-                (event) => event.type === 'spec.imported',
-              ),
-            )
-            await waitFor(
-              async () =>
-                (await fx.store.getEvents('seeded-work')).some(
-                  (event) => event.type === 'finalize.completed',
-                ) &&
-                (await fx.store.getEvents('unseeded-work')).some(
-                  (event) => event.type === 'finalize.completed',
-                ),
-              10_000,
-            )
-            return
-          }
-          input.press('interrupt')
-        },
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await run
-      run = undefined
-
-      // The ON fact fanned out onto the in-flight build (the operator never
-      // selected its row); the OFF fact withdrew it. Both commands carry the
-      // toggling operator's attribution and the fact's seq as provenance.
-      const existing = await fx.store.getEvents('existing-work')
       expect(
-        existing
-          .filter((event) => event.type.startsWith('build.auto-merge'))
-          .map((event) => [event.type, event.actor, event.payload]),
-      ).toEqual([
-        [
-          'build.auto-merge-requested',
-          { kind: 'human', user: 'default-op' },
-          { defaultSeq: expect.any(Number) },
-        ],
-        [
-          'build.auto-merge-cancelled',
-          { kind: 'human', user: 'default-op' },
-          { defaultSeq: expect.any(Number) },
-        ],
-      ])
-      const seeded = await fx.store.getEvents('seeded-work')
-      expect(seeded.filter((event) => event.type === 'build.auto-merge-requested')).toHaveLength(1)
-      expect(seeded.filter((event) => event.type === 'build.auto-merge-cancelled')).toHaveLength(1)
-      expect(seeded.find((event) => event.type === 'build.auto-merge-requested')?.actor).toEqual({
-        kind: 'human',
-        user: 'default-op',
-      })
-      // The claim sampled the ON fact, so its materialized request carries the
-      // fact's seq — the same provenance a fan-out command would record.
-      expect(seeded.find((event) => event.type === 'build.auto-merge-requested')?.payload).toEqual({
-        defaultSeq: expect.any(Number),
-      })
-      expect(
-        (await fx.store.getEvents('unseeded-work')).some(
+        (await fx.store.getEvents('existing-work')).some(
           (event) => event.type === 'build.auto-merge-requested',
         ),
       ).toBe(false)
-      expect(fx.cliErrors).toEqual([])
-      expect(fx.err).toEqual([])
     } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
@@ -7193,7 +6961,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('Down selects by slug; p pauses/cancels while rapid m toggles in order', async () => {
+  test('Down selects by slug; pause and repeated hold commands stay ordered', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-alpha', { title: 'Alpha work' }),
@@ -7239,8 +7007,8 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /beta-work.*PAUSING/.test(latestDashboardFrame(term)))
       expect(latestDashboardFrame(term)).toContain('p cancel pause')
       input.press('pause')
-      input.press('auto-merge')
-      input.press('auto-merge')
+      input.press('hold')
+      input.press('hold')
       await waitFor(async () => {
         const events = await fx.store.getEvents('beta-work')
         return (
@@ -7248,8 +7016,8 @@ describe('abDispatch interactive keyboard controls', () => {
             [
               'build.pause-requested',
               'build.resume-requested',
-              'build.auto-merge-requested',
-              'build.auto-merge-cancelled',
+              'build.hold-requested',
+              'build.hold-requested',
             ].includes(event.type),
           ).length === 4
         )
@@ -7282,8 +7050,8 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(commands.map((event) => event.type).slice(-4)).toEqual([
         'build.pause-requested',
         'build.resume-requested',
-        'build.auto-merge-requested',
-        'build.auto-merge-cancelled',
+        'build.hold-requested',
+        'build.hold-requested',
       ])
       expect(
         commands
@@ -7681,7 +7449,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('detail view routes m and blocked r to its build and Escape cancels only the modal', async () => {
+  test('detail view routes hold and blocked resume to its build and Escape cancels only the modal', async () => {
     const fx = await makeFixture(
       readyTicket('T-detail-actions', { title: 'Detail actions' }),
       happyHandlers(),
@@ -7731,11 +7499,11 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Build  detail-actions'))
 
-      input.press('auto-merge')
+      input.press('hold')
       await waitFor(async () =>
         (await fx.store.getEvents('detail-actions')).some(
           (event) =>
-            event.type === 'build.auto-merge-requested' &&
+            event.type === 'build.hold-requested' &&
             event.actor.kind === 'human' &&
             event.actor.user === 'detail-op',
         ),
@@ -7945,7 +7713,9 @@ describe('abDispatch interactive keyboard controls', () => {
         return limit > 0 && capture.model.view.scroll === limit
       })
       expect(latestPaintedFrame(term)).toContain('runtime')
-      expect(await fx.store.getEvents('resume-clamp')).toEqual(before)
+      expect(controlHistory(await fx.store.getEvents('resume-clamp'))).toEqual(
+        controlHistory(before),
+      )
 
       input.press('interrupt')
       await run
@@ -8020,7 +7790,9 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('escape')
       await waitFor(() => /^ > .*drilldown-work/m.test(latestDashboardFrame(term)))
 
-      expect(await fx.store.getEvents('drilldown-work')).toEqual(before)
+      expect(controlHistory(await fx.store.getEvents('drilldown-work'))).toEqual(
+        controlHistory(before),
+      )
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
       input.press('interrupt')
       await run
@@ -8146,7 +7918,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.text('x')
       input.paste('pasted')
       await new Promise((resolve) => setTimeout(resolve, 700))
-      expect(await fx.store.getEvents('watch-work')).toEqual(before)
+      expect(controlHistory(await fx.store.getEvents('watch-work'))).toEqual(controlHistory(before))
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
       expect(latestPaintedFrame(term)).toContain('Session  watch-work')
       expect(latestPaintedFrame(term)).not.toContain('Abort watch-work')
@@ -8172,7 +7944,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('right')
       await waitFor(() => latestPaintedFrame(term).includes(`stream ${stream.id} (open)`))
       expect(latestPaintedFrame(term)).toMatch(/>\s+implement phase implement round 1 runtime pi/)
-      expect(await fx.store.getEvents('watch-work')).toEqual(before)
+      expect(controlHistory(await fx.store.getEvents('watch-work'))).toEqual(controlHistory(before))
 
       input.press('interrupt')
       await run
@@ -8519,7 +8291,9 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('resume')
       await waitFor(() => stripAnsi(term.all()).includes('Resume '))
-      expect(await fx.store.getEvents('guidance-work')).toHaveLength(before.length)
+      expect(controlHistory(await fx.store.getEvents('guidance-work'))).toHaveLength(
+        controlHistory(before).length,
+      )
 
       // m/p/d are feedback characters while the modal is active, never global
       // actions. Backspace edits by code point before Enter submits.
@@ -8600,7 +8374,9 @@ describe('abDispatch interactive keyboard controls', () => {
     await waitFor(() => new RegExp(`^ > .*${slug}`, 'm').test(stripAnsi(term.all())))
     input.press('resume')
     await waitFor(() => stripAnsi(term.all()).includes(`Resume ${slug}`))
-    expect(await fx.store.getEvents(slug)).toHaveLength(before.length)
+    expect(controlHistory(await fx.store.getEvents(slug))).toHaveLength(
+      controlHistory(before).length,
+    )
     return { term, input, run, before }
   }
 
@@ -8668,7 +8444,9 @@ describe('abDispatch interactive keyboard controls', () => {
       // No part of the paste is interpreted as submit, however many line
       // breaks it carries.
       await new Promise((resolve) => setTimeout(resolve, 30))
-      expect(await fx.store.getEvents('paste-work')).toHaveLength(before.length)
+      expect(controlHistory(await fx.store.getEvents('paste-work'))).toHaveLength(
+        controlHistory(before).length,
+      )
 
       input.press('enter')
       await waitFor(async () =>
@@ -8835,149 +8613,48 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('finalize blocked by auto-merge recovers after cancellation and an empty dashboard retry', async () => {
-    const clock = manualClock()
-    const handlers = happyHandlers()
-    const happyPlan = handlers.plan!
-    const happyFinalize = handlers.finalize!
-    let releasePlan!: () => void
-    let planReleased = false
-    const planGate = new Promise<void>((resolve) => {
-      releasePlan = () => {
-        planReleased = true
-        resolve()
-      }
-    })
-    handlers.plan = async (cli) => {
-      await planGate
-      return happyPlan(cli)
-    }
-    const blocker =
-      'Finalize opened the PR, but native auto-merge could not be enabled; cancel it and retry.'
-    handlers.finalize = async (cli) => {
-      try {
-        return await happyFinalize(cli)
-      } catch (error) {
-        if (!String(error).includes('permission denied enabling native auto-merge')) {
-          throw error
-        }
-        await cli.run(['escalate', blocker])
-      }
-    }
-
+  test('native enable failure after finalize is retried by the janitor and a hold withdraws consent', async () => {
     const fx = await makeFixture(
       readyTicket('T-finalize-retry', { title: 'Finalize retry' }),
-      handlers,
-      DISPATCH_CONFIG_TOML,
-      clock,
+      happyHandlers(),
     )
-    const nativeSetAutoMerge = fx.forge.setAutoMerge.bind(fx.forge)
-    fx.forge.setAutoMerge = async (workspacePath: string, number: number, enabled: boolean) => {
-      if (enabled) {
-        throw new Error('permission denied enabling native auto-merge')
-      }
-      return nativeSetAutoMerge(workspacePath, number, enabled)
-    }
-
-    const term = fakeTerminal()
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      run = abDispatch({
+    const run = () =>
+      abDispatch({
         targetRepo: fx.checkout,
-        env: { USER: 'manual-merge-op' },
+        env: {},
         exec: spawnExec,
         stdout: () => {},
         stderr: (line) => fx.err.push(line),
-        intervalMs: 5,
+        once: true,
         wire: fx.wire,
-        terminal: term,
-        input,
       })
-      await waitFor(() => stripAnsi(term.all()).includes('finalize-retry'))
-      input.press('down')
-      await waitFor(() => /^ > .*finalize-retry/m.test(stripAnsi(term.all())))
-
-      // Hold plan long enough to record durable pre-PR auto-merge intent.
-      input.press('auto-merge')
-      await waitFor(async () =>
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'build.auto-merge-requested',
-        ),
-      )
-      releasePlan()
-
-      await waitFor(
-        async () =>
-          (await fx.store.getEvents('finalize-retry')).some(
-            (event) => event.type === 'escalation.raised',
-          ),
-        5_000,
-      )
-      await waitFor(() => stripAnsi(term.all()).includes(blocker), 5_000)
-      expect(fx.forge.opened).toHaveLength(1)
-      expect(
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'finalize.completed',
-        ),
-      ).toBe(false)
-
-      // The operator chooses manual merge, then submits the blocked-resume
-      // field empty. No direct launch occurs; the ordinary lease sweep owns
-      // durable reattachment after the parked runner's lease expires.
-      input.press('auto-merge')
-      await waitFor(async () =>
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'build.auto-merge-cancelled',
-        ),
-      )
-      input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
-      input.press('enter')
-      await waitFor(async () =>
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
-        ),
-      )
-      clock.advance(120_000)
-      await waitFor(
-        async () =>
-          (await fx.store.getEvents('finalize-retry')).some(
-            (event) => event.type === 'finalize.completed',
-          ),
-        5_000,
-      )
-      input.press('interrupt')
-      await run
-      run = undefined
-
-      const events = await fx.store.getEvents('finalize-retry')
-      const retry = events.find(
-        (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
-      )
-      const cancellation = events.find((event) => event.type === 'build.auto-merge-cancelled')
-      const completed = events.find((event) => event.type === 'finalize.completed')
-      expect(retry?.actor).toEqual({ kind: 'human', user: 'manual-merge-op' })
-      expect(retry?.payload).toMatchObject({
-        answer: expect.stringContaining('no feedback'),
-        resolution: 'retry',
+    try {
+      await run()
+      const slug = 'finalize-retry'
+      await fx.store.append(slug, {
+        actor: { kind: 'human', user: 'operator' },
+        type: 'build.auto-merge-requested',
+        payload: {},
       })
-      expect(Date.parse(retry!.ts)).not.toBeNaN()
-      expect(retry!.seq).toBeGreaterThan(cancellation!.seq)
-      expect(completed!.seq).toBeGreaterThan(retry!.seq)
-      expect(fx.forge.opened).toHaveLength(1) // retry adopted the existing PR
-      expect(fx.forge.autoMergeCalls.at(-1)).toMatchObject({
-        number: 1,
-        enabled: false,
+      const set = fx.forge.setAutoMerge.bind(fx.forge)
+      fx.forge.setAutoMerge = async (...args) => {
+        if (args[2]) throw new Error('permission denied enabling native auto-merge')
+        return set(...args)
+      }
+      await run()
+      expect(fx.err.join(' ')).toContain('permission denied enabling native auto-merge')
+      await fx.store.append(slug, {
+        actor: { kind: 'human', user: 'operator' },
+        type: 'build.hold-requested',
+        payload: {},
       })
-      expect(await fx.forge.getPrState('', 1)).toMatchObject({ state: 'open' })
-      expect(events.filter((event) => event.type === 'escalation.raised')).toHaveLength(1)
-      expect(fx.cliErrors).toHaveLength(1)
-      expect(fx.cliErrors[0]).toContain('permission denied enabling native auto-merge')
+      await run()
+      const events = await fx.store.getEvents(slug)
+      expect(events.filter((event) => event.type === 'finalize.completed')).toHaveLength(1)
+      expect(events.some((event) => event.type === 'escalation.raised')).toBe(false)
+      expect(fx.forge.isAutoMergeEnabled(1)).toBe(false)
+      expect(reduceBuild(events).landing?.command?.kind).toBe('hold')
     } finally {
-      if (!planReleased) releasePlan()
-      input.press('interrupt')
-      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
@@ -9028,7 +8705,9 @@ describe('abDispatch interactive keyboard controls', () => {
       input.text('do not submit this')
       input.press('escape')
       await new Promise((resolve) => setTimeout(resolve, 30))
-      expect(await fx.store.getEvents('cancel-work')).toEqual(before)
+      expect(controlHistory(await fx.store.getEvents('cancel-work'))).toEqual(
+        controlHistory(before),
+      )
       expect(stripAnsi(term.all())).toContain('Cancellation must leave this blocker untouched')
       input.press('interrupt')
       await run
@@ -9757,7 +9436,7 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
       expect(frame).toContain('ESCALATED')
       expect(frame).toContain('no progress for 3 rounds')
       expect(frame).toContain('intake OFF')
-      expect(frame).toContain('auto merge ON')
+      expect(frame).not.toContain('auto merge ON')
       expect(expectedHarvest?.run).toBe('equiv-run')
       expect(expectedSettings).toEqual({ intake: false, paused: false, defaultAutoMerge: true })
 

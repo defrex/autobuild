@@ -1,3 +1,4 @@
+import { suspendNativeLanding } from '../kernel/landing-publication'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
 import { readBuildFacts, readPhaseFailures } from '../store/reduced-reads'
 import type { IdSource } from '../ids'
@@ -72,6 +73,7 @@ export async function settlePendingPublication(
       ref: `refs/autobuild/archive/${slug}/${sha}`,
       sha,
     }))
+    await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
     const result = await publication.rewrite({
       ref,
       sha: request.payload.sha,
@@ -144,6 +146,7 @@ export async function settlePendingPublication(
       throw new Error('reconcile publication target differs from the recorded start')
     const tips = new Set([...events.gitTips, request.payload.sha])
     const archives = [...tips].map((sha) => ({ ref: `refs/autobuild/archive/${slug}/${sha}`, sha }))
+    await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
     const result = await publication.rewrite({
       ref,
       sha: request.payload.sha,
@@ -245,6 +248,7 @@ export async function settlePendingPublication(
       const ref = events.workspace?.ref
       if (ref === undefined)
         throw new Error(`build ${slug} has a publication request but no open workspace`)
+      await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
       await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
     }
   } catch (error) {

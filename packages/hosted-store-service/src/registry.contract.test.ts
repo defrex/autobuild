@@ -337,12 +337,12 @@ describe('agent tool registry contract', () => {
         clock,
       }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/control`, {
-      action: 'auto-merge-on',
+      action: 'hold',
     })
     const tool = await toolFor(toolWorld)('builds.control', {
       repo,
       slug: 'demo',
-      action: 'auto-merge-on',
+      action: 'hold',
     })
     expectEqual(tool, route.body)
     expectJsonClean(tool)
@@ -470,10 +470,10 @@ describe('agent tool registry contract', () => {
         secret,
         clock,
       }),
-    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/settings/auto-merge-default/toggle`)
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/settings/intake/toggle`)
     const tool2 = await toolFor(toolWorld2)('repository.settings', {
       repo,
-      setting: 'auto-merge-default',
+      setting: 'intake',
     })
     expectEqual(tool2, route2.body)
     expectJsonClean(tool2)
@@ -897,7 +897,7 @@ describe('agent tool registry contract', () => {
     const mutators = TOOLS.filter((tool) => tool.approval === 'default').map((tool) => tool.name)
     // One minimal valid input per mutator.
     const inputs: Record<string, unknown> = {
-      'builds.control': { repo, slug: 'demo', action: 'auto-merge-on' },
+      'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
       'repository.settings': { repo, setting: 'intake', enabled: true },
       'repository.bulk_control': { repo, action: 'pause' },

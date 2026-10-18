@@ -18,6 +18,7 @@ import {
   imageHostSchema,
   orchestratorSchema,
   orchestratorSandboxSchema,
+  landingRuleSchema,
   policySchema,
   prSchema,
   roleSchema,
@@ -405,6 +406,7 @@ function unique(fields: readonly string[]): string[] {
  * be traversed safely through Zod internals.
  */
 const TABLE_HEADINGS: Record<string, string> = {
+  landing: '`[[landing]]`',
   store: '`[store]`',
   pr: '`[pr]`',
   workspace: '`[workspace]`',
@@ -418,6 +420,7 @@ const TABLE_HEADINGS: Record<string, string> = {
 }
 
 const TABLE_FIELDS: Record<string, string[]> = {
+  landing: Object.keys(landingRuleSchema.shape),
   store: ['url'],
   pr: Object.keys(prSchema.shape),
   workspace: Object.keys(workspaceSchema.shape),

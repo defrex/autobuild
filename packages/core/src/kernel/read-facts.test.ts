@@ -66,6 +66,18 @@ test('one persisted seed includes transient attention even when consent is armed
     payload: { pr: { number: 7, url: 'https://example.test/7', headSha: 'abc' } },
   })
   await store.append('seed', {
+    actor: KERNEL,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'abc', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+  await store.append('seed', {
     actor: humanActor('human'),
     type: 'build.auto-merge-requested',
     payload: {},

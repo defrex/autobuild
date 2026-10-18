@@ -1,3 +1,5 @@
+import { migrateLandingPolicy } from './upgrade-landing'
+import type { StoreOpener } from './store-opening'
 /**
  * `ab upgrade` — the classic vendoring problem (SPEC §16.3, D11). `ab init`
  * recorded the pristine bytes of every distributed skill file; upgrade
@@ -85,6 +87,7 @@ export type UpgradeSkillAction =
   | 'unknown'
 
 export interface UpgradeReport {
+  landing?: { changed: boolean; legacyDefault?: boolean }
   /** Per-skill content outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: UpgradeSkillAction; detail?: string }>
   /** User-owned Claude entries that prevented discovery-link maintenance. */
@@ -537,6 +540,8 @@ export async function abUpgrade(opts: {
   targetRepo: string
   distRoot?: string
   exec?: Exec
+  openStore?: StoreOpener
+  env?: Record<string, string | undefined>
   resolveConflict?: ResolveConflict
   stdout?: (line: string) => void
 }): Promise<UpgradeReport> {
@@ -545,6 +550,16 @@ export async function abUpgrade(opts: {
   const stdout = opts.stdout ?? (() => {})
   const { targetRepo } = opts
 
+  const landing = await migrateLandingPolicy({
+    targetRepo,
+    exec,
+    openStore: opts.openStore,
+    env: opts.env,
+  })
+  if (landing.changed)
+    stdout(
+      `Landing policy migrated: legacy default ${landing.legacyDefault ? 'ON → leaf auto' : 'OFF → leaf consent'}; nodes consent. Configure [[landing]] rules to change it.`,
+    )
   await migrateLegacyAgentSkills(targetRepo)
 
   const skills: UpgradeReport['skills'] = []
@@ -881,6 +896,7 @@ export async function abUpgrade(opts: {
   }
 
   return {
+    landing,
     skills,
     discoveryConflicts,
     exitCode: discoveryConflicts.length > 0 ? 1 : 0,

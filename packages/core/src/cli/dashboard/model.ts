@@ -1,3 +1,4 @@
+import { landingAuthorized } from '../../kernel/landing-state'
 import {
   integrationComplete,
   integrationFailed,
@@ -191,6 +192,7 @@ export interface DashboardBuild {
   /** Current-spec per-loop review budget overrides. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Native auto-merge desired/applied state. */
+  landing?: BuildState['landing']
   autoMerge: AutoMergeDisplay
   pr?: { url: string; state: PrLifecycle }
   /** Chronological session history projected from the retained raw log. */
@@ -364,6 +366,18 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
 }
 
 export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
+  if (state.landing?.decision || state.landing?.command) {
+    if (state.landing.command?.kind === 'hold' && !state.pr && !state.landing.native?.enabled)
+      return 'off'
+    if (state.landing.command?.kind === 'hold')
+      return state.landing.acknowledgedSeq === state.landing.command.seq ? 'off' : 'cancelling'
+    if (landingAuthorized(state.landing))
+      return state.landing.native?.enabled &&
+        state.landing.native.decisionSeq === state.landing.decision?.seq
+        ? 'enabled'
+        : 'requested'
+    return 'off'
+  }
   const { requested, commandSeq, applied } = state.autoMerge
   if (requested) {
     return applied?.enabled === true && applied.commandSeq === commandSeq ? 'enabled' : 'requested'
@@ -381,12 +395,7 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
  * so the terminal row/detail and the web row/detail say the same words, and
  * so it names the per-build control that unblocks the parked build. */
 export function autoMergeConsentReason(slug: string): string {
-  return (
-    `no auto-merge consent has been requested — request it with m on the build row or ` +
-    '`ab auto-merge ' +
-    slug +
-    ' on`'
-  )
+  return `Landing awaits consent — use ab land ${slug}; use ab hold ${slug} to withdraw consent`
 }
 
 /**
@@ -561,6 +570,7 @@ export function projectBuildFromFacts(
       steps: [],
       dispatch,
       blockers: [],
+      landing: state.landing,
       autoMerge: autoMergeDisplay(state),
       sessions: projectSessions(dashboard.sessionEvents, streams),
     }
@@ -580,6 +590,7 @@ export function projectBuildFromFacts(
       state.reviewRoundCeilings.code !== undefined
         ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
         : {}),
+      landing: state.landing,
       autoMerge: autoMergeDisplay(state),
       ...(state.pr !== undefined && state.prState !== undefined
         ? { pr: { url: state.pr.url, state: state.prState } }
@@ -842,15 +853,16 @@ export function projectBuildFromFacts(
       : { accumulatedMs: 0, runningSince: lastMs }
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
   const autoMerge = autoMergeDisplay(state)
-  // The parked no-consent reason: a merge-current build whose effective
-  // auto-merge state is off will never merge without operator action, and the
-  // step must say so (and name the control) wherever the pipeline renders.
-  // Display-only; the deferral `mergeWaitReason` stays in `blockers`.
-  if (mergeCurrent && autoMerge === 'off') {
-    steps[steps.length - 1] = {
-      ...steps[steps.length - 1]!,
-      reason: autoMergeConsentReason(record.slug),
-    }
+  // Only a recorded consent decision can ask the operator to land. A
+  // finalized PR may still be awaiting the dispatcher's readiness decision.
+  if (mergeCurrent && !landingAuthorized(state.landing)) {
+    const reason =
+      state.landing?.command?.kind === 'hold'
+        ? `Landing held — use ab land ${record.slug} when ready to release the hold`
+        : state.landing?.decision?.mode === 'consent'
+          ? autoMergeConsentReason(record.slug)
+          : 'Landing policy decision pending'
+    steps[steps.length - 1] = { ...steps[steps.length - 1]!, reason }
   }
 
   const setupError =
@@ -894,11 +906,7 @@ export function projectBuildFromFacts(
                   ? 'verification failed; file a repair child targeting this node'
                   : !state.integration?.cycle || !integrationCycleVerified(state)
                     ? 'integration awaits verification'
-                    : !(
-                          state.autoMerge.requested &&
-                          state.autoMerge.explicitCommandSeq !== undefined &&
-                          state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
-                        )
+                    : !landingAuthorized(state.landing)
                       ? 'integration awaits explicit per-build consent'
                       : 'integration awaits guarded landing',
             }),
@@ -912,6 +920,7 @@ export function projectBuildFromFacts(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
+    landing: state.landing,
     autoMerge,
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
@@ -1273,9 +1282,7 @@ export function buildVocabulary(state: BuildState): {
                       : integrationCurrent(state) && integrationComplete(state)
                         ? !integrationCycleVerified(state)
                           ? 'verifying'
-                          : state.autoMerge.requested &&
-                              state.autoMerge.explicitCommandSeq !== undefined &&
-                              state.autoMerge.explicitCommandSeq === state.autoMerge.commandSeq
+                          : landingAuthorized(state.landing)
                             ? 'ready to land'
                             : 'awaiting consent'
                         : !state.nodeOpened

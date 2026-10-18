@@ -294,3 +294,26 @@ test('ticket scan cadence reloads and belongs to the deployment configuration', 
   expect((await live.refresh(candidateText)).kind).toBe('adopted')
   expect(live.current().config.ticketScanIntervalSeconds).toBe(23)
 })
+
+describe('live landing policy', () => {
+  test('rejects malformed replacement rules and retains the last accepted policy', async () => {
+    const initial = `${base}\n[[landing]]\nmode = "consent"\n`
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(initial),
+      initial,
+      runtimes,
+      async () => {},
+    )
+    expect((await live.refresh(initial.replace('"consent"', '"auto"'))).kind).toBe('adopted')
+    expect((await live.refresh(initial.replace('"consent"', '"invalid"'))).kind).toBe('rejected')
+    expect(live.current().config.landing).toEqual([{ mode: 'auto' }])
+  })
+
+  test('build composition keeps current dispatcher policy rather than the pinned branch policy', () => {
+    const pipeline = parseConfig(`${base}\n[[landing]]\nmode = "consent"\n`)
+    const current = parseConfig(`${base}\n[[landing]]\nmode = "auto"\n`)
+    expect(composeBuildConfig(pipeline, current).landing).toEqual([{ mode: 'auto' }])
+    expect(BUILD_OWNED_CONFIG_PATHS).not.toContain('landing')
+  })
+})

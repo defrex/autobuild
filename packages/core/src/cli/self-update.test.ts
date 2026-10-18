@@ -44,6 +44,10 @@ async function installFixture(
   await mkdir(join(dist, 'skills'))
   await mkdir(globalBin)
   await writeFile(
+    join(owner, 'autobuild.toml'),
+    'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  await writeFile(
     join(dist, 'package.json'),
     JSON.stringify({
       name: 'autobuild',
@@ -382,6 +386,10 @@ describe('distribution self-update orchestration', () => {
     const global = await installFixture('global')
     const target = join(root!, 'target')
     await mkdir(target)
+    await writeFile(
+      join(target, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     await Bun.$`git init -q`.cwd(target)
     await Bun.$`git config user.name 'Upgrade Test'`.cwd(target)
     await Bun.$`git config user.email upgrade@example.test`.cwd(target)
@@ -563,6 +571,10 @@ describe('distribution self-update orchestration', () => {
     const fixture = await installFixture()
     const target = join(root!, 'target')
     await mkdir(target)
+    await writeFile(
+      join(target, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     let updates = 0
     let resolverFactories = 0
     const errors: string[] = []
@@ -779,6 +791,10 @@ for (const mode of ['merge-only', 'handoff', 'fallback'] as const) {
     const fixture = await installFixture()
     const target = join(root!, 'other-target')
     await mkdir(target)
+    await writeFile(
+      join(target, 'autobuild.toml'),
+      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
     await mkdir(join(fixture.dist, 'skills', 'plan'))
     await writeFile(
       join(fixture.dist, 'skills', 'plan', 'SKILL.md'),

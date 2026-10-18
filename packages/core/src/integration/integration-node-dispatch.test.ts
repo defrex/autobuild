@@ -803,10 +803,10 @@ test('complete nodes verify and land a linear stack only after explicit consent'
         store: h.store,
         repo: h.origin,
         slug: node.slug,
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
         ticketSource: async () => h.tickets,
       }),
-    ).rejects.toThrow('CHILD')
+    ).rejects.toThrow('not ready')
     h.clock.advance(60_000)
     await h.dispatcher.tick()
     await h.runLatest()
@@ -818,6 +818,7 @@ test('complete nodes verify and land a linear stack only after explicit consent'
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
     await h.runLatest()
+    await h.dispatcher.tick()
     const verified = reduceBuild(await h.events(node.slug))
     expect(verified.verify.results.some((result) => result.outcome === 'pass')).toBe(true)
     expect(ofType(await h.events(node.slug), 'plan.started')).toHaveLength(0)
@@ -827,7 +828,7 @@ test('complete nodes verify and land a linear stack only after explicit consent'
       store: h.store,
       repo: h.origin,
       slug: node.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
       ticketSource: async () => h.tickets,
     })
     h.clock.advance(180_000)

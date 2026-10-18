@@ -12,6 +12,8 @@
  * validated.
  */
 import { z } from 'zod'
+import { landingRuleSchema } from './landing'
+export { landingRuleSchema, type LandingRule } from './landing'
 import { normalizeServiceURL } from '../connection'
 import { prImageHostSchema } from '../ontology'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
@@ -825,6 +827,7 @@ const configRootSchema = z.strictObject({
         .refine((value) => value.trim().length > 0, 'plugin module specifiers must be nonblank'),
     )
     .default([]),
+  landing: z.array(landingRuleSchema).default([]),
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
   commands: commandsSchema,

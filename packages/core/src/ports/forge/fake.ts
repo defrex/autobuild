@@ -525,7 +525,9 @@ export class FakeForge implements Forge {
     this.getPrStateCalls.push({ workspacePath, number })
     const state = this.prs.get(number)
     if (!state) throw new Error(`FakeForge: unknown PR #${number}`)
-    return state
+    return state.state === 'open'
+      ? { ...state, nativeAutoMerge: state.nativeAutoMerge ?? this.isAutoMergeEnabled(number) }
+      : state
   }
 
   async setAutoMerge(
@@ -534,8 +536,6 @@ export class FakeForge implements Forge {
     enabled: boolean,
     options?: BuildLandingOptions,
   ): Promise<AutoMergeResult> {
-    if (enabled && options?.canApply !== undefined && !(await options.canApply()))
-      return { kind: 'deferred' }
     if (enabled && options !== undefined) this.buildSlugs.set(number, options.buildSlug)
     this.assertPr(number)
     const currentlyEnabled = this.autoMerge.get(number) ?? false
@@ -561,6 +561,8 @@ export class FakeForge implements Forge {
           this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
           return { kind: 'deferred', reason }
         }
+        if (options?.canApply !== undefined && !(await options.canApply()))
+          return { kind: 'deferred' }
         this.autoMerge.set(number, true)
         this.autoMergeCalls.push({
           workspacePath,

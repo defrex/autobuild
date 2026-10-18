@@ -1,3 +1,4 @@
+import { landingAuthorized } from './landing-state'
 import { readDeferralLedger } from '../store/reduced-reads'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
@@ -340,6 +341,11 @@ export async function recordAutoMergeDeferralObservation(
 
 /** Clock-independent merge attention shared by persisted seeds and CLI output. */
 export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedger) {
+  if (state.pr && state.landing?.forgeMerge?.classification === 'possible-stale-enable')
+    return {
+      pr: state.pr,
+      reason: 'Landing contrary to policy: possible stale native enable; inspect the target',
+    }
   if (
     !state.finalizeCompletedSeq ||
     !state.pr ||
@@ -349,6 +355,16 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
   )
     return null
   const deferral = currentAutoMergeDeferralFrom(ledger, state)
-  if (state.autoMerge.requested && deferral === undefined) return null
-  return { pr: state.pr, reason: deferral ?? 'Auto-merge is not armed' }
+  if (
+    deferral === undefined &&
+    (landingAuthorized(state.landing) ||
+      (!state.landing?.decision && state.landing?.command?.kind !== 'hold'))
+  )
+    return null
+  return {
+    pr: state.pr,
+    reason:
+      deferral ??
+      (state.landing?.command?.kind === 'hold' ? 'Landing held' : 'Landing awaits consent'),
+  }
 }

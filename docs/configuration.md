@@ -214,6 +214,7 @@ These fields hot-reload:
 | `ticketScanIntervalSeconds` | Next tick; evaluates elapsed time against the new interval. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
+| `[landing]` (ordered `[[landing]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
@@ -444,6 +445,29 @@ registration key is used for session event and transcript attribution. A
 runtime's optional one-shot capability serves slug naming and lazy upgrade
 conflict resolution; when absent, each caller retains its existing safe
 fallback.
+
+## `[[landing]]`
+
+An ordered list of strict landing rules. Predicates within one rule are ANDed;
+the first matching rule wins. Omitted predicates match everything. With no
+matching rule, leaves default to `auto` and nodes to `consent`.
+
+| Field | Meaning |
+|---|---|
+| `into` | Optional destination: `root`, any `node`, or an exact frozen destination node ticket id. |
+| `from` | Optional source kind: `leaf` or `node`. |
+| `label` | Optional exact, case-sensitive label on the source ticket. Blank labels are invalid. |
+| `mode` | Required `auto` or `consent`. |
+
+For example, put a rule with `into = "root"` and `mode = "consent"`
+before a catch-all rule with `mode = "auto"` to request consent only at the
+root. A catch-all placed first shadows every later rule. Specific-node rules
+match the build's frozen destination, rather than the ticket's current parent.
+
+A readiness decision retains the complete matched rule and index (or an explicit
+default), source kind, destination and sampled labels. Later policy edits do not
+rewrite this provenance. Landing policy belongs to the live dispatcher config;
+it is excluded from pinned pipeline settings and integration verification inputs.
 
 ## `[pr]`
 
@@ -1714,7 +1738,6 @@ poll. Editing TOML cannot change them.
 |---|---:|---|---|
 | Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
 | Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` while retaining its literal `QUEUED` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
-| Repository auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent on builds claimed while the setting is enabled, and — on each change — also applies as a bulk action to every current non-terminal build: turning it on requests consent for each build (turning it off withdraws it), attributed to the operator who toggled it exactly as if they had pressed `m` on every row. A per-build toggle overrides its build's state until the global row is toggled again. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
@@ -1916,3 +1939,61 @@ and is never supplied; factory environments also exclude `AB_TOKEN`. Launch
 credentials travel through the separate transient execution-auth argument, never
 through serialized execution identity. Existing plugins that forwarded
 `storeToken` must migrate to this callback and fail closed if it is unavailable.
+
+## Landing policy
+
+Ordered `[[landing]]` rules in `autobuild.toml` decide authorization. Each rule
+requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
+<node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
+`label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
+match anything. With no match, leaves use auto and nodes require consent.
+The target is the immutable destination frozen at claim, not a ticket's current
+parent. Labels are sampled from a successful source-ticket read at readiness;
+unavailable ticket data defers the decision instead of supplying empty labels.
+
+A leaf becomes ready after verification and finalize on a current base; a node
+must be complete and verified at its exact head and parent. `landing.decided`
+records that candidate, the sampled labels, resulting mode, and the full matched
+rule and index (or explicit default). Editing configuration cannot change this
+recorded decision. A replacement candidate gets a new decision once ready.
+Policy is live dispatcher configuration, outside the pinned execution pipeline.
+
+`ab hold <slug>` durably suppresses landing and revokes previous consent, even
+before readiness. `ab land <slug>` requires readiness, clears hold, and consents
+to this build/node landing into its frozen destination. Consent survives head
+replacement, restacking, verification and re-finalization until another hold or
+completion. It is consent to the landing, not approval of an immutable diff.
+Commands and acknowledgements are sequence-correlated; hold acknowledgement
+requires confirmed native cancellation, while land acknowledgement accepts
+consent without claiming that merge gates passed. The same actions are available
+through the MCP/operator build-control tools. The terminal uses `l` for land and
+`o` for hold on the selected landing. The web has no consent controls.
+
+The repository auto-merge default and its fan-out are retired. Historical events
+still replay; explicit old per-build commands map to consent/hold until a new
+landing command supersedes them, while old default seeds confer no consent.
+`ab upgrade` samples the target repository's configured journal and writes leaf
+auto for old ON, leaf consent for old OFF (including no fact), and node consent
+in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
+configuration or unavailable journals fail with recovery guidance. Fresh init
+uses the no-rules fallback.
+
+Native auto-merge is reconciled on every janitor poll against durable desired
+landing state. It is disabled while held, unauthorized, unready, or replacement
+publication is pending or just completed; enabling binds to the current head
+through the forge's expected-head guard. Every replacement publication confirms
+cancellation first, and its first following poll re-reads and reconciles native
+state before other build actions. Native receipts bind to exact candidates;
+consent does not. A stale enable completing after cancellation is repaired by
+poll reconciliation. This is an explicitly bounded failure model: native merge
+is used only behind a merge-blocking gate, and checks on a replacement head must
+take far longer than one poll interval, allowing cancellation before they pass.
+There is no durable native-effect reservation protocol. An undesired forge
+landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
+state with no enable in flight or indeterminate means a deliberate human forge
+landing, which supplies consent. Record whether it overrode a hold: an unheld
+human landing needs no operator attention; overriding a hold is informational.
+If native auto-merge was armed, or an enable was in flight or indeterminate,
+record a possible stale-enable landing as contrary to policy and raise operator
+attention. Autobuild never rewrites the target to undo either outcome. Merge
+gates and the serialized node-writer publication rules remain authoritative.

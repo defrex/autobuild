@@ -40,6 +40,13 @@ export interface EventWrite<T extends EventType = EventType> {
  * catalog tables in SPEC §15.3.
  */
 export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
+  'landing.decided': ['dispatcher', 'kernel'],
+  'build.hold-requested': ['human'],
+  'build.land-requested': ['human'],
+  'landing.command-acknowledged': ['dispatcher', 'kernel'],
+  'landing.native-enable-started': ['dispatcher'],
+  'landing.forge-merged': ['kernel'],
+  'landing.native-applied': ['dispatcher', 'kernel'],
   'target.moved': ['dispatcher', 'kernel'],
   'restack.prepared': ['kernel', 'dispatcher'],
   'restack.replayed': ['kernel', 'dispatcher'],

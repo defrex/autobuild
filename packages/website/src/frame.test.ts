@@ -46,7 +46,6 @@ describe('the tracked hero frame', () => {
     for (const evidence of [
       'Autobuild',
       'intake ON',
-      'auto merge ON',
       'harvest ON',
       'Harvest',
       'PR merged',

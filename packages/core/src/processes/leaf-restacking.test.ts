@@ -1,3 +1,8 @@
+import { Dispatcher } from './dispatcher'
+import { FakeForge } from '../ports/forge/fake'
+import { FakeTicketSource } from '../ports/tickets/fake'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { nativeLandingApplied } from '../kernel/landing-state'
 import { done } from '../cli/terminals'
 import { parseAbPhase } from '../cli/env'
 import { defaultTurnResult } from '../ports/runner/fake'
@@ -97,6 +102,7 @@ for (const conflict of [false, true])
         if (!remote && (!conflict || recovery === 'contention')) {
           const capability = forge.rewrite!
           Object.defineProperty(forge, 'rewrite', {
+            configurable: true,
             value: {
               ...capability,
               replace: async (input: Parameters<typeof capability.replace>[0]) => {
@@ -314,10 +320,85 @@ for (const conflict of [false, true])
           headSha: canonical,
           outcome: 'pass',
         })
+        if ((await readBuildFacts(store, BUILD)).value.state.pendingCommands.length)
+          await store.append(BUILD, { actor: KERNEL, type: 'build.resumed', payload: {} })
+        const pr = await forge.openPr({
+          workspacePath: cwd,
+          head: BRANCH,
+          base: 'main',
+          title: 'Verified contribution',
+          body: 'Restack fixture',
+        })
         await store.append(BUILD, {
           actor: KERNEL,
           type: 'finalize.completed',
-          payload: { pr: { number: 1, url: 'local', headSha: canonical } },
+          payload: { pr },
+        })
+        // Model native auto-merge that persists across arbitrary branch pushes.
+        // Drive real dispatcher decisions and commands around the real restack.
+        const native = new FakeForge()
+        native.setPrState(pr.number, { state: 'open', mergeable: true })
+        native.setPrHeadSha(pr.number, pr.headSha)
+        native.setGatePresence(pr.number, 'present')
+        forge.setAutoMerge = native.setAutoMerge.bind(native)
+        const readPr = forge.getPrState.bind(forge)
+        forge.getPrState = (_path, number) => readPr(cwd, number)
+        const tickets = new FakeTicketSource([
+          {
+            ref: { source: 'linear', id: 'ENG-42' },
+            title: 'Feature',
+            body: '',
+            state: 'In Progress',
+            labels: [],
+            resolved: false,
+            revision: 'fixture',
+          },
+        ])
+        const dispatcher = new Dispatcher({
+          store,
+          tickets,
+          forge,
+          config: { ...config, landing: [{ mode: 'consent' }] },
+          workspaces: new FakeWorkspaceProvider({ mode: 'logical' }),
+          repo: 'acme/app',
+          checkout: cwd,
+          exec: async (args, options) =>
+            args[0] === 'git' && args[1] === 'ls-remote'
+              ? {
+                  exitCode: 0,
+                  stderr: '',
+                  stdout: `${await git(['rev-parse', 'main'])}\trefs/heads/main\n`,
+                }
+              : bunExec(args, options),
+          launchRunner: async () => 'already-active',
+          ids: sequentialIds(),
+          clock: deps.clock,
+        })
+        const poll = async () => {
+          const report = await dispatcher.tick({ acceptNewWork: false })
+          expect(report.janitorDiagnostics).toEqual([])
+        }
+        await poll()
+        const decided = (await readBuildFacts(store, BUILD)).value.state.landing!.decision!
+        const consent = await store.append(BUILD, {
+          actor: humanActor('operator'),
+          type: 'build.land-requested',
+          payload: { decisionSeq: decided.seq },
+        })
+        await poll()
+        expect(native.isAutoMergeEnabled(pr.number)).toBe(true)
+        const capability = forge.rewrite!
+        Object.defineProperty(forge, 'rewrite', {
+          value: {
+            ...capability,
+            replace: async (input: Parameters<typeof capability.replace>[0]) => {
+              expect(native.isAutoMergeEnabled(pr.number)).toBe(false)
+              expect(
+                (await readBuildFacts(store, BUILD)).value.state.landing?.native?.enabled,
+              ).toBe(false)
+              return capability.replace(input)
+            },
+          },
         })
         // Several target moves collapse into one transaction on the newest snapshot.
         await git(['checkout', '-q', 'main'])
@@ -330,6 +411,8 @@ for (const conflict of [false, true])
             type: 'target.moved',
             payload: { branch: 'main', sha },
           })
+        await poll()
+        expect(native.isAutoMergeEnabled(pr.number)).toBe(false)
         expect(await runner.step()).toMatchObject({
           kind: 'restack',
           trigger: 'awaiting-landing',
@@ -341,6 +424,14 @@ for (const conflict of [false, true])
           [verification],
         )
         expect(await runner.step()).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+        await poll()
+        const landing = (await readBuildFacts(store, BUILD)).value.state.landing!
+        expect(landing.command?.seq).toBe(consent.seq)
+        expect(landing.acknowledgedSeq).toBe(consent.seq)
+        expect(landing.decision?.candidate.head).toBe(rewritten)
+        expect(landing.native?.candidate?.head).toBe(rewritten)
+        expect(nativeLandingApplied(landing)).toBe(true)
+        expect(native.isAutoMergeEnabled(pr.number)).toBe(true)
         const events = await store.getEvents(BUILD)
         sessions += events.filter((e) => e.type === 'session.started').length
         expect(sessions).toBe(recovery === 'contention' ? 2 : conflict ? 1 : 0)
@@ -395,6 +486,14 @@ test('trusted automatic publication waits for both session and guest settlement 
   await store.claimLease(BUILD, 'guest', 60_000)
   const lease = (await store.getBuild(BUILD))!.lease!
   const clock = () => new Date(Date.parse(lease.expiresAt) - 1000)
+  const native = new FakeForge()
+  native.setPrState(1, { state: 'open', mergeable: true })
+  await native.setAutoMerge('/unused', 1, true)
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: transaction.oldHead } },
+  })
   let replacements = 0
   const settle = () =>
     settlePendingPublication(
@@ -404,7 +503,7 @@ test('trusted automatic publication waits for both session and guest settlement 
         clock,
         workspacePath: '/unused',
         exec: bunExec,
-        forge: new LocalGitForge(),
+        forge: native,
         ids: sequentialIds(),
         runId: 'test',
         publication: {
@@ -412,6 +511,10 @@ test('trusted automatic publication waits for both session and guest settlement 
             throw new Error('regular push forbidden')
           },
           rewrite: async () => {
+            expect(native.isAutoMergeEnabled(1)).toBe(false)
+            expect(
+              (await readBuildFacts(store, BUILD)).value.state.landing?.native?.operation,
+            ).toMatch(/^publication:/)
             replacements++
             return { kind: 'published' }
           },

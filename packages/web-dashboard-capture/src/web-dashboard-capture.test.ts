@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
-  autoMergeAction,
   buildRowActions,
   canPreviewPointer,
   handleRowControlKey,
@@ -312,8 +311,8 @@ test('rendered build controls follow previews and direct controls name their tar
   expect(row).toContain(`aria-label="Open details for ${slug}"`)
   expect(row).toContain('aria-expanded="false"')
   expect(row).toContain(`aria-controls="detail-${slug}"`)
-  expect(row).toContain(`aria-label="Auto merge off for ${slug}"`)
-  expect(row).toContain('aria-pressed="false"')
+  expect(row).not.toContain(`aria-label="Auto merge off for ${slug}"`)
+  expect(row).toContain('aria-pressed="true"')
   expect(row).not.toContain('role="toolbar"')
   for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
     expect(row).not.toContain(`aria-label="${label} ${slug}"`)
@@ -332,61 +331,11 @@ test('rendered build controls follow previews and direct controls name their tar
   expect(harvest).toContain('aria-label="RESUME Harvest run')
 })
 
-test('auto-merge indicator exposes all states and maps desired-state commands', async () => {
-  expect(autoMergeAction(build({ autoMerge: 'off' }))).toBe('auto-merge-on')
-  for (const state of ['requested', 'enabled', 'cancelling'] as const) {
-    expect(autoMergeAction(build({ autoMerge: state })), state).toBe('auto-merge-off')
-  }
-
-  const base = models()
+test('web dashboard removes obsolete auto-merge controls', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
-  const slug = 'plan-blocked-dashboard'
-  for (const state of ['off', 'requested', 'enabled', 'cancelling'] as const) {
-    const fixtures = {
-      ...base,
-      mixed: {
-        ...base.mixed,
-        builds: base.mixed.builds.map((row) =>
-          row.slug === slug ? { ...row, autoMerge: state } : row,
-        ),
-      },
-    }
-    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const button = html.match(
-      new RegExp(
-        `<button[^>]*(?:data-am="${state}"[^>]*aria-label="Auto merge ${state} for ${slug}"|aria-label="Auto merge ${state} for ${slug}"[^>]*data-am="${state}")[^>]*>`,
-      ),
-    )?.[0]
-    expect(button, state).toBeDefined()
-    expect(button, state).toContain(
-      `aria-pressed="${state === 'requested' || state === 'enabled'}"`,
-    )
-    expect(button?.includes('disabled=""'), state).toBe(false)
-  }
-
-  const pendingHtml = await renderWebFrame({ ...spec, controlPending: true }, base, {
-    css: '',
-    fontCss: '',
-  })
-  expect(
-    pendingHtml.match(new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`)),
-  ).toBeTruthy()
-
-  const unavailable = {
-    ...base,
-    mixed: {
-      ...base.mixed,
-      builds: base.mixed.builds.map((row) =>
-        row.slug === slug ? { ...row, status: 'aborting' as const } : row,
-      ),
-    },
-  }
-  const unavailableHtml = await renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
-  expect(
-    unavailableHtml.match(
-      new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`),
-    ),
-  ).toBeTruthy()
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  expect(html).not.toContain('aria-label="Auto merge')
+  expect(html).not.toContain('class="word am"')
 })
 
 test('hover frame keeps committed and preview state independent', async () => {
@@ -440,9 +389,7 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).toMatch(
       /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
     )
-    expect(html).toMatch(
-      /<button type="button" class="word am" data-am="off" disabled="" aria-label="Auto merge off for plan-blocked-dashboard"/,
-    )
+    expect(html).not.toContain('class="word am"')
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
     for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
       expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
@@ -535,13 +482,29 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
   if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
-  const reason = 'no auto-merge consent has been requested'
+  const reason = 'Landing awaits consent'
   // Both surfaces, same words: the row register and the open detail register.
   expect(evidenceText(html).split(reason)).toHaveLength(3)
-  expect(evidenceText(html)).toContain('`ab auto-merge complete-dashboard-evidence on`')
-  // The observed mismatch is visible in the row markup, not just the words:
-  // default ON with the build's consent off marks the token.
-  expect(html).toContain('data-mismatch')
+  expect(evidenceText(html)).toContain('ab land complete-dashboard-evidence')
+  expect(evidenceText(html)).toContain('landing consent')
+  expect(evidenceText(html)).not.toContain('landing not ready')
+  expect(evidenceText(html)).not.toContain('landing policy pending')
+  expect(evidenceText(html)).not.toContain('use l on the build row')
+  expect(html).not.toContain('data-mismatch')
+})
+
+test('landing detail distinguishes a pending policy decision from a hold', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  for (const held of [false, true]) {
+    const fixtures = models()
+    fixtures.mixed.builds = fixtures.mixed.builds.map((build) => ({
+      ...build,
+      landing: held ? { command: { kind: 'hold', seq: 1 } } : undefined,
+    }))
+    const text = evidenceText(await renderWebFrame(spec, fixtures, { css: '', fontCss: '' }))
+    expect(text).toContain(held ? 'landing held' : 'landing policy pending')
+    expect(text).not.toContain('landing not ready')
+  }
 })
 
 test('the named consent frame renders the real page with its registered client', async () => {
