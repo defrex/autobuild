@@ -241,6 +241,10 @@ function literalPathspec(path: string): string {
 function managedRoots(record: UpgradeCommitRecord, report: UpgradeReport): Map<string, string[]> {
   const roots = new Map<string, string[]>()
   if (record.gitRoot === undefined) return roots
+  if (report.landing?.changed) {
+    const path = repositoryPath(record.gitRoot, join(record.targetRepo, 'autobuild.toml'))
+    if (path) roots.set('landing-policy', [path])
+  }
   for (const { skill } of report.skills) {
     const paths = [
       join(record.targetRepo, '.agents', 'skills', skill),
