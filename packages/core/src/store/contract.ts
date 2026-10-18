@@ -524,6 +524,46 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('pending integration audits survive completion and clear on settlement', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/audit-digest'
+          const slug = 'audit-digest'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          const pending = async () =>
+            (await store.getRepoBuildDigests(repo)).get(slug)?.integrationAuditPending
+          expect(await pending()).toBeUndefined()
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'integration.landed',
+            payload: {
+              operation: 'landing-1',
+              head: 'head',
+              landed: 'landed',
+              provenance: 'kernel',
+              verified: true,
+              fenced: false,
+            },
+          })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          expect(await pending()).toBe(true)
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'integration.audited',
+            payload: {
+              operation: 'landing-1',
+              verifiedTree: 'tree',
+              landedTree: 'tree',
+              identities: [],
+            },
+          })
+          expect(await pending()).toBeUndefined()
+        })
+      })
+
       test('an unknown repo and a journal-less repo answer build-less maps without writes', async () => {
         await withStore(factory, undefined, async (store) => {
           expect(await store.getRepoBuildDigests('acme/never-seen')).toEqual(new Map())

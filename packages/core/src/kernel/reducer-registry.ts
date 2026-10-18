@@ -270,6 +270,9 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                     seq: event.seq,
                     ts: event.ts,
                     ...('hostedSeq' in event.payload ? { hostedSeq: event.payload.hostedSeq } : {}),
+                    ...(event.type === 'integration.landed'
+                      ? { auditRequested: !!event.payload.operation }
+                      : {}),
                     ...(event.type === 'pr.merged' ? { mergedSha: event.payload.sha } : {}),
                     ...(event.type === 'node.contribution-recorded'
                       ? { nodeContribution: event.payload }

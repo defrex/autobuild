@@ -2208,3 +2208,50 @@ describe('trusted kernel Git credentials', () => {
     await expect(failing.kernelExec(['git', 'fetch'], {})).rejects.toThrow('failed with [redacted]')
   })
 })
+
+describe('integration stack merge', () => {
+  test('uses rebase with exact head and validates merged success', async () => {
+    const { transport, calls } = makeTransport([
+      { json: { merged: true, sha: 'landed', message: 'merged' } },
+    ])
+    const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'owner/repo' } })
+    expect(await forge.mergeLinearStack('/unused', 7, 'verified')).toBe('landed')
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: 'repos/owner/repo/pulls/7/merge',
+      opts: { body: { merge_method: 'rebase', sha: 'verified' } },
+    })
+  })
+  test('merged false never acknowledges landing or falls back', async () => {
+    const { transport, calls } = makeTransport([
+      { json: { merged: false, sha: 'none', message: 'rejected' } },
+    ])
+    const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'owner/repo' } })
+    await expect(forge.mergeLinearStack('/unused', 7, 'verified')).rejects.toThrow()
+    expect(calls).toHaveLength(1)
+  })
+  test.each([true, false])('strict checks require admin enforcement (%s)', async (enforced) => {
+    const { transport } = makeTransport([
+      {
+        json: {
+          enforce_admins: { enabled: enforced },
+          required_status_checks: { strict: true, contexts: ['ci'] },
+        },
+      },
+    ])
+    const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'owner/repo' } })
+    expect((await forge.inspectMergeFreshness('main')).fenced).toBe(enforced)
+  })
+  test('strict with zero checks remains unfenced', async () => {
+    const { transport } = makeTransport([
+      {
+        json: {
+          enforce_admins: { enabled: true },
+          required_status_checks: { strict: true, contexts: [], checks: [] },
+        },
+      },
+    ])
+    const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'owner/repo' } })
+    expect((await forge.inspectMergeFreshness('main')).fenced).toBe(false)
+  })
+})

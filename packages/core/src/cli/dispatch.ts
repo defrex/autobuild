@@ -1490,6 +1490,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,
@@ -1519,6 +1520,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,
@@ -1555,6 +1557,7 @@ class DispatchLoop {
     try {
       const result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug: confirmation.slug,
         env: this.opts.env,
@@ -1577,6 +1580,7 @@ class DispatchLoop {
     try {
       const result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,
@@ -1675,6 +1679,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug: prompt.slug,
         env: this.opts.env,
@@ -1724,6 +1729,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
+        ticketSource: async () => this.wiring.tickets,
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,

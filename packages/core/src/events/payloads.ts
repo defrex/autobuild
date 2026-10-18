@@ -65,6 +65,7 @@ const reasonOnly = z.strictObject({ reason: z.string().optional() })
  * when one did. Per-build commands omit it. `{}` stays valid, so existing
  * producers and logs replay unchanged. */
 const autoMergeCommand = z.strictObject({
+  integrationConsent: z.literal(true).optional(),
   defaultSeq: z.number().int().positive().optional(),
 })
 /** A fan-out reconciliation marker: the repository seq of the newest
@@ -348,7 +349,43 @@ export const eventPayloadSchemas = {
   'node.inventory': z.strictObject({
     head: z.string().min(1),
     builds: z.array(z.string()),
+    contributions: z.array(z.string()).optional(),
     foreign: z.array(z.string()),
+  }),
+  'integration.abandoned': z.strictObject({ id: z.string().min(1), reason: z.string().min(1) }),
+  'integration.observed': z.strictObject({
+    openChildren: z.array(z.string()),
+    diagnostics: z.array(z.string()),
+    contributions: z.array(z.string()),
+  }),
+  'integration.prepared': z.strictObject({
+    id: z.string().min(1),
+    head: z.string().min(1),
+    parent: z.string().min(1),
+    config: z.string().min(1),
+  }),
+  'integration.landing-intended': z.strictObject({
+    id: z.string().min(1),
+    cycle: z.string().min(1),
+    head: z.string().min(1),
+    parent: z.string().min(1),
+    commandSeq: z.number().int().positive(),
+    fenced: z.boolean(),
+    evidence: z.array(z.string()),
+  }),
+  'integration.landed': z.strictObject({
+    operation: z.string().optional(),
+    head: z.string().min(1),
+    landed: z.string().min(1),
+    provenance: z.enum(['kernel', 'human']),
+    verified: z.boolean(),
+    fenced: z.boolean(),
+  }),
+  'integration.audited': z.strictObject({
+    operation: z.string().min(1),
+    verifiedTree: z.string().min(1),
+    landedTree: z.string().min(1),
+    identities: z.array(z.string()),
   }),
   'node.compared': z.strictObject({
     parentSha: z.string().min(1),

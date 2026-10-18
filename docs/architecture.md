@@ -1089,7 +1089,7 @@ compatibility facade. Metadata is excluded from hosted persistence/protocols.
 ### Integration node dispatch
 
 The product dispatcher owns the workspace-free node lifecycle:
-spec → node.opening → node.opened → collecting → human landing/close or abort.
+spec → node.opening → node.opened → collecting → complete → verify:* → consent → land.
 The ordinary work pipeline is unchanged. `build.created` freezes kind, target
 ticket/build identity and resolved parent in `baseBranch`. Integration facts
 are projected by the shared reducer and digests, including collecting/empty
@@ -1177,3 +1177,18 @@ The contribution boundary advances only on completed restacks. Reachable build
 identities include inherited parent changes; foreign counts include only the
 node's own contribution, preventing a parent rewrite from inflating descendants'
 foreign inventory. Status text and JSON expose both inventory and active items.
+
+
+Integration completion is sampled by `kernel/integration-completeness.ts` from
+exhaustive source listings, frozen claims and retained contribution identities.
+`integration.*` events retain observations, immutable cycle inputs, landing
+intents, provenance and tree audits. The build reducer projects these facts and
+`engine.ts` routes nodes directly through verification, without producer phases.
+Failed cycles park for repair children. The dispatcher temporarily provisions
+verification resources and rechecks head, parent, controls and completeness
+before publication. `integration-landing.ts` owns source-reserved root landing
+and immutable result audits; nested nodes use the destination writer transaction
+in `node-landing.ts`. GitHub uses guarded PR rebase; local-git uses an ancestry
+proof and exact-parent fast-forward. Shared status vocabulary exposes provenance
+and mismatch attention in both frontends. Human forge merges remain observable
+escape hatches independent of completeness and verification.

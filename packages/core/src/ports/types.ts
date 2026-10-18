@@ -371,7 +371,7 @@ export interface PrRef {
 
 export type PrState =
   | { state: 'open'; mergeable: boolean | null }
-  | { state: 'merged'; sha: string }
+  | { state: 'merged'; sha: string; headSha?: string }
   | { state: 'closed' }
 
 /** Abort cleanup may race landing. A merged result is terminal and must never
@@ -472,6 +472,14 @@ export type RewriteResult =
   | { kind: 'published' }
   | { kind: 'lease-mismatch'; actual: string | null; rewritten?: true }
 export interface ForgeRewrite {
+  /** General destination publication, restricted to proven fast-forward ancestry. */
+  fastForward?(input: {
+    workspacePath: string
+    branch: string
+    expected: string
+    sha: string
+  }): Promise<RewriteResult>
+
   snapshot(input: {
     workspacePath: string
     branch: string
@@ -501,6 +509,8 @@ export interface Forge {
   /** Credentialed rewrite transport for dispatcher-owned node work. Workspace
    * replay retains its existing provider-controlled transport. */
   readonly kernelRewrite?: ForgeRewrite
+  mergeLinearStack?(workspacePath: string, number: number, expectedHead: string): Promise<string>
+  inspectMergeFreshness?(branch: string): Promise<{ fenced: boolean; evidence: string[] }>
   inspectLandingGate?(branch: string): Promise<LandingGateInspection>
   inspectLandingPr?(
     workspacePath: string,

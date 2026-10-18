@@ -1,3 +1,5 @@
+import { observeIntegration } from '../kernel/integration-completeness'
+import type { TicketSource } from '../ports/types'
 import { readBuildFacts } from '../store/reduced-reads'
 /**
  * Durable operator controls for one build.
@@ -270,18 +272,31 @@ async function appendConsentCommand(
   user: string,
   action: 'auto-merge-on' | 'auto-merge-off' | 'toggle-auto-merge',
   via?: Via,
+  ticketSource?: () => Promise<TicketSource>,
 ): Promise<BuildControlResult> {
   while (true) {
     const state = (await readBuildFacts(store, slug)).value.state
     activeState(slug, state)
-    if (state.kind === 'node')
-      throw new Error('integration builds require human landing; auto-merge is unavailable')
     const command =
       action === 'toggle-auto-merge'
         ? state.autoMerge.requested
           ? 'auto-merge-off'
           : 'auto-merge-on'
         : action
+    if (command === 'auto-merge-on' && state.kind === 'node') {
+      if (!ticketSource)
+        throw new Error('cannot establish integration completeness: ticket source unavailable')
+      const observed = await observeIntegration(store, await ticketSource(), slug)
+      if (
+        observed.openChildren.length ||
+        observed.diagnostics.length ||
+        !observed.contributions.length
+      )
+        throw new Error(
+          `integration incomplete: ${observed.openChildren.join(', ') || observed.diagnostics.join('; ') || 'no landed changes'}`,
+        )
+      if ((await readBuildFacts(store, slug)).value.state.lastSeq !== state.lastSeq) continue
+    }
     if (command === 'auto-merge-on' && discardInFlight(state)) throw discardPending(slug)
     const actor = humanActor(user, via)
     // Written out rather than selected into a variable so `appendIfCurrent`'s
@@ -291,7 +306,7 @@ async function appendConsentCommand(
         ? await store.appendIfCurrent(slug, state.lastSeq, {
             actor,
             type: 'build.auto-merge-requested',
-            payload: {},
+            payload: state.kind === 'node' ? { integrationConsent: true } : {},
           })
         : await store.appendIfCurrent(slug, state.lastSeq, {
             actor,
@@ -461,6 +476,7 @@ export interface ControlBuildOpts {
   /** Delegated-write attribution marker threaded onto every event actor. */
   via?: Via
   action: BuildControlAction
+  ticketSource?: () => Promise<TicketSource>
   /** Injected only for --revise-spec-from-ticket. */
   prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
   readTicketBody?: (ref: TicketRef) => Promise<string>
@@ -520,7 +536,14 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     case 'toggle-auto-merge':
       // Consent has its own guarded, compare-and-append write path; the
       // outer `activeState` above only short-circuits the common inactive case.
-      return appendConsentCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
+      return appendConsentCommand(
+        opts.store,
+        opts.slug,
+        user,
+        opts.action.kind,
+        opts.via,
+        opts.ticketSource,
+      )
 
     case 'dashboard-pause': {
       const pendingPause = state.pendingCommands.some((command) => command.command === 'pause')
@@ -866,6 +889,7 @@ export interface AbBuildControlOpts {
   exec: Exec
   slug: string
   action: BuildControlAction
+  ticketSource?: () => Promise<TicketSource>
   /** Explicit `--store`; selection remains --store > AB_STORE > repo-local. */
   storeRef?: string
   /** Injected only for --revise-spec-from-ticket. */
@@ -888,6 +912,7 @@ export async function abBuildControl(opts: AbBuildControlOpts): Promise<BuildCon
       slug: opts.slug,
       env: opts.env,
       action: opts.action,
+      ticketSource: opts.ticketSource,
       ...(opts.readTicketBody !== undefined ? { readTicketBody: opts.readTicketBody } : {}),
       ...(opts.prepareTicketAssets ? { prepareTicketAssets: opts.prepareTicketAssets } : {}),
     }),

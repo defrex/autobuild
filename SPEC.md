@@ -286,7 +286,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
 | **Node ticket** | A named integration point represented by a ticket of kind `node`; its integration build owns a branch collecting child work |
 | **Build** | One ticket execution with a slug; either a work pipeline or an integration branch lifecycle; the unit the operator sees |
-| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work and awaits human landing |
+| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and awaits explicit landing consent |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
@@ -326,9 +326,10 @@ the bare phase names throughout.
 ## 5. Pipeline grammar
 
 Work builds retain the fixed grammar below. Integration builds instead follow
-`spec → branch opening → collecting → human merge/close or abort`. They never
-enter agent phases, verify, finalize or reconcile and never auto-merge. The
-dispatcher owns branch opening and collection; empty nodes have no PR.
+`spec → branch opening → collecting → complete → verify:* → consent → land`.
+They never enter plan, implement, code-review or finalize. A node conflict uses
+source-aware reconcile. Idle collecting nodes own no execution resources;
+verification temporarily uses ordinary execution capacity. Empty nodes have no PR.
 
 ```
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize (+ finalize:*)
@@ -1943,10 +1944,39 @@ metadata changes. Missing, unopened, landed, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
 
-Humans land node PRs. The janitor records landing and completes the node ticket.
+A node is complete when exhaustive native ticket enumeration finds no unresolved
+ticket targeting it, no unsettled frozen child claim remains, and a landed
+contribution is durably known. Triage, backlog and ready children keep it open;
+done and cancelled children do not. Listing diagnostics fail closed. Completeness
+is sampled again before verification and publication. Source edits cannot be
+transactional with a forge write.
+
+The kernel verifies the exact node head and sampled parent with all configured
+verify steps and normal path applicability. A moved head or parent invalidates
+eligibility, including a clean restack. Failure blocks the node; file a repair
+child targeting it. Repair children remain admissible, and their landed head
+supersedes the failed cycle. Reports retain their actual head/base citations.
+
+Landing requires explicit per-build consent; repository defaults do not grant it.
+Consent ON refuses incomplete nodes and names open children; OFF remains available.
+Node parents and local-git roots receive guarded fast-forwards, preserving one
+commit and identity trailer per contributing build. GitHub shared roots use the
+PR rebase endpoint guarded on verified head, after a final parent freshness read.
+Authoritative enforced up-to-date protection records fenced landing; uncertainty
+records unfenced landing and triggers immutable landed-tree comparison. A mismatch
+raises operator attention and never rewrites the shared parent.
+The repository build digest carries an additive optional pending-audit signal from
+`integration.landed` with an operation until `integration.audited` settles it.
+Settled nodes without that signal require no full build reads; completion does
+not suppress retries for an outstanding audit. Pending audits
+survive completion. Merge gates are never bypassed; unsupported transports defer.
+
+Human forge merges are an explicit escape hatch, even while incomplete, paused
+or unverified. The janitor records human provenance and whether the actual merged
+head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Node verification, automatic node landing and reparenting are not provided. A forge plugin needs node branch creation, comparison and
+Automatic landing policy and reparenting are not provided. A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
 **Descendant cascade and node writers.** Every open node observes its frozen
@@ -1981,8 +2011,8 @@ Missing source artifacts or invalid identities escalate. Foreign conflicts suppl
 commit metadata and a diff, with escalation when intent is unclear. Completion
 validates exactly one commit on that item's replay base, retaining its original
 identity or foreign status. The agent never publishes the stack; the dispatcher
-resumes only after session and execution settlement. Node verification and
-automatic node landing remain outside this grammar.
+resumes only after session and execution settlement. Automatic landing policy
+remains outside this grammar.
 
 **Foreign merge safety for node replay.** A node contribution is enumerated
 oldest first along first-parent history above its durable previous contribution

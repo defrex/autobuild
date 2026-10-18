@@ -1,3 +1,4 @@
+import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
  * phase per the transition table, invoke the AgentRunner with `/{skill}
@@ -156,6 +157,44 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
         round: attempt,
         reconcile: { attempt },
       }
+    }
+    const cycle = state.integration?.cycle
+    if (!integrationCurrent(state) || cycle?.config !== integrationConfig(config))
+      return { kind: 'wait', reason: 'awaiting-pr' }
+    if (integrationFailed(state)) return { kind: 'wait', reason: 'blocked' }
+    const results = log.verifyCompleted.filter(
+      (result) =>
+        result.seq > cycle.seq &&
+        result.restackId === cycle.id &&
+        result.headSha === cycle.head &&
+        result.baseSha === cycle.parent,
+    )
+    const starts = log.verifyStarted.filter(
+      (result) => result.seq > cycle.seq && result.restackId === cycle.id,
+    )
+    const attempts = [...results, ...starts].map((result) => result.attempt)
+    const attempt = attempts.length ? Math.max(...attempts) : log.maxVerifyAttemptEver + 1
+    for (const step of config.verify.steps) {
+      if (
+        results.some(
+          (result) =>
+            result.step === step && (result.outcome === 'pass' || result.outcome === 'skipped'),
+        )
+      )
+        continue
+      const selected = config.verify.stepConfigs[step]!
+      const action: VerifyAction =
+        selected.kind === 'check'
+          ? {
+              kind: 'run-check',
+              step,
+              command: config.commands[selected.command] ?? selected.command,
+              attempt,
+            }
+          : { kind: 'run-agent-verify', step, skill: selected.skill, attempt }
+      return selected.paths === undefined || selected.always === true
+        ? action
+        : { kind: 'evaluate-verify', step, attempt, paths: selected.paths, action }
     }
     return { kind: 'wait', reason: 'awaiting-pr' }
   }

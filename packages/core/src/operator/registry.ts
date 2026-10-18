@@ -1,3 +1,4 @@
+import { openOperatorTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 /**
  * The agent tool registry — one typed table that is the single source of
@@ -583,6 +584,12 @@ export const TOOLS: readonly ToolEntry[] = [
             : { kind: input.action }
       return controlBuild({
         store: ctx.store,
+        ticketSource: async () => {
+          if (!ctx.tickets) throw new Error('ticket source unavailable')
+          return (
+            await openOperatorTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets })
+          ).source
+        },
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),
@@ -602,6 +609,12 @@ export const TOOLS: readonly ToolEntry[] = [
       const { action, readTicketBody } = answerAction(input)
       return controlBuild({
         store: ctx.store,
+        ticketSource: async () => {
+          if (!ctx.tickets) throw new Error('ticket source unavailable')
+          return (
+            await openOperatorTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets })
+          ).source
+        },
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),

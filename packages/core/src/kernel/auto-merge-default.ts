@@ -110,6 +110,7 @@ export function pickAutoMergeDefault(
  * this predicate must be revisited.
  */
 export function autoMergeDefaultEligible(state: BuildState): boolean {
+  if (state.kind === 'node') return false
   if (state.status === 'done' || state.status === 'aborted') return false
   // An empty log is a record whose `build.created` has not landed yet (the
   // crash or one-await window between `createBuild` and the first append):

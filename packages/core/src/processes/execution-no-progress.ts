@@ -17,6 +17,12 @@ export const executionProgress = {
   'restack.contended': 'progress',
   'restack.completed': 'progress',
   'build.created': 'progress',
+  'integration.abandoned': 'progress',
+  'integration.observed': 'bookkeeping',
+  'integration.prepared': 'progress',
+  'integration.landing-intended': 'progress',
+  'integration.landed': 'progress',
+  'integration.audited': 'progress',
   'node.opening': 'progress',
   'node.writer-reserved': 'progress',
   'node.item-prepared': 'progress',
@@ -112,7 +118,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 2,
+  version: 3,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {

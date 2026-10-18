@@ -104,6 +104,9 @@ describe('named reducer values', () => {
               ? events.map((event) => ({
                   ...event,
                   ...event.payload,
+                  ...(event.type === 'integration.landed'
+                    ? { auditRequested: !!event.payload.operation }
+                    : {}),
                   ...(event.type === 'pr.merged' ? { mergedSha: event.payload.sha } : {}),
                   ...(event.type === 'node.contribution-recorded'
                     ? { nodeContribution: event.payload }

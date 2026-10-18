@@ -106,6 +106,8 @@ export interface ArtifactMeta {
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
 export interface BuildDigest {
+  /** A kernel landing requested an audit and no audit settlement has followed. */
+  integrationAuditPending?: true
   /** Compact confirmed landing evidence for admission; avoids full build reads. */
   mergedSha?: string
   nodeContribution?: EventPayload<'node.contribution-recorded'>

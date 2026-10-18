@@ -771,3 +771,59 @@ describe.skipIf(!runLiveGitHub || process.env.AB_RUN_LIVE_IDENTITY_DEFAULTS !== 
     }, 1_800_000)
   },
 )
+
+describe.skipIf(!runLiveGitHub)('GitHub integration stack rebase (manual opt-in)', () => {
+  test('server rebase retains separate identities and reports freshness proof', async () => {
+    const h = await githubForgeContractFactory()
+    const cwd = h.workspacePath
+    try {
+      await run(
+        [
+          'git',
+          ...GIT_ID,
+          'commit',
+          '--amend',
+          '-m',
+          'First contribution\n\nAutobuild-Build: live-stack-first',
+        ],
+        cwd,
+      )
+      await writeFile(join(cwd, 'second-stack.txt'), 'second contribution')
+      await run(['git', 'add', 'second-stack.txt'], cwd)
+      await run(
+        [
+          'git',
+          ...GIT_ID,
+          'commit',
+          '-m',
+          'Second contribution\n\nAutobuild-Build: live-stack-second',
+        ],
+        cwd,
+      )
+      await h.forge.pushBranch(cwd, h.head)
+      const head = await h.controls.remoteHead(h.head)
+      const pr = await h.forge.openPr({
+        workspacePath: cwd,
+        head: h.head,
+        base: h.base,
+        title: h.title,
+        body: h.body,
+      })
+      await h.controls.trackPr(pr.number)
+      await h.controls.prepareMergeable(pr.number)
+      expect((await h.forge.inspectMergeFreshness!(h.base)).evidence.length).toBeGreaterThan(0)
+      const landed = await h.forge.mergeLinearStack!(cwd, pr.number, head)
+      await run(['git', 'fetch', 'origin', h.base], cwd)
+      const messages = await run(['git', 'log', '-2', '--format=%B%x00', landed], cwd)
+      expect(messages.split('\0').flatMap(buildTrailers)).toEqual([
+        'live-stack-second',
+        'live-stack-first',
+      ])
+      expect(await run(['git', 'rev-parse', `${head}^{tree}`], cwd)).toBe(
+        await run(['git', 'rev-parse', `${landed}^{tree}`], cwd),
+      )
+    } finally {
+      await h.cleanup?.()
+    }
+  })
+})

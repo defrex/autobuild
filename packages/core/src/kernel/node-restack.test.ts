@@ -246,6 +246,7 @@ test('untagged side history flattens while preserving merge-specific resolution 
   expect(await nodeInventory(deps, head, parent)).toEqual({
     head,
     builds: ['owned'],
+    contributions: ['owned'],
     foreign: [head],
   })
 })

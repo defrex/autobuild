@@ -1,3 +1,5 @@
+import { inspectIntegrationStack } from './integration-stack'
+import { integrationFailed } from './integration-state'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { Forge, AutoMergeDeferralReason } from '../ports/types'
@@ -18,6 +20,7 @@ export interface NodeLandingDeps {
   pr: number
   holder: string
   id: string
+  stack?: { head: string; parent: string; cycle: string }
   eligible: () => Promise<boolean>
 }
 /** Cheap API-only proof, repeated under writer authority before publication. */
@@ -68,10 +71,11 @@ export async function landIntoNode(
       state.status === 'aborted' ||
       state.status === 'done' ||
       state.status === 'paused' ||
-      state.status === 'blocked' ||
+      (state.status === 'blocked' && !integrationFailed(state)) ||
       state.prState === 'closed' ||
       state.prState === 'merged' ||
-      state.pendingCommands.length
+      state.pendingCommands.length ||
+      (state.integration?.intent && !state.integration.landing)
     )
       throw new Error('destination node no longer admits writes')
     if (!(await store.renewNodeWriter(node, deps.holder)))
@@ -125,7 +129,11 @@ export async function landIntoNode(
       })
       if (parents.exitCode !== 0 || message.exitCode !== 0)
         throw new Error('cannot inspect canonical node landing')
-      if (parents.stdout.trim() !== expected) {
+      if (
+        deps.stack
+          ? expected !== deps.stack.parent || candidate !== deps.stack.head
+          : parents.stdout.trim() !== expected
+      ) {
         const source = (await readBuildFacts(store, deps.slug)).value
         if (source.log.restack.target?.sha !== expected)
           await store.append(deps.slug, {
@@ -137,8 +145,31 @@ export async function landIntoNode(
           'Leaf head is not one canonical change on the current node head; awaiting restack or human provenance review.',
         )
       }
-      if (JSON.stringify(buildTrailers(message.stdout)) !== JSON.stringify([deps.slug]))
+      if (deps.stack) await inspectIntegrationStack(deps.exec, workspacePath, expected, candidate)
+      if (
+        !deps.stack &&
+        JSON.stringify(buildTrailers(message.stdout)) !== JSON.stringify([deps.slug])
+      )
         throw new Error('node landing requires exactly one canonical source identity')
+      if (deps.stack) {
+        const source = (await readBuildFacts(store, deps.slug)).value.state
+        if (!source.integration?.intent) {
+          const intended = await store.appendIfCurrent(deps.slug, source.lastSeq, {
+            actor: KERNEL,
+            type: 'integration.landing-intended',
+            payload: {
+              id: deps.id,
+              cycle: deps.stack.cycle,
+              head: candidate,
+              parent: expected,
+              commandSeq: source.autoMerge.explicitCommandSeq!,
+              fenced: true,
+              evidence: ['Destination node writer reservation and exact-parent fast-forward'],
+            },
+          })
+          if (!intended) return undefined
+        }
+      }
       const archive = `refs/autobuild/archive/${node}/${expected}`
       await authority()
       await forge.rewrite.archive({ workspacePath, ref: archive, sha: expected })
@@ -251,6 +282,15 @@ export async function landIntoNode(
           type: 'node.writer-settled',
           payload: { id: active.id, outcome: 'contended', actual: result.actual },
         })
+        if (deps.stack) {
+          const intent = (await readBuildFacts(store, deps.slug)).value.state.integration?.intent
+          if (intent)
+            await store.append(deps.slug, {
+              actor: KERNEL,
+              type: 'integration.abandoned',
+              payload: { id: intent.id, reason: 'Destination parent compare-and-swap contended' },
+            })
+        }
         if (result.actual)
           await store.append(deps.slug, {
             actor: KERNEL,
@@ -266,6 +306,19 @@ export async function landIntoNode(
       })
     }
     const source = (await readBuildFacts(store, deps.slug)).value.state
+    if (deps.stack && !source.integration?.landing)
+      await store.append(deps.slug, {
+        actor: DISPATCHER,
+        type: 'integration.landed',
+        payload: {
+          operation: active.id,
+          head: active.parent,
+          landed: active.parent,
+          provenance: 'kernel',
+          verified: true,
+          fenced: true,
+        },
+      })
     if (source.prState !== 'merged')
       await store.append(deps.slug, {
         actor: DISPATCHER,

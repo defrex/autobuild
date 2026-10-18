@@ -37,6 +37,36 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
     return sha
   }
   return {
+    async fastForward(input) {
+      object(input.expected)
+      object(input.sha)
+      if (!isValidGitBranchName(input.branch)) throw new Error('invalid fast-forward destination')
+      const ancestry = await git(
+        input.workspacePath,
+        ['merge-base', '--is-ancestor', input.expected, input.sha],
+        true,
+      )
+      if (ancestry.exitCode !== 0) throw new Error('publication is not a fast-forward')
+      const ref = `refs/heads/${input.branch}`
+      const actual = await read(input.workspacePath, ref)
+      if (actual !== input.expected) return { kind: 'lease-mismatch', actual }
+      const result = await git(
+        input.workspacePath,
+        local
+          ? ['update-ref', ref, input.sha, input.expected]
+          : [
+              'push',
+              '--porcelain',
+              `--force-with-lease=${ref}:${input.expected}`,
+              'origin',
+              `${input.sha}:${ref}`,
+            ],
+        true,
+      )
+      if (result.exitCode !== 0)
+        return { kind: 'lease-mismatch', actual: await read(input.workspacePath, ref) }
+      return { kind: 'published' }
+    },
     async snapshot(input) {
       const ref = branchRef(input.branch)
       if (!/^refs\/autobuild\/reconcile\/[a-z0-9-]+\/[a-z0-9/-]+$/.test(input.destinationRef))

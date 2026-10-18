@@ -516,6 +516,7 @@ from one build's log:
 ```jsonc
 // BuildDigest
 {
+  "integrationAuditPending": true, // optional: kernel landing audit requested, not yet settled
   "slug": "ab-fix-login-3",
   "terminal": "done",               // optional: "done" | "aborted", omitted while the log has neither
   "observations": [                 // ascending-seq pairs for the log's observation.recorded events
@@ -1309,3 +1310,8 @@ These operations never renew the lease. Repository records optionally expose
 `tick: {run, open?: {startedAt}, finished?: {run, startedAt, completedAt, ...completion}}`.
 They retain the previous completion while a new tick is open and after lease
 release. Build and session credentials cannot mutate repository ticks.
+
+The optional `integrationAuditPending` digest fact is introduced on the 0.14
+release line without changing protocol identity 4. It survives build completion
+and is cleared by audit settlement. Services omit it for historical 0.12/0.13
+clients, retaining their decoders and the supported three-line window.

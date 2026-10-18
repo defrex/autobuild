@@ -318,6 +318,19 @@ async function runBuildControl(
     )
   }
   const result = await abBuildControl({
+    ticketSource: async () =>
+      (
+        await openTicketSource(
+          {
+            targetRepo: deps.workspacePath,
+            env: deps.processEnv ?? {},
+            exec: deps.exec!,
+            stdout: deps.stdout,
+            ...(storeRef !== undefined ? { storeRef } : {}),
+          },
+          'ab auto-merge',
+        )
+      ).source,
     targetRepo: deps.workspacePath,
     env: deps.processEnv ?? {},
     exec: deps.exec,

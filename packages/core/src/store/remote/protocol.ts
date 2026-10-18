@@ -283,6 +283,7 @@ export const sessionDepositsResponseSchema = z.object({
 // the build's log carries no terminal fact, per the protocol's omission
 // convention for optional members.
 export const buildDigestWireSchema = z.object({
+  integrationAuditPending: z.literal(true).optional(),
   mergedSha: z.string().min(1).optional(),
   nodeContribution: eventPayloadSchemas['node.contribution-recorded'].optional(),
   kind: z.enum(['work', 'node']).optional(),
