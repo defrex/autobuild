@@ -1,3 +1,4 @@
+import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { reconcileRewriteHead } from './reconcile-head'
@@ -203,7 +204,9 @@ export interface BuildState {
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
-  /** Human auto-merge intent and its correlated forge application fact. */
+  /** Readiness provenance, landing-bound consent and native application receipts. */
+  landing?: LandingState
+  /** Historical auto-merge controls retained for replay compatibility. */
   autoMerge: AutoMergeProjection
   /** seq of the latest `finalize.completed`, else 0 — "has finalize run for
    * the CURRENT spec". `prState` cannot answer that: it is the full-log PR
@@ -347,6 +350,7 @@ export interface BuildAcc {
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
   prState?: PrLifecycle
+  landing?: LandingState
   autoMerge: AutoMergeProjection
   specRev?: number
   restartSince: number
@@ -377,7 +381,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 9
+export const BUILD_REDUCER_VERSION = 11
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -388,6 +392,7 @@ function initialBuildAcc(): BuildAcc {
     answeredEscalations: [],
     reviewRoundCeilings: {},
     pr: undefined,
+    landing: {},
     autoMerge: { requested: false },
     restartSince: 0,
     pinnedAssets: [],
@@ -478,6 +483,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
   let lastEvent = acc.lastEvent
   for (const event of events) {
+    acc.landing ??= {}
+    advanceLanding(acc.landing, event)
     if (event.type.startsWith('integration.')) {
       acc.integration ??= {}
       advanceIntegration(acc.integration, event)
@@ -1000,6 +1007,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     reviewRoundCeilings: acc.reviewRoundCeilings,
     pr: acc.pr,
     prState: acc.prState,
+    landing: acc.landing,
     autoMerge: acc.autoMerge,
     finalizeCompletedSeq: acc.finalizeCompletedSeq,
     finalizeSteps: acc.finalizeSteps,

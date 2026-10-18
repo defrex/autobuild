@@ -88,6 +88,18 @@ export async function reducedReadBudget(opts: {
     payload: { pr: { number: 7, url: 'https://example.test/7', headSha: 'abc' } },
   })
   await store.append(slug, {
+    actor: KERNEL,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'abc', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+  await store.append(slug, {
     actor: humanActor('human'),
     type: 'build.auto-merge-requested',
     payload: {},

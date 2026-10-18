@@ -7,6 +7,7 @@ import { projectHarvest, type HarvestRunAction } from '../cli/dashboard/model'
 export class OperatorControlError extends Error {
   constructor(
     readonly code:
+      | 'retired-setting'
       | 'stale-harvest-run'
       | 'harvest-paused'
       | 'harvest-pending'
@@ -33,6 +34,11 @@ export async function setRepositorySetting(opts: {
    * journal; optional so the operator API (which has no run) is unchanged. */
   run?: string
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
+  if (opts.setting === 'auto-merge-default')
+    throw new OperatorControlError(
+      'retired-setting',
+      'Auto-merge default is retired; configure [[landing]] rules in autobuild.toml',
+    )
   await opts.store.ensureRepo(opts.repo)
   const payload = {
     enabled: opts.enabled,

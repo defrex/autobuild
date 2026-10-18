@@ -1833,16 +1833,31 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
   })
 
   test('a parked merge step names the missing consent — and requested/enabled do not', () => {
-    const bare = project(toLog(throughPr))
+    const pending = project(toLog(throughPr))
+    expect(stepFor(pending, 'merge')?.reason).toBe('Landing policy decision pending')
+    const ready = [
+      ...throughPr,
+      ev('landing.decided', {
+        candidate: { head: 'sha-r1', parent: 'base', cycle: '1' },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      }),
+    ]
+    const held = project(toLog([...ready, ev('build.hold-requested', {})]))
+    expect(stepFor(held, 'merge')?.reason).toContain('Landing held')
+    expect(stepFor(held, 'merge')?.reason).not.toContain('awaits consent')
+    const bare = project(toLog(ready))
     expect(stepFor(bare, 'merge')?.reason).toBe(
-      'no auto-merge consent has been requested — request it with m on the build row ' +
-        'or `ab auto-merge auth-rate-limit on`',
+      'Landing awaits consent — use ab land auth-rate-limit; use ab hold auth-rate-limit to withdraw consent',
     )
-    const consented = project(toLog([...throughPr, ev('build.auto-merge-requested', {})]))
+    const consented = project(toLog([...ready, ev('build.auto-merge-requested', {})]))
     expect(stepFor(consented, 'merge')?.reason).toBeUndefined()
     const enabled = project(
       toLog([
-        ...throughPr,
+        ...ready,
         ev('build.auto-merge-requested', {}),
         ev('pr.auto-merge-enabled', { commandSeq: 6 }),
       ]),

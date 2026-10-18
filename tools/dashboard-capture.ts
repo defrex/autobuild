@@ -1,3 +1,4 @@
+import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
@@ -136,7 +137,6 @@ const SESSION_CLOSED_PARTS: readonly StreamPart[] = [
 
 const HAPPY_EVIDENCE = [
   'intake ON',
-  'auto merge ON',
   'harvest ON',
   'active 5/6',
   'AUT-131',
@@ -574,6 +574,26 @@ export async function prepareScenario(): Promise<E2eHarness> {
         outcome: 'skipped',
         skipCause: 'post-reconcile-policy',
         reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      },
+    })
+
+    const readyState = (await readBuildFacts(harness.store, slug)).value.state
+    if (!readyState.pr || !readyState.finalizeCompletedSeq)
+      throw new Error('post-reconcile capture requires a finalized PR')
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: {
+          head: readyState.pr.headSha,
+          parent: 'capture-base',
+          cycle: String(readyState.finalizeCompletedSeq),
+        },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { index: 0, snapshot: { mode: 'consent' } },
       },
     })
 
@@ -1166,6 +1186,14 @@ async function capturePaint(
           : []
       const presented = {
         ...model,
+        // Runtime commits include generated fixture bytes; keep their visible
+        // provenance stable just like the scripted clock and repository name.
+        builds: model.builds.map((build) => ({
+          ...build,
+          ...(build.pipelineSource
+            ? { pipelineSource: { ...build.pipelineSource, commit: 'capture-source' } }
+            : {}),
+        })),
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
         ...(spec.forgeReadiness
@@ -1321,7 +1349,7 @@ export async function captureDashboardFrames(
         ]),
         '',
         '## Headline visual verdict',
-        '- [ ] `headline-happy-wide.png` shows intake, auto merge, and harvest enabled.',
+        '- [ ] `headline-happy-wide.png` shows intake and harvest enabled, with selected landing controls.',
         '- [ ] Harvest is running with scan complete and synthesize underway.',
         '- [ ] Five plausible builds span plan, implement, code-review, verify, and merged.',
         '- [ ] A review round count above one is visible.',

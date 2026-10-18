@@ -313,6 +313,24 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   const forge: import('../ports/types').Forge = new FakeForge()
   Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
   forge.snapshotBase = async () => parent
+  await store.append('a', {
+    actor: (await import('../events/envelope')).KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: oldHead } },
+  })
+  const native = forge as InstanceType<typeof FakeForge>
+  native.setPrState(1, { state: 'open', mergeable: true })
+  await native.setAutoMerge(deps.workspacePath, 1, true)
+  const replace = forge.rewrite!.replace.bind(forge.rewrite!)
+  forge.rewrite!.replace = async (input) => {
+    expect(native.isAutoMergeEnabled(1)).toBe(false)
+    const facts = await store.getEvents('a')
+    expect(facts.findLast((e) => e.type === 'landing.native-applied')?.payload).toMatchObject({
+      enabled: false,
+      operation: 'first',
+    })
+    return replace(input)
+  }
   const tx = { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true }
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'first' }),

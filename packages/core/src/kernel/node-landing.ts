@@ -165,7 +165,9 @@ export async function landIntoNode(
               cycle: deps.stack.cycle,
               head: candidate,
               parent: expected,
-              commandSeq: source.autoMerge.explicitCommandSeq!,
+              ...(source.landing?.decision
+                ? { decisionSeq: source.landing.decision.seq }
+                : { commandSeq: source.autoMerge.explicitCommandSeq! }),
               fenced: true,
               evidence: ['Destination node writer reservation and exact-parent fast-forward'],
             },

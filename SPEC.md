@@ -235,9 +235,8 @@ Small, independently runnable, crash-safe:
   `build.created` from the immutable record (only records an older dispatcher
   left with an empty stream: new claims write it atomically with the record), executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
-  `dispatch.failed`. `build.created` retains any claim-time auto-merge
-  attribution and the sampled default fact's seq until the human-authored
-  command fact is materialized, while
+  `dispatch.failed`. New claims do not seed landing consent or materialize
+  historical auto-merge defaults; policy is sampled at readiness. Meanwhile,
   `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
@@ -1398,10 +1397,10 @@ sessionless read-only status projection.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the auto-merge default. It uses the same
+repository-wide pause, and the harvest gate. It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
-pause off, and auto-merge default off; the query does not create that stream,
+pause off; the query does not create that stream,
 append an event, claim a ticket, attach a runner, or start dispatcher work.
 
 Agents never receive TicketSource credentials. Only the deterministic file
@@ -1969,8 +1968,9 @@ eligibility, including a clean restack. Failure blocks the node; file a repair
 child targeting it. Repair children remain admissible, and their landed head
 supersedes the failed cycle. Reports retain their actual head/base citations.
 
-Landing requires explicit per-build consent; repository defaults do not grant it.
-Consent ON refuses incomplete nodes and names open children; OFF remains available.
+Landing follows ordered `[[landing]]` rules (§15.7), defaulting to node consent.
+Auto mode authorizes complete, verified nodes; consent mode waits for `ab land`.
+Land refuses incomplete nodes and names open children; `ab hold` remains available.
 Node parents and local-git roots receive guarded fast-forwards, preserving one
 commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
@@ -1988,7 +1988,7 @@ or unverified. The janitor records human provenance and whether the actual merge
 head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
 triage; children already claimed retain their frozen base. Nested nodes work.
-Automatic landing policy is not provided. A forge plugin needs node branch creation, comparison and
+A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
 **Changing a node's parent.** Updating an open node ticket's target moves it to
@@ -2012,6 +2012,10 @@ alone do not represent outstanding work. Recovery rereads ambiguous writes,
 cancels unconfirmed requests, resumes frozen replay, and retries PR retargeting
 without replaying unrelated ticket edits. Later edits wait for the reserved
 operation to settle. Native auto-merge is cancelled before changing the base.
+Accepted node re-parenting revokes prior land consent through the recorded
+`node.parent-accepted` fact. Holds survive. Readiness evaluates landing policy
+against the new effective parent before another landing can proceed.
+
 Parent identity changes invalidate eligibility even at identical SHAs; historical
 verification evidence remains immutable.
 
@@ -2204,15 +2208,10 @@ backfill, and migration reruns preserve counters. Hosted reads use one GET
 `/repos/:repo/builds` returns scoped build records. Both routes authorize the
 repository before reading and support repositories with builds but no journal.
 
-Durable operator settings (intake, the repository-wide pause, the auto-merge
-default, the harvest gate) are repository-journal facts: they survive restarts,
-propagate between dispatchers by ordinary polling, and are never optimistically
-rendered — the UI shows acknowledged state. The repository-wide pause holds
-every queued build: while it is set, no dispatcher tick may attach a runner to
-a build that does not have one yet. The auto-merge default both seeds new
-claims and, on each change, fans out onto every current non-terminal build of
-the repository as a bulk request or withdrawal attributed to the toggling
-operator (§15.7).
+Durable operator settings (intake, repository pause, harvest gate) survive
+restarts through the repository journal. Per-landing hold and land commands
+live in the build log. Landing policy is declarative dispatcher configuration
+(§15.7); there is no writable repository auto-merge default.
 
 The **operator sandbox** is the third execution kind beside build and harvest
 executions: a persistent, credential-free, per-operator-per-repository
@@ -2368,7 +2367,8 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -2498,9 +2498,9 @@ finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.com
 
 **Interrupted dispatch:** if the log stops after `build.created`, a later
 ordinary dispatcher tick provisions the workspace, atomically imports the spec,
-posts the ticket notice once, and launches the runner. Claim-time auto-merge
-attribution retained by `build.created` is materialized as the ordinary
-human-authored request before launch. A failed boundary appends `dispatch.failed
+posts the ticket notice once, and launches the runner. New claims do not
+materialize auto-merge-default attribution as a human request. Landing policy
+is recorded at readiness; consent is an explicit land command. A failed boundary appends `dispatch.failed
 {stage,attempt,error}` and stays queued for another tick until its budget is
 exhausted. Dispatch failures share a `[policy].maxDispatchAttempts` budget
 (default 3) across
@@ -2756,7 +2756,72 @@ Merge queues ignore message overrides, so identity-aware kernel landing defers
 with `unproven-gate-state` rather than bypassing the queue. Human merges remain
 observable regardless of trailer evidence.
 
-**Merge gates are never bypassed.** The operator's auto-merge command is
+Ordered `[[landing]]` rules in `autobuild.toml` decide authorization. Each rule
+requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
+<node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
+`label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
+match anything. With no match, leaves use auto and nodes require consent.
+The target is the immutable destination frozen at claim, not a ticket's current
+parent. Labels are sampled from a successful source-ticket read at readiness;
+unavailable ticket data defers the decision instead of supplying empty labels.
+
+A leaf becomes ready after verification and finalize on a current base; a node
+must be complete and verified at its exact head and parent. `landing.decided`
+records that candidate, the sampled labels, resulting mode, and the full matched
+rule and index (or explicit default). Editing configuration cannot change this
+recorded decision. A replacement candidate gets a new decision once ready.
+Policy is live dispatcher configuration, outside the pinned execution pipeline.
+
+`ab hold <slug>` durably suppresses landing and revokes previous consent, even
+before readiness. `ab land <slug>` requires readiness, clears hold, and consents
+to this build/node landing into its frozen destination. Consent survives head
+replacement, restacking, verification and re-finalization until another hold or
+completion. It is consent to the landing, not approval of an immutable diff.
+Commands and acknowledgements are sequence-correlated; hold acknowledgement
+requires confirmed native cancellation, while land acknowledgement accepts
+consent without claiming that merge gates passed. The same actions are available
+through the MCP/operator build-control tools. The terminal uses `l` for land and
+`o` for hold on the selected landing. The web has no consent controls.
+
+The repository auto-merge default and its fan-out are retired. Historical events
+still replay; explicit old per-build commands map to consent/hold until a new
+landing command supersedes them, while old default seeds confer no consent.
+`ab upgrade` samples the target repository's configured journal and writes leaf
+auto for old ON, leaf consent for old OFF (including no fact), and node consent
+in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
+configuration or unavailable journals fail with recovery guidance. Fresh init
+uses the no-rules fallback.
+
+A native-enable failure after the provider's mutation guard requires confirmed
+cancellation. Its disabled receipt records the candidate, authorization, retry
+attempt and next eligible time. Retries back off from 30 seconds exponentially
+to a five-minute maximum interval, surviving dispatcher restarts. A new
+candidate or land command resets this delay; hold and cancellation never wait
+for it. Quiet polls append no attempt facts. Native application receipts are
+bookkeeping, not pipeline execution progress.
+
+Native auto-merge is reconciled on every janitor poll against durable desired
+landing state using the native state in the existing PR read, without additional
+forge reads. A native write is issued only when observed and desired state disagree. It is disabled while held, unauthorized, unready, or replacement
+publication is pending or just completed; enabling binds to the current head
+through the forge's expected-head guard. Every replacement publication confirms
+cancellation first, and its first following poll re-reads and reconciles native
+state before other build actions. Native receipts bind to exact candidates;
+consent does not. A stale enable completing after cancellation is repaired by
+poll reconciliation. This is an explicitly bounded failure model: native merge
+is used only behind a merge-blocking gate, and checks on a replacement head must
+take far longer than one poll interval, allowing cancellation before they pass.
+There is no durable native-effect reservation protocol. An undesired forge
+landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
+state with no enable in flight or indeterminate means a deliberate human forge
+landing, which supplies consent. Record whether it overrode a hold: an unheld
+human landing needs no operator attention; overriding a hold is informational.
+If native auto-merge was armed, or an enable was in flight or indeterminate,
+record a possible stale-enable landing as contrary to policy and raise operator
+attention. Autobuild never rewrites the target to undo either outcome. Merge
+gates and the serialized node-writer publication rules remain authoritative.
+
+**Merge gates are never bypassed.** Landing authorization is
 durable consent to merge, not a bypass. Whenever the base branch has any real
 merge-blocking gate, consent is applied as GitHub-native auto-merge, so the
 forge's own checks decide when the PR lands. Only when the forge
@@ -2899,6 +2964,18 @@ The dispatcher emits an actionable operator notice without repeating it for the
 same failure. Restoring a valid `autobuild.toml` clears the rejection and
 ordinary boundary reload resumes.
 
+Landing policy is an ordered `[[landing]]` array. Each rule requires
+`mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,
+`from = "leaf" | "node"`, and an exact, case-sensitive `label`. Predicates
+within a rule are ANDed; omitted predicates are wildcards; first match wins.
+The destination is the frozen target identity, and labels are sampled when
+readiness is recorded. No matching rule, including no rules, means leaf auto /
+node consent. Policy is hot dispatcher-owned configuration, not pinned build
+execution settings; each ready candidate retains its immutable `landing.decided`
+rule snapshot and mode after config edits. Historical `build.auto-merge-requested`
+and default-attribution fields remain replay-compatible but are not new controls.
+
+
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
@@ -3011,7 +3088,7 @@ decide where a build's effective configuration is composed from:
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
-| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's

@@ -146,28 +146,28 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-happy-wide',
     width: 1440,
     height: 1000,
-    requires: ['AUT-131', 'PR merged', 'Harvest', '[x]', 'merge(waiting)', 'auto merge', 'intake'],
+    requires: ['AUT-131', 'PR merged', 'Harvest', '[x]', 'merge(waiting)', 'intake'],
     forbids: ['BLOCKED', 'PAUSED', '(held)', 'FAILED'],
   },
   {
     id: 'builds-happy-narrow',
     width: 390,
     height: 1700,
-    requires: ['AUT-131', 'Harvest', '[x]', 'auto merge', 'intake'],
+    requires: ['AUT-131', 'Harvest', '[x]', 'intake'],
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
     id: 'builds-empty-wide',
     width: 1440,
     height: 1000,
-    requires: ['intake', 'auto merge', 'harvest', 'no active builds'],
+    requires: ['intake', 'harvest', 'no active builds'],
     forbids: ['repository RUNNING'],
   },
   {
     id: 'builds-empty-narrow',
     width: 390,
     height: 1000,
-    requires: ['intake', 'auto merge', 'harvest', 'no active builds'],
+    requires: ['intake', 'harvest', 'no active builds'],
     forbids: ['repository RUNNING'],
   },
   {
@@ -196,7 +196,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-rest-wide',
     width: 1440,
     height: 1200,
-    requires: ['BLOCKED', 'repository PAUSED', '(held)', 'auto merge off'],
+    requires: ['BLOCKED', 'repository PAUSED', '(held)'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
@@ -204,7 +204,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     width: 1440,
     height: 1200,
     emulateFineHover: true,
-    requires: ['BLOCKED', 'repository PAUSED', '(held)', 'auto merge off'],
+    requires: ['BLOCKED', 'repository PAUSED', '(held)'],
     forbids: ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
@@ -212,40 +212,42 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     width: 1440,
     height: 1200,
     emulateKeyboardFocus: true,
-    requires: ['BLOCKED', 'auto merge off'],
+    requires: ['BLOCKED'],
     forbids: ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-mixed-paused-wide',
     width: 1440,
     height: 1200,
-    requires: ['PAUSED', 'Actions', 'ABORT', 'RESUME', 'auto merge off'],
+    requires: ['PAUSED', 'Actions', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-auto-merge-on-wide',
     width: 1440,
     height: 1200,
-    requires: ['auto merge enabled', 'Actions', 'ABORT', 'RESUME'],
+    requires: ['Actions', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-parked-no-consent-wide',
     width: 1440,
     height: 1300,
-    requires: [
-      'merge(waiting)',
-      'no auto-merge consent has been requested',
-      '`ab auto-merge complete-dashboard-evidence on`',
-      'auto merge off',
+    requires: ['merge(waiting)', 'Landing awaits consent', 'ab land complete-dashboard-evidence'],
+    forbids: [
+      'BLOCKED',
+      'QUEUED',
+      '(held)',
+      'landing not ready',
+      'landing policy pending',
+      'use l on the build row',
     ],
-    forbids: ['BLOCKED', 'QUEUED', '(held)'],
   },
   {
     id: 'builds-mixed-selected-narrow',
     width: 390,
     height: 1700,
-    requires: ['BLOCKED', 'Actions', 'ABORT', 'RESUME', 'auto merge off'],
+    requires: ['BLOCKED', 'Actions', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
@@ -266,21 +268,13 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'Transcript',
       'ABORT',
       'RESUME',
-      'auto merge off',
     ],
   },
   {
     id: 'builds-mixed-detail-narrow',
     width: 390,
     height: 2600,
-    requires: [
-      'BLOCKED',
-      '(held)',
-      'Unresolved blockers',
-      'Answer escalation',
-      'ABORT',
-      'auto merge off',
-    ],
+    requires: ['BLOCKED', '(held)', 'Unresolved blockers', 'Answer escalation', 'ABORT'],
   },
   {
     id: 'builds-mixed-answer-wide',
@@ -517,10 +511,8 @@ function selectedBuildModel(
   }
 }
 
-/** The observed default-on/parked-off state: one build parked on an open PR
- * whose merge step carries the shared projection's no-consent reason, under a
- * repository default that reads ON. The web row and the open detail must say
- * the same words the terminal renders (f_b163d7ca). */
+/** A ready landing with a recorded consent policy. Row and detail share
+ * both policy provenance and the explanation of the required operator action. */
 function parkedNoConsentModel(source: DashboardModel): DashboardModel {
   const origin = source.builds[0]
   if (origin === undefined) {
@@ -541,6 +533,17 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
         sessions: undefined,
         blockers: [],
         autoMerge: 'off',
+        landing: {
+          decision: {
+            seq: 1,
+            candidate: { head: 'capture-head', parent: 'capture-base', cycle: '1' },
+            from: 'leaf',
+            into: { kind: 'root' },
+            labels: [],
+            mode: 'consent',
+            rule: { index: 0, snapshot: { mode: 'consent' } },
+          },
+        },
         pr: { url: 'https://forge.example/pr/3', state: 'open' },
         steps: [
           { label: 'plan', state: 'done', timing: { accumulatedMs: 61_000 } },
@@ -1050,7 +1053,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '',
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. On short states, empty black below the last row is the natural end of the document, not a reserved footer slot.',
     '- [ ] Compare loading, empty, and loaded Builds at both widths, then sign-in: the masthead is exactly one cell row high with identical coordinates in every state, followed by the control line and content at the recorded one-row rhythm.',
-    '- [ ] Control line: one line beneath the masthead carries the conditional repository selector, queue/active/observation facts, intake/auto merge/harvest toggles with one natural space before each ON/OFF word, `pause all` and `resume all` (slack when unavailable), and the clock pinned right. No signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` alone shows the `repo` selector.',
+    '- [ ] Control line: one line beneath the masthead carries the conditional repository selector, queue/active/observation facts, intake/harvest toggles with one natural space before each ON/OFF word, `pause all` and `resume all` (slack when unavailable), and the clock pinned right. No signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` alone shows the `repo` selector.',
     '- [ ] At 390px the control line wraps only between complete items and hides the clock; the masthead keeps the identity menu trigger at the right, ellipsized alongside the title; no control-line item clips, overlaps, or collapses into a menu.',
     '- [ ] Loading frames put neutral control placeholders inside that same control landmark and show five static neutral build-row placeholders at the normal four-row rhythm, with no dispatcher-shaped row among them, digits, status words, synthetic values, footer, or animation. The old polling sentence is absent.',
     '- [ ] The browser document is the sole scroll container: tall Builds and open detail extend document height and move masthead, controls, rows, and detail together; no shell block is fixed or pinned and no inner rows/detail scroller clips content.',
@@ -1062,13 +1065,13 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Row controls: no build row carries lifecycle or destructive words; rows are headline, pipeline, and previews only. Compare `builds-mixed-rest-wide.png`, `builds-mixed-hover-wide.png`, and `builds-mixed-focus-wide.png`: coordinates are identical, the hover frame turns the hovered identity cyan, and no ABORT, RESUME, AUTO MERGE, DETAILS, or CLOSE word appears outside an open detail.',
     '- [ ] Hover and focus frames: the selected lane is bold, a different fine-pointer preview lane is regular weight, and the focus frame visibly outlines the title. No 390px frame carries a preview marker.',
     '- [ ] `builds-mixed-selected-narrow.png` shows the open detail with its Actions section (ABORT and RESUME) directly under the kv line, unclipped at 390px.',
-    '- [ ] Direct controls: every title has a slug-qualified detail name and expanded state. Every row visibly shows auto merge OFF, REQUESTED, ENABLED, or CANCELLING in its state color; compare `builds-mixed-rest-wide.png` and `builds-auto-merge-on-wide.png`. The indicator and title do not duplicate the Actions words.',
-    '- [ ] `builds-parked-no-consent-wide.png` shows a build parked on an open PR: the row pipeline and the open detail both read `merge(waiting)` followed by the shared no-consent reason ("no auto-merge consent has been requested — request it with m … or `ab auto-merge <slug> on`"), and the row\'s `auto merge OFF` token is visibly marked as disagreeing with the control line\'s `auto merge ON`.',
+    '- [ ] Direct controls name the build and expanded state. Obsolete auto-merge mutation controls are absent; consent is managed through CLI/operator tools.',
+    '- [ ] `builds-parked-no-consent-wide.png` shows merge(waiting) and Landing awaits consent in both row and detail.',
     '- [ ] `builds-mixed-paused-wide.png` shows the paused build open with ABORT / RESUME under its Actions heading; no control or state token clips or overlaps at either viewport.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row with no rule above it and one dim rule below, carrying Actions, Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     "- [ ] Answer frames: the open detail's Actions section shows a red `!` blocker line, a focused one-row optional-guidance field, then only `SUBMIT` and `CANCEL`; no `RESUME`, `ABORT`, auto-merge, or detail accessible names for that row. Empty submission is identified as retry; the narrow frame remains unclipped. The full answer composer stays further down the detail.",
     '- [ ] Abort frame (after leaving answer mode with CANCEL): the Actions section shows a red `! abort <slug>? Enter confirms, Esc cancels` line and `CONFIRM ABORT` / `CANCEL` ghost controls, with no answer field and no ordinary action words.',
-    '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake, auto merge, and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
+    '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles, auto-merge indicators, and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds a red `!` notice beneath the heading and nothing in the masthead.',
     '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes. `consent-named-wide.png` shows the bold registered client name with the raw client id beside it and the requested scopes; `consent-unnamed-narrow.png` falls back to the raw client id alone; `consent-missing-code-wide.png` shows the missing-authorization-code notice with no form and no button; `consent-route-narrow.png` is rendered through the route page wrapper and shows the unnamed-client copy, the requested scopes, and one ink-outline `Authorize client` primary button with no notice.',

@@ -1,3 +1,9 @@
+import { evaluateLandingPolicy } from '../kernel/landing-policy'
+import {
+  landingAuthorized,
+  nativeLandingApplied,
+  sameLandingCandidate,
+} from '../kernel/landing-state'
 import { sameParentRejection } from '../kernel/node-restack-state'
 import { validateNodeParent, nodeParentBusy, type ParentContext } from '../kernel/node-parent'
 import { landIntegrationRoot, auditIntegrationLanding } from '../kernel/integration-landing'
@@ -80,21 +86,13 @@ import { createHash } from 'node:crypto'
 import type { Config } from '../config/schema'
 import type { LanguageModel } from 'ai'
 import { runOrchestratorTickStep } from './orchestrator-tick'
-import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload, PinnedAsset } from '../events/payloads'
 import type { IdSource } from '../ids'
-import {
-  autoMergeApplicationType,
-  pendingAutoMerge,
-  recordAutoMergeDeferralObservation,
-} from '../kernel/auto-merge'
-import {
-  autoMergeDefaultTarget,
-  pickAutoMergeDefault,
-  type AutoMergeDefaultFact,
-} from '../kernel/auto-merge-default'
+import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
+import type { AutoMergeDefaultFact } from '../kernel/auto-merge-default'
 import { decideNextFromFacts } from '../kernel/engine'
 import { composeBuildConfig } from '../config/live'
 import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
@@ -841,13 +839,7 @@ export class Dispatcher {
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     if (opts.viewRefreshed !== true) await this.store.refresh()
-    let autoMergeUser: string | undefined
-    if (opts.defaultAutoMerge === true) {
-      autoMergeUser = opts.autoMergeUser?.trim()
-      if (autoMergeUser === undefined || autoMergeUser === '') {
-        throw new Error('defaultAutoMerge requires nonempty human attribution in autoMergeUser')
-      }
-    }
+    const autoMergeUser = undefined
     const report = emptyTickReport()
     this.restoreScan(report)
     /** Builds already launched this tick — a janitor/startup re-attach must
@@ -860,16 +852,7 @@ export class Dispatcher {
     // pretends to a serialization the store does not offer.
     const repoFacts = this.store.repositoryFacts()
     const paused = repoFacts.settings.paused
-    const autoMergeDefault = pickAutoMergeDefault(repoFacts.autoMerge)
-    // The claim-time seed cites the newest fact whose enabled state matches
-    // the launch sample, not blindly the newest fact: the CLI samples
-    // `defaultAutoMerge` from its own earlier read, so an interleaved toggle
-    // can make this tick's read newer-and-opposite. Citing the matching fact
-    // keeps the newer opposite fact strictly ahead of the seed's provenance,
-    // so the fan-out reconciles the build on the next tick instead of the
-    // stale sample out-voting the durable default forever (f_b851c0e8).
-    const autoMergeSeedFact =
-      opts.defaultAutoMerge === true ? pickAutoMergeDefault(repoFacts.autoMerge, true) : undefined
+    const autoMergeSeedFact = undefined
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
     // provider liveness and settle their completion, lease, and publication.
     // Runs before the janitor so its executionLeaseLive checks see freshly
@@ -889,7 +872,6 @@ export class Dispatcher {
     // inside `checkPr`). Independent of intake and `acceptNewWork` — the
     // durable fact drives it, so a second dispatcher polling the same
     // repository converges the same state.
-    await this.applyAutoMergeDefault(autoMergeDefault)
     if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
@@ -1217,55 +1199,6 @@ export class Dispatcher {
         creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
       },
     })
-  }
-
-  /** Apply the newest durable `dispatcher.auto-merge-default-set` fact to every
-   * current non-terminal build of this repository: on — request consent; off —
-   * cancel it. Attribution is the toggling human's own actor, exactly as if
-   * they had pressed `m` on each row; each command carries the fact's seq so
-   * the fan-out is idempotent (a settled build fails `autoMergeDefaultTarget`)
-   * and a per-build override stands until the default is toggled again. A fact
-   * whose value already matches the build's state writes a provenance-only
-   * `build.auto-merge-default-observed` marker instead of a duplicate command,
-   * so the matching fact is recorded as answered (f_28b3fba1).
-   *
-   * Per build, a compare-and-set loop (the `requestOne` shape from
-   * `bulk-control.ts`): the read/reduce/evaluate lives inside the loop, so a
-   * competing write loses at most one attempt and the next re-reads fresh
-   * state. No TickReport counter: the evidence is the build events, and the
-   * report shape stays compatible. */
-  private async applyAutoMergeDefault(fact: AutoMergeDefaultFact | undefined): Promise<void> {
-    if (fact === undefined) return
-    const store = this.store
-
-    // Terminal builds are never eligible (`autoMergeDefaultEligible`).
-    for (const record of (await this.nonterminalBuilds()).sort((a, b) =>
-      a.slug.localeCompare(b.slug),
-    )) {
-      while (true) {
-        const { state } = await store.buildFacts(record.slug)
-        if (state.kind === 'node') break
-        const target = autoMergeDefaultTarget(state, fact)
-        if (target === undefined) break
-        if (target === 'observed') {
-          const observed = await store.appendIfCurrent(record.slug, state.lastSeq, {
-            actor: DISPATCHER,
-            type: 'build.auto-merge-default-observed',
-            payload: { defaultSeq: fact.seq },
-          })
-          if (observed !== null) break
-          continue
-        }
-        const type =
-          target === 'request' ? 'build.auto-merge-requested' : 'build.auto-merge-cancelled'
-        const appended = await store.appendIfCurrent(record.slug, state.lastSeq, {
-          actor: fact.actor,
-          type,
-          payload: { defaultSeq: fact.seq },
-        })
-        if (appended !== null) break
-      }
-    }
   }
 
   private async triggerHarvest(): Promise<void> {
@@ -1882,6 +1815,39 @@ export class Dispatcher {
           loaded ??= (await readBuildFacts(this.store, record.slug)).value
           return loaded
         }
+        let observedPr: Awaited<ReturnType<Forge['getPrState']>> | undefined
+        // A replacement head is followed first by a forge read and cancellation,
+        // ahead of node cascade, controls, or any other action for this build.
+        if (
+          state.status !== 'done' &&
+          state.status !== 'aborted' &&
+          state.prState === 'open' &&
+          state.pr &&
+          state.landing?.native?.operation
+        ) {
+          const path = this.forgeWorkspacePathOf(workspace)
+          const observed = await this.deps.forge.getPrState(path, state.pr.number)
+          observedPr = observed
+          if (observed.state !== 'open') {
+            await this.checkPr(
+              record,
+              { history, workspace },
+              state,
+              report,
+              launched,
+              executionLeaseLive,
+              observedPr,
+            )
+            continue
+          }
+          const result =
+            observed.nativeAutoMerge === false
+              ? { kind: 'applied' as const }
+              : await this.deps.forge.setAutoMerge(path, state.pr.number, false)
+          if (result.kind !== 'applied')
+            throw new Error('Replacement-head native cancellation unconfirmed')
+          observedPr = { ...observed, nativeAutoMerge: false }
+        }
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
         // has its own crash window after build.completed. Revisit only pending
         // hosted handles; this never relaunches a runner or consumes capacity.
@@ -2018,6 +1984,7 @@ export class Dispatcher {
             report,
             launched,
             executionLeaseLive,
+            observedPr,
           )
         }
       } catch (error) {
@@ -2561,6 +2528,7 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     executionLeaseLive: boolean,
+    observedPr?: Awaited<ReturnType<Forge['getPrState']>>,
   ): Promise<void> {
     const store = this.store
     const { tickets, forge } = this.deps
@@ -2579,34 +2547,152 @@ export class Dispatcher {
       reservation?.operation === 'landing' && reservation.source === record.slug
     let prState: Awaited<ReturnType<typeof forge.getPrState>>
     try {
-      prState = await forge.getPrState(workspacePath, pr.number)
+      prState = observedPr ?? (await forge.getPrState(workspacePath, pr.number))
     } catch (error) {
       if (!recoverLanding && state.prState !== 'merged') throw error
       prState = { state: 'open', mergeable: null }
     }
     if (state.prState === 'merged' && state.mergedSha)
       prState = { state: 'merged', sha: state.mergedSha }
-    if (nodeTarget && prState.state === 'open' && !recoverLanding) {
+    let nativeCancelled = false
+    if (
+      nodeTarget &&
+      prState.state === 'open' &&
+      !recoverLanding &&
+      prState.nativeAutoMerge !== false
+    ) {
       const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
       if (cancelled.kind !== 'applied')
         throw new Error('node-target native auto-merge cancellation unconfirmed')
+      nativeCancelled = true
     }
-    const autoMerge = !integration && prState.state === 'open' ? pendingAutoMerge(state) : undefined
-
-    // Revoking consent takes priority even while the PR is conflicted. A live
-    // native request could otherwise merge immediately after reconcile pushes
-    // and checks pass, before the next janitor poll gets a chance to cancel it.
-    if (autoMerge?.enabled === false && !recoverLanding) {
-      const result = await forge.setAutoMerge(workspacePath, pr.number, false)
-      if (result.kind !== 'applied') {
-        throw new Error(`forge returned ${result.kind} while disabling native auto-merge`)
+    // Converge native state on every poll, including paused and unready builds.
+    // A replacement publication invalidates readiness, even if a stale enable
+    // finished after the publisher confirmed cancellation.
+    const ready = async (candidate: BuildState): Promise<boolean> => {
+      if (
+        (integration ? executionLeaseLive : candidate.sessions.open.length > 0) ||
+        candidate.status === 'paused' ||
+        candidate.status === 'done' ||
+        candidate.status === 'aborted' ||
+        candidate.openEscalations.length ||
+        candidate.pendingCommands.length
+      )
+        return false
+      if (integration) {
+        const artifact = await store.getArtifact(record.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        const config = artifact
+          ? composeBuildConfig(parseEffectiveBuildConfig(artifact), this.deps.config)
+          : this.deps.config
+        return integrationVerified(candidate, config)
       }
+      const facts = await store.buildFacts(record.slug)
+      const decision = await this.decideBuild(record.slug, facts.state, facts.log, report)
+      return decision?.kind === 'wait' && decision.reason === 'awaiting-pr'
+    }
+    const candidateOf = async (current: BuildState) =>
+      integration
+        ? current.integration?.cycle && {
+            head: current.integration.cycle.head,
+            parent: current.integration.cycle.parent,
+            cycle: current.integration.cycle.id,
+          }
+        : current.pr && {
+            head: current.pr.headSha,
+            parent:
+              (await store.buildFacts(record.slug)).log.restack.completed?.targetBase ??
+              (await store.buildFacts(record.slug)).log.restack.initialBase ??
+              '',
+            cycle: String(current.finalizeCompletedSeq),
+          }
+    let isReady = prState.state === 'open' && (await ready(state))
+    if (
+      prState.state === 'open' &&
+      !recoverLanding &&
+      (!isReady ||
+        !landingAuthorized(state.landing) ||
+        !sameLandingCandidate(await candidateOf(state), state.landing?.decision?.candidate))
+    ) {
+      const cancellation =
+        nativeCancelled || prState.nativeAutoMerge === false
+          ? { kind: 'applied' as const }
+          : await forge.setAutoMerge(workspacePath, pr.number, false)
+      if (cancellation.kind !== 'applied')
+        throw new Error('Native landing cancellation unconfirmed')
+      nativeCancelled = true
+    }
+    if (isReady) {
+      while (true) {
+        const current = (await store.buildFacts(record.slug)).state
+        const candidate = await candidateOf(current)
+        if (!candidate?.parent || !(await ready(current))) {
+          isReady = false
+          break
+        }
+        if (sameLandingCandidate(candidate, current.landing?.decision?.candidate)) {
+          state = current
+          break
+        }
+        if (!record.ticket) throw new Error('Landing policy requires a readable source ticket')
+        const ticket = await tickets.get(record.ticket.id)
+        if (!ticket)
+          throw new Error(
+            `Landing policy source ticket ${record.ticket.id} is unavailable; retrying on next poll`,
+          )
+        const input = {
+          from: integration ? ('node' as const) : ('leaf' as const),
+          into: current.target
+            ? { kind: 'node' as const, ticket: current.target.ticket.id }
+            : { kind: 'root' as const },
+          labels: ticket.labels,
+        }
+        const decision = evaluateLandingPolicy(this.deps.config.landing, input)
+        if (!(await ready(current))) {
+          isReady = false
+          break
+        }
+        if (
+          await store.appendIfCurrent(record.slug, current.lastSeq, {
+            actor: DISPATCHER,
+            type: 'landing.decided',
+            payload: { candidate, ...input, ...decision },
+          })
+        ) {
+          state = (await store.buildFacts(record.slug)).state
+          break
+        }
+      }
+    }
+    if (
+      prState.state === 'open' &&
+      !recoverLanding &&
+      (nodeTarget || !isReady || !landingAuthorized(state.landing))
+    ) {
+      const result =
+        nativeCancelled || prState.nativeAutoMerge === false
+          ? { kind: 'applied' as const }
+          : await forge.setAutoMerge(workspacePath, pr.number, false)
+      if (result.kind !== 'applied')
+        throw new Error('Native landing cancellation unconfirmed; retrying')
+      const current = (await store.buildFacts(record.slug)).state
+      if (current.landing?.native?.enabled !== false)
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'landing.native-applied',
+          payload: { enabled: false },
+        })
+    }
+    const command = state.landing?.command
+    if (
+      command &&
+      state.landing?.acknowledgedSeq !== command.seq &&
+      (command.kind === 'land' || prState.state !== 'open' || !recoverLanding)
+    )
       await store.append(record.slug, {
         actor: DISPATCHER,
-        type: autoMergeApplicationType(false),
-        payload: { commandSeq: autoMerge.commandSeq },
+        type: 'landing.command-acknowledged',
+        payload: { commandSeq: command.seq },
       })
-    }
 
     // A positive conflict re-enters reconcile before any enable attempt. In
     // particular, an ungated fallback can never race ahead of the conflict
@@ -2648,8 +2734,9 @@ export class Dispatcher {
     // predicate. Only `applied` acknowledges native state. A direct merge is
     // owned solely by this janitor and only after the engine is parked at
     // awaiting-pr (all verify/finalize work complete).
-    const commandSeq = integration ? state.autoMerge.explicitCommandSeq : state.autoMerge.commandSeq
+    const commandSeq = state.landing?.command?.seq ?? state.landing?.decision?.seq
     const canApply = async (): Promise<boolean> => {
+      if (integration ? executionLeaseLive : state.sessions.open.length > 0) return false
       await store.refreshBuild(record.slug)
       const latest = await store.buildFacts(record.slug)
       if (integration) {
@@ -2659,9 +2746,8 @@ export class Dispatcher {
           : this.deps.config
         const candidate = latest.state
         if (
-          !candidate.autoMerge.requested ||
-          candidate.autoMerge.commandSeq !== commandSeq ||
-          candidate.autoMerge.explicitCommandSeq !== commandSeq ||
+          !landingAuthorized(candidate.landing) ||
+          candidate.landing?.decision?.seq !== state.landing?.decision?.seq ||
           candidate.status === 'paused' ||
           candidate.status === 'done' ||
           candidate.status === 'aborted' ||
@@ -2676,9 +2762,8 @@ export class Dispatcher {
         const current = (await store.buildFacts(record.slug)).state
         const cycle = current.integration?.cycle
         return (
-          current.autoMerge.requested &&
-          current.autoMerge.commandSeq === commandSeq &&
-          current.autoMerge.explicitCommandSeq === commandSeq &&
+          landingAuthorized(current.landing) &&
+          current.landing?.decision?.seq === state.landing?.decision?.seq &&
           current.status !== 'paused' &&
           current.status !== 'aborted' &&
           current.status !== 'done' &&
@@ -2693,8 +2778,9 @@ export class Dispatcher {
       return (
         latest.state.pr?.number === pr.number &&
         latest.state.prState === 'open' &&
-        latest.state.autoMerge.requested === true &&
-        latest.state.autoMerge.commandSeq === commandSeq &&
+        landingAuthorized(latest.state.landing) &&
+        latest.state.landing?.decision?.seq === state.landing?.decision?.seq &&
+        sameLandingCandidate(await candidateOf(latest.state), state.landing?.decision?.candidate) &&
         decision?.kind === 'wait' &&
         decision.reason === 'awaiting-pr'
       )
@@ -2705,14 +2791,14 @@ export class Dispatcher {
       this.integrationPollDue(
         this.integrationLandingPolls,
         record.slug,
-        `${state.integration?.cycle?.id ?? ''}:${state.verify.results.at(-1)?.seq ?? ''}:${state.autoMerge.commandSeq ?? ''}:${state.nodeComparison?.headSha ?? ''}:${state.nodeRestack?.observedParent?.sha ?? ''}`,
+        `${state.integration?.cycle?.id ?? ''}:${state.verify.results.at(-1)?.seq ?? ''}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${state.nodeComparison?.headSha ?? ''}:${state.nodeRestack?.observedParent?.sha ?? ''}`,
       )
     if (
       integrationPublicationDue &&
       nodeTarget &&
       (recoverLanding ||
         (prState.state === 'open' &&
-          ((state.autoMerge.requested && commandSeq !== undefined) ||
+          ((landingAuthorized(state.landing) && commandSeq !== undefined) ||
             (integration && state.integration?.intent !== undefined)))) &&
       !executionLeaseLive &&
       record.branch
@@ -2798,33 +2884,114 @@ export class Dispatcher {
         )
       }
     }
+    const native = state.landing?.native
+    const retry =
+      native?.retry &&
+      native.decisionSeq === state.landing?.decision?.seq &&
+      native.commandSeq === state.landing?.command?.seq &&
+      sameLandingCandidate(native.candidate, state.landing?.decision?.candidate)
+        ? native.retry
+        : undefined
     if (
       !integration &&
       !nodeTarget &&
       prState.state === 'open' &&
-      state.autoMerge.requested === true &&
+      landingAuthorized(state.landing) &&
+      (prState.nativeAutoMerge === false ||
+        !nativeLandingApplied(state.landing) ||
+        !!state.landing?.nativeEnablePending) &&
+      (!retry || Date.parse(retry.after) <= this.deps.clock().getTime()) &&
       commandSeq !== undefined &&
-      state.prState === 'open' &&
-      // An acknowledged request gets a read-only freshness check. The adapter
-      // calls canApply before any repair, so quiet polls need no extra facts
-      // read, pipeline decision, or consent refresh.
-      (autoMerge?.enabled !== true || (await canApply()))
+      (await canApply())
     ) {
-      const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
-        buildSlug: record.slug,
-        baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
-        canApply,
-      })
-      if (result.kind === 'applied' && autoMerge?.enabled === true) {
-        await store.refreshBuild(record.slug)
-        const pending = pendingAutoMerge((await store.buildFacts(record.slug)).state)
-        if (pending?.enabled === true && pending.commandSeq === commandSeq)
-          await store.append(record.slug, {
-            actor: DISPATCHER,
-            type: autoMergeApplicationType(true),
-            payload: { commandSeq },
-          })
-      } else if (result.kind === 'deferred' && result.reason !== undefined) {
+      const decision = state.landing!.decision!
+      // The provider checks eligibility immediately before mutating. Inspection
+      // deferrals therefore leave no uncertainty facts on quiet polls.
+      let enableSeq = state.landing?.nativeEnablePending
+      const settleFailedEnable = async () => {
+        if (enableSeq === undefined) return
+        const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+        if (cancelled.kind !== 'applied')
+          throw new Error('Native landing cancellation unconfirmed; retrying')
+        const attempt = (retry?.attempt ?? 0) + 1
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'landing.native-applied',
+          payload: {
+            enabled: false,
+            enableSeq,
+            candidate: decision.candidate,
+            decisionSeq: decision.seq,
+            ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
+            retry: {
+              attempt,
+              after: new Date(
+                this.deps.clock().getTime() +
+                  Math.min(300_000, 30_000 * 2 ** Math.min(attempt - 1, 4)),
+              ).toISOString(),
+            },
+          },
+        })
+      }
+      const result =
+        prState.nativeAutoMerge === true && !nativeCancelled
+          ? { kind: 'applied' as const }
+          : await forge
+              .setAutoMerge(workspacePath, pr.number, true, {
+                buildSlug: record.slug,
+                baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+                canApply: async () => {
+                  if (!(await canApply())) return false
+                  if (enableSeq === undefined)
+                    enableSeq = (
+                      await store.append(record.slug, {
+                        actor: DISPATCHER,
+                        type: 'landing.native-enable-started',
+                        payload: {},
+                      })
+                    ).seq
+                  return true
+                },
+              })
+              .catch(async (error: unknown) => {
+                await settleFailedEnable()
+                throw error
+              })
+      // Only an attempt that reached the mutation guard needs cancellation.
+      // Persist retry timing with its receipt so restart cannot reset backoff.
+      if (result.kind !== 'applied') await settleFailedEnable()
+      if (result.kind === 'applied') {
+        const latest = (await store.buildFacts(record.slug)).state
+        if (await canApply()) {
+          if (
+            latest.landing?.nativeEnablePending ||
+            latest.landing?.native?.enabled !== true ||
+            latest.landing.native.decisionSeq !== decision.seq ||
+            latest.landing.native.commandSeq !== latest.landing.command?.seq
+          )
+            await store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'landing.native-applied',
+              payload: {
+                enabled: true,
+                ...(enableSeq !== undefined ? { enableSeq } : {}),
+                candidate: decision.candidate,
+                decisionSeq: decision.seq,
+                ...(latest.landing?.command ? { commandSeq: latest.landing.command.seq } : {}),
+              },
+            })
+        } else {
+          // Enable may have won after cancellation. Repair immediately, and
+          // again on the next poll if this process dies at this boundary.
+          const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+          if (cancelled.kind === 'applied')
+            await store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'landing.native-applied',
+              payload: { enabled: false, ...(enableSeq !== undefined ? { enableSeq } : {}) },
+            })
+        }
+      } else if (result.kind === 'deferred' && result.reason) {
         await recordAutoMergeDeferralObservation(
           store,
           record.slug,
@@ -2833,31 +3000,11 @@ export class Dispatcher {
           commandSeq,
           this.deps.ids('obs'),
         )
-      } else if (
-        result.kind === 'ungated' &&
-        autoMerge?.enabled === true &&
-        prState.mergeable === true
-      ) {
-        // Re-read at the last possible point. A cancellation, replacement
-        // command, newly due pipeline work, or application fact suppresses
-        // this attempt; the next tick reclassifies from fresh forge state.
-        await store.refreshBuild(record.slug)
-        const latest = await store.buildFacts(record.slug)
-        const latestState = latest.state
-        const latestIntent = pendingAutoMerge(latestState)
-        const decision = await this.decideBuild(record.slug, latest.state, latest.log, report)
-        if (
-          latestState.pr?.number === pr.number &&
-          latestIntent?.enabled === true &&
-          latestIntent.commandSeq === autoMerge.commandSeq &&
-          decision?.kind === 'wait' &&
-          decision.reason === 'awaiting-pr'
-        ) {
-          await forge.squashMerge(workspacePath, pr.number, result.headSha, {
-            buildSlug: record.slug,
-            baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
-          })
-        }
+      } else if (result.kind === 'ungated' && prState.mergeable === true && (await canApply())) {
+        await forge.squashMerge(workspacePath, pr.number, result.headSha, {
+          buildSlug: record.slug,
+          baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+        })
       }
     }
 
@@ -2884,7 +3031,8 @@ export class Dispatcher {
             pr: pr.number,
             holder: this.deps.ids('node-writer'),
             id: this.deps.ids('integration-landing'),
-            commandSeq: intent?.commandSeq ?? commandSeq,
+            ...(intent?.commandSeq !== undefined ? { commandSeq: intent.commandSeq } : {}),
+            decisionSeq: intent?.decisionSeq ?? state.landing?.decision?.seq,
             head: intent?.head ?? cycle.head,
             parent: intent?.parent ?? cycle.parent,
             cycle: intent?.cycle ?? cycle.id,
@@ -2935,6 +3083,32 @@ export class Dispatcher {
       case 'merged': {
         if (executionLeaseLive) return
         const events = await source.history()
+        if (!landingAuthorized(state.landing) && !state.landing?.forgeMerge) {
+          // Use our durable native-effect evidence, never provider origin.
+          // Absence of a confirmed disabled receipt is indeterminate too.
+          const classification =
+            state.landing?.native?.enabled === false && !state.landing.nativeEnablePending
+              ? ('human' as const)
+              : ('possible-stale-enable' as const)
+          const overrodeHold = state.landing?.command?.kind === 'hold'
+          await store.append(record.slug, {
+            actor: KERNEL,
+            type: 'landing.forge-merged',
+            payload: { classification, overrodeHold },
+          })
+          if (classification === 'possible-stale-enable')
+            await store.append(record.slug, {
+              actor: KERNEL,
+              type: 'observation.recorded',
+              payload: {
+                id: this.deps.ids('obs'),
+                kind: 'followup',
+                summary:
+                  'Landing contrary to policy: native auto-merge was armed or indeterminate when the forge merged without landing authorization. Operator attention required; the target has not been rewritten.',
+                refs: ['landing-contrary-to-policy'],
+              },
+            })
+        }
         // Emit the fact once (a crash between steps re-runs this block; the
         // reduced prState dedupes the event, the log dedupes the release).
         if (state.prState !== 'merged') {
@@ -3392,26 +3566,6 @@ export class Dispatcher {
       }
 
       const created = events.created
-      const autoMergeUser = seed?.autoMergeUser ?? created?.payload.autoMergeRequestedBy
-      // The claim's sampled default fact, for the request's fan-out provenance:
-      // the seed's own value first (this dispatch created the build), else the
-      // durable `build.created` fact a recovery pass resumes from.
-      const autoMergeDefaultSeq = seed?.autoMergeDefaultSeq ?? created?.payload.autoMergeDefaultSeq
-      if (
-        created.payload.kind !== 'node' &&
-        autoMergeUser !== undefined &&
-        !events.autoMergeEverRequested
-      ) {
-        await store.append(record.slug, {
-          actor: humanActor(autoMergeUser),
-          type: 'build.auto-merge-requested',
-          payload: {
-            ...(autoMergeDefaultSeq !== undefined ? { defaultSeq: autoMergeDefaultSeq } : {}),
-          },
-        })
-        events = (await readBuildFacts(store, record.slug)).value
-      }
-
       if (created.payload.kind === 'node')
         return this.completeDispatchBoundaries(record, seed, report, launched)
 
@@ -4659,7 +4813,7 @@ export class Dispatcher {
       this.integrationPollDue(
         this.integrationPolls,
         record.slug,
-        `${comparison.headSha}:${comparison.parentSha}:${state.autoMerge.commandSeq ?? ''}:${claims}`,
+        `${comparison.headSha}:${comparison.parentSha}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${claims}`,
       )
     ) {
       await this.observeIntegration(record.slug)

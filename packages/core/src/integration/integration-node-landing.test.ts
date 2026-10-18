@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { makeHarness, happyHandlers, readyTicket, git, commitAll } from './harness'
+import { makeHarness, happyHandlers, readyTicket, git, commitAll, CONFIG_TOML } from './harness'
 import { controlBuild } from '../cli/build-control'
 import { reduceBuild } from '../kernel/reducer'
 import { observeIntegration } from '../kernel/integration-completeness'
@@ -20,6 +20,7 @@ async function addStack(h: Awaited<ReturnType<typeof makeHarness>>, branch: stri
 test('nested node landing preserves both child commits and parent lands the stack without wrappers', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
@@ -36,11 +37,12 @@ test('nested node landing preserves both child commits and parent lands the stac
     await h.runLatest()
     const state = reduceBuild(await h.events(b.slug))
     expect(integrationHeadVerified(state, state.integration!.cycle!.head)).toBe(true)
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,
       slug: b.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
       ticketSource: async () => h.tickets,
     })
     for (let i = 0; i < 4; i++) {
@@ -49,11 +51,12 @@ test('nested node landing preserves both child commits and parent lands the stac
     }
     expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
     await h.runLatest()
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,
       slug: a.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
       ticketSource: async () => h.tickets,
     })
     for (let i = 0; i < 4; i++) {
@@ -75,6 +78,7 @@ test('nested node landing preserves both child commits and parent lands the stac
 test('native terminal states, partial listings and reopening govern completeness', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('NODE', { title: 'Release integration' }), kind: 'node' },
@@ -94,10 +98,10 @@ test('native terminal states, partial listings and reopening govern completeness
         store: h.store,
         repo: h.origin,
         slug: node.slug,
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
         ticketSource: async () => h.tickets,
       }),
-    ).rejects.toThrow('no landed changes')
+    ).rejects.toThrow('Landing is not ready')
     await h.tickets.transition('TRIAGE', 'Ready')
     expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([
       'TRIAGE',
@@ -116,6 +120,7 @@ test('native terminal states, partial listings and reopening govern completeness
 test('a verification-blocked node admits a repair child and verifies the repaired head', async () => {
   const h = await makeHarness({
     localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [{ ...readyTicket('NODE', { title: 'Repairable integration' }), kind: 'node' }],
   })
@@ -136,11 +141,12 @@ test('a verification-blocked node admits a repair child and verifies the repaire
     await h.runLatest()
     const repair = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'REPAIR')!
     expect(repair).toBeDefined()
+    await h.dispatcher.tick()
     await controlBuild({
       store: h.store,
       repo: h.origin,
       slug: repair.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
     })
     for (let i = 0; i < 4; i++) {
       h.clock.advance(60_000)
@@ -202,6 +208,20 @@ test('an unfenced tree mismatch raises durable attention after completion and au
     })
     await h.store.append(node.slug, {
       actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 1, url: 'https://forge/pr/1', headSha: head } },
+    })
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'landing.native-applied',
+      payload: { enabled: false, operation: 'node-restack' },
+    })
+    // Terminal audit work must not re-enter PR settlement or probe the forge.
+    h.forgeAdapter.getPrState = async () => {
+      throw new Error('terminal PR must not be reprobed')
+    }
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
@@ -221,6 +241,11 @@ test('an unfenced tree mismatch raises durable attention after completion and au
     expect(
       (await h.store.getRepoBuildDigests(h.origin)).get(node.slug)?.integrationAuditPending,
     ).toBeUndefined()
+    await h.dispatcher.tick()
+    expect((await h.events(node.slug)).filter((e) => e.type === 'build.completed')).toHaveLength(1)
+    expect(
+      (await h.events(node.slug)).filter((e) => e.type === 'integration.audited'),
+    ).toHaveLength(1)
     await auditIntegrationLanding(deps)
     await auditIntegrationLanding(deps)
     const state = reduceBuild(await h.events(node.slug))

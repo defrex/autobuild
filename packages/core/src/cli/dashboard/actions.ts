@@ -53,7 +53,7 @@ export function buildActionAvailability(build: DashboardBuild): DashboardActionA
 export function repositoryActionAvailability(model: DashboardModel) {
   return {
     intake: true,
-    defaultAutoMerge: true,
+    defaultAutoMerge: false,
     bulkPause: model.builds.some((build) => build.status === 'running'),
     bulkResume: model.builds.some((build) => build.status === 'paused'),
     harvestToggle: true,

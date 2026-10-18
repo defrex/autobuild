@@ -40,6 +40,29 @@ function randomWrite(rand: () => number): EventWrite {
   const session = pick(rand, ['s_a', 's_b'])
   const step = pick(rand, ['types', 'unit'])
   const templates: Array<() => EventWrite> = [
+    () =>
+      w('landing.decided', {
+        candidate: { head: SHA, parent: 'b'.repeat(40), cycle: 'cycle' },
+        from: pick(rand, ['leaf', 'node']),
+        into: rand() < 0.5 ? { kind: 'root' } : { kind: 'node', ticket: 'N-1' },
+        labels: ['release'],
+        mode: pick(rand, ['auto', 'consent']),
+        rule:
+          rand() < 0.5
+            ? { default: true }
+            : { index: 0, snapshot: { label: 'release', mode: 'auto' } },
+      }),
+    () => w('build.hold-requested', {}),
+    () => w('build.land-requested', { decisionSeq: 1 }),
+    () => w('landing.command-acknowledged', { commandSeq: 1 }),
+    () =>
+      w('landing.native-applied', {
+        enabled: rand() < 0.5,
+        candidate: { head: SHA, parent: 'b'.repeat(40), cycle: 'cycle' },
+        decisionSeq: 1,
+        commandSeq: 2,
+        operation: 'rewrite-1',
+      }),
     () => w('runner.attached', { instance: 'runner-1', host: 'local' }),
     () => w('spec.imported', { artifact: ART('spec', 0), ticket: { source: 'linear', id: 'E-1' } }),
     () => w('spec.revised', { artifact: ART('spec', round), escalation: 1 }),

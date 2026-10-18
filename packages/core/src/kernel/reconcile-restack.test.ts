@@ -13,6 +13,8 @@ import {
   validateRestack,
   retainReplay,
 } from './reconcile-restack'
+import { FakeForge } from '../ports/forge/fake'
+import { humanActor } from '../events/envelope'
 import { buildTrailers } from './build-identity'
 
 for (const mode of ['clean', 'conflict', 'empty'] as const) {
@@ -173,6 +175,58 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
         }
         await git(['checkout', '--detach', head])
       }
+      const native = new FakeForge()
+      native.setPrState(1, { state: 'open', mergeable: true })
+      await native.setAutoMerge(cwd, 1, true)
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: 1, url: 'https://forge/1', headSha: oldHead } },
+      })
+      const decision = await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: oldHead, parent: base, cycle: '1' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
+      })
+      const consent = await store.append(BUILD, {
+        actor: humanActor('operator'),
+        type: 'build.land-requested',
+        payload: { decisionSeq: decision.seq },
+      })
+      deps.forge.getPrState = native.getPrState.bind(native)
+      deps.forge.setAutoMerge = native.setAutoMerge.bind(native)
+      const rewrite = deps.forge.rewrite!
+      Object.defineProperty(deps.forge, 'rewrite', { value: rewrite })
+      const replace = rewrite.replace.bind(rewrite)
+      let crashAfterCancel = mode === 'clean'
+      deps.forge.rewrite!.replace = async (input) => {
+        expect(native.isAutoMergeEnabled(1)).toBe(false)
+        expect(
+          (await store.getEvents(BUILD)).findLast((e) => e.type === 'landing.native-applied')
+            ?.payload,
+        ).toMatchObject({ enabled: false, operation: intent.id })
+        if (crashAfterCancel) {
+          crashAfterCancel = false
+          throw new Error('crash after cancellation')
+        }
+        return replace(input)
+      }
+      const setter = deps.forge.setAutoMerge
+      deps.forge.setAutoMerge = async () => ({ kind: 'deferred' })
+      await expect(publishRestack(deps, intent)).rejects.toThrow('cancellation unconfirmed')
+      expect(await git(['rev-parse', BRANCH])).toBe(oldHead)
+      deps.forge.setAutoMerge = setter
+      if (mode === 'clean') {
+        await expect(publishRestack(deps, intent)).rejects.toThrow('crash after cancellation')
+        expect(await git(['rev-parse', BRANCH])).toBe(oldHead)
+      }
       if (mode === 'clean') {
         crashAfterCas = true
         await expect(publishRestack(deps, intent)).rejects.toThrow('crash after CAS')
@@ -187,6 +241,10 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
       expect(
         (await store.getEvents(BUILD)).filter((e) => e.type === 'reconcile.rewritten'),
       ).toHaveLength(1)
+      const finalEvents = await store.getEvents(BUILD)
+      expect(finalEvents.findLast((e) => e.type === 'build.land-requested')?.seq).toBe(consent.seq)
+      expect(finalEvents.filter((e) => e.type === 'build.hold-requested')).toEqual([])
+      expect(native.isAutoMergeEnabled(1)).toBe(false)
       const archives = await archiveTips(deps)
       expect(archives.some((entry) => entry.sha === oldHead)).toBe(true)
       for (const sha of unavailable) expect(archives.some((entry) => entry.sha === sha)).toBe(false)
@@ -435,6 +493,8 @@ for (const local of [true, false]) {
         return result
       }
       const forge = local ? new LocalGitForge({ exec }) : new GitHubForge({ exec })
+      forge.getPrState = async () => ({ state: 'open', mergeable: true })
+      forge.setAutoMerge = async () => ({ kind: 'applied' as const })
       const deps = { store, slug: BUILD, workspacePath: cwd, exec: bunExec, forge }
       const transaction = await prepareRestack(deps, {
         attempt: 1,

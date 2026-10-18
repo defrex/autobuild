@@ -19,7 +19,8 @@ export interface IntegrationLandingDeps {
   pr: number
   holder: string
   id: string
-  commandSeq: number
+  commandSeq?: number
+  decisionSeq?: number
   head: string
   parent: string
   cycle: string
@@ -124,7 +125,8 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
             cycle: deps.cycle,
             head,
             parent,
-            commandSeq: deps.commandSeq,
+            ...(deps.commandSeq === undefined ? {} : { commandSeq: deps.commandSeq }),
+            ...(deps.decisionSeq === undefined ? {} : { decisionSeq: deps.decisionSeq }),
             ...freshness,
           },
         })

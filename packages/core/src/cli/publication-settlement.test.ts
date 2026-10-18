@@ -98,6 +98,60 @@ async function seed(options: { workspace?: boolean; attachments?: boolean } = {}
 }
 
 describe('settlePendingPublication', () => {
+  test('trusted publication cancels persistent native enable before push, preserves hold, and recovers crashes', async () => {
+    const h = await seed()
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    await h.forge.setAutoMerge('/repo', 1, true)
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: BASE } },
+    })
+    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 's1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        base: BASE,
+        round: 1,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    const set = h.forge.setAutoMerge.bind(h.forge)
+    h.forge.setAutoMerge = async () => ({ kind: 'deferred' })
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('cancellation unconfirmed')
+    expect(h.published).toEqual([])
+    let held = false
+    h.forge.setAutoMerge = async (...args) => {
+      const result = await set(...args)
+      if (!held) {
+        held = true
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+      }
+      return result
+    }
+    const publish = h.deps.publication!.publish
+    h.deps.publication!.publish = async (input) => {
+      expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+      const { readBuildFacts } = await import('../store/reduced-reads')
+      expect((await readBuildFacts(h.store, SLUG)).value.state.landing?.command?.kind).toBe('hold')
+      await publish(input)
+    }
+    h.store.failCompletion = true
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('injected append crash')
+    await settlePendingPublication(h.deps, SLUG)
+    expect(h.published).toHaveLength(2)
+    expect(
+      (await h.store.getEvents(SLUG)).filter((e) => e.type === 'implement.completed'),
+    ).toHaveLength(1)
+  })
   test('publishes exact implementation identity, appends completion, and suppresses retry duplicates', async () => {
     const h = await seed()
     const artifact = await h.store.putArtifact(SLUG, {
@@ -373,7 +427,7 @@ describe('settlePendingPublication', () => {
       }),
     ])
     expect(h.forge.prAttachmentUploads).toHaveLength(1)
-    expect(h.forge.autoMergeCalls).toHaveLength(1)
+    expect(h.forge.autoMergeCalls).toHaveLength(0)
     expect(h.forge.comments).toHaveLength(0)
     expect(
       renderPrSummary(
@@ -807,7 +861,18 @@ async function seedRestackPublication(withLostPublications = false) {
 test('trusted restack publication carries archives and an explicit lease, then settles once', async () => {
   const h = await seedRestackPublication()
   const calls: unknown[] = []
+  h.forge.setPrState(1, { state: 'open', mergeable: true })
+  await h.forge.setAutoMerge('/repo', 1, true)
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: h.transaction.oldHead } },
+  })
   h.deps.publication!.rewrite = async (input) => {
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    expect(
+      (await h.store.getEvents(SLUG)).findLast((e) => e.type === 'landing.native-applied')?.payload,
+    ).toMatchObject({ enabled: false, operation: `publication:${h.request.seq}` })
     calls.push(input)
     return { kind: 'published' }
   }
