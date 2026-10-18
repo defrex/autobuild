@@ -62,6 +62,7 @@ export async function runNodeTransaction(
       destinationRef: `${destinationRef}-parent-head`,
     })
     if (parent === oldBase) {
+      if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)
       if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
         await append(deps, { actor: KERNEL, type: 'node.inventory', payload: inventory })

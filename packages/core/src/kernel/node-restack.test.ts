@@ -324,9 +324,30 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   expect(node.inventory?.foreign).toHaveLength(1)
   expect(await git('rev-parse', 'ab-node/a')).toBe(node.inventory!.head)
   expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+  const exec = tx.exec
+  let historyReads = 0
+  tx.exec = async (args, options) => {
+    if (args[0] === 'git' && args[1] === 'log') historyReads++
+    return exec(args, options)
+  }
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'next' }),
   ).toBe('idle')
+  expect(historyReads).toBe(0)
+  await commit('hand-push')
+  await git('update-ref', 'refs/heads/ab-node/a', await git('rev-parse', 'HEAD'))
+  expect(
+    await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'hand-push' }),
+  ).toBe('idle')
+  expect(historyReads).toBe(2)
+  expect(
+    (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state
+      .nodeRestack?.inventory?.foreign,
+  ).toHaveLength(2)
+  expect(
+    await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'unchanged' }),
+  ).toBe('idle')
+  expect(historyReads).toBe(2)
 })
 
 for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
@@ -386,3 +407,58 @@ for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
     expect(await git('rev-list', '--count', `${parent}..ab-node/a`)).toBe('2')
   })
 }
+
+test('large reachable histories and contribution metadata are read in a bounded number of Git processes', async () => {
+  const { deps, git, base } = await fixture()
+  const count = 4096
+  const records: string[] = []
+  const builds: string[] = []
+  for (let index = 1; index <= count; index++) {
+    const build = index % 512 === 0 ? `source-${index}` : undefined
+    if (build) builds.push(build)
+    const message = `History ${index}\nBody with a record separator \x1e and blank lines.\n\n${build ? `Autobuild-Build: ${build}\n` : ''}`
+    records.push(
+      `commit refs/heads/main\nmark :${index}\ncommitter Test <test@example.test> 1700000000 +0000\ndata ${Buffer.byteLength(message)}\n${message}\nfrom ${index === 1 ? base : `:${index - 1}`}\n\n`,
+    )
+  }
+  const input = join(deps.workspacePath, '.git', 'node-history-import')
+  await Bun.write(input, records.join(''))
+  const imported = await deps.exec(
+    ['sh', '-c', 'git fast-import --quiet < "$1"', 'node-history', input],
+    { cwd: deps.workspacePath },
+  )
+  expect(imported.exitCode).toBe(0)
+  const head = await git('rev-parse', 'main')
+  const exec = deps.exec
+  const commands: string[][] = []
+  deps.exec = async (args, options) => {
+    commands.push([...args])
+    return exec(args, options)
+  }
+  const inventory = await nodeInventory(deps, head, base)
+  expect(inventory.builds).toEqual(builds.sort())
+  expect(inventory.foreign).toHaveLength(count - builds.length)
+  expect(commands).toHaveLength(2)
+  expect(commands.every((args) => args[1] === 'log')).toBe(true)
+  commands.length = 0
+  const frozen = await prepareNodeReplay(deps, { oldBase: base, oldHead: head, parent: base })
+  expect(frozen.changes).toHaveLength(count)
+  expect(frozen.changes.filter((change) => change.build).map((change) => change.build)).toEqual(
+    builds.sort((a, b) => Number(a.slice(7)) - Number(b.slice(7))),
+  )
+  expect(commands).toHaveLength(3)
+  expect(commands.filter((args) => args[1] === 'show')).toHaveLength(0)
+}, 30_000)
+
+test('batched history preserves rejection of malformed and ambiguous terminal identities', async () => {
+  const { deps, commit, base, git } = await fixture()
+  const malformed = await commit('malformed', 'invalid slug')
+  await expect(
+    prepareNodeReplay(deps, { oldBase: base, oldHead: base, parent: malformed }),
+  ).rejects.toThrow(`invalid build identity on ${malformed}`)
+  await git('commit', '--amend', '-m', 'Ambiguous\n\nAutobuild-Build: one\nAutobuild-Build: two')
+  const ambiguous = await git('rev-parse', 'HEAD')
+  await expect(nodeInventory(deps, ambiguous, base)).rejects.toThrow(
+    `ambiguous build identity on ${ambiguous}`,
+  )
+})

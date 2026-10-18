@@ -41,11 +41,48 @@ async function git(deps: NodeGit, args: string[], allowFailure = false) {
 async function output(deps: NodeGit, args: string[]) {
   return (await git(deps, args)).stdout.trim()
 }
-function lines(value: string) {
-  return value === '' ? [] : value.split('\n')
+interface HistoryCommit {
+  sha: string
+  parents: string[]
+  message: string
 }
-async function identity(deps: NodeGit, sha: string): Promise<string | undefined> {
-  const trailers = buildTrailers(await output(deps, ['show', '-s', '--format=%B', sha]))
+/** Git commit messages cannot contain NUL. Read metadata in one process per
+ * history/range, including merge parents, rather than spawning per commit. */
+async function history(
+  deps: NodeGit,
+  revisions: string[],
+  options: string[] = [],
+): Promise<HistoryCommit[]> {
+  const raw = (
+    await git(deps, [
+      'log',
+      '--no-show-signature',
+      '--no-notes',
+      '-z',
+      '--format=%H%x00%P%x00%B',
+      ...options,
+      ...revisions,
+      '--',
+    ])
+  ).stdout
+  if (raw === '') return []
+  const fields = raw.split('\0')
+  if (fields.pop() !== '' || fields.length % 3 !== 0)
+    throw new Error('invalid node history metadata')
+  const commits: HistoryCommit[] = []
+  for (let index = 0; index < fields.length; index += 3) {
+    const sha = fields[index]!
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha)) throw new Error('invalid node history commit')
+    commits.push({
+      sha,
+      parents: fields[index + 1] === '' ? [] : fields[index + 1]!.split(' '),
+      message: fields[index + 2]!,
+    })
+  }
+  return commits
+}
+function messageIdentity(sha: string, message: string): string | undefined {
+  const trailers = buildTrailers(message)
   if (trailers.length === 0) return undefined
   if (trailers.length !== 1)
     throw new Error(`ambiguous build identity on ${sha}: ${trailers.join(', ')}`)
@@ -56,10 +93,13 @@ async function identity(deps: NodeGit, sha: string): Promise<string | undefined>
   }
   return trailers[0]
 }
-async function reachableBuilds(deps: NodeGit, revision: string): Promise<Set<string>> {
+async function identity(deps: NodeGit, sha: string): Promise<string | undefined> {
+  return messageIdentity(sha, await output(deps, ['show', '-s', '--format=%B', sha]))
+}
+async function reachableBuilds(deps: NodeGit, revisions: string[]): Promise<Set<string>> {
   const result = new Set<string>()
-  for (const sha of lines(await output(deps, ['rev-list', revision]))) {
-    const build = await identity(deps, sha)
+  for (const commit of await history(deps, revisions)) {
+    const build = messageIdentity(commit.sha, commit.message)
     if (build !== undefined) result.add(build)
   }
   return result
@@ -78,27 +118,18 @@ export async function prepareNodeReplay(
     throw new Error(
       `node head ${input.oldHead} no longer descends from contribution base ${input.oldBase}`,
     )
-  const upstream = await reachableBuilds(deps, input.parent)
+  const upstream = await reachableBuilds(deps, [input.parent])
   const changes: NodeChange[] = []
   const merges: NodeMergeProof[] = []
-  for (const sha of lines(
-    await output(deps, [
-      'rev-list',
-      '--reverse',
-      '--first-parent',
-      `${input.oldBase}..${input.oldHead}`,
-    ]),
+  for (const commit of await history(
+    deps,
+    [`${input.oldBase}..${input.oldHead}`],
+    ['--reverse', '--first-parent'],
   )) {
-    const parents = (await output(deps, ['show', '-s', '--format=%P', sha])).split(' ')
+    const { sha, parents, message } = commit
     if (parents.length > 1) {
-      const mergeBuild = await identity(deps, sha)
-      const identities = new Set<string>()
-      for (const side of lines(
-        await output(deps, ['rev-list', ...parents.slice(1), '--not', parents[0]!]),
-      )) {
-        const build = await identity(deps, side)
-        if (build !== undefined) identities.add(build)
-      }
+      const mergeBuild = messageIdentity(sha, message)
+      const identities = await reachableBuilds(deps, [...parents.slice(1), '--not', parents[0]!])
       const sorted = [...identities].sort()
       merges.push({
         sha,
@@ -111,7 +142,7 @@ export async function prepareNodeReplay(
       // independent items, and the merge never creates their identities.
       changes.push({ sha, mainline: 1 })
     } else {
-      const build = await identity(deps, sha)
+      const build = messageIdentity(sha, message)
       changes.push({ sha, ...(build === undefined ? {} : { build }) })
     }
   }
@@ -135,13 +166,15 @@ export async function nodeInventory(
   contributionBase: string,
 ): Promise<NodeInventory> {
   const foreign: string[] = []
-  for (const sha of lines(
-    await output(deps, ['rev-list', '--reverse', '--first-parent', `${contributionBase}..${head}`]),
+  for (const commit of await history(
+    deps,
+    [`${contributionBase}..${head}`],
+    ['--reverse', '--first-parent'],
   )) {
-    const parents = await output(deps, ['show', '-s', '--format=%P', sha])
-    if (parents.includes(' ') || (await identity(deps, sha)) === undefined) foreign.push(sha)
+    if (commit.parents.length > 1 || messageIdentity(commit.sha, commit.message) === undefined)
+      foreign.push(commit.sha)
   }
-  return { head, builds: [...(await reachableBuilds(deps, head))].sort(), foreign }
+  return { head, builds: [...(await reachableBuilds(deps, [head]))].sort(), foreign }
 }
 
 /** Run one item only. The caller persists inputs first and retains the result
