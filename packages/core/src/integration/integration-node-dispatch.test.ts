@@ -135,6 +135,11 @@ test('root movement cascades through nested nodes with owned foreign history and
       await Bun.write(join(h.origin, `upstream-${round}`), `upstream ${round}`)
       const root = await commitAll(h.origin, `Root movement ${round}`)
       for (let i = 0; i < 5; i++) await h.dispatcher.tick()
+      expect(
+        ofType(await h.events(a.slug), 'target.moved').filter(
+          (event) => event.payload.sha === root,
+        ),
+      ).toHaveLength(1)
       for (const r of nodes) {
         expect(await git(['merge-base', '--is-ancestor', root, r.branch!], h.origin)).toBe('')
         expect(await git(['show', `${r.branch}:foreign-a`], h.origin)).toBe('foreign-a')
@@ -343,3 +348,102 @@ test('unsafe foreign merge escalates once without moving the node and an authori
     await h.cleanup()
   }
 }, 30_000)
+
+for (const command of ['abort', 'pause'] as const) {
+  test(`a live node conflict runner owns ${command} acknowledgement until its turn ends`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    const { access } = await import('node:fs/promises')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { KERNEL } = await import('../events/envelope')
+    let nodeSlug = ''
+    let resolverPath = ''
+    let lateReceipt: import('../events/payloads').EventPayload<'node.item-replayed'> | undefined
+    let turns = 0
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: {
+        ...happyHandlers(),
+        reconcile: async (cli) => {
+          turns++
+          resolverPath = cli.ws
+          const before = (await readBuildFacts(h.store, nodeSlug)).value.state
+          const lease = (await h.store.getBuild(nodeSlug))!.lease!
+          expect(lease).toBeDefined()
+          const node = before.nodeRestack!
+          lateReceipt = {
+            id: node.active!.id,
+            index: node.conflict!.index,
+            base: node.conflict!.base,
+            head: 'e'.repeat(40),
+            dropped: false,
+          }
+          await controlBuild({
+            store: h.store,
+            repo: h.origin,
+            slug: nodeSlug,
+            action: { kind: command },
+          })
+          const report = await h.dispatcher.tick()
+          expect(report.janitorFailed).toBe(0)
+          const during = (await readBuildFacts(h.store, nodeSlug)).value.state
+          expect(during.pendingCommands.some((intent) => intent.command === command)).toBe(true)
+          expect(during.status).toBe('collecting')
+          expect(during.nodeRestack?.active?.id).toBe(node.active!.id)
+          expect((await h.store.getBuild(nodeSlug))!.lease?.holder).toBe(lease.holder)
+          await access(cli.ws)
+          // Return the live turn without completing its item: the runner's next
+          // engine decision acknowledges the pending command before another phase.
+        },
+      },
+      tickets: [{ ...readyTicket('NODE', { title: 'Controlled conflict node' }), kind: 'node' }],
+    })
+    try {
+      await h.dispatcher.tick()
+      const record = (await h.store.listBuilds())[0]!
+      nodeSlug = record.slug
+      const ws = join(h.tmp, 'foreign-control')
+      await git(['worktree', 'add', ws, record.branch!], h.origin)
+      await Bun.write(join(ws, 'collision'), 'node intent\n')
+      await commitAll(ws, 'Foreign node change')
+      await git(['worktree', 'remove', ws], h.origin)
+      await h.dispatcher.tick()
+      await Bun.write(join(h.origin, 'collision'), 'parent intent\n')
+      await commitAll(h.origin, 'Conflicting root change')
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(h.launched.at(-1)?.slug).toBe(nodeSlug)
+      await h.runLatest()
+      expect(turns).toBe(1)
+      expect((await readBuildFacts(h.store, nodeSlug)).value.state.status).toBe(
+        command === 'abort' ? 'aborted' : 'paused',
+      )
+      const report = await h.dispatcher.tick()
+      expect(report.janitorFailed).toBe(0)
+      if (command === 'abort') {
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.active,
+        ).toBeUndefined()
+        await expect(access(resolverPath)).rejects.toThrow()
+        // Old logs may already contain the pre-fix settlement/late-receipt
+        // race. Both direct and persisted reductions must remain readable.
+        await h.store.append(nodeSlug, {
+          actor: KERNEL,
+          type: 'node.item-replayed',
+          payload: lateReceipt!,
+        })
+        expect(reduceBuild(await h.events(nodeSlug)).nodeRestack?.active).toBeUndefined()
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.active,
+        ).toBeUndefined()
+      } else {
+        await access(resolverPath)
+        expect(
+          (await readBuildFacts(h.store, nodeSlug)).value.state.nodeRestack?.conflict,
+        ).toBeDefined()
+      }
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}

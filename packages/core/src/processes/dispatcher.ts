@@ -1802,7 +1802,7 @@ export class Dispatcher {
         if (state.kind === 'node' && state.status !== 'aborted') {
           const command =
             state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(0)
-          if (command !== undefined) {
+          if (command !== undefined && !executionLeaseLive) {
             await this.store.append(record.slug, {
               actor: DISPATCHER,
               type:
@@ -1818,6 +1818,19 @@ export class Dispatcher {
             continue
           }
           if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) continue
+          if (state.nodeOpened && state.baseBranch) {
+            if (
+              await this.observeTarget(
+                record.slug,
+                state.baseBranch,
+                log.restack.target?.sha,
+                report,
+              )
+            ) {
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+          }
           if (
             state.nodeOpened &&
             state.status !== 'paused' &&
@@ -1827,9 +1840,6 @@ export class Dispatcher {
             !executionLeaseLive
           ) {
             await this.cascadeNode(record, state, report, launched, opts)
-          }
-          if (state.nodeOpened && state.baseBranch) {
-            await this.observeTarget(record.slug, state.baseBranch, log.restack.target?.sha, report)
           }
           if (state.nodeOpened !== undefined && state.pr === undefined) {
             await this.pollEmptyNode(record, state)
@@ -1869,7 +1879,7 @@ export class Dispatcher {
           await this.cleanupAborted(record, await history(), report)
           continue
         }
-        if (state.status !== 'aborted' && state.status !== 'queued') {
+        if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
           const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
           if (branch !== undefined) {
             if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {

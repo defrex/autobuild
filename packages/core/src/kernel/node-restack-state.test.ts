@@ -96,3 +96,35 @@ test('contention does not promote the contribution base or fabricate inventory',
   expect(state.active).toBeUndefined()
   expect(state.inventory).toBeUndefined()
 })
+
+test('late resolver receipts cannot revive settled or superseded reservations', () => {
+  let state = nodeRestackReducer.advance(nodeRestackReducer.initial(), [
+    event('node.opened', { sha: 'initial' }),
+    reservation,
+    prepared(0, 'new-parent'),
+    event('node.writer-settled', { id: 'tx', outcome: 'abandoned' }),
+  ])
+  const settled = structuredClone(state)
+  state = nodeRestackReducer.advance(state, [receipt(0, 'new-parent', 'late')])
+  expect(state).toEqual(settled)
+  const replacement = event('node.writer-reserved', {
+    ...(reservation.payload as EventPayload<'node.writer-reserved'>),
+    id: 'replacement',
+  })
+  state = nodeRestackReducer.advance(state, [replacement])
+  const next = structuredClone(state)
+  state = nodeRestackReducer.advance(state, [receipt(0, 'new-parent', 'late')])
+  expect(state).toEqual(next)
+})
+
+test('duplicate receipts do not corrupt a later prepared item', () => {
+  let state = nodeRestackReducer.advance(nodeRestackReducer.initial(), [
+    reservation,
+    prepared(0, 'new-parent'),
+    receipt(0, 'new-parent', 'prefix'),
+    prepared(1, 'prefix'),
+  ])
+  const before = structuredClone(state)
+  state = nodeRestackReducer.advance(state, [receipt(0, 'new-parent', 'prefix')])
+  expect(state).toEqual(before)
+})

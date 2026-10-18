@@ -50,6 +50,10 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         state.conflict = event.payload
         break
       case 'node.item-replayed':
+        // A resolver can finish after its reservation was settled or after
+        // another item advanced. Retain the fact without reviving that work
+        // or making the append-only stream impossible to reduce.
+        if (event.payload.id !== state.active?.id || event.payload.index < state.items.length) break
         if (
           event.payload.id !== state.prepared?.id ||
           event.payload.index !== state.prepared.index ||
@@ -103,7 +107,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 1,
+  version: 2,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),
