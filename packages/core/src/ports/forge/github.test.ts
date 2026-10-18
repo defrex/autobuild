@@ -2072,3 +2072,83 @@ test('node push acknowledgement observes a merged review and tolerates provider 
   ).resolves.toBeUndefined()
   expect(paths(unavailable.calls)).toEqual(['GET repos/acme/app/pulls/123'])
 })
+
+describe('trusted kernel Git credentials', () => {
+  test('real Git receives scoped ephemeral headers for normalized and .git origins', async () => {
+    const { tmpdir } = await import('node:os')
+    const forge = new GitHubForge({ repository: 'acme/private', token: 'kernel-secret' })
+    for (const url of ['https://github.com/acme/private', 'https://github.com/acme/private.git']) {
+      const result = await forge.kernelExec(
+        ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+        {
+          cwd: tmpdir(),
+          env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+        },
+      )
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.trim()).toBe('Authorization: Basic [redacted]')
+    }
+    for (const url of ['https://github.com/acme/other', 'https://elsewhere.invalid/acme/private']) {
+      const result = await forge.kernelExec(
+        ['git', 'config', '--get-urlmatch', 'http.extraHeader', url],
+        {
+          cwd: tmpdir(),
+          env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+        },
+      )
+      expect(result.stdout.trim()).toBe('')
+    }
+  })
+  test('scopes ephemeral credentials to the repository and redacts transport diagnostics', async () => {
+    const token = 'kernel-secret'
+    const encoded = Buffer.from(`x-access-token:${token}`).toString('base64')
+    const cmd = ['git', 'clone', '--bare', 'https://github.com/acme/private', '/tmp/repo.git']
+    const forge = new GitHubForge({
+      repository: 'acme/private',
+      token,
+      exec: async (argv, opts) => {
+        expect(argv).toEqual(cmd)
+        expect(opts.env).toMatchObject({
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_CONFIG_COUNT: '4',
+          GIT_CONFIG_KEY_0: 'http.extraHeader',
+          GIT_CONFIG_VALUE_0: '',
+          GIT_CONFIG_KEY_1: 'http.https://github.com/acme/private.extraHeader',
+          GIT_CONFIG_VALUE_1: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_2: 'http.https://github.com/acme/private.git.extraHeader',
+          GIT_CONFIG_VALUE_2: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_3: 'credential.helper',
+          GIT_CONFIG_VALUE_3: '',
+        })
+        return { stdout: token, stderr: encoded, exitCode: 128 }
+      },
+    })
+    expect(await forge.kernelExec(cmd, { cwd: '/tmp' })).toEqual({
+      stdout: '[redacted]',
+      stderr: '[redacted]',
+      exitCode: 128,
+    })
+  })
+
+  test('fails before spawning when no token is available and redacts thrown failures', async () => {
+    let spawned = false
+    const forge = new GitHubForge({
+      repository: 'acme/private',
+      token: async () => undefined,
+      exec: async () => {
+        spawned = true
+        throw new Error('unexpected spawn')
+      },
+    })
+    await expect(forge.kernelExec(['git', 'clone'], {})).rejects.toThrow('requires a GitHub token')
+    expect(spawned).toBe(false)
+    const failing = new GitHubForge({
+      repository: 'acme/private',
+      token: 'secret-token',
+      exec: async () => {
+        throw new Error('failed with secret-token')
+      },
+    })
+    await expect(failing.kernelExec(['git', 'fetch'], {})).rejects.toThrow('failed with [redacted]')
+  })
+})

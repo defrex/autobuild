@@ -2,6 +2,7 @@ import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 import type { EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
+import { isValidGitBranchName } from './origin'
 import type { RestackDeps } from './reconcile-restack'
 import { retainReplay, restoreReplay, requireRewrite } from './reconcile-restack'
 import {
@@ -30,6 +31,32 @@ async function append(deps: NodeTransactionDeps, event: EventWrite) {
   if (!written) throw new Error('node writer log advanced; retry reserved operation')
   return written
 }
+async function snapshotParent(deps: NodeTransactionDeps, base: string, destinationRef: string) {
+  const input = { workspacePath: deps.workspacePath, base, destinationRef }
+  if (deps.forge.snapshotBase) return deps.forge.snapshotBase(input)
+  if (!isValidGitBranchName(base)) throw new Error('invalid node parent branch')
+  // Like leaf target snapshots, Git-transport forges fetch into a private ref.
+  // The dispatcher supplies the forge's credentialed kernel execution seam.
+  const fetched = await deps.exec(
+    [
+      'git',
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--refmap=',
+      'origin',
+      `+refs/heads/${base}:${destinationRef}`,
+    ],
+    { cwd: deps.workspacePath },
+  )
+  if (fetched.exitCode !== 0) throw new Error(fetched.stderr)
+  const head = await deps.exec(['git', 'rev-parse', '--verify', `${destinationRef}^{commit}`], {
+    cwd: deps.workspacePath,
+  })
+  if (head.exitCode !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head.stdout.trim()))
+    throw new Error('node parent snapshot did not resolve to a commit')
+  return head.stdout.trim()
+}
 /** The caller provides an isolated worktree sharing the authoritative object
  * database. All receipts follow object retention; no public ref is touched
  * until preflight and the entire ordered replay have succeeded. */
@@ -54,13 +81,7 @@ export async function runNodeTransaction(
       branch: input.branch,
       destinationRef,
     })
-    if (!deps.forge.snapshotBase)
-      throw new Error('node restack requires authoritative parent snapshots')
-    const parent = await deps.forge.snapshotBase({
-      workspacePath: deps.workspacePath,
-      base: input.parentBranch,
-      destinationRef: `${destinationRef}-parent-head`,
-    })
+    const parent = await snapshotParent(deps, input.parentBranch, `${destinationRef}-parent-head`)
     if (parent === oldBase) {
       if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)

@@ -1153,6 +1153,17 @@ including empty nodes, and advances clean cascades without agent calls. Only the
 active conflicted item attaches a reconcile runner, using source-build artifacts
 materialized by the dispatcher into the integration owner's store scope.
 
+In origin mode, node plumbing uses the forge's trusted `kernelExec` transport.
+The GitHub adapter supplies its token through subprocess-only Git configuration,
+scoped to the repository's HTTPS URL; credentials are absent from argv, saved
+remote URLs, repository configuration and agent environments. Parent snapshots,
+archives and expected-head writes use this same transport. The dispatcher checks
+parent and node heads through the forge API before acquiring a repository: an
+unchanged inventory needs no clone or Git commands. A required temporary clone
+completes before the node writer lease is acquired, so download time cannot
+expire writer authority. Build sandbox publication retains its separate trusted
+receive-pack path.
+
 `kernel/node-landing.ts` shares the node writer lease and reservation with
 restacking. It cancels native auto-merge, refreshes actual PR refs, proves the
 exact destination ungated and fast-forwards the canonical child commit under

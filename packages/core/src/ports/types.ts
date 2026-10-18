@@ -495,6 +495,12 @@ export type LandingGateInspection =
   | { kind: 'unproven'; reason: string }
 
 export interface Forge {
+  /** Trusted kernel-only Git execution, with forge credentials scoped to its
+   * origin. Never pass this capability or its environment to agent sessions. */
+  readonly kernelExec?: import('./workspace/git-worktree').Exec
+  /** Credentialed rewrite transport for dispatcher-owned node work. Workspace
+   * replay retains its existing provider-controlled transport. */
+  readonly kernelRewrite?: ForgeRewrite
   inspectLandingGate?(branch: string): Promise<LandingGateInspection>
   inspectLandingPr?(
     workspacePath: string,

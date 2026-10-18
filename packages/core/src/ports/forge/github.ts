@@ -16,7 +16,8 @@ import { findSummaryMarker } from './summary-marker'
  * exception on the API side is that probe; `pushBranch` remains `git push`
  * from the workspace — it is only ever called from worktree-side terminals
  * and contract fixtures; `vercel-sandbox` builds publish through the
- * sandbox's receive-pack proxy and the host never pushes.
+ * sandbox's receive-pack proxy. Integration-node plumbing uses a separate
+ * trusted kernel Git transport, with credentials scoped to this repository.
  *
  * Native auto-merge is the one operation GitHub exposes only through its
  * GraphQL schema (no REST route exists), so its enable/disable mutations
@@ -25,7 +26,7 @@ import { findSummaryMarker } from './summary-marker'
  * Repository coordinates (owner/name) resolve lazily and memoized: explicit
  * constructor option → `AB_REPOSITORY` (normalized) → `git remote get-url
  * origin` in `repoRoot` (checkout mode) → hard error at first use. In origin
- * mode the dispatcher exports `AB_REPOSITORY`, so no git call ever runs.
+ * mode the dispatcher exports `AB_REPOSITORY`, so coordinate discovery needs no Git call.
  */
 import { z } from 'zod'
 import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
@@ -72,6 +73,7 @@ export const bunExec: Exec = async (cmd, opts) => {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
+    ...(opts.env === undefined ? {} : { env: { ...process.env, ...opts.env } }),
   })
   const abort = (): void => {
     try {
@@ -539,13 +541,51 @@ export class GitHubForge implements Forge {
   get rewrite() {
     return gitRewrite(this.exec, false)
   }
+  get kernelRewrite() {
+    return gitRewrite(this.kernelExec, false)
+  }
+  /** Credentials exist only in the trusted subprocess environment, never in
+   * argv, repository config, remote URLs, or the resolving agent's environment. */
+  readonly kernelExec: Exec = async (cmd, opts) => {
+    const repo = await this.repoCoordinates()
+    if (!repo) throw new Error('kernel Git requires explicit GitHub repository coordinates')
+    const credential = typeof this.token === 'function' ? await this.token() : this.token
+    const token = typeof credential === 'string' ? credential : credential?.token
+    if (!token) throw new Error('kernel Git requires a GitHub token')
+    const encoded = Buffer.from(`x-access-token:${token}`).toString('base64')
+    const url = `https://github.com/${repo.owner}/${repo.name}`
+    const redact = (value: string) =>
+      value.replaceAll(token, '[redacted]').replaceAll(encoded, '[redacted]')
+    try {
+      const result = await this.exec(cmd, {
+        ...opts,
+        env: {
+          ...opts.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_CONFIG_COUNT: '4',
+          GIT_CONFIG_KEY_0: 'http.extraHeader',
+          GIT_CONFIG_VALUE_0: '',
+          GIT_CONFIG_KEY_1: `http.${url}.extraHeader`,
+          GIT_CONFIG_VALUE_1: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_2: `http.${url}.git.extraHeader`,
+          GIT_CONFIG_VALUE_2: `Authorization: Basic ${encoded}`,
+          GIT_CONFIG_KEY_3: 'credential.helper',
+          GIT_CONFIG_VALUE_3: '',
+        },
+      })
+      return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
+    } catch (error) {
+      throw new Error(redact(error instanceof Error ? error.message : String(error)))
+    }
+  }
   readonly name = 'github'
   readonly prAttachments: PrAttachmentHosting
 
   private readonly transport: GitHubRequest
-  /** Only `pushBranch` still runs a local command (`git push` from the
-   * workspace); every API operation goes through the transport. */
+  /** Subprocess seam for workspace pushes and trusted kernel Git operations;
+   * every API operation goes through the HTTP transport. */
   private readonly exec: Exec
+  private readonly token: GitHubTokenSource
   private readonly explicitRepository?: string
   private readonly repoRoot?: string
   private readonly env: Readonly<Record<string, string | undefined>>
@@ -584,6 +624,7 @@ export class GitHubForge implements Forge {
   ) {
     this.exec = opts.exec ?? bunExec
     this.env = opts.env ?? {}
+    this.token = opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec)
     // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
     // stored login, probed lazily through this adapter's exec seam on the
     // first request. A request that still goes out anonymously carries the
@@ -591,7 +632,7 @@ export class GitHubForge implements Forge {
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
-        token: opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec),
+        token: this.token,
       })
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository

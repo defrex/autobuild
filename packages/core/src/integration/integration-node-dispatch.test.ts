@@ -454,7 +454,7 @@ for (const checkout of ['scratch', 'absent'] as const) {
     const { join } = await import('node:path')
     const { mkdir } = await import('node:fs/promises')
     const { Dispatcher } = await import('../processes/dispatcher')
-    const { gitRewrite } = await import('../ports/forge/git-rewrite')
+    const { GitHubForge } = await import('../ports/forge/github')
     const { spawnExec } = await import('../ports/workspace/git-worktree')
     const { humanActor } = await import('../events/envelope')
     const h = await makeHarness({
@@ -472,7 +472,38 @@ for (const checkout of ['scratch', 'absent'] as const) {
       const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
       const scratch = join(h.tmp, 'dispatch-scratch')
       await mkdir(scratch)
-      const remoteRewrite = gitRewrite(spawnExec, false)
+      const origin = 'https://github.com/acme/private-repo'
+      const token = 'fixture-private-token'
+      const activity: string[] = []
+      const claimWriter = h.store.claimNodeWriter.bind(h.store)
+      h.store.claimNodeWriter = async (...args) => {
+        activity.push('claim')
+        return claimWriter(...args)
+      }
+      const transport = new GitHubForge({
+        repository: origin,
+        token,
+        exec: async (cmd, opts) => {
+          // Fail every credential-less host transport attempt, including
+          // clone, fetch, archive push, readback and destination CAS.
+          expect(opts.env?.GIT_CONFIG_VALUE_1).toBe(
+            `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+          )
+          expect(opts.env?.GIT_CONFIG_KEY_1).toBe(`http.${origin}.extraHeader`)
+          expect(cmd.join(' ')).not.toContain(token)
+          activity.push(cmd[1]!)
+          if (cmd[1] === 'clone') {
+            // A download slower than the writer TTL must still converge.
+            h.clock.advance(65_000)
+          }
+          // The fixture models the credentialed HTTPS endpoint with real Git
+          // transport to a local repository only after validating credentials.
+          return spawnExec(
+            cmd.map((arg) => (arg === origin ? h.origin : arg)),
+            opts,
+          )
+        },
+      })
       const apiMethods = new Set([
         'getPrState',
         'inspectLandingPr',
@@ -484,24 +515,10 @@ for (const checkout of ['scratch', 'absent'] as const) {
       ])
       const forge = new Proxy(h.forgeAdapter, {
         get(target, key) {
-          if (key === 'rewrite') return remoteRewrite
-          if (key === 'snapshotBase')
-            return async (input: {
-              workspacePath: string
-              base: string
-              destinationRef: string
-            }) => {
-              await git(
-                [
-                  'fetch',
-                  '--no-tags',
-                  'origin',
-                  `+refs/heads/${input.base}:${input.destinationRef}`,
-                ],
-                input.workspacePath,
-              )
-              return git(['rev-parse', input.destinationRef], input.workspacePath)
-            }
+          if (key === 'kernelExec') return transport.kernelExec
+          if (key === 'kernelRewrite') return transport.kernelRewrite
+          if (key === 'rewrite') return transport.rewrite
+          if (key === 'snapshotBase') return undefined
           if (key === 'openPr')
             return (input: Parameters<NonNullable<typeof target.openPr>>[0]) =>
               target.openPr({ ...input, workspacePath: h.origin })
@@ -520,9 +537,13 @@ for (const checkout of ['scratch', 'absent'] as const) {
         forge,
         config: h.config,
         repo: h.origin,
-        repoOrigin: h.origin,
+        repoOrigin: origin,
         ...(checkout === 'scratch' ? { checkout: scratch } : {}),
-        exec: spawnExec,
+        exec: async (cmd, opts) => {
+          if (['clone', 'fetch', 'push', 'ls-remote'].includes(cmd[1]!))
+            throw new Error('uncredentialed host Git transport')
+          return spawnExec(cmd, opts)
+        },
         ids: h.ids,
         clock: h.clock,
         launchRunner: async () => {
@@ -532,10 +553,15 @@ for (const checkout of ['scratch', 'absent'] as const) {
       const original = await git(['rev-parse', node.branch!], h.origin)
       await Bun.write(join(h.origin, 'origin-upstream'), 'upstream')
       const root = await commitAll(h.origin, 'Origin parent movement')
-      expect((await dispatcher.tick()).janitorFailed).toBe(0)
+      expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
       expect(await git(['rev-parse', node.branch!], h.origin)).toBe(root)
       expect(ofType(await h.events(node.slug), 'node.rewritten')).toHaveLength(1)
       expect(original).not.toBe(root)
+      expect(activity.indexOf('clone')).toBeLessThan(activity.indexOf('claim'))
+      const idleActivity = activity.length
+      for (let i = 0; i < 2; i++)
+        expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      expect(activity).toHaveLength(idleActivity)
       expect(
         (await spawnExec(['git', 'rev-parse', '--git-dir'], { cwd: scratch })).exitCode,
       ).not.toBe(0)
@@ -550,7 +576,7 @@ for (const checkout of ['scratch', 'absent'] as const) {
       })
       await h.runLatest()
       const canonical = await git(['rev-parse', child.branch!], h.origin)
-      expect((await dispatcher.tick()).janitorFailed).toBe(0)
+      expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
       expect(reduceBuild(await h.events(child.slug)).mergedSha).toBe(canonical)
       expect(await git(['rev-parse', node.branch!], h.origin)).toBe(canonical)
       expect(ofType(await h.events(child.slug), 'pr.auto-merge-enabled')).toHaveLength(0)

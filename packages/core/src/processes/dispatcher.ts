@@ -1969,8 +1969,8 @@ export class Dispatcher {
           await this.withKernelRepository((workspacePath) =>
             landIntoNode({
               store,
-              forge,
-              exec: this.deps.exec,
+              forge: this.kernelForge(),
+              exec: forge.kernelExec ?? this.deps.exec,
               workspacePath,
               slug: record.slug,
               node: target.slug,
@@ -1996,8 +1996,8 @@ export class Dispatcher {
       !(await this.withKernelRepository((workspacePath) =>
         settleClosedNode({
           store,
-          forge,
-          exec: this.deps.exec,
+          forge: this.kernelForge(),
+          exec: forge.kernelExec ?? this.deps.exec,
           workspacePath,
           slug: record.slug,
           branch,
@@ -2344,8 +2344,8 @@ export class Dispatcher {
         const reason = await this.withKernelRepository((kernelPath) =>
           landIntoNode({
             store,
-            forge,
-            exec: this.deps.exec,
+            forge: this.kernelForge(),
+            exec: forge.kernelExec ?? this.deps.exec,
             workspacePath: kernelPath,
             slug: record.slug,
             node: target.slug,
@@ -2458,8 +2458,8 @@ export class Dispatcher {
         !(await this.withKernelRepository((kernelPath) =>
           settleClosedNode({
             store,
-            forge,
-            exec: this.deps.exec,
+            forge: this.kernelForge(),
+            exec: forge.kernelExec ?? this.deps.exec,
             workspacePath: kernelPath,
             slug: record.slug,
             branch: record.branch!,
@@ -3739,6 +3739,18 @@ export class Dispatcher {
     })
   }
 
+  private kernelForge(): Forge {
+    const forge = this.deps.forge
+    if (!forge.kernelRewrite) return forge
+    return new Proxy(forge, {
+      get(target, key) {
+        if (key === 'rewrite') return target.kernelRewrite
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+  }
+
   private async kernelRepository(root: string): Promise<string> {
     const checkout = this.deps.checkout ?? this.deps.repo
     if (!this.deps.repoOrigin) return checkout
@@ -3749,9 +3761,12 @@ export class Dispatcher {
       if (probe.exitCode === 0) return checkout
     }
     const path = join(root, 'repository.git')
-    const clone = await this.deps.exec(['git', 'clone', '--bare', this.deps.repoOrigin, path], {
-      cwd: root,
-    })
+    const clone = await (this.deps.forge.kernelExec ?? this.deps.exec)(
+      ['git', 'clone', '--bare', this.deps.repoOrigin, path],
+      {
+        cwd: root,
+      },
+    )
     if (clone.exitCode !== 0) throw new Error(clone.stderr)
     return path
   }
@@ -3772,7 +3787,7 @@ export class Dispatcher {
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
-    const forge = this.deps.forge
+    const forge = this.kernelForge()
     const settled = (await readBuildFacts(this.store, record.slug)).value
     if (settled.open !== null || settled.publication.pending()) return
     if (
@@ -3782,14 +3797,41 @@ export class Dispatcher {
     )
       return
     if (state.nodeRestack?.active?.operation === 'landing') return
-    if (!record.branch || !state.baseBranch || !forge.rewrite || !forge.snapshotBase) return
+    if (
+      !record.branch ||
+      !state.baseBranch ||
+      !forge.rewrite ||
+      (!forge.snapshotBase && !forge.kernelExec)
+    )
+      return
+    // The forge API can prove an unchanged inventory without downloading Git
+    // history. Active work and hand pushes still enter the transaction path.
+    if (!state.nodeRestack?.active && state.sessions.open.length === 0 && forge.remoteBranchSha) {
+      const [parent, head] = await Promise.all([
+        forge.remoteBranchSha(state.baseBranch),
+        forge.remoteBranchSha(record.branch),
+      ])
+      if (
+        parent === state.nodeRestack?.contributionBase &&
+        head === state.nodeRestack?.inventory?.head
+      )
+        return
+    }
     const holder = this.deps.ids('node-writer')
-    if (!(await this.store.claimNodeWriter(record.slug, holder, 60_000))) return
     const root = await mkdtemp(join(tmpdir(), 'autobuild-node-'))
     const workspacePath = join(root, 'replay')
     let checkout = this.deps.checkout ?? this.deps.repo
     let added = false
+    let claimed = false
     try {
+      // Repository download is read-only and may exceed the writer lease TTL.
+      // Acquire writer authority only after it completes.
+      checkout = await this.kernelRepository(root)
+      claimed = await this.store.claimNodeWriter(record.slug, holder, 60_000)
+      if (!claimed) return
+      const latest = (await readBuildFacts(this.store, record.slug)).value
+      if (latest.open !== null || latest.publication.pending()) return
+      state = latest.state
       // An ended execution may have died between an item's atomic receipt and
       // its phase/session acknowledgements. Reclaim only after supervision has
       // settled the complete execution, before any public stack rewrite.
@@ -3822,7 +3864,6 @@ export class Dispatcher {
           },
         })
       }
-      checkout = await this.kernelRepository(root)
       const result = await this.deps.exec(
         ['git', 'worktree', 'add', '--detach', workspacePath, 'HEAD'],
         { cwd: checkout },
@@ -3856,7 +3897,7 @@ export class Dispatcher {
           store: this.store,
           slug: record.slug,
           forge,
-          exec: this.deps.exec,
+          exec: forge.kernelExec ?? this.deps.exec,
           workspacePath,
           holder,
           canWrite: async () => {
@@ -3879,7 +3920,7 @@ export class Dispatcher {
         },
         {
           branch: record.branch,
-          parentBranch: state.baseBranch,
+          parentBranch: state.baseBranch!,
           id: this.deps.ids('node-restack').replaceAll('_', '-'),
         },
       )
@@ -3986,7 +4027,7 @@ export class Dispatcher {
           cwd: checkout,
         })
       await rm(root, { recursive: true, force: true })
-      await this.store.releaseNodeWriter(record.slug, holder)
+      if (claimed) await this.store.releaseNodeWriter(record.slug, holder)
     }
   }
 
