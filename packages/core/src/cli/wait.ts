@@ -1,3 +1,6 @@
+import { awaitsConsent } from '../kernel/landing-readiness'
+import { leafRestackReducer, type LeafRestackState } from '../kernel/leaf-restack-state'
+import { consentReady, consentIdentity } from './attention'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed } from '../store/reduced-reads'
 import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
@@ -85,7 +88,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 /** The `--for` condition vocabulary, in the order the help documents it. */
 const CONDITION_VOCABULARY =
   'blocked, paused, running, collecting, done, aborted, terminal, pr=open, pr=merged, pr=closed, ' +
-  'pr=conflicted, phase=<phase> (a core phase or verify:<step>), attention'
+  'consent, node-landed, restack-conflicted, pr=conflicted, phase=<phase> (a core phase or verify:<step>), attention'
 
 // ── Conditions ───────────────────────────────────────────────────────────────
 
@@ -95,6 +98,7 @@ type ConditionBody =
   | { kind: 'pr'; prState: PrLifecycle }
   | { kind: 'phase'; phase: Phase }
   | { kind: 'attention' }
+  | { kind: 'consent' | 'node-landed' | 'restack-conflicted' }
 
 interface WaitCondition {
   /** The original `--for` value — what a matching record's `condition` names. */
@@ -130,6 +134,8 @@ export function parseConditions(
         ` — ${WAIT_USAGE}`,
     )
   const conditions = forValues.map((value): WaitCondition => {
+    if (value === 'consent' || value === 'node-landed' || value === 'restack-conflicted')
+      return { text: value, cond: { kind: value } }
     if (value === 'terminal') return { text: value, cond: { kind: 'terminal' } }
     if (value === 'attention') return { text: value, cond: { kind: 'attention' } }
     if (value.startsWith('pr=')) {
@@ -169,7 +175,7 @@ export function parseConditions(
 }
 
 function attentionFrom(
-  input: AbEvent[] | { state: BuildState; deferral: DeferralLedger },
+  input: AbEvent[] | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState },
   state?: BuildState,
 ) {
   return Array.isArray(input)
@@ -185,8 +191,13 @@ function attentionFrom(
 function stateSatisfies(
   cond: ConditionBody,
   state: BuildState,
-  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
+  events:
+    | AbEvent[]
+    | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState } = [],
 ): boolean {
+  const restack = Array.isArray(events)
+    ? leafRestackReducer.reduce(events)
+    : (events.restack ?? { gates: {} })
   switch (cond.kind) {
     case 'status':
       return state.status === cond.status
@@ -196,8 +207,20 @@ function stateSatisfies(
       return state.prState === cond.prState
     case 'phase':
       return (state.phase ?? null) === cond.phase
+    case 'consent':
+      return awaitsConsent(state, restack)
+    case 'node-landed':
+      return !!state.integration?.landing
+    case 'restack-conflicted':
+      return !!state.nodeRestack?.conflict || !!(restack.active && restack.replay?.conflicted)
     case 'attention':
-      return (state.openEscalations?.length ?? 0) > 0 || attentionFrom(events, state) !== null
+      return (
+        awaitsConsent(state, restack) ||
+        !!state.nodeRestack?.conflict ||
+        !!(restack.active && restack.replay?.conflicted) ||
+        (state.openEscalations?.length ?? 0) > 0 ||
+        attentionFrom(events, state) !== null
+      )
   }
 }
 
@@ -209,7 +232,9 @@ function stateSatisfies(
 export function matchState(
   conditions: readonly WaitCondition[],
   state: BuildState,
-  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
+  events:
+    | AbEvent[]
+    | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
     if (stateSatisfies(cond, state, events)) return text
@@ -221,15 +246,35 @@ export function matchState(
  * globs in supply order. Used on a cursor-resumed backlog, where state
  * conditions must not fire. */
 export function matchEvent(
-  event: Pick<AbEvent, 'type'>,
+  event: Pick<AbEvent, 'type'> & { payload?: unknown },
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
-  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
+  events:
+    | AbEvent[]
+    | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
+    if (cond.kind === 'node-landed' && event.type === 'integration.landed') return text
+    if (
+      cond.kind === 'restack-conflicted' &&
+      (event.type === 'node.item-conflicted' ||
+        (event.type === 'restack.replayed' &&
+          (event.payload as { conflicted?: boolean })?.conflicted))
+    )
+      return text
+    if (
+      cond.kind === 'consent' &&
+      !Array.isArray(events) &&
+      awaitsConsent(events.state, events.restack ?? { gates: {} })
+    )
+      return text
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) || attentionFrom(events) !== null)
+      (isAttentionEvent(event.type) ||
+        (event.type === 'restack.replayed' &&
+          !!(event.payload as { conflicted?: boolean })?.conflicted) ||
+        (!Array.isArray(events) && stateSatisfies(cond, events.state, events)) ||
+        attentionFrom(events) !== null)
     )
       return text
   }
@@ -246,17 +291,37 @@ export function matchEvent(
  * original string becomes the record's `condition` field.
  */
 function matchFirst(
-  event: Pick<AbEvent, 'type'>,
+  event: Pick<AbEvent, 'type'> & { payload?: unknown },
   state: BuildState,
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
-  events: AbEvent[] | { state: BuildState; deferral: DeferralLedger } = [],
+  events:
+    | AbEvent[]
+    | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
     if (stateSatisfies(cond, state, events)) return text
+    if (cond.kind === 'node-landed' && event.type === 'integration.landed') return text
+    if (
+      cond.kind === 'restack-conflicted' &&
+      (event.type === 'node.item-conflicted' ||
+        (event.type === 'restack.replayed' &&
+          (event.payload as { conflicted?: boolean })?.conflicted))
+    )
+      return text
+    if (
+      cond.kind === 'consent' &&
+      !Array.isArray(events) &&
+      awaitsConsent(events.state, events.restack ?? { gates: {} })
+    )
+      return text
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) || attentionFrom(events) !== null)
+      (isAttentionEvent(event.type) ||
+        (event.type === 'restack.replayed' &&
+          !!(event.payload as { conflicted?: boolean })?.conflicted) ||
+        (!Array.isArray(events) && stateSatisfies(cond, events.state, events)) ||
+        attentionFrom(events) !== null)
     )
       return text
   }
@@ -382,11 +447,17 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * exactly one condition-satisfying record; the exit-2 record carries
        * `condition` null so the caller can see how the build ended. */
       const finish = (condition: string | null, event: AbEvent, state: BuildState): number => {
+        const seed = streams.get(event.build)!.seed
+        const consent =
+          condition === 'consent' || condition === 'attention' ? consentReady(seed, now()) : null
         const observation =
-          condition === 'attention' && event.type !== 'escalation.raised'
-            ? mergeDecisionFromFacts(state, streams.get(event.build)!.seed.deferral, now())
-            : null
-        if (observation) deliveredAttention.add(mergeIdentity(event.build, observation.pr.number))
+          consent ??
+          (condition === 'attention' && event.type !== 'escalation.raised'
+            ? mergeDecisionFromFacts(state, seed.deferral, now())
+            : null)
+        if (consent) deliveredAttention.add(consentIdentity(event.build, consent.position))
+        else if (observation && 'pr' in observation)
+          deliveredAttention.add(mergeIdentity(event.build, observation.pr.number))
         const record = {
           ...(observation
             ? projectAttentionRecord(observation, state, encodeCurrent(), { build: event.build })
@@ -418,7 +489,18 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       }
 
       const eventConditions = (event: AbEvent, seed: BuildStreamSeed): readonly WaitCondition[] => {
-        if (event.type === 'escalation.raised') return conditions
+        if (
+          event.type === 'escalation.raised' ||
+          event.type === 'integration.landed' ||
+          event.type === 'node.item-conflicted' ||
+          (event.type === 'restack.replayed' && event.payload.conflicted)
+        )
+          return conditions
+        if (
+          seed.consentEpisode &&
+          !deliveredAttention.has(consentIdentity(event.build, seed.consentEpisode.seq))
+        )
+          return conditions
         const observation = mergeDecisionFromFacts(
           buildReducer.finish(seed.build),
           seed.deferral,
@@ -453,7 +535,11 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * latest event. Not cursor-relative — `--since` does not suppress it. */
       const checkRegistrationState = (stream: WaitStream): void => {
         const state = buildReducer.finish(stream.seed.build)
-        const condition = matchState(conditions, state, { state, deferral: stream.seed.deferral })
+        const condition = matchState(conditions, state, {
+          state,
+          deferral: stream.seed.deferral,
+          restack: stream.seed.restack,
+        })
         if (condition !== null && state.lastEvent !== undefined) {
           match(state.lastEvent!, state, condition)
         }
@@ -487,6 +573,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
             const condition = matchEvent(event, eventConditions(event, stream.seed), globs, {
               state,
               deferral: stream.seed.deferral,
+              restack: stream.seed.restack,
             })
             if (condition !== null) {
               match(event, state, condition)
@@ -500,6 +587,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           const condition = matchState(conditions, latest, {
             state: latest,
             deferral: current.value.deferral,
+            restack: current.value.restack,
           })
           if (condition !== null && latest.lastEvent) {
             stream.seed = current.value
@@ -552,6 +640,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           const condition = matchFirst(event, state, eventConditions(event, stream.seed), globs, {
             state,
             deferral: stream.seed.deferral,
+            restack: stream.seed.restack,
           })
           if (condition !== null) {
             match(event, state, condition)

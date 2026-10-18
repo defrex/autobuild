@@ -1,3 +1,5 @@
+import { projectTree, type TreeProjection } from './tree'
+export { treeVocabulary, consentQueue } from './tree'
 import { landingAuthorized } from '../../kernel/landing-state'
 import {
   integrationComplete,
@@ -155,6 +157,7 @@ export interface DashboardHarvest {
 }
 
 export interface DashboardBuild {
+  tree?: TreeProjection
   kind?: 'integration' | 'work'
   target?: string
   integration?:
@@ -564,6 +567,7 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -580,6 +584,7 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -889,6 +894,7 @@ export function projectBuildFromFacts(
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
     status,
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),

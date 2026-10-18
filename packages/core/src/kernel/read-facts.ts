@@ -1,3 +1,6 @@
+import { awaitsConsent } from './landing-readiness'
+import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
+import { landingCandidateId } from './landing-policy'
 import { referencedGitTips } from './reconcile-head'
 import { encodeLog } from './log-index-value'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
@@ -37,23 +40,40 @@ export interface BuildStreamSeed {
   build: BuildAcc
   deferral: DeferralLedger
   mergeAttentionPrs: number[]
+  branch?: string
+  restack: LeafRestackState
+  consentEpisode?: { seq: number; candidate: string }
   /** Terminal identity can precede later observations; retain it at the seed cursor. */
   terminalEvent?: AbEvent
 }
 // Bump with either constituent's semantics or historical eligibility semantics.
 export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, BuildStreamSeed>({
-  version: 2 + buildReducer.version + currentDeferralObservationReducer.version,
+  version:
+    3 +
+    leafRestackReducer.version +
+    buildReducer.version +
+    currentDeferralObservationReducer.version,
   initial: () => ({
     build: buildReducer.initial(),
     deferral: currentDeferralObservationReducer.initial(),
     mergeAttentionPrs: [],
+    restack: leafRestackReducer.initial(),
   }),
   fold(acc, events) {
     for (const event of events) {
+      if (event.type === 'workspace.provisioned' || event.type === 'node.opening')
+        acc.branch = event.payload.branch
       if (event.type === 'build.completed' || event.type === 'build.aborted')
         acc.terminalEvent = event
+      acc.restack = leafRestackReducer.advance(acc.restack, [event])
       acc.build = buildReducer.advance(acc.build, [event])
       acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, [event])
+      const state = buildReducer.finish(acc.build)
+      if (awaitsConsent(state, acc.restack)) {
+        const candidate = landingCandidateId(state.landing!.decision!.candidate)
+        if (acc.consentEpisode?.candidate !== candidate)
+          acc.consentEpisode = { seq: event.seq, candidate }
+      } else delete acc.consentEpisode
       const decision = mergeAttentionFromFacts(buildReducer.finish(acc.build), acc.deferral)
       if (decision && !acc.mergeAttentionPrs.includes(decision.pr.number))
         acc.mergeAttentionPrs.push(decision.pr.number)

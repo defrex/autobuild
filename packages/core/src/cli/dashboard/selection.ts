@@ -9,7 +9,10 @@ export function dashboardSelections(
   return [
     { kind: 'global' },
     ...(model.harvest !== undefined ? [{ kind: 'harvest' } as const] : []),
-    ...model.builds.map((build) => ({ kind: 'build' as const, slug: build.slug })),
+    ...[
+      ...model.builds.filter((build) => build.tree?.consent),
+      ...model.builds.filter((build) => !build.tree?.consent),
+    ].map((build) => ({ kind: 'build' as const, slug: build.slug })),
   ]
 }
 

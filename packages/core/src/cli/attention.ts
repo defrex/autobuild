@@ -1,3 +1,5 @@
+import type { BuildStreamSeed } from '../kernel/read-facts'
+import { buildReducer } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
 import type { RepositoryEvent } from '../events/repository'
 import {
@@ -62,3 +64,22 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
 }
 
 export { RepositoryAttention, type PersistenceObservation } from '../kernel/repository-attention'
+
+export function consentReady(seed: BuildStreamSeed, observedAt: Date) {
+  const state = buildReducer.finish(seed.build)
+  const episode = seed.consentEpisode
+  if (!episode) return null
+  return {
+    type: 'build.consent-ready' as const,
+    observedAt: observedAt.toISOString(),
+    target: state.target ?? { branch: state.baseBranch },
+    candidate: state.landing!.decision!.candidate,
+    reason: state.landing?.command?.kind === 'hold' ? 'held' : 'consent required',
+    branch: seed.branch ?? state.nodeOpening?.branch,
+    position: episode.seq,
+  }
+}
+export type ConsentReady = NonNullable<ReturnType<typeof consentReady>>
+export function consentIdentity(slug: string, seq: number): string {
+  return JSON.stringify(['consent', slug, seq])
+}

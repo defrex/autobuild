@@ -1,3 +1,4 @@
+import { consentReady, consentIdentity, type ConsentReady } from './attention'
 import { formatReadinessFailure } from '../ports/forge/readiness'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
@@ -102,7 +103,11 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
  * a watch emits exactly these — deciding what to do about a blocker or a
  * merge stays with the caller's skill.
  */
-export const BUILD_ATTENTION_EVENTS = ['escalation.raised'] as const satisfies readonly EventType[]
+export const BUILD_ATTENTION_EVENTS = [
+  'escalation.raised',
+  'integration.landed',
+  'node.item-conflicted',
+] as const satisfies readonly EventType[]
 
 // ── Glob compilation and matching ────────────────────────────────────────────
 
@@ -147,11 +152,17 @@ function validAttentionIdentity(id: unknown): boolean {
     const value: unknown = JSON.parse(id)
     return (
       Array.isArray(value) &&
-      value.length === 2 &&
-      typeof value[0] === 'string' &&
-      value[0].length > 0 &&
-      Number.isSafeInteger(value[1]) &&
-      value[1] > 0
+      ((value.length === 3 &&
+        value[0] === 'consent' &&
+        typeof value[1] === 'string' &&
+        value[1].length > 0 &&
+        Number.isSafeInteger(value[2]) &&
+        value[2] > 0) ||
+        (value.length === 2 &&
+          typeof value[0] === 'string' &&
+          value[0].length > 0 &&
+          Number.isSafeInteger(value[1]) &&
+          value[1] > 0))
     )
   } catch {
     return false
@@ -306,12 +317,12 @@ export interface AttentionObservationRecord {
   repo?: string
   build: string | null
   state: WatchRecordState | null
-  observation: MergeDecision | PersistenceObservation
+  observation: MergeDecision | PersistenceObservation | ConsentReady
   cursor: string
 }
 
 export function projectAttentionRecord(
-  observation: MergeDecision | PersistenceObservation,
+  observation: MergeDecision | PersistenceObservation | ConsentReady,
   state: BuildState | null,
   cursor: string,
   scope: { build: string } | { repo: string },
@@ -326,7 +337,7 @@ export function projectAttentionRecord(
 }
 
 export function renderAttentionLine(
-  observation: MergeDecision | PersistenceObservation,
+  observation: MergeDecision | PersistenceObservation | ConsentReady,
   label: string,
 ): string {
   return `${observation.observedAt}  ${singleLine(label)}  ${observation.type}  ${singleLine(JSON.stringify(observation))}`
@@ -659,7 +670,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
 
       const emitObservation = (
-        observation: MergeDecision | PersistenceObservation,
+        observation: MergeDecision | PersistenceObservation | ConsentReady,
         state: BuildState | null,
         scope: { build: string } | { repo: string },
         identity: string,
@@ -677,6 +688,17 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           countCursor = cursor
           requestStop()
         }
+      }
+      const checkConsent = (stream: BuildStream): void => {
+        if (filters.length || stop) return
+        const observation = consentReady(stream.seed, now())
+        if (observation)
+          emitObservation(
+            observation,
+            buildReducer.finish(stream.seed.build),
+            { build: stream.slug },
+            consentIdentity(stream.slug, observation.position),
+          )
       }
       const checkPersistence = (): void => {
         if (filters.length || !attentionInitialized || stop) return
@@ -759,7 +781,12 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
         const state = buildReducer.finish(stream.seed.build)
         stream.status = state.status
-        if (matchesBuildFilter(event.type, filters)) emit(event, state)
+        if (
+          matchesBuildFilter(event.type, filters) ||
+          (!filters.length && event.type === 'restack.replayed' && event.payload.conflicted)
+        )
+          emit(event, state)
+        checkConsent(stream)
         if (!filters.length && !stop) {
           const observation = mergeDecisionFromFacts(state, stream.seed.deferral, now())
           if (observation)
@@ -818,6 +845,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             if (stop) break
           }
         }
+        checkConsent(stream)
         return true
       }
 

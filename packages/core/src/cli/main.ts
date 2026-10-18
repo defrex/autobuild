@@ -1,3 +1,4 @@
+import { abLandings } from './landings'
 import { readBuildFacts } from '../store/reduced-reads'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import type { PinnedAsset } from '../events/payloads'
@@ -105,6 +106,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'ticket',
   'dispatch',
   'builds',
+  'landings',
   'build',
   'watch',
   'wait',
@@ -799,6 +801,23 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         json: parsed.flags.has('json'),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+      })
+      return 0
+    }
+
+    case 'landings': {
+      const usage = 'usage: ab landings [--json] [--store <ref>]'
+      const parsed = parseArgs(rest, { json: 'boolean', store: 'value' }, usage)
+      if (parsed.positionals.length) throw new Error(usage)
+      if (!deps.exec) throw new Error('ab landings needs an exec seam')
+      await abLandings({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        json: parsed.flags.has('json'),
+        storeRef: stringFlag(parsed, 'store'),
+        openStore: deps.openStore,
       })
       return 0
     }

@@ -2480,3 +2480,75 @@ test('forge failures reach default and repository watch with full remediation', 
     expect(renderWatchLine(records[0].event, null)).toContain('Enable squash merging')
   }
 })
+
+test('consent readiness is observed on discovery, resumes once, and wakes on held reentry', async () => {
+  const store = makeStore()
+  await store.createBuild({ slug: 'ready', repo: REPO, branch: 'preview/ready' })
+  await store.append('ready', {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'runner', host: 'host' },
+  })
+  await store.append('ready', {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'local',
+      ref: 'local',
+      branch: 'preview/ready',
+      base: { source: 'local', sha: 'base', remoteError: 'offline' },
+    },
+  })
+  await store.append('ready', {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+  })
+  await store.append('ready', {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+      candidate: { head: 'head', parent: 'base', cycle: '3' },
+    },
+  })
+  const first = harness(store, { slugs: ['ready'], count: 1 })
+  await abWatch(first.base)
+  const record = JSON.parse(first.out[0]!)
+  expect(record.observation).toMatchObject({
+    type: 'build.consent-ready',
+    branch: 'preview/ready',
+    position: 4,
+  })
+  const resumed = harness(store, { slugs: ['ready'], since: record.cursor, timeout: '1s' })
+  await abWatch(resumed.base)
+  expect(
+    resumed.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
+  ).toEqual([])
+  await store.append('ready', {
+    actor: humanActor('operator'),
+    type: 'build.land-requested',
+    payload: { decisionSeq: 4 },
+  })
+  await store.append('ready', {
+    actor: humanActor('operator'),
+    type: 'build.hold-requested',
+    payload: {},
+  })
+  const held = harness(store, { slugs: ['ready'], since: record.cursor, count: 1 })
+  await abWatch(held.base)
+  expect(JSON.parse(held.out[0]!).observation).toMatchObject({
+    type: 'build.consent-ready',
+    reason: 'held',
+    position: 6,
+  })
+  const eventsOnly = harness(store, { slugs: ['ready'], events: ['landing.*'], timeout: '1s' })
+  await abWatch(eventsOnly.base)
+  expect(
+    eventsOnly.out.map((line) => JSON.parse(line)).filter((record) => record.observation),
+  ).toEqual([])
+})
