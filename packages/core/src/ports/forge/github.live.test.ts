@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describeForgeContract, type ForgeContractFactory } from './contract'
+import {
+  describeForgeContract,
+  type ForgeContractFactoryOptions,
+  type ForgeContractHarness,
+} from './contract'
+import { buildTrailers } from '../../kernel/build-identity'
 import { bunExec, GitHubForge, rulesetsHaveMergeGate, type ExecResult } from './github'
 
 const GIT_ID = [
@@ -90,7 +95,9 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}; last observation: ${detail}`)
 }
 
-const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
+const githubForgeContractFactory = async (
+  opts: ForgeContractFactoryOptions & { nodeBase?: boolean } = {},
+): Promise<ForgeContractHarness> => {
   const repoSlug = requiredEnv('AB_GITHUB_CONTRACT_REPO')
   const match = /^([^/\s]+)\/([^/\s]+)$/.exec(repoSlug)
   if (!match) {
@@ -101,7 +108,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-github-forge-contract-'))
   const workspacePath = join(tmp, 'repo')
   const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 20)
-  const base = `ab-contract-${suffix}-base`
+  const base = opts.nodeBase ? `ab-node/contract-${suffix}-base` : `ab-contract-${suffix}-base`
   const head = `ab/contract-${suffix}-head`
   const protectionEndpoint =
     `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/` +
@@ -507,6 +514,77 @@ const runLiveGitHub =
 
 describe.skipIf(!runLiveGitHub)('GitHub live port contracts (opt-in)', () => {
   describeForgeContract('GitHubForge (live)', githubForgeContractFactory)
+})
+
+// This probes the provider assumption required by serialized node landing before
+// production code relies on indirect PR recognition. The destination is a real
+// non-default ab-node/ branch; only the fixture's explicit scratch repo is used.
+describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in)', () => {
+  test('a guarded destination fast-forward preserves identity and marks the PR merged', async () => {
+    const h = await githubForgeContractFactory({ nodeBase: true })
+    const cwd = h.workspacePath
+    const slug = `contract-${crypto.randomUUID()}`
+    try {
+      await run(
+        [
+          'git',
+          ...GIT_ID,
+          'commit',
+          '--amend',
+          '-m',
+          `Node landing probe\n\nAutobuild-Build: ${slug}`,
+        ],
+        cwd,
+      )
+      await h.forge.pushBranch(cwd, h.head)
+      const candidate = await h.controls.remoteHead(h.head)
+      const expected = await h.controls.remoteHead(h.base)
+      expect(await run(['git', 'show', '-s', '--format=%P', candidate], cwd)).toBe(expected)
+      expect(
+        buildTrailers(await run(['git', 'show', '-s', '--format=%B', candidate], cwd)),
+      ).toEqual([slug])
+      const pr = await h.forge.openPr({
+        workspacePath: cwd,
+        head: h.head,
+        base: h.base,
+        title: h.title,
+        body: h.body,
+      })
+      await h.controls.trackPr(pr.number)
+      await h.controls.prepareMergeable(pr.number)
+      expect(await h.controls.nativeAutoMergeEnabled(pr.number)).toBe(false)
+      // An exact destination lease, together with the one-parent check above,
+      // models the controlled landing without invoking a provider merge API.
+      await run(
+        [
+          'git',
+          'push',
+          `--force-with-lease=refs/heads/${h.base}:${expected}`,
+          'origin',
+          `${candidate}:refs/heads/${h.base}`,
+        ],
+        cwd,
+      )
+      expect(await h.controls.remoteHead(h.base)).toBe(candidate)
+      expect(await h.controls.mergeSha(pr.number)).toBe(candidate)
+      expect(await h.forge.getPrState(cwd, pr.number)).toMatchObject({ state: 'merged' })
+      // A stale worker must fail even if its replacement is a known ancestor.
+      const stale = await execute(
+        [
+          'git',
+          'push',
+          `--force-with-lease=refs/heads/${h.base}:${expected}`,
+          'origin',
+          `${expected}:refs/heads/${h.base}`,
+        ],
+        cwd,
+      )
+      expect(stale.exitCode).not.toBe(0)
+      expect(await h.controls.remoteHead(h.base)).toBe(candidate)
+    } finally {
+      await h.cleanup?.()
+    }
+  }, 180_000)
 })
 
 describe.skipIf(!runLiveGitHub)('GitHub reconcile transport (manual opt-in)', () => {
