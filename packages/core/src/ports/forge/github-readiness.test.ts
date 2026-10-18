@@ -9,6 +9,7 @@ function fixture(
     sets?: Record<string, unknown>[]
     protection?: unknown
     rules?: unknown[]
+    nodes?: unknown[]
     fail?: string
   } = {},
 ) {
@@ -32,8 +33,13 @@ function fixture(
       json = (options.sets ?? []).map((set) => ({ id: set.id, enforcement: set.enforcement }))
     else if (path.includes('/rulesets/'))
       json = options.sets?.find((set) => path.endsWith(`/${set.id}`))
-    else if (path.includes('/git/matching-refs/')) json = []
-    else if (path.includes('/rules/branches/')) json = options.rules ?? []
+    else if (path.includes('/git/matching-refs/')) {
+      // GitHub ignores page/per_page here and returns every match each time.
+      // Bound a regression's requests so a pagination bug fails instead of hanging.
+      if (calls.filter((call) => call.path === path).length > 1)
+        throw new Error('Matching references must be fetched once')
+      json = options.nodes ?? []
+    } else if (path.includes('/rules/branches/')) json = options.rules ?? []
     else if (path.endsWith('/protection'))
       json = options.protection ?? {
         enforce_admins: { enabled: true },
@@ -324,5 +330,39 @@ test('literal exclusions cannot hide other blocked future names', async () => {
       ],
     }).inspect()
     expect(byKey(checks, 'build-refs').status).toBe('fail')
+  }
+})
+
+test('matching refs returns 100+ node targets in one unpaginated response', async () => {
+  for (const count of [100, 101, 250]) {
+    const nodes = Array.from({ length: count }, (_, index) => ({
+      ref: `refs/heads/ab-node/target-${index}`,
+    }))
+    const lastTarget = `ab-node/target-${count - 1}`
+    const fixture_ = fixture({
+      nodes,
+      classic: [classic(lastTarget)],
+      protection: {
+        enforce_admins: { enabled: true },
+        required_linear_history: { enabled: false },
+        required_status_checks: null,
+      },
+    })
+    const checks = await fixture_.inspect()
+    const matchingRequests = fixture_.calls.filter((call) =>
+      call.path.includes('/git/matching-refs/'),
+    )
+    expect(matchingRequests).toEqual([
+      { method: 'GET', path: 'repos/o/r/git/matching-refs/heads/ab-node/', opts: undefined },
+    ])
+    const inspectedTargets = fixture_.calls
+      .filter((call) => call.path.includes('/rules/branches/'))
+      .map((call) => call.path.split('/rules/branches/')[1])
+    expect(inspectedTargets).toEqual([
+      'release%2Froot',
+      ...nodes.map((node) => encodeURIComponent(node.ref.slice(11))),
+    ])
+    expect(byKey(checks, 'linear-history').status).toBe('fail')
+    expect(byKey(checks, 'linear-history').detail).toContain(lastTarget)
   }
 })

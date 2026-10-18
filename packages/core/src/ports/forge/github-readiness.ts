@@ -321,9 +321,11 @@ export async function inspectGitHubReadiness(opts: {
     )
 
   try {
-    const nodes = await pages(
+    // Matching refs returns the complete array and has no pagination parameters.
+    // A full response can contain 100+ refs, so the paginated helper would loop.
+    const nodes = await get(
       `${root}/git/matching-refs/heads/ab-node/`,
-      z.object({ ref: z.string() }),
+      z.array(z.object({ ref: z.string() })),
     )
     const targets = [
       opts.input.rootBranch,
