@@ -35,10 +35,10 @@ export function openBuildWorkspace(events: readonly AbEvent[]): OpenBuildWorkspa
   return openBuildWorkspaceReducer.reduce(events)
 }
 
-export const BASE_BRANCH_REDUCER_VERSION = 1
+export const BASE_BRANCH_REDUCER_VERSION = 2
 
-/** The base branch recorded on the FIRST `build.created` in array order, or
- * undefined for logs missing one (callers fall back to the repo config). */
+/** Creation freezes work bases; accepted node parent changes advance the
+ * effective base. Missing creation facts leave callers' config fallback intact. */
 export const baseBranchReducer = defineReducer<
   { baseBranch?: string },
   AbEvent,
@@ -47,12 +47,10 @@ export const baseBranchReducer = defineReducer<
   version: BASE_BRANCH_REDUCER_VERSION,
   initial: () => ({}),
   fold(acc, events) {
-    if (acc.baseBranch !== undefined) return
     for (const event of events) {
-      if (event.type === 'build.created') {
+      if (event.type === 'build.created' && acc.baseBranch === undefined)
         acc.baseBranch = event.payload.baseBranch
-        return
-      }
+      if (event.type === 'node.parent-accepted') acc.baseBranch = event.payload.next.branch
     }
   },
   finish: (acc) => acc.baseBranch,

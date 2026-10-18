@@ -1,3 +1,4 @@
+import { updateTicketTarget } from '../kernel/node-parent'
 import { compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
@@ -19,12 +20,15 @@ import { effectiveConfig } from './query'
 export interface OperatorTicketContext {
   repo: string
   tickets: Config['tickets']
+  baseBranch?: string
   teamKey: string
   claimedState?: string
   createState?: string
 }
 
 export interface OperatorTicketBackend {
+  supportsNodeRetarget?(context: OperatorTicketContext): Promise<boolean>
+
   contextFor?(repo: string): Promise<OperatorTicketContext>
   sourceFor(context: OperatorTicketContext): TicketSource | Promise<TicketSource>
   statesFor(context: OperatorTicketContext, source: TicketSource): string[] | Promise<string[]>
@@ -57,6 +61,7 @@ function contextFor(config: Config, repo: string): OperatorTicketContext {
   const tickets = config.tickets
   return {
     repo,
+    baseBranch: config.baseBranch,
     tickets,
     teamKey: tickets.teamKey ?? '',
     ...(tickets.claimedState !== undefined ? { claimedState: tickets.claimedState } : {}),
@@ -210,13 +215,30 @@ export async function mutateOperatorTicket(opts: {
     operation.kind === 'create'
       ? await createTicket(source, { ...operation, kind: operation.ticketKind })
       : operation.kind === 'update'
-        ? (await updateTicket(
-            source,
-            operation.id,
-            operation.patch,
-            true,
-            operation.expectedRevision,
-          ))!
+        ? (await (operation.patch.target === undefined
+            ? updateTicket(source, operation.id, operation.patch, true, operation.expectedRevision)
+            : updateTicketTarget(
+                {
+                  store: opts.store,
+                  repo: opts.repo,
+                  source,
+                  configuredSource: context.tickets.source,
+                  root:
+                    context.baseBranch ??
+                    (
+                      await effectiveConfig(opts.store, opts.repo)
+                    ).config.baseBranch,
+                  supportsRetarget: async () => {
+                    if (opts.backend.supportsNodeRetarget)
+                      return opts.backend.supportsNodeRetarget(context)
+                    const config = (await effectiveConfig(opts.store, opts.repo)).config
+                    return config.forge === 'github' || config.forge === 'local-git'
+                  },
+                },
+                operation.id,
+                operation.patch,
+                operation.expectedRevision,
+              )))!
         : operation.kind === 'move'
           ? await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
           : await changeBlockers(

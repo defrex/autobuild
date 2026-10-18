@@ -2255,3 +2255,45 @@ describe('integration stack merge', () => {
     expect((await forge.inspectMergeFreshness('main')).fenced).toBe(false)
   })
 })
+
+describe('node PR retargeting', () => {
+  const view = (base: string, state = 'open') => ({
+    number: 7,
+    state,
+    merged: false,
+    draft: false,
+    base: { ref: base },
+    head: { ref: 'ab-node/move', sha: 'head' },
+  })
+  test('PATCH sends a branch name and validates the returned review identity/base/head', async () => {
+    const { forge, calls } = makeForge([{ json: view('old') }, { json: view('new') }])
+    await forge.retargetPr('.', 7, 'new')
+    expect(calls.at(-1)).toMatchObject({
+      method: 'PATCH',
+      path: 'repos/acme/app/pulls/7',
+      opts: { body: { base: 'new' } },
+    })
+  })
+  test('retry adopts an already changed base without a second PATCH', async () => {
+    const { forge, calls } = makeForge([{ json: view('new') }])
+    await forge.retargetPr('.', 7, 'new')
+    expect(calls).toHaveLength(1)
+  })
+  test('wrong base and closed reviews never acknowledge retargeting', async () => {
+    await expect(
+      makeForge([{ json: view('old') }, { json: view('wrong') }]).forge.retargetPr('.', 7, 'new'),
+    ).rejects.toThrow('acknowledgement')
+    await expect(
+      makeForge([{ json: view('old', 'closed') }]).forge.retargetPr('.', 7, 'new'),
+    ).rejects.toThrow('no longer open')
+  })
+  for (const status of [403, 422])
+    test(`propagates provider ${status} refusals`, async () => {
+      await expect(
+        makeForge([
+          { json: view('old') },
+          { status, json: { message: 'refused' } },
+        ]).forge.retargetPr('.', 7, 'new'),
+      ).rejects.toThrow('refused')
+    })
+})

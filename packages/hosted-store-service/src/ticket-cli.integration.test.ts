@@ -71,10 +71,9 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
         fetch: (request) => {
           // Repo and ticket ids are path segments; normalize the asset routes.
           requests.push(
-            new URL(request.url).pathname.replace(
-              /^\/repos\/[^/]+\/tickets\/[^/]+\/assets/,
-              '/ticket-assets',
-            ),
+            new URL(request.url).pathname
+              .replace(/^\/repos\/[^/]+\/tickets\/[^/]+\/assets/, '/ticket-assets')
+              .replace(/^\/repos\/[^/]+\/builds$/, '/repo-builds'),
           )
           return service.fetch(request)
         },
@@ -156,6 +155,8 @@ test('all ab ticket subcommands have hosted/direct parity through normal config 
   expect(hosted.finalBody).toBe('# Updated\r\n\r\nUnicode ☃\r\ntrailing\t ')
   expect(new Set(hosted.requests)).toEqual(
     new Set([
+      // Target writes consult claims before mutating provider metadata.
+      '/repo-builds',
       '/tickets/policy',
       '/tickets/create',
       '/tickets/update',

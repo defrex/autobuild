@@ -55,6 +55,12 @@ export async function observeIntegration(
     for (const { record: build, state: child } of builds) {
       if (child.target?.build === slug && child.status !== 'done' && child.status !== 'aborted')
         children.add(build.ticket?.id ?? build.slug)
+      if (
+        [child.nodeRestack?.parentRequest, child.nodeRestack?.parentChange].some(
+          (move) => move && (move.old.target?.build === slug || move.next.target?.build === slug),
+        )
+      )
+        children.add(build.ticket?.id ?? build.slug)
       if (child.target?.build === slug && child.prState === 'merged')
         observation.contributions.push(build.slug)
     }

@@ -387,6 +387,19 @@ export class LocalGitForge implements Forge {
     return (await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)).ok
   }
 
+  async retargetPr(workspacePath: string, number: number, base: string): Promise<void> {
+    await this.sha(`refs/heads/${base}`, workspacePath)
+    if ((await this.getPrState(workspacePath, number)).state !== 'open')
+      throw new Error(`PR #${number} is no longer open`)
+    await this.updateRecord(workspacePath, number, (current) => {
+      if (current.status !== 'open' || current.pendingLanding)
+        throw new Error(`PR #${number} is landing or terminal`)
+      return { ...current, base }
+    })
+    if ((await this.inspectLandingPr(workspacePath, number)).base !== base)
+      throw new Error(`PR #${number} base acknowledgement failed`)
+  }
+
   async inspectLandingPr(workspacePath: string, number: number) {
     const { record } = await this.readRecord(workspacePath, number)
     if (record.status === 'merged' && !record.mergedHeadSha)

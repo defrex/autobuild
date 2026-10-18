@@ -100,6 +100,13 @@ export class FakeForge implements Forge {
     this.prs.set(number, { state: 'merged', sha, headSha: head })
     return sha
   }
+  readonly retargeted: { number: number; base: string }[] = []
+  async retargetPr(workspacePath: string, number: number, base: string): Promise<void> {
+    const pr = await this.inspectLandingPr(workspacePath, number)
+    if (!pr.open) throw new Error(`PR #${number} is no longer open`)
+    this.opened[number - 1]!.base = base
+    this.retargeted.push({ number, base })
+  }
   async inspectLandingPr(_workspacePath: string, number: number) {
     const pr = this.opened[number - 1]
     if (!pr) throw new Error(`FakeForge: missing PR refs #${number}`)

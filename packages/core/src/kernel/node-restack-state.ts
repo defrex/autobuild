@@ -5,6 +5,11 @@ import { defineReducer } from './incremental'
 /** Reservations outlive writer leases and disposable replay workspaces. A new
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
+  parentRequest?: EventPayload<'node.parent-requested'>
+  parentChange?: EventPayload<'node.parent-accepted'>
+  parentReplay?: string
+  parentPr?: string
+  parentRejection?: EventPayload<'node.parent-rejected'>
   contributionBoundaries?: Record<string, string>
   droppedIdentities?: string[]
   foreignAliases?: Record<string, string>
@@ -23,6 +28,29 @@ export interface NodeRestackState {
 export function advanceNodeRestack(state: NodeRestackState, events: readonly AbEvent[]) {
   for (const event of events) {
     switch (event.type) {
+      case 'node.parent-requested':
+        state.parentRequest = event.payload
+        break
+      case 'node.parent-accepted':
+        state.parentChange = event.payload
+        delete state.parentRequest
+        delete state.parentReplay
+        delete state.parentPr
+        delete state.parentRejection
+        delete state.observedParent
+        break
+      case 'node.parent-cancelled':
+        if (state.parentRequest?.id === event.payload.id) delete state.parentRequest
+        break
+      case 'node.parent-rejected':
+        state.parentRejection = event.payload
+        break
+      case 'node.parent-pr-retargeted':
+        state.parentPr = event.payload.id
+        break
+      case 'node.parent-completed':
+        if (state.parentChange?.id === event.payload.id) delete state.parentChange
+        break
       case 'target.moved':
         if (state.contributionBase !== undefined) state.observedParent = event.payload
         break
@@ -115,6 +143,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
                 state.foreignAliases[item.head] = state.foreignAliases[change.sha] ?? change.sha
             }
             state.droppedIdentities = [...dropped].sort()
+            if (state.parentChange) state.parentReplay = state.parentChange.id
             state.contributionBase = state.active.parent
           }
         }
@@ -139,7 +168,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 3,
+  version: 4,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

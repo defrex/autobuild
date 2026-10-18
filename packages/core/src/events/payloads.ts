@@ -58,6 +58,17 @@ const archiveEntry = z.strictObject({
   sha: gitOid,
 })
 
+const nodeParent = z.strictObject({
+  target: z.strictObject({ ticket: ticketRefSchema, build: z.string().min(1) }).nullable(),
+  branch: z.string().min(1),
+})
+const parentChange = z.strictObject({
+  id: z.string().min(1),
+  old: nodeParent,
+  next: nodeParent,
+  revision: z.string(),
+})
+
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
 /** Fan-out provenance shared by the auto-merge command facts: the repository
@@ -281,6 +292,16 @@ export const eventPayloadSchemas = {
     branch: z.string().min(1),
     parent: z.string().min(1),
     sha: z.string().min(1),
+  }),
+  'node.parent-requested': parentChange,
+  'node.parent-accepted': parentChange,
+  'node.parent-pr-retargeted': z.strictObject({ id: z.string().min(1), base: z.string().min(1) }),
+  'node.parent-completed': z.strictObject({ id: z.string().min(1) }),
+  'node.parent-cancelled': z.strictObject({ id: z.string().min(1), reason: z.string() }),
+  'node.parent-rejected': z.strictObject({
+    revision: z.string(),
+    target: z.string().nullable(),
+    reason: z.string(),
   }),
   'node.opened': z.strictObject({ sha: z.string().min(1) }),
   'node.writer-reserved': z.strictObject({

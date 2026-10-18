@@ -49,6 +49,8 @@ export function integrationCurrent(state: BuildState): boolean {
   return (
     !!cycle &&
     integrationComplete(state) &&
+    !state.nodeRestack?.parentRequest &&
+    !state.nodeRestack?.parentChange &&
     !state.nodeRestack?.active &&
     state.nodeComparison?.headSha === cycle.head &&
     state.nodeComparison?.parentSha === cycle.parent &&
@@ -117,10 +119,17 @@ export function integrationHeadVerified(state: BuildState, head: string): boolea
   })
 }
 
-export function integrationNeedsRunner(state: BuildState): boolean {
-  return (
-    integrationCurrent(state) &&
-    !integrationFailed(state) &&
-    !integrationHeadVerified(state, state.integration!.cycle!.head)
+/** Eligibility belongs to the current cycle. Historical same-head evidence
+ * remains available to landing audits, but cannot authorize a new parent. */
+export function integrationCycleVerified(state: BuildState): boolean {
+  const cycle = state.integration?.cycle
+  if (!cycle) return false
+  return integrationHeadVerified(
+    { ...state, integration: { ...state.integration, cycles: [cycle] } },
+    cycle.head,
   )
+}
+
+export function integrationNeedsRunner(state: BuildState): boolean {
+  return integrationCurrent(state) && !integrationFailed(state) && !integrationCycleVerified(state)
 }

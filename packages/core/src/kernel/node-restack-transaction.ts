@@ -57,7 +57,7 @@ export async function runNodeTransaction(
       destinationRef,
     })
     const parent = await snapshotParent(deps, input.parentBranch, `${destinationRef}-parent-head`)
-    if (parent === oldBase) {
+    if (parent === oldBase && !node?.parentChange) {
       if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)
       if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
