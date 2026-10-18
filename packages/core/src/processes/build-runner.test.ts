@@ -2149,6 +2149,7 @@ describe('finalize post-step publication', () => {
   async function readyHarness(options: HarnessOptions = {}): Promise<Harness> {
     const h = await makeHarness(options)
     await seedReadyForFinalizeStep(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
     return h
   }
 
@@ -2478,6 +2479,7 @@ skill = "custom-notes-skill"
       finalizeAncestors: [true],
     })
     await seedReady(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
 
     await h.br.step()
 
@@ -4170,6 +4172,7 @@ describe('phase-session budget', () => {
       }),
     })
     await seedReadyForFinalizeStep(h.store)
+    h.forge.setPrState(7, { state: 'open', mergeable: true })
     await h.br.attach()
 
     const step = h.br.step()

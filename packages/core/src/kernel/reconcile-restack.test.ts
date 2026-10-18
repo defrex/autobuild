@@ -435,6 +435,8 @@ for (const local of [true, false]) {
         return result
       }
       const forge = local ? new LocalGitForge({ exec }) : new GitHubForge({ exec })
+      forge.getPrState = async () => ({ state: 'open', mergeable: true })
+      forge.setAutoMerge = async () => ({ kind: 'applied' as const })
       const deps = { store, slug: BUILD, workspacePath: cwd, exec: bunExec, forge }
       const transaction = await prepareRestack(deps, {
         attempt: 1,

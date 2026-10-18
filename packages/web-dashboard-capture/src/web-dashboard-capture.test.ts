@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
-  autoMergeAction,
   buildRowActions,
   canPreviewPointer,
   handleRowControlKey,
@@ -325,61 +324,11 @@ test('rendered build controls follow previews and direct controls name their tar
   expect(harvest).toContain('aria-label="RESUME Harvest run')
 })
 
-test('auto-merge indicator exposes all states and maps desired-state commands', async () => {
-  expect(autoMergeAction(build({ autoMerge: 'off' }))).toBe('auto-merge-on')
-  for (const state of ['requested', 'enabled', 'cancelling'] as const) {
-    expect(autoMergeAction(build({ autoMerge: state })), state).toBe('auto-merge-off')
-  }
-
-  const base = models()
+test('web dashboard removes obsolete auto-merge controls', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
-  const slug = 'plan-blocked-dashboard'
-  for (const state of ['off', 'requested', 'enabled', 'cancelling'] as const) {
-    const fixtures = {
-      ...base,
-      mixed: {
-        ...base.mixed,
-        builds: base.mixed.builds.map((row) =>
-          row.slug === slug ? { ...row, autoMerge: state } : row,
-        ),
-      },
-    }
-    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const button = html.match(
-      new RegExp(
-        `<button[^>]*(?:data-am="${state}"[^>]*aria-label="Auto merge ${state} for ${slug}"|aria-label="Auto merge ${state} for ${slug}"[^>]*data-am="${state}")[^>]*>`,
-      ),
-    )?.[0]
-    expect(button, state).toBeDefined()
-    expect(button, state).toContain(
-      `aria-pressed="${state === 'requested' || state === 'enabled'}"`,
-    )
-    expect(button?.includes('disabled=""'), state).toBe(false)
-  }
-
-  const pendingHtml = await renderWebFrame({ ...spec, controlPending: true }, base, {
-    css: '',
-    fontCss: '',
-  })
-  expect(
-    pendingHtml.match(new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`)),
-  ).toBeTruthy()
-
-  const unavailable = {
-    ...base,
-    mixed: {
-      ...base.mixed,
-      builds: base.mixed.builds.map((row) =>
-        row.slug === slug ? { ...row, status: 'aborting' as const } : row,
-      ),
-    },
-  }
-  const unavailableHtml = await renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
-  expect(
-    unavailableHtml.match(
-      new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`),
-    ),
-  ).toBeTruthy()
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  expect(html).not.toContain('aria-label="Auto merge')
+  expect(html).not.toContain('class="word am"')
 })
 
 test('hover frame keeps committed and preview state independent', async () => {

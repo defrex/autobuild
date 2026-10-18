@@ -150,10 +150,6 @@ export interface BuildRowAction {
   action: BuildControlAction | 'request-abort'
 }
 
-export function autoMergeAction(row: DashboardBuild): BuildControlAction {
-  return row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off'
-}
-
 /** Lifecycle and destructive actions shown in a build's reserved row register. */
 export function buildRowActions(row: DashboardBuild): BuildRowAction[] {
   const available = buildActionAvailability(row)
@@ -280,7 +276,7 @@ export function BuildsView(props: BuildsViewProps) {
 export interface DispatcherControlsProps {
   model: DashboardModel
   pending?: string
-  onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
+  onSetting: (name: 'intake', enabled: boolean) => void
   onHarvest: (body: HarvestControl) => void
   onBulk: (action: 'pause' | 'resume') => void
 }
@@ -332,17 +328,7 @@ export function DispatcherControls({
       >
         intake<b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
       </button>
-      <button
-        type="button"
-        className="word control-item toggle"
-        disabled={busy}
-        onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
-      >
-        auto merge
-        <b className={model.defaultAutoMerge ? 'on' : 'off'}>
-          {model.defaultAutoMerge ? 'ON' : 'OFF'}
-        </b>
-      </button>
+
       <button
         type="button"
         className="word control-item toggle"
@@ -513,8 +499,6 @@ function BuildRow({
   const open = selected && detailOpen
   const answering = selected && answerStep?.slug === row.slug
   const held = model.repositoryPaused && row.status === 'queued'
-  const autoMergeAvailable = buildActionAvailability(row).autoMerge
-  const autoMergeOn = row.autoMerge === 'requested' || row.autoMerge === 'enabled'
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title button is the keyboard path
     <li
@@ -549,18 +533,6 @@ function BuildRow({
           <span className="slug">{row.slug}</span>
         </button>
         <span className="tokens">
-          <button
-            type="button"
-            className="word am"
-            data-am={row.autoMerge}
-            data-mismatch={model.defaultAutoMerge && row.autoMerge === 'off' ? true : undefined}
-            disabled={answering || pending !== undefined || !autoMergeAvailable}
-            aria-label={`Auto merge ${row.autoMerge} for ${row.slug}`}
-            aria-pressed={autoMergeOn}
-            onClick={() => onRowBuildControl(row.slug, autoMergeAction(row))}
-          >
-            auto merge <b>{row.autoMerge}</b>
-          </button>
           {row.pr && (
             <a
               className="pr"
@@ -761,7 +733,9 @@ function BuildDetail({
         )}
         <span>
           <span className="k">auto merge </span>
-          {build.autoMerge}
+          {build.landing?.command?.kind === 'hold'
+            ? 'held'
+            : (build.landing?.decision?.mode ?? 'not ready')}
         </span>
         {ceilingText && <span>{ceilingText}</span>}
         {build.pr && (

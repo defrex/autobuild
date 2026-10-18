@@ -200,14 +200,14 @@ describe('operator behavioral parity contract', () => {
     {
       name: 'auto merge on',
       seed: async () => {},
-      direct: { kind: 'auto-merge-on' },
-      request: { action: 'auto-merge-on' },
+      direct: { kind: 'land' },
+      request: { action: 'land' },
     },
     {
       name: 'auto merge off',
       seed: async () => {},
-      direct: { kind: 'auto-merge-off' },
-      request: { action: 'auto-merge-off' },
+      direct: { kind: 'hold' },
+      request: { action: 'hold' },
     },
   ]
 

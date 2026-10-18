@@ -1,3 +1,4 @@
+import { landingAuthorized } from './landing-state'
 import { readDeferralLedger } from '../store/reduced-reads'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
@@ -349,6 +350,11 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
   )
     return null
   const deferral = currentAutoMergeDeferralFrom(ledger, state)
-  if (state.autoMerge.requested && deferral === undefined) return null
-  return { pr: state.pr, reason: deferral ?? 'Auto-merge is not armed' }
+  if (landingAuthorized(state.landing) && deferral === undefined) return null
+  return {
+    pr: state.pr,
+    reason:
+      deferral ??
+      (state.landing?.command?.kind === 'hold' ? 'Landing held' : 'Landing awaits consent'),
+  }
 }

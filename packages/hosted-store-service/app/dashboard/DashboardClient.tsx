@@ -296,7 +296,7 @@ export function DashboardClient({ identity, repositories, initialSelection }: Cl
       }
     })()
   }
-  const setting = (name: 'intake' | 'auto-merge-default', enabled: boolean) =>
+  const setting = (name: 'intake', enabled: boolean) =>
     void act(name, () => api.setting(repo, name, enabled))
   const bulk = (action: 'pause' | 'resume') =>
     void act(`bulk-${action}`, () => api.bulk(repo, action))
@@ -447,16 +447,6 @@ export function DashboardClient({ identity, repositories, initialSelection }: Cl
         if (selectedBuild) {
           if (available?.primary === 'resume') control(selectedBuild.slug, 'resume')
         } else if (!selection && repository.bulkResume) bulk('resume')
-        return
-      case 'm':
-        if (busy) return
-        if (selectedBuild) {
-          if (available?.autoMerge)
-            control(
-              selectedBuild.slug,
-              selectedBuild.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-            )
-        } else if (!selection) setting('auto-merge-default', !model.defaultAutoMerge)
         return
       case 'd':
         if (!busy && selectedBuild && available?.discard) control(selectedBuild.slug, 'discard')

@@ -57,14 +57,7 @@ export async function controlPrechecks(
   store: BuildStore,
   repo: string,
   slug: string,
-  action:
-    | 'pause'
-    | 'cancel-pause'
-    | 'resume'
-    | 'auto-merge-on'
-    | 'auto-merge-off'
-    | 'abort'
-    | 'discard',
+  action: 'pause' | 'cancel-pause' | 'resume' | 'land' | 'hold' | 'abort' | 'discard',
 ): Promise<void> {
   await requireRouteBuild(store, repo, slug)
   if (action === 'pause' || action === 'cancel-pause') {

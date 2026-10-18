@@ -683,7 +683,7 @@ export class DispatchFrontend {
   }
 
   private async buildAction(
-    kind: 'pause' | 'resume' | 'discard' | 'toggle-auto-merge' | 'abort',
+    kind: 'pause' | 'resume' | 'discard' | 'hold' | 'land' | 'abort',
     slug: string,
   ): Promise<void> {
     const result = await controlBuild({
@@ -717,9 +717,9 @@ export class DispatchFrontend {
               ? `build ${slug}: discard requested`
               : result.command === 'abort'
                 ? `build ${slug}: abort requested`
-                : result.command === 'auto-merge-on'
-                  ? `build ${slug}: auto-merge requested`
-                  : `build ${slug}: auto-merge cancelled`
+                : result.command === 'land'
+                  ? `build ${slug}: landing consent requested`
+                  : `build ${slug}: landing hold requested`
     await this.report(message)
     await this.renderOnce()
   }
@@ -733,18 +733,6 @@ export class DispatchFrontend {
       run: this.runId,
     })
     await this.report(`dispatcher intake ${event.enabled ? 'ON' : 'OFF'}`)
-    await this.renderOnce()
-  }
-
-  private async toggleDefaultAutoMerge(): Promise<void> {
-    const event = await toggleRepositorySetting({
-      store: this.opts.store,
-      repo: this.opts.repo,
-      user: buildControlUser(this.opts.env),
-      setting: 'auto-merge-default',
-      run: this.runId,
-    })
-    await this.report(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
   }
 
@@ -904,13 +892,13 @@ export class DispatchFrontend {
         if (this.selection?.kind === 'global' && this.view === undefined)
           this.queue(() => this.toggleIntake())
         break
-      case 'm': {
+      case 'o':
+      case 'l': {
         const slug = this.selectedSlug()
-        if (this.view === undefined && this.selection?.kind === 'global') {
-          this.queue(() => this.toggleDefaultAutoMerge())
-        } else if (slug !== undefined) {
-          this.queue(() => this.buildAction('toggle-auto-merge', slug))
-        }
+        if (slug !== undefined)
+          this.queue(() =>
+            this.buildAction(input.text.toLowerCase() === 'o' ? 'hold' : 'land', slug),
+          )
         break
       }
       case 'p': {
@@ -1063,13 +1051,6 @@ export class DispatchFrontend {
         actor,
         type: 'dispatcher.intake-set',
         payload: { enabled: this.opts.intake, run: this.runId },
-      })
-    }
-    if (this.opts.defaultAutoMerge !== undefined) {
-      await this.opts.store.appendRepo(this.opts.repo, {
-        actor,
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: this.opts.defaultAutoMerge, run: this.runId },
       })
     }
 

@@ -112,6 +112,8 @@ export const SESSIONLESS_COMMANDS = new Set([
   'repository',
   'pause',
   'resume',
+  'hold',
+  'land',
   'auto-merge',
   'answer',
   'abort',
@@ -253,6 +255,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         resume: 'resume requested',
         abort: 'abort requested',
         discard: 'discard requested',
+        hold: 'landing hold requested',
+        land: 'landing consent requested',
         'auto-merge-on': 'auto-merge requested',
         'auto-merge-off': 'auto-merge cancelled',
       }
@@ -638,6 +642,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
               })
         const report = await abUpgrade({
           targetRepo,
+          env: deps.processEnv,
+          openStore: deps.openStore,
           stdout,
           ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
           ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
@@ -700,8 +706,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (sawIntake && sawNoIntake) {
         throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
       }
-      if (sawAutoMerge && sawNoAutoMerge) {
-        throw new Error(`--auto-merge and --no-auto-merge cannot be combined — ${usage}`)
+      if (sawAutoMerge || sawNoAutoMerge) {
+        throw new Error(`Auto-merge flags are retired; configure [[landing]] policy — ${usage}`)
       }
 
       const interval = stringFlag(parsed, 'interval')
@@ -1055,25 +1061,21 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return 0
     }
 
-    case 'auto-merge': {
-      const usage = 'usage: ab auto-merge <slug> <on|off> [--store <ref>]'
+    case 'hold':
+    case 'land': {
+      const usage = `usage: ab ${command} <slug> [--store <ref>]`
       const parsed = parseArgs(rest, { store: 'value' }, usage)
-      const [slug, setting] = parsed.positionals
-      if (
-        parsed.positionals.length !== 2 ||
-        slug === undefined ||
-        (setting !== 'on' && setting !== 'off')
-      ) {
-        throw new Error(usage)
-      }
+      if (parsed.positionals.length !== 1) throw new Error(usage)
       await runBuildControl(
         deps,
-        slug,
-        { kind: setting === 'on' ? 'auto-merge-on' : 'auto-merge-off' },
+        parsed.positionals[0]!,
+        { kind: command },
         stringFlag(parsed, 'store'),
       )
       return 0
     }
+    case 'auto-merge':
+      throw new Error('ab auto-merge is retired; use ab hold, ab land, and [[landing]] policy')
 
     case 'answer': {
       const usage =

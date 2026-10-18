@@ -1,3 +1,4 @@
+import { suspendNativeLanding } from './landing-publication'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 import type { EventWrite } from '../events/catalog'
@@ -174,6 +175,8 @@ export async function runNodeTransaction(
       payload: { id: active.id, head },
     })
   await authority(deps)
+  await suspendNativeLanding(deps, active.id)
+  revision = (await current(deps.store, deps.slug)).lastSeq
   const result = await rewrite.replace({
     workspacePath: deps.workspacePath,
     branch: input.branch,

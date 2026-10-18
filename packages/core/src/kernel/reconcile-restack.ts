@@ -1,3 +1,4 @@
+import { suspendNativeLanding } from './landing-publication'
 import { readBuildFacts } from '../store/reduced-reads'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
@@ -532,6 +533,7 @@ export async function publishRestack(
   await validateRestack(deps, intent, intent.headSha)
   const archives = await archiveTips(deps, [intent.headSha])
   await deps.beforeRewrite?.()
+  await suspendNativeLanding(deps, intent.id)
   const result = await capability.replace({
     workspacePath: deps.workspacePath,
     branch: intent.branch,

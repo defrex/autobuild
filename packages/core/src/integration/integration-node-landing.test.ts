@@ -40,7 +40,7 @@ test('nested node landing preserves both child commits and parent lands the stac
       store: h.store,
       repo: h.origin,
       slug: b.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
       ticketSource: async () => h.tickets,
     })
     for (let i = 0; i < 4; i++) {
@@ -53,7 +53,7 @@ test('nested node landing preserves both child commits and parent lands the stac
       store: h.store,
       repo: h.origin,
       slug: a.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
       ticketSource: async () => h.tickets,
     })
     for (let i = 0; i < 4; i++) {
@@ -94,7 +94,7 @@ test('native terminal states, partial listings and reopening govern completeness
         store: h.store,
         repo: h.origin,
         slug: node.slug,
-        action: { kind: 'auto-merge-on' },
+        action: { kind: 'land' },
         ticketSource: async () => h.tickets,
       }),
     ).rejects.toThrow('no landed changes')
@@ -140,7 +140,7 @@ test('a verification-blocked node admits a repair child and verifies the repaire
       store: h.store,
       repo: h.origin,
       slug: repair.slug,
-      action: { kind: 'auto-merge-on' },
+      action: { kind: 'land' },
     })
     for (let i = 0; i < 4; i++) {
       h.clock.advance(60_000)

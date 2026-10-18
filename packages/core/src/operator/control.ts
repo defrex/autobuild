@@ -33,6 +33,8 @@ export async function setRepositorySetting(opts: {
    * journal; optional so the operator API (which has no run) is unchanged. */
   run?: string
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
+  if (opts.setting === 'auto-merge-default')
+    throw new Error('Auto-merge default is retired; configure [[landing]] rules in autobuild.toml')
   await opts.store.ensureRepo(opts.repo)
   const payload = {
     enabled: opts.enabled,

@@ -8,8 +8,8 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('resume') }),
   z.strictObject({ action: z.literal('abort') }),
   z.strictObject({ action: z.literal('discard') }),
-  z.strictObject({ action: z.literal('auto-merge-on') }),
-  z.strictObject({ action: z.literal('auto-merge-off') }),
+  z.strictObject({ action: z.literal('land') }),
+  z.strictObject({ action: z.literal('hold') }),
 ])
 export type OperatorBuildControlRequest = z.infer<typeof buildControlRequestSchema>
 

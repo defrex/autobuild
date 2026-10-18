@@ -420,7 +420,13 @@ async function seedAwaitingPr(
   slug = 'auth-limit',
   baseBranch?: string,
 ): Promise<string> {
-  await seedBuild(h, { slug, baseBranch })
+  const ticketId = `T-${slug}`
+  if (!(await h.tickets.get(ticketId)))
+    await h.tickets.create(
+      { title: slug, body: CONFORMING_BODY, labels: [] },
+      { requestedId: ticketId },
+    )
+  await seedBuild(h, { slug, baseBranch, ticketId })
   await seedLoopsApproved(h, slug)
   await h.store.append(slug, {
     actor: KERNEL,
@@ -9615,3 +9621,107 @@ test.each([true, false])(
     )
   },
 )
+
+describe('declarative landing reconciliation', () => {
+  async function candidate(mode: 'auto' | 'consent' = 'consent') {
+    const h = harness({ toml: `[[landing]]\nmode = "${mode}"` })
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'present')
+    const poll = () => h.dispatcher.tick({ acceptNewWork: false })
+    const state = async () => reduceBuild(await h.store.getEvents(slug))
+    return { ...h, slug, poll, state }
+  }
+  test('policy auto authorizes a ready leaf; consent waits for land and hold revokes it', async () => {
+    const auto = await candidate('auto')
+    expect((await auto.poll()).janitorFailed).toBe(0)
+    expect(auto.forge.isAutoMergeEnabled(1)).toBe(true)
+    expect((await auto.state()).landing?.decision?.rule).toEqual({
+      index: 0,
+      snapshot: { mode: 'auto' },
+    })
+    const h = await candidate()
+    expect((await h.poll()).janitorFailed).toBe(0)
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    const decided = (await h.state()).landing!.decision!
+    const command = await h.store.append(h.slug, {
+      actor: humanActor('operator'),
+      type: 'build.land-requested',
+      payload: { decisionSeq: decided.seq },
+    })
+    await h.poll()
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+    expect((await h.state()).landing?.acknowledgedSeq).toBe(command.seq)
+    const held = await h.store.append(h.slug, {
+      actor: humanActor('operator'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    await h.poll()
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    expect((await h.state()).landing?.acknowledgedSeq).toBe(held.seq)
+  })
+  test('enable finishing after cancellation is repaired immediately and on the next poll', async () => {
+    const h = await candidate('auto')
+    const set = h.forge.setAutoMerge.bind(h.forge)
+    let raced = false
+    h.forge.setAutoMerge = async (cwd, pr, enabled, options) => {
+      if (enabled && !raced) {
+        raced = true
+        // Deterministically model the adverse external-effect ordering:
+        // enable starts, hold cancels, then the old enable finishes.
+        await h.store.append(h.slug, {
+          actor: humanActor('operator'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+        await set(cwd, pr, false)
+        return set(cwd, pr, true, { ...options, buildSlug: h.slug, canApply: async () => true })
+      }
+      return set(cwd, pr, enabled, options)
+    }
+    expect((await h.poll()).janitorFailed).toBe(0)
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    await h.poll()
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    expect((await h.state()).landing?.native?.enabled).toBe(false)
+  })
+  test('policy changes preserve an earlier decision and replacement candidates preserve consent', async () => {
+    let config = parseConfig(withReadyState('[[landing]]\nmode = "consent"'))
+    const h = harness({ getConfig: () => config })
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const decision = reduceBuild(await h.store.getEvents(slug)).landing!.decision!
+    config = parseConfig(withReadyState('[[landing]]\nmode = "auto"'))
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reduceBuild(await h.store.getEvents(slug)).landing!.decision).toEqual(decision)
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.land-requested',
+      payload: { decisionSeq: decision.seq },
+    })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'landing.native-applied',
+      payload: { enabled: false, operation: 'replacement' },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { ...PR, headSha: 'replacement' } },
+    })
+    h.forge.setPrHeadSha(1, 'replacement')
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const state = reduceBuild(await h.store.getEvents(slug))
+    expect(state.landing?.command?.seq).toBe(command.seq)
+    expect(state.landing?.acknowledgedSeq).toBe(command.seq)
+    expect(state.landing?.decision?.candidate.head).toBe('replacement')
+    expect(state.landing?.native?.candidate?.head).toBe('replacement')
+    expect(state.landing?.native?.commandSeq).toBe(command.seq)
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+  })
+})

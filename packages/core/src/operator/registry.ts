@@ -263,17 +263,9 @@ const buildControlInput = z.strictObject({
   repo: repoField,
   slug: slugField,
   action: z
-    .enum([
-      'pause',
-      'cancel-pause',
-      'resume',
-      'auto-merge-on',
-      'auto-merge-off',
-      'abort',
-      'discard',
-    ])
+    .enum(['pause', 'cancel-pause', 'resume', 'land', 'hold', 'abort', 'discard'])
     .describe(
-      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "auto-merge-on"/"auto-merge-off" for native auto-merge — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
+      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "land" for landing consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
     ),
 })
 
@@ -284,7 +276,7 @@ const repositoryStatusInput = z.strictObject({ repo: repoField })
 const repositorySettingsInput = z.strictObject({
   repo: repoField,
   setting: z
-    .enum(['intake', 'auto-merge-default'])
+    .enum(['intake'])
     .describe(
       '"intake" gates whether new tickets may be claimed; "auto-merge-default" is the claim-time auto-merge default for newly claimed builds.',
     ),

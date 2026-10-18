@@ -40,6 +40,8 @@ export type AnswerResolutionRequest =
   | { kind: 'revise-spec'; body: SpecBodySource }
 
 export type BuildControlAction =
+  | { kind: 'hold' }
+  | { kind: 'land' }
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'abort' }
@@ -62,6 +64,8 @@ export type BuildControlAction =
     }
 
 export type BuildControlCommand =
+  | 'hold'
+  | 'land'
   | 'pause'
   | 'resume'
   | 'abort'
@@ -156,6 +160,9 @@ async function appendCommand(
   const actor = humanActor(user, via)
   let event: AbEvent
   switch (command) {
+    case 'hold':
+    case 'land':
+      throw new Error('Landing commands require compare-and-append authorization')
     case 'pause':
       event = await store.append(slug, {
         actor,
@@ -266,58 +273,6 @@ function discardPending(slug: string): BuildControlError {
  * re-read state each attempt. `activeState` runs before the guard on every
  * attempt: a queued build (where the discard normally sits) still reports the
  * existing `inactive` error. */
-async function appendConsentCommand(
-  store: BuildStore,
-  slug: string,
-  user: string,
-  action: 'auto-merge-on' | 'auto-merge-off' | 'toggle-auto-merge',
-  via?: Via,
-  ticketSource?: () => Promise<TicketSource>,
-): Promise<BuildControlResult> {
-  while (true) {
-    const state = (await readBuildFacts(store, slug)).value.state
-    activeState(slug, state)
-    const command =
-      action === 'toggle-auto-merge'
-        ? state.autoMerge.requested
-          ? 'auto-merge-off'
-          : 'auto-merge-on'
-        : action
-    if (command === 'auto-merge-on' && state.kind === 'node') {
-      if (!ticketSource)
-        throw new Error('cannot establish integration completeness: ticket source unavailable')
-      const observed = await observeIntegration(store, await ticketSource(), slug)
-      if (
-        observed.openChildren.length ||
-        observed.diagnostics.length ||
-        !observed.contributions.length
-      )
-        throw new Error(
-          `integration incomplete: ${observed.openChildren.join(', ') || observed.diagnostics.join('; ') || 'no landed changes'}`,
-        )
-      if ((await readBuildFacts(store, slug)).value.state.lastSeq !== state.lastSeq) continue
-    }
-    if (command === 'auto-merge-on' && discardInFlight(state)) throw discardPending(slug)
-    const actor = humanActor(user, via)
-    // Written out rather than selected into a variable so `appendIfCurrent`'s
-    // `T extends EventType` infers a concrete payload type in each branch.
-    const appended =
-      command === 'auto-merge-on'
-        ? await store.appendIfCurrent(slug, state.lastSeq, {
-            actor,
-            type: 'build.auto-merge-requested',
-            payload: state.kind === 'node' ? { integrationConsent: true } : {},
-          })
-        : await store.appendIfCurrent(slug, state.lastSeq, {
-            actor,
-            type: 'build.auto-merge-cancelled',
-            payload: {},
-          })
-    if (appended !== null) return { kind: 'command', slug, command, event: appended }
-    // The stream advanced under us (a racing discard, a fan-out write, a
-    // runner acknowledgement): loop to re-read and re-check before writing.
-  }
-}
 
 function abortPending(slug: string): BuildControlError {
   return new BuildControlError(
@@ -531,18 +486,73 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     case 'resume':
       return appendCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
 
+    case 'hold':
+    case 'land': {
+      while (true) {
+        const facts = (await readBuildFacts(opts.store, opts.slug)).value
+        const current = facts.state
+        activeState(opts.slug, current)
+        if (discardInFlight(current)) throw discardPending(opts.slug)
+        const decision = current.landing?.decision
+        if (opts.action.kind === 'land') {
+          if (
+            !decision ||
+            current.status === 'paused' ||
+            current.currentPhase ||
+            current.openEscalations.length ||
+            current.pendingCommands.length ||
+            current.prState !== 'open' ||
+            (current.kind === 'node' ? current.integration?.cycle?.head : current.pr?.headSha) !==
+              decision.candidate.head ||
+            (current.kind !== 'node' &&
+              facts.log.restack.target &&
+              facts.log.restack.target.sha !== decision.candidate.parent) ||
+            facts.log.restack.active ||
+            current.nodeRestack?.active
+          )
+            throw new Error(
+              'Landing is not ready; wait for current-base verification and finalize before running ab land',
+            )
+          if (current.kind === 'node') {
+            if (!opts.ticketSource)
+              throw new Error('Cannot establish node completeness: ticket source unavailable')
+            const observed = await observeIntegration(
+              opts.store,
+              await opts.ticketSource(),
+              opts.slug,
+            )
+            if (
+              observed.openChildren.length ||
+              observed.diagnostics.length ||
+              !observed.contributions.length
+            )
+              throw new Error(
+                'Node is incomplete; wait for its children and verification before running ab land',
+              )
+          }
+        }
+        const actor = humanActor(user, opts.via)
+        const event =
+          opts.action.kind === 'hold'
+            ? await opts.store.appendIfCurrent(opts.slug, current.lastSeq, {
+                actor,
+                type: 'build.hold-requested',
+                payload: {},
+              })
+            : await opts.store.appendIfCurrent(opts.slug, current.lastSeq, {
+                actor,
+                type: 'build.land-requested',
+                payload: { decisionSeq: decision!.seq },
+              })
+        if (event) return { kind: 'command', slug: opts.slug, command: opts.action.kind, event }
+      }
+      throw new Error('Landing command was not recorded')
+    }
     case 'auto-merge-on':
     case 'auto-merge-off':
     case 'toggle-auto-merge':
-      // Consent has its own guarded, compare-and-append write path; the
-      // outer `activeState` above only short-circuits the common inactive case.
-      return appendConsentCommand(
-        opts.store,
-        opts.slug,
-        user,
-        opts.action.kind,
-        opts.via,
-        opts.ticketSource,
+      throw new Error(
+        'Auto-merge controls are retired; use ab hold or ab land and [[landing]] policy',
       )
 
     case 'dashboard-pause': {

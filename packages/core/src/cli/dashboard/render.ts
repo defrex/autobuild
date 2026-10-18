@@ -348,7 +348,13 @@ function renderBuild(
               ? 'red'
               : 'dim'
     if (build.kind !== 'integration')
-      rightTokens.push(paint(`auto merge ${build.autoMerge}`, autoColor, color))
+      rightTokens.push(
+        paint(
+          `landing ${build.landing?.command?.kind === 'hold' ? 'held' : build.landing?.decision?.mode === 'consent' && build.landing.command?.kind !== 'land' ? 'awaiting consent' : build.autoMerge}`,
+          autoColor,
+          color,
+        ),
+      )
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // A repository hold changes no build lifecycle state. Keep QUEUED literal
@@ -471,13 +477,13 @@ function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undef
 // ── The frame ────────────────────────────────────────────────────────────────
 
 export const DASHBOARD_GLOBAL_LEGEND =
-  'Keys: Up/Down select  h harvest  m auto-merge  i intake  p pause all  r resume all  Ctrl-C quit'
+  'Keys: Up/Down select  h harvest  l land  o hold  i intake  p pause all  r resume all  Ctrl-C quit'
 export const DASHBOARD_HARVEST_LEGEND = 'Keys: Up/Down select  Ctrl-C quit'
 export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  Ctrl-C quit'
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND =
-  'Keys: Up/Down select  Enter details  m auto-merge  p pause  a abort  Ctrl-C quit'
+  'Keys: Up/Down select  Enter details  l land  o hold  p pause  a abort  Ctrl-C quit'
 export const DASHBOARD_QUEUED_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
 /** The session view offers ONLY scrolling, back, and quit — it is read-only,
@@ -501,8 +507,8 @@ function buildLegend(build: DashboardBuild, detail: boolean): string {
   const control = dashboardBuildControl(build.status)
   const action = control === undefined ? '' : `  ${control.key} ${control.label}`
   return detail
-    ? `Keys: Up/Down scroll  Left/Right select session  Enter transcript  m auto-merge${action}  a abort  Esc back  Ctrl-C quit`
-    : `Keys: Up/Down select  Enter details  m auto-merge${action}  a abort  Ctrl-C quit`
+    ? `Keys: Up/Down scroll  Left/Right select session  Enter transcript  l land  o hold${action}  a abort  Esc back  Ctrl-C quit`
+    : `Keys: Up/Down select  Enter details  l land  o hold${action}  a abort  Ctrl-C quit`
 }
 
 const MESSAGE_PREVIEW_ROWS = 3
@@ -662,7 +668,10 @@ function detailBody(
     body.push(
       `  ${build.kind ?? 'work'} · target ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
     )
-  if (build.kind !== 'integration') body.push(`  auto merge ${build.autoMerge}`)
+  if (build.kind !== 'integration')
+    body.push(
+      `  landing ${build.landing?.command?.kind === 'hold' ? 'held' : (build.landing?.decision?.mode ?? 'not ready')}`,
+    )
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)
@@ -1415,11 +1424,6 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   const intake = model.drained
     ? paint('intake OFF', 'yellow', color)
     : paint('intake ON', 'green', color)
-  // "default" is implicit at the top level — the header is repo-wide state,
-  // while a build row's own `auto merge` token is that build's setting.
-  const autoMergeDefault = model.defaultAutoMerge
-    ? paint('auto merge ON', 'green', color)
-    : paint('auto merge OFF', 'yellow', color)
   const harvestGate = model.harvestPaused
     ? paint('harvest OFF', 'yellow', color)
     : paint('harvest ON', 'green', color)
@@ -1443,7 +1447,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // marker prefix aligns the first toggle with the title while keeping the
   // selection lane empty.
   const toggles = truncate(
-    `  ${[intake, autoMergeDefault, harvestGate, repositoryPause]
+    `  ${[intake, harvestGate, repositoryPause]
       .filter((token): token is string => token !== undefined)
       .join('  ')}`,
     width,

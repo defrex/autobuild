@@ -240,6 +240,7 @@ type DashboardAction =
   | 'left'
   | 'right'
   | 'enter'
+  | 'hold'
   | 'auto-merge'
   | 'intake'
   | 'pause'
@@ -1709,19 +1710,7 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
-  private async toggleAutoMerge(): Promise<void> {
-    if (this.view === undefined && this.selection?.kind === 'global') {
-      const event = await toggleRepositorySetting({
-        store: this.wiring.store,
-        repo: this.repoIdentity,
-        user: buildControlUser(this.opts.env),
-        setting: 'auto-merge-default',
-        run: this.runId,
-      })
-      this.say(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
-      await this.renderOnce()
-      return
-    }
+  private async toggleAutoMerge(kind: 'hold' | 'land' = 'land'): Promise<void> {
     const slug = this.selectedBuildSlug('auto-merge')
     if (slug === undefined) return
 
@@ -1733,21 +1722,18 @@ class DispatchLoop {
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,
-        action: { kind: 'toggle-auto-merge' },
+        action: { kind },
       })
     } catch (error) {
       if (await this.ignoreControlError('action', error)) return
       throw error
     }
-    if (
-      result.kind !== 'command' ||
-      (result.command !== 'auto-merge-on' && result.command !== 'auto-merge-off')
-    ) {
+    if (result.kind !== 'command' || (result.command !== 'land' && result.command !== 'hold')) {
       throw new Error('build-control returned an invalid auto-merge toggle result')
     }
     this.say(
-      `build ${slug}: auto-merge ${
-        result.command === 'auto-merge-off' ? 'cancelled' : 'requested'
+      `build ${slug}: landing ${
+        result.command === 'hold' ? 'hold requested' : 'consent requested'
       }`,
     )
     await this.renderOnce()
@@ -1985,6 +1971,9 @@ class DispatchLoop {
       case 'bulk-resume':
         await this.bulkControl('resume')
         return
+      case 'hold':
+        await this.toggleAutoMerge('hold')
+        return
       case 'auto-merge':
         await this.toggleAutoMerge()
         return
@@ -2134,7 +2123,10 @@ class DispatchLoop {
     // directional motions were routed above.
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
-      case 'm':
+      case 'o':
+        this.queueAction('hold')
+        return
+      case 'l':
         // Defense in depth: the session-view gate above already returns for a
         // session view, and the transcript guard below predates it.
         if (this.view?.kind !== 'transcript') {
@@ -4402,13 +4394,6 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       actor,
       type: 'dispatcher.intake-set',
       payload: { enabled: resolvedOpts.intake, run: runId },
-    })
-  }
-  if (resolvedOpts.defaultAutoMerge !== undefined) {
-    await view.appendRepo(state.repo, {
-      actor,
-      type: 'dispatcher.auto-merge-default-set',
-      payload: { enabled: resolvedOpts.defaultAutoMerge, run: runId },
     })
   }
 
