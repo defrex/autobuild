@@ -43,7 +43,9 @@ describe('hosted-dispatcher package manifest', () => {
     // floor-version install break the suite. 0.9.0 exists only if the next
     // release is a minor bump; the release tool applies one version to all
     // workspace manifests.
-    expect(manifest.peerDependencies?.['@defrex/autobuild-hosted-store-service']).toBe('>=0.9.0')
+    expect(manifest.peerDependencies?.['@defrex/autobuild-hosted-store-service']).toBe(
+      '>=0.9.0 || >=1.0.0-0 <1.0.0',
+    )
   })
 
   test('peers on @defrex/autobuild >=0.9.0, the first version exporting ./operator, ./hosted-tickets, and ./testing', () => {
@@ -60,7 +62,7 @@ describe('hosted-dispatcher package manifest', () => {
     // non-optional, so a lower floor would let dispatcher@0.9.0 +
     // hosted-store-service@0.9.0 + core@0.8.0 install and then crash on
     // missing subpath exports.
-    expect(manifest.peerDependencies?.['@defrex/autobuild']).toBe('>=0.9.0')
+    expect(manifest.peerDependencies?.['@defrex/autobuild']).toBe('>=0.9.0 || >=1.0.0-0 <1.0.0')
   })
 
   test('exposes the runtime singleton and the dispatcher bin', () => {
