@@ -72,6 +72,9 @@ describe('static site', () => {
     const landing = html
       .replace('<a class="btn" href="/docs/">Documentation</a>', '')
       .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
+      .replace('<a href="/docs/builds/">Follow one build end to end</a>', '')
+      .replace('<a href="/docs/dispatcher/">Read about the dispatcher</a>', '')
+      .replace('<a href="/docs/tickets/">Read about tickets and intake</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
     expect(
@@ -94,6 +97,25 @@ describe('static site', () => {
     expect(html).toContain('type="button" class="word motion-replay"')
     expect(js).toContain('__websiteCapture')
     expect(js).not.toMatch(/https?:\/\//)
+  })
+
+  test('core guides have one ordinary link in their matching landing sections', async () => {
+    const { 'index.html': html } = await buildFiles()
+    const sections = [...html.matchAll(/<section class="section">[\s\S]*?<\/section>/g)].map(
+      (match) => match[0],
+    )
+    expect(sections).toHaveLength(7)
+    for (const [index, title, path] of [
+      [1, 'Every ticket runs the pipeline', '/docs/builds/'],
+      [2, 'A dispatcher spawns builds', '/docs/dispatcher/'],
+      [5, 'Let the queue fill itself', '/docs/tickets/'],
+    ] as const) {
+      expect(sections[index]).toContain(title)
+      expect(sections[index]!.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
+      expect(sections[index]).toContain(`<a href="${path}">`)
+      expect(html.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
+    }
+    expect(html).not.toContain('href="/docs/integration/"')
   })
 
   test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
