@@ -1,3 +1,5 @@
+import { settlePendingPublication } from './publication-settlement'
+import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { prepareRestack } from '../kernel/reconcile-restack'
 import { gitRewrite } from '../ports/forge/git-rewrite'
 import { renderPrSummary } from './pr-summary'
@@ -18,7 +20,7 @@ import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
 import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
-import type { MemoryBuildStore } from '../store/memory'
+import { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
 import { buildContext } from './context'
 import { done, escalate, renderFindingsIssues, verdict } from './terminals'
@@ -364,6 +366,213 @@ describe('ab done — implement', () => {
     return shas
   }
 
+  async function retargetBuild(baseBranch: string): Promise<void> {
+    const prior = await store.getEvents(BUILD)
+    await store.close()
+    store = new MemoryBuildStore()
+    await store.createBuild({
+      slug: BUILD,
+      repo: 'acme/app',
+      branch: BRANCH,
+      ticket: { source: 'file', id: 'node-leaf' },
+    })
+    for (const event of prior) {
+      const payload =
+        event.type === 'build.created' ? { ...event.payload, baseBranch } : event.payload
+      await store.append(BUILD, { actor: event.actor, type: event.type, payload })
+    }
+  }
+
+  test.each(['remote', 'local'] as const)(
+    'rewritten node retains the %s fresh cut above sibling contributions',
+    async (source) => {
+      // Model a node cascade as one net contribution replayed onto a new parent.
+      const sibling1 = await commitFile(workspace, 'sibling-one', 'one\n', 'sibling one')
+      const cut = await commitFile(workspace, 'sibling-two', 'two\n', 'sibling two')
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'git-worktree',
+          ref: workspace,
+          branch: BRANCH,
+          base:
+            source === 'local'
+              ? { source, sha: cut, remoteError: 'offline' }
+              : { source, sha: cut },
+        },
+      })
+      await runGit(['push', '-q', 'origin', `${cut}:refs/heads/ab-node/site`], workspace)
+      await retargetBuild('ab-node/site')
+      const head = await commitFile(workspace, 'leaf-only', 'leaf\n', 'leaf work')
+      const parent = await runGit(['rev-parse', `${implementationBase}^`], workspace)
+      const updater = join(tmp, 'cascade')
+      await runGit(['clone', '-q', remote, updater], tmp)
+      await runGit(['reset', '--hard', parent], updater)
+      await commitFile(updater, 'parent-only', 'advanced\n', 'advance parent')
+      await runGit(['fetch', workspace, cut], updater)
+      await runGit(['cherry-pick', '--no-commit', `${parent}..${cut}`], updater)
+      await runGit(
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.invalid',
+          'commit',
+          '-qm',
+          'cascade node',
+        ],
+        updater,
+      )
+      const rewritten = await runGit(['rev-parse', 'HEAD'], updater)
+      await runGit(
+        [
+          'push',
+          '-q',
+          `--force-with-lease=refs/heads/ab-node/site:${cut}`,
+          'origin',
+          `${rewritten}:refs/heads/ab-node/site`,
+        ],
+        updater,
+      )
+      await runGit(['fetch', 'origin', 'refs/heads/ab-node/site'], workspace)
+      expect(await runGit(['merge-base', rewritten, head], workspace)).toBe(parent)
+      expect(sibling1).not.toBe(parent)
+      const event = await done(implementDeps(), { notes: await stash('node-notes', 'implemented') })
+      expect(event.payload).toMatchObject({ commits: { base: cut, head } })
+      expect(await runGit(['diff', '--name-only', cut, head], workspace)).toBe('leaf-only')
+    },
+  )
+
+  test('remote re-cut supersedes the original cut but existing resume does not', async () => {
+    await runGit(['update-ref', '-d', `refs/heads/${BRANCH}`], remote)
+    await runGit(
+      ['push', '-q', 'origin', `${implementationBase}:refs/heads/ab-node/site`],
+      workspace,
+    )
+    await retargetBuild('ab-node/site')
+    const updater = join(tmp, 'recut')
+    await runGit(['clone', '-q', remote, updater], tmp)
+    await runGit(['reset', '--hard', `${implementationBase}^`], updater)
+    await commitFile(updater, 'parent-only', 'parent\n', 'advanced parent')
+    const cut = await commitFile(updater, 'sibling', 'sibling\n', 'replayed node')
+    await runGit(['push', '-q', '--force', 'origin', 'HEAD:refs/heads/ab-node/site'], updater)
+    await runGit(['fetch', 'origin', 'refs/heads/ab-node/site'], workspace)
+    await runGit(['reset', '--hard', cut], workspace)
+    const head = await commitFile(workspace, 'leaf-only', 'leaf\n', 'new leaf')
+    for (const [source, sha] of [
+      ['remote', cut],
+      ['existing', head],
+    ] as const)
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'vercel-sandbox',
+          remote: true,
+          ref: 'sandbox',
+          branch: BRANCH,
+          base: { source, sha },
+        },
+      })
+    expect(await runGit(['merge-base', implementationBase, head], workspace)).not.toBe(
+      implementationBase,
+    )
+    const event = await done(implementDeps(), { notes: await stash('recut-notes', 'implemented') })
+    expect(event.type).toBe('publication.requested')
+    expect(event.payload).toMatchObject({ base: cut, sha: head })
+    const deps = implementDeps()
+    await settlePendingPublication(
+      {
+        ...deps,
+        storeRef: 'local',
+        runId: 'test',
+        publication: {
+          publish: async ({ sha, branch }) => {
+            await runGit(['push', '-q', 'origin', `${sha}:refs/heads/${branch}`], workspace)
+          },
+        },
+      },
+      BUILD,
+    )
+    expect(reduceBuild(await store.getEvents(BUILD)).implement.commits).toEqual({ base: cut, head })
+
+    expect(await runGit(['diff', '--name-only', cut, head], workspace)).toBe('leaf-only')
+  })
+
+  test('later implementation uses its replay base ahead of fresh cuts and existing resumes', async () => {
+    const oldHead = await runGit(['rev-parse', 'HEAD'], workspace)
+    await store.append(BUILD, {
+      actor: agent('implement'),
+      type: 'implement.completed',
+      payload: {
+        round: 1,
+        commits: { base: implementationBase, head: oldHead },
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    const [target] = await advanceTarget([
+      { file: 'upstream-only', content: 'upstream', message: 'advance' },
+    ])
+    await runGit(['fetch', 'origin', 'main'], workspace)
+    await runGit(['rebase', target!], workspace)
+    const replayHead = await runGit(['rev-parse', 'HEAD'], workspace)
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'restack.completed',
+      payload: {
+        ...leafTransaction,
+        oldBase: implementationBase,
+        oldHead,
+        targetBase: target!,
+        headSha: replayHead,
+      },
+    })
+    const head = await commitFile(workspace, 'later-only', 'later', 'round two')
+    for (const source of ['remote', 'existing'] as const)
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'git-worktree',
+          ref: workspace,
+          branch: BRANCH,
+          base: { source, sha: head },
+        },
+      })
+    await store.append(BUILD, { actor: KERNEL, type: 'implement.started', payload: { round: 2 } })
+    const event = await done(implementDeps(undefined, { round: 2, session: 's_round2' }), {
+      notes: await stash('round-two', 'implemented'),
+    })
+    expect(event.payload).toMatchObject({ commits: { base: target, head } })
+    expect(await runGit(['diff', '--name-only', target!, head], workspace)).toBe(
+      'feature.ts\nlater-only',
+    )
+  })
+
+  test('non-ancestor effective base fails before publication or notes deposit', async () => {
+    const [target] = await advanceTarget([
+      { file: 'upstream-only', content: 'upstream', message: 'advance' },
+    ])
+    await runGit(['fetch', 'origin', 'main'], workspace)
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'remote', sha: target! },
+      },
+    })
+    const deps = implementDeps()
+    await expect(done(deps, { notes: await stash('invalid-base', 'invalid') })).rejects.toThrow(
+      /not an ancestor of HEAD/,
+    )
+    expect(deps.forge.pushes).toEqual([])
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+  })
+
   test('--notes is required', async () => {
     const deps = implementDeps()
     await expect(done(deps)).rejects.toThrow(/--notes <file> is required/)
@@ -424,7 +633,12 @@ describe('ab done — implement', () => {
     const realExec = deps.exec
     deps.exec = async (cmd, opts) => {
       const result = await realExec(cmd, opts)
-      if (cmd[0] === 'git' && cmd[1] === 'merge-base' && result.exitCode === 0) {
+      if (
+        cmd[0] === 'git' &&
+        cmd[1] === 'merge-base' &&
+        cmd[2] === '--all' &&
+        result.exitCode === 0
+      ) {
         const sha = result.stdout.trim()
         return { ...result, stdout: `${sha}\n${other}\n` }
       }

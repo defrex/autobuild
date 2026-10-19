@@ -883,19 +883,33 @@ The base-selection invariants make this safe with Git:
   resumes the published branch. The kernel collapses and restacks at verify
   entry and after target moves while awaiting landing. The first
   `workspace.provisioned` base stays immutable branch-cut provenance; later
-  `existing` facts are resume evidence, not new cuts.
+  `existing` facts are resume evidence, not new cuts. A remote workspace lost
+  before publication may be freshly cut again; the latest `remote` or `local`
+  provisioning fact then supplies the starting base until an implementation
+  or replay range has been established.
 - **Review loops keep their starting effective base.** The initial loop uses
-  the original cut; after a successful verify-entry restack, later failure
+  the latest fresh cut; after a successful verify-entry restack, later failure
   loops use that restacked contribution base. Plan, implementation and
   code-review never rewrite the branch. Previously recorded review ranges
   remain immutable, including between rounds.
 - **Each implementation completion records effective target divergence.**
   `ab done` snapshots the authoritative frozen target branch in a build-private
-  ref and requires exactly one merge-base with implementation HEAD. The focused
-  `implement.completed {commits}` range excludes target history already absorbed
-  by the branch. This interrogation never moves the build branch. The original
+  ref and requires exactly one merge-base with implementation HEAD. The effective
+  starting base is the current projected contribution base,
+  falling back to the latest fresh-cut provisioning base (`remote` or `local`,
+  never an `existing` resume). It must be an ancestor of HEAD. Use the unique
+  merge-base only if it descends from that effective base; otherwise retain
+  the effective base, excluding sibling history when the destination was rewritten.
+  The focused `implement.completed {commits}` range excludes target history
+  already absorbed by the branch. This interrogation never moves the build
+  branch. The original
   cut remains provenance, and successful restacks establish the contribution
-  baseline for later loops and collapses. Recorded review ranges stay immutable.
+  baseline for later loops and collapses. Historical event ranges stay immutable;
+  the current `implement.commits` projection advances to `targetBase..headSha`
+  on successful leaf `restack.rewritten`, `restack.completed`, and
+  `reconcile.rewritten` facts. `ab context` supplies that current range unchanged
+  to code review and every agent verify step. Node integration cycles retain
+  their separate range semantics.
 - **Verification names its actual base.** Successful restack or reconcile
   publication promotes the contribution/path base. Every new verify start and
   result, including skips, cites the cycle's base and head. Those citations stay

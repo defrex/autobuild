@@ -176,7 +176,9 @@ class SeedWorkspaceProvider implements WorkspaceProvider {
       ref: path,
       path,
       branch: opts.branch,
-      base: { source: 'existing', sha: this.baseSha },
+      // This provider creates a fresh branch from the local seed, rather than
+      // resuming a previously published implementation branch.
+      base: { source: 'local', sha: this.baseSha, remoteError: 'local seed fixture' },
     }
   }
 

@@ -250,10 +250,9 @@ export interface BuildState {
     artifactRev?: number
     approval?: { seq: number; round: number }
   }
-  /** `round` tracks the latest `implement.started`/`.completed`; `commits`
-   * and `artifactRev` come from the latest `implement.completed` only — so
-   * mid-round they still point at the last pushed head, the cross-sandbox
-   * resume anchor (D3, §15.6-C). */
+  /** Round tracks the latest implementation start/completion; artifact identifies
+   * its latest completion. Commits tracks the current contribution, including
+   * successful leaf replays. */
   implement: { round: number; commits?: CommitRange; artifactRev?: number }
   /** ≡ the latest `code-review.verdict` is 'approve'. */
   codeReviewApproved: boolean
@@ -381,7 +380,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 11
+export const BUILD_REDUCER_VERSION = 12
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -828,6 +827,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'restack.rewritten':
       case 'restack.completed':
+        if (acc.kind !== 'node' && implement.commits)
+          implement.commits = { base: event.payload.targetBase, head: event.payload.headSha }
         if (event.type === 'restack.completed' && prState === 'conflicted') prState = 'open'
         if (pr !== undefined)
           pr = {
@@ -839,6 +840,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           }
         break
       case 'reconcile.rewritten':
+        if (acc.kind !== 'node' && implement.commits)
+          implement.commits = { base: event.payload.targetBase, head: event.payload.headSha }
         if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }
         break
       case 'reconcile.completed': {

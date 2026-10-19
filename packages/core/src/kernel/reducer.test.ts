@@ -1,3 +1,4 @@
+import { leafTransaction, leafRestackLog } from './generators/leaf-restack-log'
 /**
  * Reducer seam tests (SPEC §15.5), fixture-driven off the walkthroughs in
  * §15.6. Envelopes are constructed directly — seq by index, ts from a
@@ -1909,4 +1910,97 @@ test('dispatch exhaustion uses the ordinary blocked and answered projection', ()
   const state = reduceBuild(toLog(writes))
   expect(state.status).toBe('queued')
   expect(state.openEscalations).toEqual([])
+})
+
+describe('current contribution range after leaf publication', () => {
+  test.each([undefined, null, 'f'.repeat(40)])(
+    'restacks use proven heads, observed %s',
+    (observedHead) => {
+      const log = leafRestackLog()
+      const original = { ...reduceBuild(log.slice(0, 10)).implement }
+      expect(original.commits).toEqual({
+        base: leafTransaction.oldBase,
+        head: leafTransaction.oldHead,
+      })
+      const rewrite = log[10]!
+      if (rewrite.type !== 'restack.rewritten') throw new Error('fixture')
+      if (observedHead !== undefined) rewrite.payload.observedHead = observedHead
+      for (const end of [11, 12]) {
+        expect(reduceBuild(log.slice(0, end)).implement).toEqual({
+          ...original,
+          commits: { base: leafTransaction.targetBase, head: 'e'.repeat(40) },
+        })
+      }
+      log.push(
+        ...toLog([
+          ev('restack.completed', {
+            ...leafTransaction,
+            targetBase: '1'.repeat(40),
+            headSha: '2'.repeat(40),
+          }),
+        ]).map((e) => ({ ...e, seq: log.length + 1 })),
+      )
+      expect(reduceBuild(log).implement.commits).toEqual({
+        base: '1'.repeat(40),
+        head: '2'.repeat(40),
+      })
+    },
+  )
+
+  test('node builds retain their integration range through leaf-named rewrite facts', () => {
+    const log = leafRestackLog()
+    const created = log[0]!
+    if (created.type !== 'build.created') throw new Error('fixture')
+    created.payload.kind = 'node'
+    const original = reduceBuild(log.slice(0, 7)).implement
+    expect(reduceBuild(log).implement).toEqual(original)
+  })
+
+  test.each([false, true])('reconcile rewrite updates range, leaf restack=%s', (insideRestack) => {
+    const initial = leafRestackLog().slice(0, 7)
+    const {
+      trigger: _trigger,
+      cycle: _cycle,
+      observation: _observation,
+      message: _message,
+      ...transaction
+    } = leafTransaction
+    const tx = { ...transaction, attempt: 1, ...(insideRestack ? { restackId: 'leaf-1' } : {}) }
+    const original = reduceBuild(initial).implement
+    const writes = [
+      ev('reconcile.prepared', tx),
+      ev('reconcile.publish-intended', {
+        ...tx,
+        headSha: 'e'.repeat(40),
+        conflicted: true,
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+      ev('reconcile.rewritten', {
+        ...tx,
+        headSha: 'e'.repeat(40),
+        observedHead: 'f'.repeat(40),
+        conflicted: true,
+        archives: [],
+      }),
+      ev('reconcile.completed', {
+        headSha: 'e'.repeat(40),
+        rewriteId: tx.id,
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+      ev('reconcile.completed', {
+        mergeCommit: 'legacy',
+        artifact: { kind: 'reconcile-notes', rev: 1 },
+      }),
+    ]
+    const log = [
+      ...initial,
+      ...toLog(writes).map((e, i) => ({ ...e, seq: initial.length + i + 1 })),
+    ]
+    expect(reduceBuild(log.slice(0, 9)).implement).toEqual(original)
+    for (const end of [10, 11, 12])
+      expect(reduceBuild(log.slice(0, end)).implement).toEqual({
+        ...original,
+        commits: { base: tx.targetBase, head: 'e'.repeat(40) },
+      })
+  })
 })
