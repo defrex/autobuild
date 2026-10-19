@@ -69,8 +69,9 @@ describe('layered CLI help catalog', () => {
     const ai = lines.indexOf('AI-first commands:')
 
     expect(help).toContain('Primary human workflow:')
-    expect(help).toContain('`ab init`')
-    expect(help).toContain('`ab dispatch`')
+    expect(help).toContain('bun add -d --exact @defrex/autobuild')
+    expect(help).toContain('`bun ab init`')
+    expect(help).toContain('`bun ab dispatch`')
     expect(help).toContain('ab help <command>')
     expect(help).toContain('ab <command> --help')
     expect(human).toBeGreaterThan(lines.indexOf('Primary human workflow:'))
