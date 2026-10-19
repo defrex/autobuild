@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#662](https://github.com/defrex/autobuild/pull/662) — Record native agent session handles for cross-process continuation
 - [#654](https://github.com/defrex/autobuild/pull/654) — Recommend project-pinned Autobuild installation
 - [#653](https://github.com/defrex/autobuild/pull/653) — Keep the terminal dashboard live when its pane loses focus
 - [#652](https://github.com/defrex/autobuild/pull/652) — Pin release install commands as exact dev dependencies
