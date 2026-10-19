@@ -85,7 +85,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/vercel-sandbox/` | Published `@defrex/autobuild-vercel-sandbox` provider plugin: transitional manifest over the shared capability object with a guarded factory (implementation stays builtin-hosted until AUT-505) | §3.2.1 |
 | `packages/hosted-store-service/server.ts`, `packages/hosted-store-service/vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
-| `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
+| `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification, awaited native identity observation and optional fresh-process native resume under `ports/runner/` | §3.2, §9, §13 |
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, harvest trigger, and the last-step orchestrator resume/reap/wake pass, origin-mode-gated), orchestrator tick step, harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
@@ -1245,3 +1245,9 @@ decisions and persistent hold/land commands. The dispatcher owns readiness,
 ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
 confirms native cancellation at local and trusted remote head-publication seams.
 Node landings retain the existing writer serialization and gate proof.
+
+Build native session handles are kernel-authored `session.native-handle-recorded`
+facts. The build reducer retains them by bracket session id after session end;
+absence means no harness identity was reported. Adapters guard host/workspace
+and resume only native persisted state with fresh execution options. This does
+not change pause or §15.6 reclaim-and-rerun recovery behavior.

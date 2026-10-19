@@ -86,6 +86,7 @@ export const executionProgress = {
   'spec.authored': 'progress',
   'spec.revised': 'progress',
   'session.started': 'progress',
+  'session.native-handle-recorded': 'bookkeeping',
   'session.ended': 'progress',
   'plan.started': 'progress',
   'plan.completed': 'progress',

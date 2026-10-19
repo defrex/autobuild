@@ -1,3 +1,12 @@
+import { hostname } from 'node:os'
+import { readFile } from 'node:fs/promises'
+import {
+  guardNativeHandle,
+  nativeHandle,
+  NativeObservationError,
+  notResumable,
+} from './native-session'
+import type { NativeSessionHandle, AgentResumeResult } from '../types'
 /** AgentRunner adapter for the operator's locally installed Pi CLI. */
 import semver from 'semver'
 import type { StreamPart } from '../../store/streams/types'
@@ -240,12 +249,15 @@ export interface PiTurn {
 }
 
 export interface PiSession {
+  readonly sessionFile?: string
   readonly sessionId: string
   prompt(text: string, env: Record<string, string>, signal?: AbortSignal): Promise<PiTurn>
   dispose(): Promise<void> | void
 }
 
 export type PiCreateSessionFn = (opts: {
+  persistent?: boolean
+  sessionFile?: string
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
@@ -386,11 +398,19 @@ function createPiTurnTranslator(emit: (parts: StreamPart[]) => void): PiTurnTran
 
 export class PiAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'pi'
+  private readonly host: () => string
   private readonly createSessionFn: PiCreateSessionFn
   private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
-  constructor(opts: { createSessionFn?: PiCreateSessionFn; createSessionId?: () => string } = {}) {
+  constructor(
+    opts: {
+      hostname?: () => string
+      createSessionFn?: PiCreateSessionFn
+      createSessionId?: () => string
+    } = {},
+  ) {
+    this.host = opts.hostname ?? hostname
     this.createSessionFn = opts.createSessionFn ?? createLocalPiSession
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
@@ -422,7 +442,9 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     let turn: PiTurn
     const turnEvents: PiTurnEventHook = {}
     try {
+      rejectSessionArgs(opts.args)
       native = await this.createSessionFn({
+        persistent: true,
         cwd: opts.workspacePath,
         ...(model !== undefined ? { model } : {}),
         tools: PI_TOOLS,
@@ -433,6 +455,21 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         // continued turns even when turn 1 streams nothing.
         onEvent: (event) => turnEvents.translator?.onEvent(event),
       })
+      if (opts.onNativeSession !== undefined) {
+        try {
+          await opts.onNativeSession(
+            nativeHandle(
+              this.name,
+              native.sessionId,
+              opts.workspacePath,
+              this.host(),
+              native.sessionFile,
+            ),
+          )
+        } catch (error) {
+          throw new NativeObservationError(error)
+        }
+      }
       turn = await this.runPrompt(
         native,
         prompt,
@@ -442,6 +479,10 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         turnEvents,
       )
     } catch (error) {
+      if (error instanceof NativeObservationError) {
+        await native?.dispose()
+        throw error
+      }
       turn = {
         text: '',
         usage: { inputTokens: 0, outputTokens: 0 },
@@ -473,6 +514,15 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     if (state.session === undefined) {
       throw new Error(`pi: cannot continue session "${handle.id}" because local Pi failed to start`)
     }
+    await opts?.onNativeSession?.(
+      nativeHandle(
+        this.name,
+        state.session.sessionId,
+        state.opts.workspacePath,
+        this.host(),
+        state.session.sessionFile,
+      ),
+    )
     const scoped = opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
     const turn = await this.runPrompt(
       state.session,
@@ -484,6 +534,93 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     )
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
+  }
+
+  async resume(
+    handle: NativeSessionHandle,
+    message: string,
+    opts: AgentStartOpts,
+  ): Promise<AgentResumeResult> {
+    const invalid = guardNativeHandle(handle, this.name, opts, this.host())
+    if (invalid !== undefined) return invalid
+    if (handle.statePath === undefined)
+      return notResumable('missing-state', 'Pi handle has no persistent session file')
+    try {
+      const text = await readFile(handle.statePath, 'utf8')
+      const header = JSON.parse(text.split('\n')[0]!) as { type?: string; id?: string }
+      if (header.type !== 'session' || header.id !== handle.nativeId)
+        return notResumable('missing-state', 'Pi session file identity mismatch')
+    } catch {
+      return notResumable('missing-state', 'Pi session file is missing or unreadable')
+    }
+    try {
+      rejectSessionArgs(opts.args)
+    } catch (error) {
+      const session: AgentSessionHandle = { id: this.createSessionId(), runner: this.name }
+      const turn: PiTurn = {
+        text: '',
+        usage: { inputTokens: 0, outputTokens: 0 },
+        failure: localPiFailure(error),
+      }
+      this.sessions.set(session.id, { opts, turns: [this.turnRecord(1, message, turn)] })
+      return { kind: 'resumed', session, result: this.toResult(turn) }
+    }
+    const model = opts.model !== undefined ? parsePiModel(opts.model) : undefined
+    const turnEvents: PiTurnEventHook = {}
+    let native: PiSession
+    try {
+      native = await this.createSessionFn({
+        persistent: true,
+        sessionFile: handle.statePath,
+        cwd: opts.workspacePath,
+        model,
+        tools: PI_TOOLS,
+        args: opts.args ?? [],
+        skill: opts.skill,
+        env: sessionEnv(opts.env),
+        onEvent: (event) => turnEvents.translator?.onEvent(event),
+      })
+    } catch (error) {
+      const session: AgentSessionHandle = { id: this.createSessionId(), runner: this.name }
+      const turn: PiTurn = {
+        text: '',
+        usage: { inputTokens: 0, outputTokens: 0 },
+        failure: localPiFailure(error),
+      }
+      this.sessions.set(session.id, { opts, turns: [this.turnRecord(1, message, turn)] })
+      return { kind: 'resumed', session, result: this.toResult(turn) }
+    }
+    if (native.sessionId !== handle.nativeId || native.sessionFile !== handle.statePath) {
+      await native.dispose()
+      return notResumable('missing-state', 'Pi resumed a different native session')
+    }
+    try {
+      await opts.onNativeSession?.(handle)
+    } catch (error) {
+      await native.dispose()
+      throw new NativeObservationError(error)
+    }
+    const turn = await this.runPrompt(
+      native,
+      message,
+      this.turnEnv(opts.env),
+      opts.signal,
+      opts.stream,
+      turnEvents,
+    )
+    const session: AgentSessionHandle = {
+      id: native.sessionId,
+      runner: this.name,
+      model: opts.model,
+    }
+    this.sessions.set(session.id, {
+      opts,
+      model: opts.model,
+      session: native,
+      turnEvents,
+      turns: [this.turnRecord(1, message, turn)],
+    })
+    return { kind: 'resumed', session, result: this.toResult(turn) }
   }
 
   async end(handle: AgentSessionHandle): Promise<Transcript> {
@@ -592,7 +729,11 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
 function localPiFailure(error: unknown): AgentTurnFailure {
   const message = errorText(error)
   if (/executable "pi" was not found/.test(message)) return missingExecutableFailure(message)
-  if (/requires Pi .* or newer|could not parse detected Pi version/.test(message)) {
+  if (
+    /conflicting session-control|requires Pi .* or newer|could not parse detected Pi version/.test(
+      message,
+    )
+  ) {
     return configurationFailure(message)
   }
   if (/not ready|authentication|logged in|credentials/i.test(message))
@@ -616,4 +757,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function rejectSessionArgs(args: readonly string[] = []): void {
+  const flags = [
+    '--no-session',
+    '--session',
+    '--session-id',
+    '--session-dir',
+    '--continue',
+    '-c',
+    '--resume',
+    '-r',
+    '--fork',
+  ]
+  const conflict = args.find((arg) =>
+    flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+  )
+  if (conflict !== undefined)
+    throw new Error(`pi runtime: conflicting session-control argument: ${conflict}`)
 }

@@ -99,6 +99,7 @@ function claudeTransport(
   observed: { streamingArgs: string[] },
 ): ClaudeAgentRunner {
   const sessions = new Map<string, AgentSessionHandle>()
+  let nextNativeId = 0
 
   const isOneShot = (args: string[]): boolean => args.includes('--no-session-persistence')
 
@@ -223,8 +224,10 @@ function claudeTransport(
   })
 
   return new ClaudeAgentRunner({
-    // Buffered boundary: one-shot completions and unstreamed turns
-    // (streamSessions disabled) parse the same rendered output.
+    // Native identities are now durable facts, so pin them across parity runs.
+    createSessionId: () => `00000000-0000-4000-8000-${String(++nextNativeId).padStart(12, '0')}`,
+    // Buffered boundary: one-shot completions and calls without native observation
+    // parse the same rendered output.
     runCli: async (call) => {
       if (isOneShot(call.args)) {
         return cliFor([
@@ -368,7 +371,9 @@ test('engine decisions are identical with streaming disabled (presentation, neve
   const plainEvents = stripStreamFields(await plain.events(SLUG), plain.tmp)
 
   // Same transport, same harness output: only the streaming flag differed.
-  expect(plainObserved.streamingArgs).toHaveLength(0)
+  // Native identity observation also requires incremental transport without UI streaming.
+  expect(plainObserved.streamingArgs.length).toBeGreaterThan(0)
+  expect(plainObserved.streamingArgs).not.toContain('--include-partial-messages')
   expect(streamedObserved.streamingArgs).toContain('--include-partial-messages')
   expect(plainEvents).toEqual(streamedEvents)
   expect(plainState.status).toBe(streamedState.status)
