@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-test('prerelease distribution serves health, store, tickets and operator routes', async () => {
+async function verifyDistribution(version: string, fixture: string, success: string) {
   const root = resolve(import.meta.dir, '../../..')
   const temp = await mkdtemp(join(tmpdir(), 'ab-beta-service-'))
   try {
@@ -12,7 +12,7 @@ test('prerelease distribution serves health, store, tickets and operator routes'
       filter: (path) => !path.split('/').includes('node_modules'),
     })
     const manifest = await Bun.file(join(root, 'package.json')).json()
-    manifest.version = '1.0.0-beta.1'
+    manifest.version = version
     await writeFile(join(temp, 'package.json'), JSON.stringify(manifest))
     await mkdir(join(temp, 'node_modules/@defrex'), { recursive: true })
     for (const name of await readdir(join(root, 'node_modules'))) {
@@ -47,10 +47,7 @@ test('prerelease distribution serves health, store, tickets and operator routes'
       )
     }
     const child = Bun.spawn(
-      [
-        process.execPath,
-        join(temp, 'packages/hosted-store-service/src/testing/prerelease-service.ts'),
-      ],
+      [process.execPath, join(temp, 'packages/hosted-store-service/src/testing', fixture)],
       {
         cwd: temp,
         stdout: 'pipe',
@@ -66,7 +63,7 @@ test('prerelease distribution serves health, store, tickets and operator routes'
       ])
       expect({ code, output: stdout + stderr }).toMatchObject({
         code: 0,
-        output: expect.stringContaining('beta service verified'),
+        output: expect.stringContaining(success),
       })
     } finally {
       clearTimeout(timer)
@@ -74,4 +71,12 @@ test('prerelease distribution serves health, store, tickets and operator routes'
   } finally {
     await rm(temp, { recursive: true, force: true })
   }
+}
+
+test('prerelease distribution serves health, store, tickets and operator routes', async () => {
+  await verifyDistribution('1.0.0-beta.1', 'prerelease-service.ts', 'beta service verified')
+}, 60_000)
+
+test('historical service strips audit capability only for pre-introduction clients', async () => {
+  await verifyDistribution('0.14.0', 'audit-capability-service.ts', 'audit service verified')
 }, 60_000)

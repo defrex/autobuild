@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
-import { assertPublicSnapshotReducer } from '@defrex/autobuild/remote-store'
+import {
+  clientSupportsIntegrationAuditPending,
+  assertPublicSnapshotReducer,
+} from '@defrex/autobuild/remote-store'
 import { reducerValueRequestSchema, resolveReducerValue } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import { randomBytes } from 'node:crypto'
@@ -828,10 +831,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     const digests = [...(await store.getRepoBuildDigests(repo)).values()]
     // Historical release lines predate the additive audit signal.
-    const currentLine = req.headers.get('x-autobuild-version')?.startsWith('0.14.')
+    const supportsAudit = clientSupportsIntegrationAuditPending(
+      req.headers.get(AUTOBUILD_VERSION_HEADER),
+    )
     return json(
       200,
-      currentLine
+      supportsAudit
         ? digests
         : digests.map(({ integrationAuditPending: _audit, ...digest }) => digest),
     )
