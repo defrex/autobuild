@@ -26,7 +26,7 @@ const pipeline = `<section class="section">${intro('autobuild · how it works', 
 
 const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}<p><a href="/docs/dispatcher/">Read about the dispatcher</a></p>${dispatcherDiagram()}${dispatcherLegend()}</section>`
 
-const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}</section>`
+const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}<p><a href="/docs/seams/">Explore the infrastructure seams</a></p></section>`
 
 const throughput = `<section class="section">${intro('autobuild · throughput', 'Built for throughput, not latency', 'One build may take longer than a chat with an agent. The trade is far more changes landing every day, and with much greater reliability.', 'why')}<div class="two"><div class="point"><b>File it and walk away</b><p>Nothing in the pipeline waits on you. You don't approve tool calls, paste errors back, or watch a terminal.</p></div><div class="point"><b>As many builds as you can groom</b><p>Builds run side by side, each in its own workspace, up to the limit you set. Your attention stops being the ceiling.</p></div></div></section>`
 
