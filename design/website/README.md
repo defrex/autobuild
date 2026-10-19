@@ -104,3 +104,27 @@ the production timeline at 0, 2,400 and 4,800ms, and checks reduced-motion
 stillness and 390px overflow. Separate Chromium playback checks exercise actual
 viewport entry, both review returns, keyboard replay, rapid replay, breakpoint
 changes, preference changes and the JavaScript-disabled fallback.
+
+## Core workflow documentation reference revision
+
+On 2026-10-19, the `core-workflow-docs` spec authorized one ordinary text link
+in each of the existing pipeline, dispatcher, and intake sections, pointing to
+`/docs/builds/`, `/docs/dispatcher/`, and `/docs/tickets/`. The four landing
+reference PNGs were regenerated from `bun run capture:website` to include
+exactly those additions. Section contents below each link shift by the added
+paragraph and existing section spacing. The historical `reference.html`,
+diagrams, typography, styles, hero assets, and section order are unchanged.
+No integration-tree landing section or link is included; AUT-841 owns that work.
+
+The complete capture inventory contains 28 reviewed full-page PNGs: the four
+local/remote landing frames and six documentation routes at 1440px and 390px.
+The four new guides share the existing Read layout, reference links, and
+wrapping navigation. Every phone probe reports scrollWidth 390 and innerWidth
+390. All stylesheets loaded, all frames are still under reduced motion, and
+the pipeline animation adds twelve normal-motion sample frames across local/remote and desktop/phone variants. Its four final-state references were refreshed to include the same three links, preserving the upstream replay control and animation.
+Landing section gaps remain 288px desktop and 192px phone, with matching footer
+gaps and 48px terminal-to-action spacing. Docs add no figures and retain the
+72ch reading column. A separate focused-link capture confirms the existing
+2px cyan outline remains visible on the expanded docs navigation and the new
+landing link at phone width. The maintainer reviews the integrated reference
+set before the website node lands.
