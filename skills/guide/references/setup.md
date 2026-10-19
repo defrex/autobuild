@@ -1,5 +1,9 @@
 # Repository setup
 
+Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
+Here, `ab <command>` means the repository-installed CLI; run it as
+`bun ab <command>`, for example `bun ab init`.
+
 Configure Autobuild outside the build pipeline. This conversation is not a
 build or phase. Work directly in the repository and involve the maintainer in
 choices that cannot be derived from source. Secrets belong in the environment
