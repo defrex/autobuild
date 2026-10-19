@@ -5,6 +5,7 @@
 - [#664](https://github.com/defrex/autobuild/pull/664) — Suspend live sessions on runner stop and resume them natively
 - [#661](https://github.com/defrex/autobuild/pull/661) — Keep review ranges scoped to each build after restacks
 - [#662](https://github.com/defrex/autobuild/pull/662) — Record native agent session handles for cross-process continuation
+- [#660](https://github.com/defrex/autobuild/pull/660) — Document operating, seams and configuration on the website
 - [#658](https://github.com/defrex/autobuild/pull/658) — Animate the website pipeline figure through its review loops
 - [#659](https://github.com/defrex/autobuild/pull/659) — Document builds, dispatch, integration and tickets on the website
 - [#657](https://github.com/defrex/autobuild/pull/657) — Add a documentation section to the website
