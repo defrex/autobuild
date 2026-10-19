@@ -12,13 +12,25 @@ export const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, '.ab', 'website-frames')
 export const MAX_PAGE_HEIGHT = 12_000
 const ATTEMPTS = 2
 
+export type CaptureFiles = Record<string, string | Uint8Array<ArrayBuffer>> & {
+  'index.html': string
+  'site.css': string
+  'site.js': string
+}
+
 export interface WebsiteFrame {
+  page?: string
+  kind?: 'landing' | 'docs'
+  motion?: 'reduce' | 'normal'
+  figure?: string
+  sample?: 'start' | 'midpoint' | 'final'
+  duration?: number
   id: string
   width: number
   /** Switch the seam selector to fully remote before measuring and shooting. */
   remote: boolean
   /** The approved reference screenshot this frame is judged against. */
-  reference: string
+  reference?: string
 }
 
 export const WEBSITE_FRAMES: readonly WebsiteFrame[] = [
@@ -40,6 +52,35 @@ export const WEBSITE_FRAMES: readonly WebsiteFrame[] = [
   },
 ]
 
+/** Encode the complete UTF-8 path, preserving slash/dash and Unicode distinctions. */
+export function artifactId(path: string): string {
+  return Buffer.from(path).toString('hex')
+}
+
+export function discoverFrames(files: CaptureFiles): WebsiteFrame[] {
+  return [
+    ...WEBSITE_FRAMES.map((f) => ({
+      ...f,
+      page: 'index.html',
+      kind: 'landing' as const,
+      motion: 'reduce' as const,
+    })),
+    ...Object.keys(files)
+      .filter((p) => p.startsWith('docs/') && p.endsWith('.html'))
+      .sort()
+      .flatMap((page) =>
+        [1440, 390].map((width) => ({
+          id: `docs-${artifactId(page)}-${width}`,
+          page,
+          kind: 'docs' as const,
+          motion: 'reduce' as const,
+          width,
+          remote: false,
+        })),
+      ),
+  ]
+}
+
 /** Pixels between consecutive sections, and from the last section to the footer. */
 export function expectedSectionGap(frame: WebsiteFrame): number {
   return frame.width >= 720 ? 288 : 192
@@ -54,7 +95,20 @@ export interface ChipProbe {
   pressed: string | null
 }
 
+export interface FigureProbe {
+  id: string
+  animated: boolean
+  duration?: number
+  timeMs?: number
+  complete?: boolean
+  still?: boolean
+}
+
 export interface Probe {
+  error?: string
+  reducedMotion: boolean
+  still: boolean
+  figures: FigureProbe[]
   scrollWidth: number
   innerWidth: number
   scrollHeight: number
@@ -102,11 +156,12 @@ export function chromiumBinary(
 /** Longer than the knob's 200ms glide, so the remote frame is probed after it should have settled. */
 const KNOB_SETTLE_MS = 350
 
-function probeScript(remote: boolean): string {
+function probeScript(frame: WebsiteFrame): string {
+  const remote = frame.remote
   return `<script>
-addEventListener('DOMContentLoaded', () => setTimeout(() => {
+addEventListener('DOMContentLoaded', () => setTimeout(async () => {
   ${remote ? `document.querySelector('[data-set="remote"]')?.click()` : ''}
-  setTimeout(() => {
+  setTimeout(async () => {
     const knob = document.querySelector('.knob')
     // Chromium's virtual-time budget freezes the animation clock, so the glide never advances on
     // its own; finish it so the shot shows the settled knob, then check it sits at the rail's end.
@@ -115,6 +170,31 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
     const knobSettled =
       knob !== null && knob !== undefined && knob.getAnimations().length === 0 &&
       (${remote ? 'true' : 'false'} ? knob.offsetLeft + knob.offsetWidth === rail.clientWidth : knob.offsetLeft === 0)
+    const frame = ${JSON.stringify(frame)}
+    const figures = []
+    let error
+    try {
+      const ids = new Set()
+      for (const node of document.querySelectorAll('[data-capture-figure], [data-capture-animated]')) {
+        const id = node.getAttribute('data-capture-figure')
+        if (!id || ids.has(id)) throw Error('missing or duplicate figure id')
+        ids.add(id)
+        const animated = node.hasAttribute('data-capture-animated')
+        const record = { id, animated }
+        if (animated) {
+          const adapter = window.__websiteCapture?.[id]
+          if (!adapter || !Number.isFinite(adapter.duration) || adapter.duration <= 0) throw Error('invalid or missing adapter: ' + id)
+          await adapter.ready
+          const target = frame.figure === id
+          const timeMs = target ? (frame.sample === 'final' ? adapter.duration : frame.sample === 'midpoint' ? adapter.duration / 2 : 0) : 0
+          const ack = await adapter.seek(timeMs, { still: !target })
+          if (!ack || ack.timeMs !== timeMs || (target && frame.sample === 'final' && ack.complete !== true) || (!target && ack.still !== true)) throw Error('invalid seek/final/still acknowledgement: ' + id)
+          Object.assign(record, ack, { duration: adapter.duration })
+        }
+        figures.push(record)
+      }
+    } catch (e) { error = String(e) }
+    const still = !document.getAnimations().some(a => a.playState === 'running' || a.pending)
     const root = document.documentElement
     const sheet = [...document.styleSheets].find((s) => (s.href || '').endsWith('/site.css'))
     const selector = document.querySelector('.seam-selector')
@@ -128,6 +208,8 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
     const actions = closing?.querySelector('.actions')
     const ctaGap = terminal && actions ? Math.round(actions.getBoundingClientRect().top - terminal.getBoundingClientRect().bottom) : -1
     const probe = {
+      error, figures, still,
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       sectionGaps,
       footerGap,
       ctaGap,
@@ -155,9 +237,14 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
 }
 
 /** The built page with a base href and a probe script; the built files stay untouched. */
-export function injectProbe(html: string, options: { remote: boolean }): string {
-  const withBase = html.replace(/<head[^>]*>/i, (head) => `${head}<base href="/">`)
-  const script = probeScript(options.remote)
+export function injectProbe(html: string, options: WebsiteFrame | { remote: boolean }): string {
+  const frame: WebsiteFrame = { id: 'injected', width: 1440, ...options }
+  const base =
+    frame.page && frame.page !== 'index.html'
+      ? `/${frame.page.split('/').map(encodeURIComponent).join('/')}`
+      : '/'
+  const withBase = html.replace(/<head[^>]*>/i, (head) => `${head}<base href="${base}">`)
+  const script = probeScript(frame)
   return /<\/body>/i.test(withBase)
     ? withBase.replace(/<\/body>/i, `${script}</body>`)
     : `${withBase}${script}`
@@ -171,10 +258,13 @@ export function injectProbe(html: string, options: { remote: boolean }): string 
  */
 export function wrapperPage(frame: WebsiteFrame, height: number): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}iframe{display:block;border:0;width:${frame.width}px;height:${height}px}</style></head><body><iframe id="page" src="/__page-${frame.id}.html"></iframe><script>
-document.getElementById('page').addEventListener('load', () => setTimeout(() => {
+document.getElementById('page').addEventListener('load', () => {
+ const timer = setInterval(() => {
   const probe = document.getElementById('page').contentDocument.querySelector('meta[name="capture-probe"]')
-  if (probe) document.head.append(probe.cloneNode())
-}, 900))
+  if (probe) { document.head.append(probe.cloneNode()); clearInterval(timer) }
+ }, 50)
+ setTimeout(() => clearInterval(timer), 4500)
+})
 </script></body></html>`
 }
 
@@ -194,6 +284,27 @@ export function parseProbe(dom: string): Probe {
 /** Why a probe does not show the page as it should look, if it does not. */
 export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
   const problems: string[] = []
+  if (probe.error) problems.push(probe.error)
+  if (
+    frame.figure &&
+    !probe.figures.some(
+      (f) =>
+        f.id === frame.figure &&
+        f.animated &&
+        f.duration === frame.duration &&
+        f.timeMs ===
+          (frame.sample === 'final'
+            ? f.duration
+            : frame.sample === 'midpoint'
+              ? (f.duration ?? NaN) / 2
+              : 0) &&
+        (frame.sample !== 'final' || f.complete),
+    )
+  )
+    problems.push('missing expected motion evidence')
+  if (probe.reducedMotion !== (frame.motion !== 'normal'))
+    problems.push('incorrect reduced-motion preference')
+  if (!probe.still) problems.push('running or pending animation')
   if (!probe.stylesheetLoaded) problems.push('site.css did not load')
   if (frame.remote) {
     if (probe.lean !== 'remote') problems.push(`seam selector data-lean is ${probe.lean}`)
@@ -212,16 +323,18 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
       }
     }
   }
-  const expected = expectedSectionGap(frame)
-  if (probe.sectionGaps.length === 0) problems.push('no sections found to measure')
-  for (const gap of probe.sectionGaps) {
-    if (gap !== expected) problems.push(`section gap is ${gap}px, expected ${expected}px`)
-  }
-  if (probe.footerGap !== expected) {
-    problems.push(`footer gap is ${probe.footerGap}px, expected ${expected}px`)
-  }
-  if (probe.ctaGap !== EXPECTED_CTA_GAP) {
-    problems.push(`terminal-to-button gap is ${probe.ctaGap}px, expected ${EXPECTED_CTA_GAP}px`)
+  if (frame.kind !== 'docs') {
+    const expected = expectedSectionGap(frame)
+    if (probe.sectionGaps.length === 0) problems.push('no sections found to measure')
+    for (const gap of probe.sectionGaps) {
+      if (gap !== expected) problems.push(`section gap is ${gap}px, expected ${expected}px`)
+    }
+    if (probe.footerGap !== expected) {
+      problems.push(`footer gap is ${probe.footerGap}px, expected ${expected}px`)
+    }
+    if (probe.ctaGap !== EXPECTED_CTA_GAP) {
+      problems.push(`terminal-to-button gap is ${probe.ctaGap}px, expected ${EXPECTED_CTA_GAP}px`)
+    }
   }
   if (frame.width <= 390 && probe.scrollWidth > probe.innerWidth) {
     problems.push(`page scrolls sideways (${probe.scrollWidth} > ${probe.innerWidth})`)
@@ -238,9 +351,15 @@ export function renderReport(
       `- \`${frame.id}\` — \`.ab/website-frames/${frame.id}.png\`, ${frame.width}x${height}${
         capped ? ` (page height capped at ${MAX_PAGE_HEIGHT}px)` : ''
       }`,
-      `  - reference: \`${frame.reference}\``,
+      `  - URL: /${frame.page ?? 'index.html'}; duration: ${frame.duration ?? 'none'}ms; page: ${frame.page ?? 'index.html'}; kind: ${frame.kind ?? 'landing'}; motion: ${frame.motion ?? 'reduce'}; figure: ${frame.figure ?? 'none'}; sample: ${frame.sample ?? 'still'}`,
+      `  - reduced-motion: ${probe.reducedMotion}; still: ${probe.still}; figures (${probe.figures.length}): ${JSON.stringify(probe.figures)}`,
+      `  - reference: ${frame.reference ? `\`${frame.reference}\`` : 'none (design-system and spec review)'}`,
       `  - measured: scrollWidth ${probe.scrollWidth}, innerWidth ${probe.innerWidth}, scrollHeight ${probe.scrollHeight}`,
-      `  - spacing: section gaps [${probe.sectionGaps.join(', ')}]px, footer gap ${probe.footerGap}px (expected ${expectedSectionGap(frame)}px), terminal-to-button gap ${probe.ctaGap}px`,
+      ...(frame.kind === 'docs'
+        ? []
+        : [
+            `  - spacing: section gaps [${probe.sectionGaps.join(', ')}]px, footer gap ${probe.footerGap}px (expected ${expectedSectionGap(frame)}px), terminal-to-button gap ${probe.ctaGap}px`,
+          ]),
     )
   }
   lines.push('', '## Horizontal overflow at 390px', '')
@@ -282,27 +401,31 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 /** Serve the built site on an ephemeral loopback port, plus `/__frame-<id>.html` variants. */
-export function serveSite(files: SiteFiles): { url: string; stop: () => void } {
+export function serveSite(
+  input: CaptureFiles | SiteFiles,
+  frames: WebsiteFrame[] = discoverFrames({ ...input }),
+): { url: string; stop: () => void } {
+  const files: CaptureFiles = { ...input }
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
     fetch(request) {
-      const { pathname } = new URL(request.url)
-      const variant = /^\/__(page|frame)-([a-z-]+)\.html$/.exec(pathname)
+      const pathname = decodeURI(new URL(request.url).pathname)
+      const variant = /^\/__(page|frame)-([a-z0-9-]+)\.html$/.exec(pathname)
       if (variant) {
-        const frame = WEBSITE_FRAMES.find((f) => f.id === variant[2])
+        const frame = frames.find((f) => f.id === variant[2])
         if (!frame) return new Response('unknown frame', { status: 404 })
         const height = Number(new URL(request.url).searchParams.get('h')) || 900
         const body =
           variant[1] === 'page'
-            ? injectProbe(files['index.html'], { remote: frame.remote })
+            ? injectProbe(String(files[frame.page ?? 'index.html']), frame)
             : wrapperPage(frame, height)
         return new Response(body, { headers: { 'content-type': CONTENT_TYPES.html as string } })
       }
-      const name = pathname === '/' ? 'index.html' : pathname.slice(1)
+      const name = pathname.endsWith('/') ? `${pathname.slice(1)}index.html` : pathname.slice(1)
       if (Object.hasOwn(files, name)) {
         const ext = name.split('.').pop() as string
-        return new Response(files[name as keyof SiteFiles], {
+        return new Response(files[name], {
           headers: { 'content-type': CONTENT_TYPES[ext] as string },
         })
       }
@@ -319,11 +442,13 @@ async function runChromium(
   height: number,
   mode: { dumpDom: true } | { screenshot: string },
   url: string,
+  motion: 'reduce' | 'normal' = 'reduce',
 ): Promise<string> {
   const proc = Bun.spawn(
     [
       chromium,
       '--headless=new',
+      ...(motion === 'reduce' ? ['--force-prefers-reduced-motion'] : []),
       '--hide-scrollbars',
       '--disable-gpu',
       '--no-sandbox',
@@ -335,13 +460,14 @@ async function runChromium(
       '--force-device-scale-factor=1',
       `--window-size=${width},${height}`,
       '--virtual-time-budget=5000',
-      'dumpDom' in mode ? '--dump-dom' : `--screenshot=${mode.screenshot}`,
+      ...('dumpDom' in mode ? [] : [`--screenshot=${mode.screenshot}`]),
+      '--dump-dom',
       url,
     ],
-    { stdout: 'dumpDom' in mode ? 'pipe' : 'ignore', stderr: 'pipe', timeout: 90_000 },
+    { stdout: 'pipe', stderr: 'pipe', timeout: 90_000 },
   )
   const [stdout, stderr, code] = await Promise.all([
-    'dumpDom' in mode ? new Response(proc.stdout).text() : Promise.resolve(''),
+    new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ])
@@ -367,26 +493,37 @@ export interface CaptureOptions {
   chromium?: string
   /** Defaults to `<repo>/.ab/website-frames`; must stay under `.ab/`. */
   outputDir?: string
-  files?: SiteFiles
+  /** Synthetic fixture override; the CLI always discovers the complete build output. */
+  frames?: WebsiteFrame[]
+  files?: CaptureFiles
 }
 
 export async function captureWebsite(options: CaptureOptions = {}): Promise<string> {
-  const chromium = options.chromium ?? chromiumBinary()
-  if (!chromium) {
-    throw new Error(
-      'website capture: no Chromium binary found. Install chromium or set CHROMIUM_BIN.',
-    )
-  }
   const outputDir = options.outputDir ?? DEFAULT_OUTPUT_DIR
   assertOutputUnderScratch(REPO_ROOT, outputDir)
-  const files = options.files ?? (await buildFiles())
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
+  await writeFile(
+    join(outputDir, 'verify-report.md'),
+    '# Website capture report\n\nFAIL: capture incomplete; no complete inventory yet.\n',
+  )
+  const chromium = options.chromium ?? chromiumBinary()
+  if (!chromium) {
+    const message =
+      'website capture: no Chromium binary found. Install chromium or set CHROMIUM_BIN.'
+    await writeFile(
+      join(outputDir, 'verify-report.md'),
+      `# Website capture report\n\nFAIL: ${message}\n`,
+    )
+    throw new Error(message)
+  }
+  const files: CaptureFiles = options.files ?? { ...(await buildFiles()) }
   const profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
-  const site = serveSite(files)
+  const frames = [...(options.frames ?? discoverFrames(files))]
+  const site = serveSite(files, frames)
+  const results: Parameters<typeof renderReport>[0][number][] = []
   try {
-    const results: Parameters<typeof renderReport>[0][number][] = []
-    for (const frame of WEBSITE_FRAMES) {
+    for (const frame of frames) {
       const frameUrl = (height: number) => `${site.url}/__frame-${frame.id}.html?h=${height}`
       const probe = await attempt(`${frame.id} probe`, async (n) =>
         parseProbe(
@@ -397,9 +534,25 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
             900,
             { dumpDom: true },
             frameUrl(900),
+            frame.motion,
           ),
         ),
       )
+      if (frame.motion === 'reduce') {
+        for (const figure of probe.figures.filter((f) => f.animated)) {
+          for (const sample of ['start', 'midpoint', 'final'] as const) {
+            frames.push({
+              ...frame,
+              reference: undefined,
+              id: `${frame.id}-figure-${artifactId(figure.id)}-${sample}`,
+              motion: 'normal',
+              figure: figure.id,
+              duration: figure.duration,
+              sample,
+            })
+          }
+        }
+      }
       const problems = probeProblems(frame, probe)
       if (problems.length > 0) {
         throw new Error(`website capture ${frame.id}: ${problems.join('; ')}`)
@@ -408,22 +561,36 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
       const png = join(outputDir, `${frame.id}.png`)
       await attempt(`${frame.id} screenshot`, async (n) => {
         await rm(png, { force: true })
-        await runChromium(
+        const shotDom = await runChromium(
           chromium,
           join(profileRoot, `${frame.id}-shot-${n}`),
           frame.width,
           height,
           { screenshot: png },
           frameUrl(height),
+          frame.motion,
         )
+        const shotProbe = parseProbe(shotDom)
+        const shotProblems = probeProblems(frame, shotProbe)
+        if (JSON.stringify(shotProbe.figures) !== JSON.stringify(probe.figures))
+          shotProblems.push('screenshot figure inventory/state differs from measurement')
+        if (shotProblems.length) throw Error(shotProblems.join('; '))
         if (!existsSync(png) || (await stat(png)).size === 0) {
           throw new Error(`no screenshot written at ${png}`)
         }
       })
       results.push({ frame, probe, height, capped: probe.scrollHeight > MAX_PAGE_HEIGHT })
     }
+    if (results.length !== frames.length) throw Error('incomplete frame inventory')
+    await writeFile(join(outputDir, 'inventory.json'), JSON.stringify(results, null, 2))
     await writeFile(join(outputDir, 'verify-report.md'), renderReport(results))
     return outputDir
+  } catch (error) {
+    await writeFile(
+      join(outputDir, 'verify-report.md'),
+      `${renderReport(results)}\nFAIL: ${String(error)}\nExpected inventory: ${JSON.stringify(frames)}`,
+    )
+    throw error
   } finally {
     site.stop()
     await rm(profileRoot, { recursive: true, force: true })
