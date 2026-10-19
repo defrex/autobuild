@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import {
   inc as incrementSemver,
+  parse as parseSemver,
   satisfies as satisfiesSemver,
   valid as validSemver,
   validRange as validRangeSemver,
@@ -165,6 +166,47 @@ export function resolveReleaseVersion(
     throw new Error(`could not apply --${arguments_.bump} to ${currentVersion}`)
   }
   return version
+}
+
+export interface ReleasePolicy {
+  prerelease: boolean
+  distTag: string
+}
+
+export function releasePolicy(version: string): ReleasePolicy {
+  const parsed = parseSemver(version)
+  if (parsed === null) throw new Error(`invalid release version: ${version}`)
+  const first = parsed.prerelease[0]
+  if (first === undefined) return { prerelease: false, distTag: 'latest' }
+  if (
+    typeof first === 'number' ||
+    /^\d+$/.test(first) ||
+    first === 'latest' ||
+    validRangeSemver(first) !== null
+  ) {
+    throw new Error(
+      `cannot release ${version}: first prerelease identifier "${first}" must be a non-numeric npm dist-tag, cannot be latest, and cannot be a semver range`,
+    )
+  }
+  return { prerelease: true, distTag: first }
+}
+
+function publishArguments(policy: ReleasePolicy): string[] {
+  return [...PUBLISH_ARGS, ...(policy.prerelease ? ['--tag', policy.distTag] : [])]
+}
+
+function githubReleaseArguments(tag: string, policy: ReleasePolicy): string[] {
+  return [
+    'release',
+    'create',
+    tag,
+    '--verify-tag',
+    '--title',
+    tag,
+    '--notes-file',
+    '-',
+    ...(policy.prerelease ? ['--prerelease', '--latest=false'] : []),
+  ]
 }
 
 function unreleasedHeadingMatches(content: string): number[] {
@@ -537,12 +579,12 @@ function canonicalSmokeRecoveryCommand(tag: string, commit: string): string {
   ].join('\n')
 }
 
-function githubReleaseRecoveryCommand(tag: string, notes: string): string {
+function githubReleaseRecoveryCommand(tag: string, notes: string, policy: ReleasePolicy): string {
   const noteLines = new Set(notes.split(/\r?\n/))
   let delimiter = 'AUTOBUILD_RELEASE_NOTES'
   while (noteLines.has(delimiter)) delimiter += '_END'
   const terminatedNotes = notes.endsWith('\n') ? notes : `${notes}\n`
-  return `gh release create ${tag} --verify-tag --title ${tag} --notes-file - <<'${delimiter}'\n${terminatedNotes}${delimiter}`
+  return `gh ${githubReleaseArguments(tag, policy).join(' ')} <<'${delimiter}'\n${terminatedNotes}${delimiter}`
 }
 
 export interface PublishablePackage {
@@ -696,12 +738,15 @@ ${lines.join('\n')}
 
 /** Verbatim retry commands for the packages a failed publish stage left
  * unpublished, in dependency order. */
-export function publishRecoveryCommand(remaining: readonly PublishablePackage[]): string {
+export function publishRecoveryCommand(
+  remaining: readonly PublishablePackage[],
+  policy: ReleasePolicy = { prerelease: false, distTag: 'latest' },
+): string {
   return remaining
     .map((entry) =>
       entry.directory === '.'
-        ? `bun ${PUBLISH_ARGS.join(' ')}`
-        : `(cd ${entry.directory} && bun ${PUBLISH_ARGS.join(' ')})`,
+        ? `bun ${publishArguments(policy).join(' ')}`
+        : `(cd ${entry.directory} && bun ${publishArguments(policy).join(' ')})`,
     )
     .join('\n')
 }
@@ -715,12 +760,13 @@ export async function publishPackages(
   packages: readonly PublishablePackage[],
   version: string,
   output: ReleaseOutput,
+  policy: ReleasePolicy = releasePolicy(version),
 ): Promise<void> {
   for (const [index, entry] of packages.entries()) {
     output.log(`Publishing ${entry.name}@${version} to the npm registry`)
     const result = await run({
       command: 'bun',
-      args: [...PUBLISH_ARGS],
+      args: publishArguments(policy),
       cwd: resolve(root, entry.directory),
     })
     if (result.exitCode !== 0) {
@@ -729,7 +775,7 @@ export async function publishPackages(
       throw new Error(
         `publishing ${entry.name}@${version} failed: ${detail}.\n` +
           'The release commit, tag, and GitHub Release are already public; do not rewrite them. ' +
-          `Publish the remaining packages in this order:\n\n${publishRecoveryCommand(packages.slice(index))}`,
+          `Publish the remaining packages in this order:\n\n${publishRecoveryCommand(packages.slice(index), policy)}`,
       )
     }
     output.log(`Published ${entry.name}@${version}`)
@@ -772,6 +818,7 @@ export async function runRelease(
     }
   }
   const version = resolveReleaseVersion(manifest.version, arguments_)
+  const policy = releasePolicy(version)
   const tag = `v${version}`
   const packages = publishablePackages(workspaceManifests)
   if (packages.length === 0) throw new Error('no publishable (non-private) workspace package found')
@@ -887,43 +934,50 @@ export async function runRelease(
   const date = today()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
   const changelog = renderReleasedChangelog(changelogText, tag, date, summary)
-  const readme = replaceReadmeInstall(readmeText, version)
   const manifestCandidates = workspaceManifests.map((entry) => ({
     path: entry.path,
     content: replacePackageVersion(entry.text, version),
   }))
 
-  for (const path of [
-    'templates/hosted-service/package.json',
-    'packages/hosted-store-service/deployment/package.json',
-  ]) {
-    const file = resolve(root, path)
-    // Older repositories/fixture release trees may not carry this template.
-    const template = Bun.file(file)
-    if (await template.exists())
+  if (!policy.prerelease) {
+    for (const path of [
+      'templates/hosted-service/package.json',
+      'packages/hosted-store-service/deployment/package.json',
+    ]) {
+      const file = resolve(root, path)
+      // Older repositories/fixture release trees may not carry this template.
+      const template = Bun.file(file)
+      if (await template.exists())
+        manifestCandidates.push({
+          path,
+          content: replaceHostedServicePins(await template.text(), version),
+        })
+    }
+
+    const serviceDocs = Bun.file(resolve(root, 'docs/hosted-service.md'))
+    if (await serviceDocs.exists())
       manifestCandidates.push({
-        path,
-        content: replaceHostedServicePins(await template.text(), version),
+        path: 'docs/hosted-service.md',
+        content: (await serviceDocs.text()).replace(
+          /("@defrex\/autobuild(?:-hosted-store-service)?"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
+          `$1${version}$2`,
+        ),
       })
+
+    manifestCandidates.unshift(
+      { path: 'CHANGELOG.md', content: changelog.content },
+      { path: 'README.md', content: replaceReadmeInstall(readmeText, version) },
+    )
   }
 
-  const serviceDocs = Bun.file(resolve(root, 'docs/hosted-service.md'))
-  if (await serviceDocs.exists())
-    manifestCandidates.push({
-      path: 'docs/hosted-service.md',
-      content: (await serviceDocs.text()).replace(
-        /("@defrex\/autobuild(?:-hosted-store-service)?"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
-        `$1${version}$2`,
-      ),
-    })
-
-  output.log(`Release ${tag} (${date})`)
+  output.log(
+    `Release ${tag} (${date}); ${policy.prerelease ? 'prerelease' : 'stable'}; npm dist-tag: ${policy.distTag}`,
+  )
+  output.log(`GitHub command: gh ${githubReleaseArguments(tag, policy).join(' ')}`)
   output.log(`Summary: ${summary ?? '[omitted; Claude did not return usable prose]'}`)
 
   if (arguments_.dryRun) {
     output.log('DRY RUN — no files, commits, tags, pushes, or GitHub releases will be created.')
-    printCandidate(output, 'CHANGELOG.md', changelog.content)
-    printCandidate(output, 'README.md', readme)
     for (const candidate of manifestCandidates) {
       printCandidate(output, candidate.path, candidate.content)
     }
@@ -933,7 +987,7 @@ export async function runRelease(
       )
     }
     output.log(
-      `Would commit CHANGELOG.md, README.md, and ${manifestCandidates.map((entry) => entry.path).join(', ')} as "chore: release ${tag}".`,
+      `Would commit ${manifestCandidates.map((entry) => entry.path).join(', ')} as "chore: release ${tag}".`,
     )
     output.log(
       `Would create annotated tag ${tag}, smoke its migration script from a clean local checkout, and atomically push HEAD plus ${tag} to origin.`,
@@ -954,8 +1008,6 @@ export async function runRelease(
   let releaseCommit: string | undefined
   try {
     await Promise.all([
-      writeFile(resolve(root, 'CHANGELOG.md'), changelog.content),
-      writeFile(resolve(root, 'README.md'), readme),
       ...manifestCandidates.map((candidate) =>
         writeFile(resolve(root, candidate.path), candidate.content),
       ),
@@ -983,8 +1035,6 @@ export async function runRelease(
       lockfileChanged = lockStatus.stdout.trim() !== ''
     }
     const releasePaths = [
-      'CHANGELOG.md',
-      'README.md',
       ...manifestCandidates.map((entry) => entry.path),
       ...(lockfileChanged ? ['bun.lock'] : []),
     ]
@@ -1045,25 +1095,25 @@ export async function runRelease(
     throw new Error(
       `${config.baseBranch} and ${tag} were pushed, but the canonical GitHub-tag migration smoke failed: ${detail}.\n` +
         `Do not rewrite or delete the public refs. Run these commands verbatim to retry the canonical-tag smoke:\n\n${canonicalSmokeRecoveryCommand(tag, releaseCommit)}\n\n` +
-        `After that smoke passes, publish the GitHub Release with the exact cut-section notes:\n\n${githubReleaseRecoveryCommand(tag, changelog.cutSection)}`,
+        `After that smoke passes, publish the GitHub Release with the exact cut-section notes:\n\n${githubReleaseRecoveryCommand(tag, changelog.cutSection, policy)}`,
     )
   }
 
   const release = await run({
     command: 'gh',
-    args: ['release', 'create', tag, '--verify-tag', '--title', tag, '--notes-file', '-'],
+    args: githubReleaseArguments(tag, policy),
     cwd: root,
     stdin: changelog.cutSection,
   })
   if (release.exitCode !== 0) {
     const detail =
       release.stderr.trim() || release.stdout.trim() || `exit status ${release.exitCode}`
-    const recoveryCommand = githubReleaseRecoveryCommand(tag, changelog.cutSection)
+    const recoveryCommand = githubReleaseRecoveryCommand(tag, changelog.cutSection, policy)
     throw new Error(
       `${config.baseBranch} and ${tag} were pushed, but GitHub Release publication failed: ${detail}.\n` +
         `Do not rewrite or delete the public refs. Run this verbatim retry command; it includes the exact cut-section notes:\n\n${recoveryCommand}` +
         `\n\nThen pack and upload the guest distribution archive:\n\n${distributionUploadRecoveryCommand(tag)}` +
-        `\n\nThen publish the packages to the npm registry, in this order:\n\n${publishRecoveryCommand(packages)}`,
+        `\n\nThen publish the packages to the npm registry, in this order:\n\n${publishRecoveryCommand(packages, policy)}`,
     )
   }
 
@@ -1074,7 +1124,7 @@ export async function runRelease(
 
   // Publish last: npm publication cannot be undone, so every earlier step
   // must already have succeeded, and a failure here leaves public refs alone.
-  await publishPackages(run, root, packages, version, output)
+  await publishPackages(run, root, packages, version, output, policy)
 
   await ensureClean(run, root)
   output.log(
