@@ -65,7 +65,26 @@ describe('static site', () => {
     const reference = textOf(withoutHeroFigure(updatedReference))
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(words(textOf(withoutHeroFigure(html)))).toEqual(words(reference))
+    expect(
+      words(
+        textOf(
+          withoutHeroFigure(
+            html.replace(/<button[^>]*data-motion-replay[^>]*>[\s\S]*?<\/button>/g, ''),
+          ),
+        ),
+      ),
+    ).toEqual(words(reference))
+  })
+
+  test('pipeline is one logical motion figure with a hidden native replay control', async () => {
+    const { 'index.html': html, 'site.js': js } = await buildFiles()
+    expect(html.match(/data-capture-figure="pipeline"/g)).toHaveLength(1)
+    expect(html.match(/data-capture-animated/g)).toHaveLength(1)
+    expect(html.match(/data-motion-node=/g)).toHaveLength(16)
+    expect(html).toContain('data-motion-replay hidden aria-label="Replay pipeline animation"')
+    expect(html).toContain('type="button" class="word motion-replay"')
+    expect(js).toContain('__websiteCapture')
+    expect(js).not.toMatch(/https?:\/\//)
   })
 
   test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
