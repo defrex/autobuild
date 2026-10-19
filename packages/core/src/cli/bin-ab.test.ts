@@ -879,7 +879,7 @@ test('a scoped implement terminal routes publication through the configured plug
       provider: 'git-worktree',
       ref: repo,
       branch: `ab/${slug}`,
-      base: { source: 'existing', sha: base },
+      base: { source: 'remote', sha: base },
     },
   })
   await local.append(slug, {

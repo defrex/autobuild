@@ -176,6 +176,23 @@ async function implementationReviewBoundary(
       headCommand,
     )
 
+    const provision = events.reconcileHistory.findLast(
+      (event) => event.type === 'workspace.provisioned' && event.payload.base.source !== 'existing',
+    )
+    const effectiveBase =
+      events.state.implement.commits?.base ??
+      (provision?.type === 'workspace.provisioned' ? provision.payload.base.sha : undefined)
+    if (!effectiveBase) throw new Error('missing fresh-cut contribution provenance')
+    async function ancestor(base: string, tip: string): Promise<boolean> {
+      const args = ['git', 'merge-base', '--is-ancestor', base, tip]
+      const result = await deps.exec(args, { cwd: deps.workspacePath })
+      if (result.exitCode === 0) return true
+      if (result.exitCode === 1) return false
+      throw new Error(`${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim()}`)
+    }
+    if (!(await ancestor(effectiveBase, head)))
+      throw new Error(`effective contribution base ${effectiveBase} is not an ancestor of HEAD`)
+
     const targetRef = `refs/autobuild/review/${branch}/base`
     const target =
       deps.forge.snapshotBase !== undefined
@@ -224,7 +241,11 @@ async function implementationReviewBoundary(
           `${mergeBases.length}${mergeBases.length > 0 ? `: ${mergeBases.join(', ')}` : ''}`,
       )
     }
-    return { branch, base: mergeBases[0]!, head }
+    return {
+      branch,
+      base: (await ancestor(effectiveBase, mergeBases[0]!)) ? mergeBases[0]! : effectiveBase,
+      head,
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`${diagnostic}: ${detail}`)
