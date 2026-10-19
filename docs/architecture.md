@@ -743,9 +743,13 @@ adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
 `packages/core/src/cli/dashboard/refresh.ts` owns the shared presentation read
-scheduler for both terminal paths: focused by default, paused on focus-out,
+scheduler for both terminal paths: focused by default, independent of focus for
+local stores, and 5-second polling when unfocused for network stores,
 immediate on focus-in or keys, 500 ms with retained builds or during a 30-second
-interaction hold, and 5 seconds when idle. Presentation store facades check
+interaction hold, and 5 seconds when idle. The optional BuildStore.networkReads
+capability identifies remote HTTP and Postgres adapters, including wrapped stores.
+Session feeds and automatic recovery follow the same cadence; unchanged network
+polls retain the change-position savings and bounded enrichment exception. Presentation store facades check
 admission at every asynchronous read stage; the kernel uses its original store
 and independent tick timers. Cached clock paints perform no reads. The mode
 ledger owns focus reporting through teardown and catchable faults; job-control
