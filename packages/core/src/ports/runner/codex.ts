@@ -1,3 +1,13 @@
+import { hostname } from 'node:os'
+import {
+  guardNativeHandle,
+  nativeObserver,
+  nativeStateUnavailable,
+  NativeIdentityMismatch,
+  NativeObservationError,
+  notResumable,
+} from './native-session'
+import type { NativeSessionHandle, AgentResumeResult } from '../types'
 /**
  * CodexAgentRunner (SPEC §9): AgentRunner over the locally installed OpenAI
  * Codex CLI. Phase turns use Codex's JSONL exec protocol and native thread
@@ -202,16 +212,19 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
 
   private readonly runCli: CodexCliRunFn
   private readonly runCliStream: CodexCliStreamFn | undefined
+  private readonly host: () => string
   private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
   constructor(
     opts: {
+      hostname?: () => string
       runCli?: CodexCliRunFn
       runCliStream?: CodexCliStreamFn
       createSessionId?: () => string
     } = {},
   ) {
+    this.host = opts.hostname ?? hostname
     this.runCli = opts.runCli ?? runCodexCli
     // A test injecting only the buffered boundary takes the buffered
     // translation path for streaming turns (degraded latency, same content);
@@ -305,10 +318,59 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts),
       stream: opts?.stream,
+      onNativeSession: opts?.onNativeSession,
+    }
+    if (state.nativeThreadId !== undefined) {
+      const observe = nativeObserver({ ...turnOpts }, this.name, this.host(), state.nativeThreadId)
+      await observe(state.nativeThreadId)
+      turnOpts.onNativeSession = async (handle) => observe(handle.nativeId)
     }
     const turn = await this.runTurn(message, turnOpts, state.nativeThreadId, opts?.signal)
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
+  }
+
+  async resume(
+    handle: NativeSessionHandle,
+    message: string,
+    opts: AgentStartOpts,
+  ): Promise<AgentResumeResult> {
+    const invalid = guardNativeHandle(handle, this.name, opts, this.host())
+    if (invalid !== undefined) return invalid
+    let observed = false
+    const callerObserver = opts.onNativeSession
+    opts = {
+      ...opts,
+      onNativeSession: async (native) => {
+        observed = true
+        await callerObserver?.(native)
+      },
+    }
+    let turn: CodexTurn
+    try {
+      turn = await this.runTurn(message, opts, handle.nativeId)
+    } catch (error) {
+      if (error instanceof NativeIdentityMismatch)
+        return notResumable('missing-state', 'Native resume returned a different identity')
+      throw error
+    }
+    if (turn.failure !== undefined && nativeStateUnavailable(turn.failure))
+      return notResumable('missing-state', turn.failure.message)
+    if (!observed && turn.failure === undefined)
+      return notResumable('missing-state', 'Native resume reported no identity')
+    const id = handle.nativeId
+    const session: AgentSessionHandle = {
+      id,
+      runner: this.name,
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+    }
+    this.sessions.set(id, {
+      opts,
+      model: opts.model,
+      nativeThreadId: id,
+      turns: [this.turnRecord(1, message, turn)],
+    })
+    return { kind: 'resumed', session, result: this.toResult(turn) }
   }
 
   async end(session: AgentSessionHandle): Promise<Transcript> {
@@ -357,6 +419,23 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     resume?: string,
     signal: AbortSignal | undefined = opts.signal,
   ): Promise<CodexTurn> {
+    const observe = nativeObserver(opts, this.name, this.host(), resume)
+    const observeEvent = async (event: JsonRecord) => {
+      const id = event.type === 'thread.started' ? (event.thread_id ?? event.threadId) : undefined
+      if (typeof id === 'string') await observe(id)
+    }
+    const conflict = (opts.args ?? []).find((arg) =>
+      CODEX_SESSION_ARGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+    )
+    if (conflict !== undefined) {
+      const failed = launchFailure(new Error(`Conflicting session-control argument: ${conflict}`))
+      failed.failure = {
+        message: `Conflicting session-control argument: ${conflict}`,
+        permanent: true,
+        cause: 'configuration',
+      }
+      return failed
+    }
     const args = ['exec']
     if (resume !== undefined) args.push('resume')
     args.push(
@@ -375,7 +454,15 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       env: sessionEnv(opts.env),
       ...(signal !== undefined ? { signal } : {}),
     }
-    if (opts.stream === undefined) return this.runPrompt(invocation)
+    if (opts.stream === undefined && opts.onNativeSession === undefined)
+      return this.runPrompt(invocation)
+    if (opts.stream === undefined) {
+      if (this.runCliStream !== undefined)
+        return this.runStreamingPrompt(invocation, undefined, observe)
+      const turn = await this.runPrompt(invocation)
+      for (const event of turn.events) await observeEvent(event)
+      return turn
+    }
 
     // Streaming turn: translate while the CLI runs. Without an injected
     // streaming boundary (offline fakes), the buffered path still translates
@@ -384,10 +471,11 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
     let turn: CodexTurn
     if (this.runCliStream !== undefined) {
-      turn = await this.runStreamingPrompt(invocation, emitter)
+      turn = await this.runStreamingPrompt(invocation, emitter, observe)
     } else {
       turn = await this.runPrompt(invocation)
-      translateBufferedCodexTurn(turn, (parts) => emitter.append(parts))
+      for (const event of turn.events) await observeEvent(event)
+      translateBufferedCodexTurn(turn, (parts) => emitter?.append(parts))
     }
     this.emitTurnEnd(turn, emitter, signal)
     return turn
@@ -417,16 +505,24 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
    * same records feed the ordinary accumulators. */
   private async runStreamingPrompt(
     invocation: CodexCliInvocation,
-    emitter: SessionStreamEmitter,
+    emitter: SessionStreamEmitter | undefined,
+    observe: (id: string) => Promise<void>,
   ): Promise<CodexTurn> {
     let handle: CodexCliStreamHandle
+    const controller = new AbortController()
     try {
-      handle = this.runCliStream!(invocation)
+      handle = this.runCliStream!({
+        ...invocation,
+        signal:
+          invocation.signal === undefined
+            ? controller.signal
+            : AbortSignal.any([invocation.signal, controller.signal]),
+      })
     } catch (error) {
       return launchFailure(error)
     }
     const acc = new CodexOutputAccumulator()
-    const translator = createCodexStreamTranslator((parts) => emitter.append(parts))
+    const translator = createCodexStreamTranslator((parts) => emitter?.append(parts))
     try {
       for await (const line of handle.lines) {
         let value: unknown
@@ -440,10 +536,17 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
           acc.push(line)
           continue
         }
+        const id = value.type === 'thread.started' ? (value.thread_id ?? value.threadId) : undefined
+        if (typeof id === 'string') await observe(id)
         acc.pushRecord(value)
         translator.onEvent(value)
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof NativeObservationError) {
+        controller.abort(error)
+        void handle.result.catch(() => {})
+        throw error
+      }
       // The result promise below still carries the CLI's exit and stderr.
     }
     const cli = await handle.result
@@ -875,3 +978,5 @@ function translateBufferedCodexTurn(turn: CodexTurn, emit: (parts: StreamPart[])
   }
   emit([finishStepPart()])
 }
+
+const CODEX_SESSION_ARGS = ['--ephemeral', '--last', '--all', '--fork']

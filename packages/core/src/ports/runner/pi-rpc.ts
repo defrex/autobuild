@@ -99,6 +99,7 @@ interface TurnCapture {
 }
 
 export class PiRpcClient implements PiSession {
+  readonly sessionFile?: string
   readonly sessionId: string
   private nextId = 0
   private closed = false
@@ -139,6 +140,8 @@ export class PiRpcClient implements PiSession {
       if (id === undefined || id.length === 0)
         throw new Error('pi runtime: RPC get_state returned no sessionId')
       Object.defineProperty(client, 'sessionId', { value: id })
+      if (typeof data?.sessionFile === 'string')
+        Object.defineProperty(client, 'sessionFile', { value: data.sessionFile })
       return client
     } catch (error) {
       await client.dispose()
@@ -333,6 +336,8 @@ export class PiRpcClient implements PiSession {
 }
 
 export interface PiRpcSessionOptions {
+  persistent?: boolean
+  sessionFile?: string
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
@@ -348,12 +353,13 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
   const args = [
     PI_RPC_MODE_ARG,
     'rpc',
-    '--no-session',
+    ...(!opts.persistent ? ['--no-session'] : []),
     '--no-approve',
     '--no-context-files',
     '--no-prompt-templates',
     '--no-themes',
   ]
+  if (opts.sessionFile !== undefined) args.push('--session', opts.sessionFile)
   if (opts.model !== undefined) args.push(PI_MODEL_ARG, `${opts.model.provider}/${opts.model.id}`)
   // `--tools` filters both builtin and package tools out of Pi's registry.
   // Keep the complete registry for build sessions and let the bridge activate

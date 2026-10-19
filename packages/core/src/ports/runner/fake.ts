@@ -1,3 +1,6 @@
+import { hostname } from 'node:os'
+import { guardNativeHandle, nativeHandle, notResumable } from './native-session'
+import type { NativeSessionHandle, AgentResumeResult } from '../types'
 /**
  * ScriptedAgentRunner (SPEC §9): the deterministic AgentRunner used by every
  * kernel/process/integration test. A single script function plays the agent;
@@ -86,10 +89,19 @@ export class ScriptedAgentRunner implements AgentRunner {
   /** Journals keyed by session id (`s_1`, `s_2`, …), in creation order. */
   readonly sessions = new Map<string, SessionJournal>()
 
+  private readonly nativeIds = new Map<string, string>()
+  private readonly nativeState?: Map<string, string[]>
+  private readonly host: () => string
   private readonly script: Script
   private nextSession = 0
 
-  constructor(opts: { script: Script }) {
+  constructor(opts: {
+    script: Script
+    nativeState?: Map<string, string[]>
+    hostname?: () => string
+  }) {
+    this.nativeState = opts.nativeState
+    this.host = opts.hostname ?? hostname
     this.script = opts.script
   }
 
@@ -111,6 +123,14 @@ export class ScriptedAgentRunner implements AgentRunner {
     }
     this.sessions.set(session.id, journal)
 
+    if (this.nativeState !== undefined) {
+      const nativeId = crypto.randomUUID()
+      this.nativeIds.set(session.id, nativeId)
+      this.nativeState.set(nativeId, [])
+      await opts.onNativeSession?.(
+        nativeHandle(this.name, this.nativeIds.get(session.id)!, opts.workspacePath, this.host()),
+      )
+    }
     const result = await this.runScript(
       {
         // Scripts observe the same effective launch environment as production
@@ -133,6 +153,15 @@ export class ScriptedAgentRunner implements AgentRunner {
     opts?: AgentContinueOpts,
   ): Promise<AgentTurnResult> {
     const journal = this.liveJournal(session, 'continue')
+    if (this.nativeState !== undefined)
+      await opts?.onNativeSession?.(
+        nativeHandle(
+          this.name,
+          this.nativeIds.get(session.id)!,
+          journal.opts.workspacePath,
+          this.host(),
+        ),
+      )
     const history = [...journal.messages]
     const turn = journal.turns.length + 1
     // Mirror the real adapters (§10, D8): the continued turn runs under the
@@ -146,6 +175,7 @@ export class ScriptedAgentRunner implements AgentRunner {
       ...journal.opts,
       env: sessionEnv(scoped),
       stream: opts?.stream,
+      onNativeSession: opts?.onNativeSession,
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
     }
 
@@ -160,8 +190,36 @@ export class ScriptedAgentRunner implements AgentRunner {
       opts?.signal,
     )
     journal.messages.push(message)
+    this.nativeState?.set(this.nativeIds.get(session.id)!, [...journal.messages])
     journal.turns.push({ turn, message, result })
     return result
+  }
+
+  async resume(
+    handle: NativeSessionHandle,
+    message: string,
+    opts: AgentStartOpts,
+  ): Promise<AgentResumeResult> {
+    const invalid = guardNativeHandle(handle, this.name, opts, this.host())
+    if (invalid !== undefined) return invalid
+    const history = this.nativeState?.get(handle.nativeId)
+    if (history === undefined)
+      return notResumable('missing-state', 'Fake native state is unavailable')
+    const session: AgentSessionHandle = {
+      id: handle.nativeId,
+      runner: this.name,
+      model: opts.model,
+    }
+    this.nativeIds.set(session.id, handle.nativeId)
+    this.sessions.set(session.id, {
+      session,
+      opts,
+      turns: [],
+      messages: [...history],
+      ended: false,
+    })
+    const result = await this.continue(session, message, opts)
+    return { kind: 'resumed', session, result }
   }
 
   async end(session: AgentSessionHandle): Promise<Transcript> {

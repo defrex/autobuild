@@ -174,3 +174,76 @@ export async function runLiveAgentRunnerContract(
     await fixture.cleanup()
   }
 }
+
+/** Process A returns only its observed handle; process B has no adapter memory
+ * or secret-bearing prompt/environment. This also drives offline CLI fixtures. */
+export async function runNativeAdapterChild(input: {
+  provider: string
+  opts: import('../types').AgentStartOpts
+  handle?: import('../types').NativeSessionHandle
+  message?: string
+}): Promise<unknown> {
+  const child = Bun.spawn(
+    [process.execPath, new URL('./native-process-fixture.ts', import.meta.url).pathname],
+    {
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  child.stdin.write(JSON.stringify(input))
+  child.stdin.end()
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  if (code !== 0) throw new Error(`Native adapter child exited ${code}: ${stderr}`)
+  return JSON.parse(stdout)
+}
+
+export async function runLiveNativeResumeContract(provider: string, model: string): Promise<void> {
+  const fixture = await createLiveFixture()
+  try {
+    await writeFile(
+      join(fixture.cwd, '.agents/skills/ab-runner-contract/SKILL.md'),
+      `---\nname: ab-runner-contract\ndescription: Native memory probe\n---\nRemember the exact invocation argument as a memory-only code. Never write it to a file. Run ./contract-probe once and reply only probed.\n`,
+    )
+    const secret = crypto.randomUUID()
+    const opts = {
+      skill: 'ab-runner-contract',
+      invocation: secret,
+      workspacePath: fixture.cwd,
+      model,
+      env: { AB_CONTRACT_PHASE: 'start' },
+    }
+    const handle = (await runNativeAdapterChild({
+      provider,
+      opts,
+    })) as import('../types').NativeSessionHandle
+    const resumed = (await runNativeAdapterChild({
+      provider,
+      handle,
+      opts: { ...opts, invocation: 'resumed-probe', env: { AB_CONTRACT_PHASE: 'resume' } },
+      message:
+        'Recall the exact memory-only code from the initial skill invocation. Run ./contract-probe once, then reply with that code.',
+    })) as {
+      result: AgentTurnResult
+      handle: import('../types').NativeSessionHandle
+      transcript: Transcript
+    }
+    expect(resumed.handle).toEqual(handle)
+    expectCompleted(resumed.result)
+    expect(resumed.result.text).toContain(secret)
+    expect(resumed.transcript.content).toContain(secret)
+    expect(resumed.transcript.metadata.usage.turns).toBe(1)
+    const rows = await evidence(fixture.evidencePath)
+    expect(rows.map((row) => row.phase)).toEqual(['start', 'resume'])
+    for (const row of rows) {
+      expect(row.helpStatus).toBe('0')
+      expect(row.abPath).toBe(join(AGENT_BIN_DIR, 'ab'))
+    }
+  } finally {
+    await fixture.cleanup()
+  }
+}

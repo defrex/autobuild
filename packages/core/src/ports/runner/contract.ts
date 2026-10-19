@@ -490,3 +490,81 @@ export function describeAgentRunnerContract(
     })
   })
 }
+
+export interface NativeResumeContractFixture {
+  createRunner(): AgentRunner
+  opts: import('../types').AgentStartOpts
+  /** Delete the fixture's native state, independently of adapter memory. */
+  forget(): Promise<void>
+  cleanup(): Promise<void>
+}
+
+/** A fixture supplies native persistence shared by otherwise independent runners.
+ * Plugins without resume may still run the existing live-session contract. */
+export function describeNativeResumeContract(
+  name: string,
+  factory: () => Promise<NativeResumeContractFixture>,
+): void {
+  describe(`Native resume contract: ${name}`, () => {
+    test('serialized identity continues in a fresh runner, guards location, and retains endable results', async () => {
+      const { resumeAgent } = await import('./native-session')
+      const f = await factory()
+      try {
+        let handle: import('../types').NativeSessionHandle | undefined
+        const a = f.createRunner()
+        const started = await a.start({
+          ...f.opts,
+          onNativeSession: async (value) => {
+            handle = value
+          },
+        })
+        expect(started.result.kind).toBe('completed')
+        expect(handle).toBeDefined()
+        await a.continue(started.session, 'remember contract-secret')
+        await a.end(started.session)
+        const durable = JSON.parse(JSON.stringify(handle)) as import('../types').NativeSessionHandle
+        const b = f.createRunner()
+        expect(
+          (await resumeAgent(b, { ...durable, host: 'another-host.invalid' }, 'recall', f.opts))
+            .kind,
+        ).toBe('not-resumable')
+        expect(
+          (
+            await resumeAgent(b, durable, 'recall', {
+              ...f.opts,
+              workspacePath: `${f.opts.workspacePath}/other`,
+            })
+          ).kind,
+        ).toBe('not-resumable')
+        expect(
+          (await resumeAgent(b, { ...durable, runner: 'another-adapter' }, 'recall', f.opts)).kind,
+        ).toBe('not-resumable')
+        const resumed = await resumeAgent(b, durable, 'recall', {
+          ...f.opts,
+          env: { NATIVE_CONTRACT_FRESH: 'fresh' },
+        })
+        expect(resumed.kind).toBe('resumed')
+        if (resumed.kind !== 'resumed') throw new Error(resumed.message)
+        expect(resumed.result.kind).toBe('completed')
+        expect(resumed.result.text).toContain('contract-secret')
+        expect(resumed.result.text).toContain('fresh')
+        const transcript = await b.end(resumed.session)
+        expect(transcript.content).toContain('recall')
+        expect(transcript.metadata.usage.turns).toBe(1)
+        const failedRunner = f.createRunner()
+        const failed = await resumeAgent(failedRunner, durable, 'provider-failure', f.opts)
+        expect(failed.kind).toBe('resumed')
+        if (failed.kind === 'resumed') {
+          expect(failed.result.kind).toBe('failed')
+          await failedRunner.end(failed.session)
+        }
+        await f.forget()
+        expect((await resumeAgent(f.createRunner(), durable, 'recall', f.opts)).kind).toBe(
+          'not-resumable',
+        )
+      } finally {
+        await f.cleanup()
+      }
+    })
+  })
+}

@@ -48,8 +48,10 @@ export {
   CONTRACT_RETRYABLE_FAILURE,
   CONTRACT_SKILL,
   describeAgentRunnerContract,
+  describeNativeResumeContract,
 } from '../ports/runner/contract'
 export type {
+  NativeResumeContractFixture,
   AgentRunnerContractFactory,
   AgentRunnerContractHarness,
   AgentRunnerContractOneShotHarness,
@@ -242,3 +244,5 @@ export type {
   ReducerValueStorage,
   ValueCacheRow,
 } from '../store/reducer-values'
+
+export { resumeAgent } from '../ports/runner/native-session'

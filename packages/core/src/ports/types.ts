@@ -618,6 +618,26 @@ export interface Forge {
 // the front of the tool environment's PATH; CLI availability is a runner
 // guarantee and does not depend on a global installation or host ordering.
 
+/** Portable native identity only: never credentials, prompts or process handles. */
+export interface NativeSessionHandle {
+  version: 1
+  runner: string
+  nativeId: string
+  host: string
+  workspacePath: string
+  statePath?: string
+}
+
+export type NativeSessionObserver = (handle: NativeSessionHandle) => Promise<void>
+export type AgentResumeOpts = AgentStartOpts
+export type AgentResumeResult =
+  | { kind: 'resumed'; session: AgentSessionHandle; result: AgentTurnResult }
+  | {
+      kind: 'not-resumable'
+      reason: 'unsupported' | 'wrong-runner' | 'wrong-host' | 'wrong-workspace' | 'missing-state'
+      message: string
+    }
+
 export interface AgentSessionHandle {
   id: string
   runner: string
@@ -678,6 +698,9 @@ export interface Transcript {
 }
 
 export interface AgentStartOpts {
+  /** Await before further native output/prompt processing. Rejections are
+   * infrastructure failures and must propagate to the caller. */
+  onNativeSession?: NativeSessionObserver
   /** Installed skill to invoke, e.g. `ab-plan`. */
   skill: string
   /** Opaque argument passed to the skill (build slug or harvest run id). */
@@ -714,6 +737,9 @@ export function agentInvocation(opts: AgentStartOpts): string {
 }
 
 export interface AgentContinueOpts {
+  /** Await before further native output/prompt processing. Rejections are
+   * infrastructure failures and must propagate to the caller. */
+  onNativeSession?: NativeSessionObserver
   env?: Record<string, string>
   /** Caller-owned cancellation for this continued turn. */
   signal?: AbortSignal
@@ -724,9 +750,13 @@ export interface AgentContinueOpts {
 
 export interface AgentRunner {
   readonly name: string
+  resume?(
+    handle: NativeSessionHandle,
+    message: string,
+    opts: AgentResumeOpts,
+  ): Promise<AgentResumeResult>
   start(opts: AgentStartOpts): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>
-  /** Review-loop rounds (§10). Adapters without native resumption implement
-   * this as start-with-rehydrate-from-store (§9). */
+  /** Review-loop rounds (§10), continuing the live native conversation. */
   continue(
     session: AgentSessionHandle,
     message: string,

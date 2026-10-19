@@ -1,3 +1,6 @@
+import { hostname } from 'node:os'
+import { nativeSessionHandleSchema } from '../ports/runner/native-session'
+import type { NativeSessionObserver } from '../ports/types'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { integrationCurrent } from '../kernel/integration-state'
 import { replayNodeChange } from '../kernel/node-restack'
@@ -1940,10 +1943,11 @@ export class BuildRunner {
       let result: AgentTurnResult | undefined
       let turnError: unknown
       const turn = await this.runBudgetedTurn(
-        started.seq,
+        started,
         resolved.sessionBudgetSeconds,
-        async (signal) =>
+        async (signal, onNativeSession) =>
           target.runner.start({
+            onNativeSession,
             skill,
             invocation: slug,
             buildSlug: slug,
@@ -2082,18 +2086,22 @@ export class BuildRunner {
 
     let handle: AgentSessionHandle | undefined
     let failureNote: string | undefined
-    const turn = await this.runBudgetedTurn(started.seq, sessionBudgetSeconds, async (signal) =>
-      runner.start({
-        skill,
-        invocation: slug,
-        buildSlug: slug,
-        workspacePath,
-        ...(model !== undefined ? { model } : {}),
-        ...(args !== undefined ? { args } : {}),
-        env: await this.sessionEnvFor('finalize@1', session),
-        signal,
-        ...(stream !== undefined ? { stream } : {}),
-      }),
+    const turn = await this.runBudgetedTurn(
+      started,
+      sessionBudgetSeconds,
+      async (signal, onNativeSession) =>
+        runner.start({
+          onNativeSession,
+          skill,
+          invocation: slug,
+          buildSlug: slug,
+          workspacePath,
+          ...(model !== undefined ? { model } : {}),
+          ...(args !== undefined ? { args } : {}),
+          env: await this.sessionEnvFor('finalize@1', session),
+          signal,
+          ...(stream !== undefined ? { stream } : {}),
+        }),
     )
     if (turn.settlement.kind === 'value') {
       handle = turn.settlement.value.session
@@ -2286,19 +2294,53 @@ export class BuildRunner {
    * classification, but does not disarm this backstop for an adapter that
    * ignores cancellation. */
   private async runBudgetedTurn<T>(
-    preSeq: number,
+    started: AbEvent,
     budgetSeconds: number,
-    run: (signal: AbortSignal) => Promise<T>,
+    run: (signal: AbortSignal, onNativeSession: NativeSessionObserver) => Promise<T>,
   ): Promise<BudgetedTurn<T>> {
     const { store, slug } = this.deps
     const controller = new AbortController()
+    const preSeq = started.seq
+    if (started.type !== 'session.started')
+      throw new Error('Native observation requires an open session bracket')
+    let closed = false
+    let recorded: string | undefined
+    let recording = Promise.resolve()
+    const onNativeSession: NativeSessionObserver = (handle) => {
+      if (closed || controller.signal.aborted) return Promise.resolve()
+      recording = recording.then(async () => {
+        if (closed || controller.signal.aborted) return
+        const validated = nativeSessionHandleSchema.parse(handle)
+        if (validated.host !== hostname() || validated.workspacePath !== this.deps.workspacePath)
+          throw new Error('Native identity execution location mismatch')
+        const bytes = JSON.stringify(validated)
+        if (recorded === bytes) return
+        if (recorded !== undefined)
+          throw new Error('Conflicting native identities in session bracket')
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'session.native-handle-recorded',
+          payload: {
+            session: started.payload.session,
+            phase: started.payload.phase,
+            round: started.payload.round,
+            handle: validated,
+          },
+        } satisfies EventWrite<'session.native-handle-recorded'>)
+        recorded = bytes
+      })
+
+      // Observe the rejection even if a nonconforming adapter discards its callback promise.
+      void recording.catch(() => {})
+      return recording
+    }
     let abortCause: 'operator' | 'budget' | undefined
     let resolveExpiry!: (settlement: { kind: 'expired' }) => void
     const expiry = new Promise<{ kind: 'expired' }>((resolve) => {
       resolveExpiry = resolve
     })
     const pending = Promise.resolve()
-      .then(() => run(controller.signal))
+      .then(() => run(controller.signal, onNativeSession))
       .then(
         (value): { kind: 'value'; value: T } => ({ kind: 'value', value }),
         (error): { kind: 'error'; error: unknown } => ({ kind: 'error', error }),
@@ -2320,12 +2362,14 @@ export class BuildRunner {
 
     try {
       const settlement = await Promise.race([pending, expiry])
+      await recording
       return {
         settlement,
         ...(abortCause !== undefined ? { abortCause } : {}),
         pending,
       }
     } finally {
+      closed = true
       cancelTimer()
       unsubscribe()
     }
@@ -2467,18 +2511,20 @@ export class BuildRunner {
       let result: AgentTurnResult | undefined
       let turnError: unknown
       const turn = await this.runBudgetedTurn(
-        preSeq,
+        startedEnvelope,
         primary.sessionBudgetSeconds,
-        async (signal) =>
+        async (signal, onNativeSession) =>
           live !== undefined
             ? live.runner
                 .continue(live.handle, continueMessage(spec), {
+                  onNativeSession,
                   env: await this.sessionEnvFor(spec.abPhase, session),
                   signal,
                   ...(stream !== undefined ? { stream } : {}),
                 })
                 .then((continued) => ({ session: live.handle, result: continued }))
             : target.runner.start({
+                onNativeSession,
                 skill: spec.skill,
                 invocation: slug,
                 buildSlug: slug,
@@ -2754,34 +2800,40 @@ export class BuildRunner {
     let handle: AgentSessionHandle | undefined = live?.handle
     let result: AgentTurnResult | undefined
     let turnError: unknown
-    const turn = await this.runBudgetedTurn(preSeq, sessionBudgetSeconds, async (signal) => {
-      if (live !== undefined) {
-        // §10: the producer continues its session; the feedback message
-        // points at the .ab/ inputs — `ab context` is the real carrier. The
-        // turn re-issues ambient auth (D8) for the NEW bracket — AB_PHASE at
-        // this round, AB_SESSION = this bracket's id — so the CLI's terminal
-        // lands on the continued round instead of being rejected as round
-        // 1's second terminal (§8.4 D5).
-        return live.runner
-          .continue(live.handle, continueMessage(spec), {
-            env: await this.sessionEnvFor(spec.abPhase, session),
-            signal,
-            ...(stream !== undefined ? { stream } : {}),
-          })
-          .then((continued) => ({ session: live.handle, result: continued }))
-      }
-      return runner.start({
-        skill: spec.skill,
-        invocation: slug,
-        buildSlug: slug,
-        workspacePath,
-        ...(model !== undefined ? { model } : {}),
-        ...(args !== undefined ? { args } : {}),
-        env: await this.sessionEnvFor(spec.abPhase, session),
-        signal,
-        ...(stream !== undefined ? { stream } : {}),
-      })
-    })
+    const turn = await this.runBudgetedTurn(
+      startedEnvelope,
+      sessionBudgetSeconds,
+      async (signal, onNativeSession) => {
+        if (live !== undefined) {
+          // §10: the producer continues its session; the feedback message
+          // points at the .ab/ inputs — `ab context` is the real carrier. The
+          // turn re-issues ambient auth (D8) for the NEW bracket — AB_PHASE at
+          // this round, AB_SESSION = this bracket's id — so the CLI's terminal
+          // lands on the continued round instead of being rejected as round
+          // 1's second terminal (§8.4 D5).
+          return live.runner
+            .continue(live.handle, continueMessage(spec), {
+              onNativeSession,
+              env: await this.sessionEnvFor(spec.abPhase, session),
+              signal,
+              ...(stream !== undefined ? { stream } : {}),
+            })
+            .then((continued) => ({ session: live.handle, result: continued }))
+        }
+        return runner.start({
+          onNativeSession,
+          skill: spec.skill,
+          invocation: slug,
+          buildSlug: slug,
+          workspacePath,
+          ...(model !== undefined ? { model } : {}),
+          ...(args !== undefined ? { args } : {}),
+          env: await this.sessionEnvFor(spec.abPhase, session),
+          signal,
+          ...(stream !== undefined ? { stream } : {}),
+        })
+      },
+    )
     if (turn.settlement.kind === 'value') {
       handle = turn.settlement.value.session
       result = turn.settlement.value.result

@@ -512,14 +512,9 @@ describe('PiAgentRunner.start', () => {
     ])
     const runner = new PiAgentRunner({ createSessionFn })
     await runner.start(
-      startOpts({ args: ['--session', 'operator-session', '--extension', './web-access.js'] }),
+      startOpts({ args: ['--thinking', 'high', '--extension', './web-access.js'] }),
     )
-    expect(creates[0]?.args).toEqual([
-      '--session',
-      'operator-session',
-      '--extension',
-      './web-access.js',
-    ])
+    expect(creates[0]?.args).toEqual(['--thinking', 'high', '--extension', './web-access.js'])
     // Absent passes an empty argv list, not undefined.
     await runner.start(startOpts())
     expect(creates[1]?.args).toEqual([])
