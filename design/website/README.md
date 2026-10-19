@@ -104,3 +104,34 @@ the production timeline at 0, 2,400 and 4,800ms, and checks reduced-motion
 stillness and 390px overflow. Separate Chromium playback checks exercise actual
 viewport entry, both review returns, keyboard replay, rapid replay, breakpoint
 changes, preference changes and the JavaScript-disabled fallback.
+
+
+## Operating, seams, and configuration reference revision
+
+On 2026-10-19, the `operating-seams-configuration` spec explicitly authorized
+one text link to `/docs/seams/` in the landing seams section. The four landing
+reference PNGs now include “Explore the infrastructure seams” below the seam
+selector, using the existing cyan underlined link style. Following sections
+shift down with the added line; existing copy, diagrams, styles, and assets
+remain unchanged. `reference.html` stays the historical design export.
+
+Evidence: `bun run capture:website` produced 14 reviewed full-page PNGs:
+local and remote landing states at 1440px and 390px, and all five docs pages
+at both widths. All seven phone probes reported scrollWidth 390 and
+innerWidth 390. Every frame loaded its stylesheet and reported reduced-motion
+still evidence with zero marked animated figures. Landing section gaps remain
+288px desktop and 192px phone, footer gaps match, and terminal-to-action
+spacing is 48px. The refreshed landing references match these captured PNGs
+byte for byte. The maintainer reviews the integrated reference set before the
+website node lands.
+
+## Combined documentation and pipeline replay evidence
+
+Reconciliation onto the pipeline-motion change preserves both revisions above.
+A fresh capture of the combined site produced 26 reviewed frames: ten docs
+stills, four landing stills, and twelve pipeline samples at 0, 2,400 and
+4,800ms. Every frame loaded its stylesheet and had no horizontal overflow.
+The reduced-motion landing stills match the four seams-link references byte
+for byte. The four normal-motion final references are refreshed to include
+that same seams link while preserving the completed pipeline and replay
+control. The production animation code and timeline remain unchanged.
