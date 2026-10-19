@@ -331,9 +331,17 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     (frame) => frame.kind === 'docs',
   )
   expect(frames.map((frame) => [frame.page, frame.width])).toEqual([
+    ['docs/builds/index.html', 1440],
+    ['docs/builds/index.html', 390],
+    ['docs/dispatcher/index.html', 1440],
+    ['docs/dispatcher/index.html', 390],
     ['docs/getting-started/index.html', 1440],
     ['docs/getting-started/index.html', 390],
     ['docs/index.html', 1440],
     ['docs/index.html', 390],
+    ['docs/integration/index.html', 1440],
+    ['docs/integration/index.html', 390],
+    ['docs/tickets/index.html', 1440],
+    ['docs/tickets/index.html', 390],
   ])
 })
