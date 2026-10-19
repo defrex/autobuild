@@ -1084,8 +1084,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           ),
         )
       }
-      case 'POST deposits': {
+      case 'POST deposits':
+      case 'POST deposits/conditional': {
         const body = await readBody(req, depositsBodySchema)
+        if (rest === 'deposits/conditional' && body.expectedSeq === undefined)
+          throw new RequestError(400, 'validation', 'conditional deposits require expectedSeq')
+        if (rest === 'deposits' && body.expectedSeq !== undefined)
+          throw new RequestError(400, 'validation', 'use deposits/conditional for expectedSeq')
 
         const actor = enforceVia(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
@@ -1097,17 +1102,17 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         // payload's negative placeholders (protocol.ts). Runs inside the
         // backing store's atomic appendWithArtifacts, so an invalid event
         // rolls the whole deposit back (D6).
-        const result = await store.appendWithArtifacts(
-          slug,
-          inputs,
-          (deposited) =>
-            ({
-              actor,
-              type: body.event.type,
-              payload: substitutePlaceholderRefs(body.event.payload, deposited),
-            }) as EventWrite,
-        )
-        return json(201, { event: result.event, artifacts: result.artifacts })
+        const deposit = (deposited: import('@defrex/autobuild/store-adapter').ArtifactMeta[]) =>
+          ({
+            actor,
+            type: body.event.type,
+            payload: substitutePlaceholderRefs(body.event.payload, deposited),
+          }) as EventWrite
+        const result =
+          body.expectedSeq === undefined
+            ? await store.appendWithArtifacts(slug, inputs, deposit)
+            : await store.appendWithArtifactsIfCurrent(slug, body.expectedSeq, inputs, deposit)
+        return json(result === null ? 200 : 201, result)
       }
       case 'POST artifacts': {
         const body = await readBody(req, putArtifactBodySchema)

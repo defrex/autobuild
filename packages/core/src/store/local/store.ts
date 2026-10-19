@@ -783,6 +783,41 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
+  async appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifactInputs: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    validateExpectedSeq(expectedSeq)
+    const prepared: PreparedArtifact[] = []
+    for (const input of artifactInputs) {
+      prepared.push(await this.prepareArtifact(input))
+    }
+    // One synchronous transaction: deposits + event append commit together;
+    // an invalid event throws, rolling back every deposit (D6).
+    //
+    // Ordering invariant (AUT-322): the batch event is validated BEFORE any
+    // retention prune runs. Deposits land unpruned, validation gates the
+    // whole batch, and only then does one prune per distinct batch kind
+    // execute — still inside this transaction. A same-kind batch whose prune
+    // scope covers a sibling therefore never deletes that sibling before the
+    // batch's event is validated. Pruning once per kind (not per deposit) is
+    // equivalent: `revisionsToPrune` is a pure function of the full
+    // post-batch revision set, and pruned revisions are always older than
+    // the current MAX, so revision assignment is unaffected.
+    return this.writeTx(() => {
+      if (this.currentSeqInTx(slug) !== expectedSeq) return null
+      const deposited = prepared.map((p) => this.depositInTx(slug, p, { prune: false }))
+      const validated = validateEventWrite(makeEvent(deposited))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        this.pruneBuildInTx(slug, kind)
+      }
+      const event = this.appendInTx(slug, validated) as EventEnvelope<T>
+      return { event, artifacts: deposited }
+    })
+  }
+
   async getEvents(
     slug: string,
     sinceSeq = 0,

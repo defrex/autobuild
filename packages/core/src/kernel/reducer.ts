@@ -98,6 +98,13 @@ export interface PendingCommand {
 export interface OpenSession {
   /** Absent means the harness has not reported an identity. */
   nativeHandle?: NativeSessionHandle
+  continuation?: EventPayload<'session.started'>['continuation']
+  budgetMs?: number
+  args?: string[]
+  startedAt: string
+  nativeResumeFallback?: boolean
+  resumed?: boolean
+  suspendedActiveMs?: number
   session: string
   role: string
   runner: string
@@ -108,6 +115,12 @@ export interface OpenSession {
   stream?: string
   /** seq of the `session.started` event. */
   seq: number
+}
+
+export interface LogicalSessionTotals {
+  activeMs: number
+  usage?: { inputTokens: number; outputTokens: number; turns: number }
+  transcripts: ArtifactRef[]
 }
 
 /** One `verify.completed` fact. Results accumulate across attempts; membership
@@ -308,7 +321,12 @@ export interface BuildState {
   discardRequest?: { seq: number; actor: Actor }
   /** Unacknowledged runner-owned operator commands in request order (D2). */
   pendingCommands: PendingCommand[]
-  sessions: { open: OpenSession[]; nativeHandles: Record<string, NativeSessionHandle> }
+  sessions: {
+    open: OpenSession[]
+    nativeHandles: Record<string, NativeSessionHandle>
+    suspended: OpenSession[]
+    totals: Record<string, LogicalSessionTotals>
+  }
   /** `phase.failed` tally per phase (verify steps key as `verify:<step>`) —
    * retry policy input (§8.4). */
   failures: Record<string, number>
@@ -378,13 +396,15 @@ export interface BuildAcc {
   discardRequest: BuildState['discardRequest']
   pending: Record<PendingCommand['command'], PendingCommand[]>
   nativeHandles: Record<string, NativeSessionHandle>
+  sessionTotals: Record<string, LogicalSessionTotals>
+  suspendedSessions: OpenSession[]
   openSessions: OpenSession[]
   failures: Record<string, number>
   lastEvent?: AbEvent
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 12
+export const BUILD_REDUCER_VERSION = 13
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -420,6 +440,8 @@ function initialBuildAcc(): BuildAcc {
     discardRequest: undefined,
     pending: { pause: [], resume: [], abort: [] },
     nativeHandles: {},
+    sessionTotals: {},
+    suspendedSessions: [],
     openSessions: [],
     failures: {},
   }
@@ -463,6 +485,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   const cleanupAttempts = acc.cleanupAttempts
   let discardRequest = acc.discardRequest
   const pending = acc.pending
+  const suspended = new Map(acc.suspendedSessions.map((s) => [s.session, s]))
   const openSessions = new Map(acc.openSessions.map((s) => [s.session, s]))
   const failures = acc.failures
 
@@ -686,8 +709,23 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         delete reviewRoundCeilings.code
         break
 
-      case 'session.started':
+      case 'session.started': {
+        const root = event.payload.continuation?.root ?? event.payload.session
+        acc.sessionTotals[root] ??= { activeMs: 0, transcripts: [] }
+        const totals = acc.sessionTotals[root]
+        totals.activeMs = Math.max(totals.activeMs, event.payload.continuation?.activeMs ?? 0)
+        if (event.payload.continuation)
+          acc.nativeHandles[event.payload.session] = event.payload.continuation.handle
+        if (event.payload.continuation) {
+          suspended.delete(event.payload.continuation.predecessor)
+          openSessions.delete(event.payload.continuation.predecessor)
+        }
         openSessions.set(event.payload.session, {
+          continuation: event.payload.continuation,
+          budgetMs: event.payload.budgetMs,
+          args: event.payload.args,
+          startedAt: event.ts,
+          nativeHandle: event.payload.continuation?.handle,
           session: event.payload.session,
           role: event.payload.role,
           runner: event.payload.runner,
@@ -698,6 +736,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
+      }
       case 'session.native-handle-recorded': {
         const { session, phase, round, handle } = event.payload
         const open = openSessions.get(session)
@@ -712,9 +751,71 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         }
         break
       }
-      case 'session.ended':
+      case 'session.suspended': {
+        const open = openSessions.get(event.payload.session)
+        if (
+          open &&
+          open.phase === event.payload.phase &&
+          open.round === event.payload.round &&
+          !(lastCompletedPhase?.phase === open.phase && lastCompletedPhase.seq > open.seq)
+        ) {
+          const totals = acc.sessionTotals[open.continuation?.root ?? open.session]!
+          totals.activeMs += event.payload.activeMs
+          totals.transcripts.push(event.payload.transcript)
+          if (event.payload.usage) {
+            totals.usage ??= { inputTokens: 0, outputTokens: 0, turns: 0 }
+            totals.usage.inputTokens += event.payload.usage.inputTokens
+            totals.usage.outputTokens += event.payload.usage.outputTokens
+            totals.usage.turns += event.payload.usage.turns
+          }
+          suspended.set(open.session, {
+            ...open,
+            nativeHandle: event.payload.handle,
+            suspendedActiveMs: event.payload.activeMs,
+          })
+          openSessions.delete(open.session)
+        }
+        break
+      }
+      case 'session.resume-fallback': {
+        if (event.payload.stale) break
+        suspended.delete(event.payload.session)
+        const open = openSessions.get(event.payload.session)
+        if (open) {
+          const { nativeHandle: _handle, resumed: _resumed, ...fresh } = open
+          openSessions.set(open.session, { ...fresh, nativeResumeFallback: true })
+        }
+        break
+      }
+      case 'session.resumed': {
+        const open = openSessions.get(event.payload.session)
+        if (
+          !event.payload.stale &&
+          !open?.nativeResumeFallback &&
+          open?.continuation &&
+          open.continuation.predecessor === event.payload.predecessor &&
+          open.continuation.root === event.payload.root &&
+          JSON.stringify(open.nativeHandle) === JSON.stringify(event.payload.handle)
+        )
+          openSessions.set(open.session, { ...open, resumed: true })
+        break
+      }
+      case 'session.ended': {
+        const open = openSessions.get(event.payload.session)
+        if (open && 'transcript' in event.payload) {
+          const totals = acc.sessionTotals[open.continuation?.root ?? open.session]!
+          totals.activeMs +=
+            event.payload.activeMs ?? Math.max(0, Date.parse(event.ts) - Date.parse(open.startedAt))
+          totals.transcripts.push(event.payload.transcript)
+          totals.usage ??= { inputTokens: 0, outputTokens: 0, turns: 0 }
+          totals.usage.inputTokens += event.payload.usage.inputTokens
+          totals.usage.outputTokens += event.payload.usage.outputTokens
+          totals.usage.turns += event.payload.usage.turns
+        }
+        suspended.delete(event.payload.session)
         openSessions.delete(event.payload.session)
         break
+      }
 
       case 'plan.started':
         round = event.payload.round
@@ -968,6 +1069,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   acc.setupFailure = setupFailure
   acc.infrastructureFailure = infrastructureFailure
   acc.discardRequest = discardRequest
+  acc.suspendedSessions = [...suspended.values()]
   acc.openSessions = [...openSessions.values()]
   acc.lastEvent = lastEvent
 }
@@ -1057,7 +1159,12 @@ function finishBuild(acc: BuildAcc): BuildState {
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(
       (a, b) => a.seq - b.seq,
     ),
-    sessions: { open: [...acc.openSessions], nativeHandles: { ...acc.nativeHandles } },
+    sessions: {
+      totals: structuredClone(acc.sessionTotals),
+      suspended: [...acc.suspendedSessions],
+      open: [...acc.openSessions],
+      nativeHandles: { ...acc.nativeHandles },
+    },
     failures: acc.failures,
   }
 }

@@ -726,7 +726,7 @@ consumed by the core `plan` phase, and nothing is reported.
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Only model and parsed protocol/output-mode spellings are rejected eagerly. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |
-| `sessionBudgetSeconds` | policy fallback | optional positive integer | Wall-clock budget for each build phase session on this logical role. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
+| `sessionBudgetSeconds` | policy fallback | optional positive integer | Active-time budget for each build phase session on this logical role; suspended intervals are excluded and native continuation retains the original ceiling. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
 | `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. `extensions` remains only the deprecated no-op. |
 
 Inheritance is mechanical and **independent per field**: merge each configured
@@ -790,7 +790,7 @@ nonnegative integer so zero can disable that trigger.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `sessionBudgetSeconds` | `3600` | positive integer | Wall-clock bound for each build agent session unless its logical role overrides it. |
+| `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it; native continuation retains accumulated time and excludes suspension. |
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxDispatchAttempts` | `3` | positive integer | Caps consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation. |
@@ -1778,14 +1778,25 @@ JSON exposes `outcome: "skipped"` and `reason`, never a synthetic pass.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
-The open-session list is literal durable state. Historical logs with a
-`session.started` but no ending remain readable and show that session as open;
-Autobuild does not reinterpret or repair them. When a runner actually takes a
-build over, it first records each session open at the resume boundary as
-`reclaimed`, without inventing a transcript, and then records its attachment.
-The rerun opens one fresh session, so after attachment only work that could
-still be alive appears in `ab build status`. Dashboard session history keeps the
-reclaimed entry visibly distinct and reports that its transcript is unavailable.
+The open-session list is literal durable state. A graceful dispatcher stop
+suspends local git-worktree agent turns, retaining their partial transcripts
+and native handles. On restart, a matching host/path/runtime resumes the same
+phase and round with fresh session credentials. The first message names the
+interruption and asks the agent to re-check the worktree and re-run anything
+in flight. Native state is an optimization; the Store remains authoritative.
+
+`session.started.continuation` records resume intent before launch. Native
+acceptance is a separate `session.resumed` fact; terminals may land before it.
+Recovery retries an unaccepted attempt using its inherited handle. Suspended
+sessions reject old credentials permanently. `session.resume-fallback` records
+why native continuation could not be used (including remote workspaces), then
+ordinary fresh-session recovery applies. Unrelated open sessions are reclaimed
+without inventing transcripts. Dashboard history shows suspended and resumed
+segments separately, with their individual transcript refs and usage.
+
+The phase budget counts active time across interruptions using the original
+ceiling. Suspended intervals do not consume it; abrupt loss is conservatively
+charged through recovery. Pause still lets the current turn finish.
 
 Each session row also shows its live-view stream: the stream id and
 whether that stream is `open` or `closed` — for example `stream st_1f2e (open)`.

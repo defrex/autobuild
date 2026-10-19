@@ -126,6 +126,14 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
       return Promise.reject(new SessionScopeError(scope, 'appendWithArtifacts', slug))
     },
+    appendWithArtifactsIfCurrent<T extends EventType>(
+      slug: string,
+      _expectedSeq: number,
+      _artifacts: ArtifactInput[],
+      _makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+    ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+      return Promise.reject(new SessionScopeError(scope, 'appendWithArtifactsIfCurrent', slug))
+    },
     getEvents(slug: string, _sinceSeq?: number): Promise<AbEvent[]> {
       return Promise.reject(new SessionScopeError(scope, 'getEvents', slug))
     },

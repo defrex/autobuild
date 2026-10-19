@@ -494,6 +494,44 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
+  async appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    validateExpectedSeq(expectedSeq)
+    const prepared: PreparedArtifact[] = []
+    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    return this.tx(async (q) => {
+      await this.lockBuild(q, slug)
+      const tails: Row[] =
+        await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
+      if (num(tails[0]?.seq) !== expectedSeq) return null
+      // Ordering invariant (AUT-322): the batch event is validated BEFORE
+      // any retention prune runs. Deposits land unpruned, validation gates
+      // the whole batch, and only then does one prune per distinct batch
+      // kind execute — still inside this locked transaction. A same-kind
+      // batch whose prune scope covers a sibling therefore never deletes
+      // that sibling before the batch's event is validated. Pruning once
+      // per kind (not per deposit) is equivalent: `revisionsToPrune` is a
+      // pure function of the full post-batch revision set.
+      const revisions = new Map<string, number>()
+      const deposited: ArtifactMeta[] = []
+      for (const artifact of prepared) {
+        deposited.push(
+          await this.depositBuildLocked(q, slug, artifact, revisions, { prune: false }),
+        )
+      }
+      const validated = validateEventWrite(makeEvent(structuredClone(deposited)))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        await this.pruneBuildLocked(q, slug, kind)
+      }
+      const event = (await this.appendLocked(q, slug, validated, true)) as EventEnvelope<T>
+      return { event, artifacts: deposited }
+    })
+  }
+
   async getEvents(
     slug: string,
     sinceSeq = 0,

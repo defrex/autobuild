@@ -15,7 +15,10 @@ export interface DashboardSession {
   runtime: string
   model?: string
   startedSeq: number
-  status: 'open' | 'ended' | 'reclaimed'
+  status: 'open' | 'ended' | 'reclaimed' | 'suspended' | 'resumed'
+  predecessor?: string
+  root?: string
+  cause?: 'shutdown' | 'runner-loss'
   usage?: SessionUsage
   transcript?: { kind: string; rev: number }
   reclaimedBy?: { instance: string; resumedFromSeq: number }
@@ -50,6 +53,15 @@ export function projectSessions(
 
   for (const event of events) {
     if (event.type === 'session.started') {
+      const predecessor = event.payload.continuation?.predecessor
+      if (predecessor) {
+        const previous = open.get(predecessor)
+        if (previous) {
+          previous.status = 'reclaimed'
+          previous.streamStatus = 'closed'
+          open.delete(predecessor)
+        }
+      }
       const record = streamsByLabel.get(`session:${event.payload.session}`)
       const session: DashboardSession = {
         id: event.payload.session,
@@ -60,6 +72,13 @@ export function projectSessions(
         ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
         startedSeq: event.seq,
         status: 'open',
+        ...(event.payload.continuation
+          ? {
+              predecessor: event.payload.continuation.predecessor,
+              root: event.payload.continuation.root,
+              cause: event.payload.continuation.cause,
+            }
+          : {}),
         // The store's records are authoritative when available; without them
         // the pairing degrades gracefully (open until `session.ended`).
         ...(record !== undefined
@@ -71,6 +90,25 @@ export function projectSessions(
       }
       sessions.push(session)
       open.set(session.id, session)
+      continue
+    }
+    if (event.type === 'session.resumed') {
+      if (!event.payload.stale) {
+        const current = open.get(event.payload.session)
+        if (current) current.status = 'resumed'
+      }
+      continue
+    }
+    if (event.type === 'session.suspended') {
+      const current = open.get(event.payload.session)
+      if (current) {
+        current.status = 'suspended'
+        current.cause = event.payload.cause
+        current.transcript = event.payload.transcript
+        current.usage = event.payload.usage
+        current.streamStatus = 'closed'
+        open.delete(current.id)
+      }
       continue
     }
     if (event.type !== 'session.ended') continue

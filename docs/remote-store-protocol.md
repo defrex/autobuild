@@ -316,6 +316,7 @@ it to exist. An unknown build returns `404 not-found`.
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
 | `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
 | `getEvents` | `GET /builds/{slug}/events?since={n}&wait={s}` | optional `since` query value, parsed below; absence defaults to `0`. Optional `wait` in whole seconds, parsed per the event-wait rules below | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
+| `appendWithArtifactsIfCurrent` | `POST /builds/{slug}/deposits/conditional` | atomic deposit request plus `expectedSeq` | `201` + `{event, artifacts}`, or `200` + `null` on stale head |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
 | `getReducerSnapshot` | `GET /builds/{slug}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, or ahead of the build log's tail; an unknown build is `404`, which the shipped client also maps to `null` |
 | `putReducerSnapshot` | `PUT /builds/{slug}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the log's tail answer `written: false` |
@@ -1084,6 +1085,16 @@ unreferenced content-addressed blob after failure, because blobs are immutable
 and metadata is the visibility boundary. Revision assignment, substitution,
 event validation, and metadata/event commit must be serialized or
 transactional so concurrent deposits receive distinct revisions and events.
+
+Conditional build deposits use `POST /builds/{slug}/deposits/conditional` and
+require nonnegative integer `expectedSeq`. The distinct endpoint fails closed
+against an older server; the client never falls back to an unguarded deposit.
+The backing store compares the head under the same transaction
+or build lock as the deposit. A stale head returns `200 null` without artifact
+metadata, revision allocation, timestamp updates, retention pruning or event
+append. A matching head follows the normal validation/rollback contract and
+returns `201 {event, artifacts}`. Immutable orphan blobs remain harmless.
+Terminal and suspension writers re-read and revalidate after a comparison miss.
 
 These rules apply identically to build, repository, and session deposits.
 

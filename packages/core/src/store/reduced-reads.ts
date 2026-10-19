@@ -157,13 +157,23 @@ export async function readTerminalGuard(
   round: number,
   session: string,
 ) {
+  return (await readTerminalGuardBoundary(store, slug, phase, round, session)).value
+}
+
+export async function readTerminalGuardBoundary(
+  store: Reader,
+  slug: string,
+  phase: import('../ontology').Phase,
+  round: number,
+  session: string,
+) {
   const result = await store.getReducerValue(
     { kind: 'build', slug },
     { reducer: 'terminalGuard', args: { phase, round, session } },
   )
   if (!validateReducerValue('terminalGuard', result.value))
     throw new Error('invalid terminalGuard value')
-  return result.value as { diagnostic?: string }
+  return { cursor: result.cursor, value: result.value as { diagnostic?: string } }
 }
 
 export async function readOpenTick(store: Reader, repo: string, run: string, historical = true) {

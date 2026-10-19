@@ -13,7 +13,7 @@ interface TerminalGuardAcc {
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
   return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string }>({
-    version: 1,
+    version: 2,
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -46,10 +46,17 @@ function checkEvent(
 ): void {
   const spec = phaseSpecFor(env.phase)
   const restartSeq = 0
-  if (event.type === 'session.ended' && event.payload.session === env.session) {
+  if (event.type === 'session.started' && event.payload.continuation?.predecessor === env.session)
     throw new Error(
-      `terminal rejected (D5): session "${env.session}" already ended ` +
-        `(session.ended at seq ${event.seq}) — a session that ended without ` +
+      `terminal rejected (D5): session "${env.session}" was superseded by continuation ${event.payload.session}`,
+    )
+  if (
+    (event.type === 'session.ended' || event.type === 'session.suspended') &&
+    event.payload.session === env.session
+  ) {
+    throw new Error(
+      `terminal rejected (D5): session "${env.session}" already ${event.type === 'session.suspended' ? 'suspended' : 'ended'} ` +
+        `(${event.type} at seq ${event.seq}) — a session that ended without ` +
         'a terminal was failed and retried; only the live retry may complete ' +
         'this phase round (§8.4).',
     )
