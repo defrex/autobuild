@@ -34,7 +34,7 @@ Design canvas so builds can read it without access to claude.ai.
 - Sections are 288px apart at desktop width and 192px apart below 720px, with
   the same space after the last section. No horizontal rules appear anywhere.
   The pipeline section has no "inside one build-runner" caption, and the page
-  closes on a single outlined "View on GitHub" button.
+  closes on outlined "Getting started" and "View on GitHub" buttons.
 - `design-system.md` and `tokens.json` are the Autobuild design system the page
   is drawn in: palette, type scale, spacing, components, and diagram
   vocabulary.
@@ -57,3 +57,24 @@ for marked animated figures. Every phone variant must pass overflow checks.
 See [the capture protocol](../../tools/website-capture.md) for adapter and
 inventory details. This tooling revision preserves all approved PNG bytes and
 the approval history above.
+
+## Documentation foundation reference revision
+
+On 2026-10-19, the `website-docs-foundation` spec explicitly authorized a
+Documentation link in the landing action area and a Getting started link in
+the closing get-started section. The four landing reference PNGs now include
+those two additions. GitHub access and all existing copy remain present;
+`reference.html` stays the historical export. The added hero action wraps to
+another row; subsequent sections shift with that added height. The closing
+links also wrap at phone width. No unrelated landing styles or assets changed.
+
+Evidence: `bun run capture:website` produced eight reviewed full-page PNGs:
+local and remote landing states at 1440px and 390px, plus both docs pages at
+both widths. The docs retain the broadcast palette, face and type scale in a
+72ch reading column with above-content navigation. All four phone probes
+reported scrollWidth 390 and innerWidth 390; every stylesheet loaded and
+prose pages reported zero figures. Landing section gaps remain 288px desktop
+and 192px phone, footer gaps match, and terminal-to-action spacing is 48px.
+The keyboard skip link was also checked in Chromium: focused, visible at the
+top of the viewport, with the existing 2px focus outline. The maintainer
+reviews this integrated reference set before the website node lands.
