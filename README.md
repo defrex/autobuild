@@ -21,6 +21,8 @@ agent runtime you select: Claude Code, Codex CLI, or Pi. The GitHub forge also
 needs an authenticated [`gh` CLI](https://cli.github.com) or an exported
 `GITHUB_TOKEN`/`GH_TOKEN`; the local-git forge needs no account or remote.
 
+From the repository you want built, install Autobuild as a development dependency:
+
 <!-- release-install:start -->
 
 ```sh
@@ -29,10 +31,13 @@ bun add -d --exact @defrex/autobuild@0.14.0
 
 <!-- release-install:end -->
 
-Then, from the repository you want built:
+Without a `package.json`, installation creates `package.json` and `bun.lock`,
+which should be committed, with `node_modules/` ignored.
+
+Run the repository-installed CLI:
 
 ```sh
-ab init
+bun ab init
 ```
 
 This vendors the editable `ab-*` skills, writes a stack-neutral config, and
@@ -41,7 +46,7 @@ hands repository-aware setup to a coding agent. The
 start the dispatcher and its live dashboard:
 
 ```sh
-ab dispatch
+bun ab dispatch
 ```
 
 Then groom your first ticket in your coding agent:
