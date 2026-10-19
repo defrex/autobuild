@@ -7,6 +7,7 @@ function harness(reduced = false, hidden = false) {
   let visibility = () => {}
   let click = () => {}
   let disconnected = 0
+  let observations = 0
   let serial = 0
   const frames = new Map<number, (time: number) => void>()
   const rendered: number[] = []
@@ -28,6 +29,7 @@ function harness(reduced = false, hidden = false) {
       frames.delete(id)
     },
     observe(callback) {
+      observations++
       enter = callback
       return () => {
         disconnected++
@@ -65,6 +67,7 @@ function harness(reduced = false, hidden = false) {
       visibility()
     },
     disconnected: () => disconnected,
+    observations: () => observations,
     tick(time: number) {
       const callbacks = [...frames.values()]
       frames.clear()
@@ -105,20 +108,71 @@ test('replays cancel the prior clock, including rapid clicks', () => {
   expect(h.rendered.at(-1)).toBe(400)
 })
 
-test('reduced motion initially and mid-run settles, and turning it off never autoplays', () => {
-  for (const initial of [true, false]) {
-    const h = harness(initial)
+test('reduced motion during playback settles, and turning it off never repeats autoplay', () => {
+  const h = harness()
+  h.enter()
+  h.reduced(true)
+  expect(h.control.hidden).toBe(true)
+  expect(h.frames.size).toBe(0)
+  expect(h.rendered.at(-1)).toBe(4800)
+  h.reduced(false)
+  h.enter()
+  expect(h.control.hidden).toBe(false)
+  expect(h.frames.size).toBe(0)
+  expect(h.observations()).toBe(1)
+  h.click()
+  expect(h.frames.size).toBe(1)
+})
+
+for (const initiallyUnavailable of [false, true]) {
+  test(`hidden ${initiallyUnavailable ? 'at load' : 'before entry'} preserves first-entry autoplay`, () => {
+    const h = harness(false, initiallyUnavailable)
+    if (!initiallyUnavailable) h.hidden(true)
+    // Include a late intersection callback queued before the tab was hidden.
     h.enter()
-    h.reduced(true)
-    expect(h.control.hidden).toBe(true)
+    expect(h.rendered).toEqual([])
+    expect(h.frames.size).toBe(0)
+    h.hidden(false)
+    expect(h.observations()).toBe(initiallyUnavailable ? 1 : 2)
+    h.enter()
+    expect(h.rendered.at(-1)).toBe(0)
+    expect(h.frames.size).toBe(1)
+    h.tick(100)
+    h.tick(4900)
+    h.hidden(true)
+    h.hidden(false)
+    h.enter()
     expect(h.frames.size).toBe(0)
     expect(h.rendered.at(-1)).toBe(4800)
+  })
+
+  test(`reduced motion ${initiallyUnavailable ? 'at load' : 'before entry'} preserves an unplayed run`, () => {
+    const h = harness(initiallyUnavailable)
+    if (!initiallyUnavailable) h.reduced(true)
+    h.enter()
+    expect(h.control.hidden).toBe(true)
+    expect(h.rendered).toEqual([])
+    expect(h.frames.size).toBe(0)
+    h.reduced(false)
+    expect(h.observations()).toBe(initiallyUnavailable ? 1 : 2)
+    expect(h.control.hidden).toBe(false)
+    h.enter()
+    expect(h.rendered.at(-1)).toBe(0)
+    expect(h.frames.size).toBe(1)
+  })
+}
+
+test('restoring availability after capture or disposal never re-arms observation', () => {
+  for (const action of ['capture', 'dispose']) {
+    const h = harness(false, true)
+    if (action === 'capture') h.motion.seek(0, { still: true })
+    else h.motion.dispose()
+    h.hidden(false)
+    h.reduced(true)
     h.reduced(false)
     h.enter()
-    expect(h.control.hidden).toBe(false)
+    expect(h.observations()).toBe(0)
     expect(h.frames.size).toBe(0)
-    h.click()
-    expect(h.frames.size).toBe(1)
   }
 })
 

@@ -40,7 +40,11 @@ export function createMotion(
   let frame: number | undefined
   let started = false
   let captured = false
-  let stopObserving = () => {}
+  let stopObserving: (() => void) | undefined
+  const stopObservation = (): void => {
+    stopObserving?.()
+    stopObserving = undefined
+  }
   const cancel = (): void => {
     if (frame !== undefined) env.cancelFrame(frame)
     frame = undefined
@@ -48,14 +52,14 @@ export function createMotion(
   const finish = (): void => {
     cancel()
     started = true
-    stopObserving()
+    stopObservation()
     render(duration)
   }
   const play = (): void => {
     if (captured || env.reduced() || env.hidden()) return
     cancel()
     started = true
-    stopObserving()
+    stopObservation()
     render(0)
     let start: number | undefined
     const tick = (time: number): void => {
@@ -66,22 +70,23 @@ export function createMotion(
     }
     frame = env.requestFrame(tick)
   }
-  const preference = (): void => {
+  // An unavailable idle figure has not spent its first-entry autoplay. Re-arm
+  // observation on return so an already-visible figure gets a fresh callback too.
+  const availability = (): void => {
     control.hidden = env.reduced()
-    if (env.reduced()) finish()
+    if (env.reduced() || env.hidden()) {
+      if (frame !== undefined) finish()
+      else stopObservation()
+    } else if (!started && !captured && !stopObserving) {
+      stopObserving = env.observe(() => {
+        if (!started && !captured) play()
+      })
+    }
   }
-  const visibility = (): void => {
-    if (env.hidden()) finish()
-  }
-  const offPreference = env.onReducedChange(preference)
-  const offVisibility = env.onVisibilityChange(visibility)
+  const offPreference = env.onReducedChange(availability)
+  const offVisibility = env.onVisibilityChange(availability)
   control.addEventListener('click', play)
-  control.hidden = env.reduced()
-  if (env.reduced() || env.hidden()) finish()
-  else
-    stopObserving = env.observe(() => {
-      if (!started && !captured) play()
-    })
+  availability()
   return {
     duration,
     seek(timeMs, { still }) {
