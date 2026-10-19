@@ -9,6 +9,14 @@ export function stableVersion(value: unknown): semver.SemVer | undefined {
   return parsed && parsed.version === value ? parsed : undefined
 }
 
+/** Canonical release identities exclude build metadata, prefixes and whitespace. */
+export function releaseVersion(value: unknown): semver.SemVer | undefined {
+  if (typeof value !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value))
+    return undefined
+  const parsed = semver.parse(value)
+  return parsed && parsed.version === value ? parsed : undefined
+}
+
 const stableVersionSchema = z.string().refine((value) => stableVersion(value) !== undefined)
 export const supportedClientRangeSchema = z
   .strictObject({
@@ -20,8 +28,8 @@ export type SupportedClientRange = z.infer<typeof supportedClientRangeSchema>
 
 /** A major starts a new family: X.0 has one line, X.1 two, X.2+ three. */
 export function supportedClientRange(serviceVersion = AUTOBUILD_VERSION): SupportedClientRange {
-  const version = stableVersion(serviceVersion)
-  if (!version) throw new Error('service must have a stable release version')
+  const version = releaseVersion(serviceVersion)
+  if (!version) throw new Error('service must have a canonical release version')
   return {
     minVersion: `${version.major}.${Math.max(0, version.minor - 2)}.0`,
     maxVersionExclusive: `${version.major}.${version.minor + 1}.0`,
@@ -32,10 +40,10 @@ export function classifyClient(
   version: unknown,
   range: SupportedClientRange,
 ): 'supported' | 'older' | 'newer' | 'invalid' {
-  const parsed = stableVersion(version)
+  const parsed = releaseVersion(version)
   if (!parsed) return 'invalid'
-  if (semver.lt(parsed, range.minVersion)) return 'older'
-  if (semver.gte(parsed, range.maxVersionExclusive)) return 'newer'
+  if (semver.lt(`${parsed.major}.${parsed.minor}.0`, range.minVersion)) return 'older'
+  if (semver.gte(`${parsed.major}.${parsed.minor}.0`, range.maxVersionExclusive)) return 'newer'
   return 'supported'
 }
 
@@ -52,12 +60,12 @@ export function compatibilityAdvice(
   const description = `service Autobuild ${serviceVersion} supports clients ${formatClientRange(range)}`
   if (classification === 'supported') return undefined
   if (classification === 'newer') {
-    const version = stableVersion(client)!
+    const version = releaseVersion(client)!
     return `${description}; upgrade the service to at least ${version.major}.${version.minor}.0 before upgrading projects (service first)`
   }
   if (classification === 'older')
     return `${description}; upgrade the project's Autobuild into ${formatClientRange(range)}`
-  return `${description}; supply a stable Autobuild client version`
+  return `${description}; supply a canonical Autobuild client version`
 }
 
 /** Retain these wire identities and handlers until their lines leave the window.
@@ -81,9 +89,9 @@ export function clientIdentityError(
   serviceProtocol = REMOTE_STORE_PROTOCOL_VERSION,
 ): string | undefined {
   const range = supportedClientRange(serviceVersion)
-  const service = stableVersion(serviceVersion)!
+  const service = releaseVersion(serviceVersion)!
   const advice = compatibilityAdvice(client, serviceVersion, range)
-  const parsed = stableVersion(client)
+  const parsed = releaseVersion(client)
   const expected =
     parsed &&
     (parsed.major === service.major && parsed.minor === service.minor

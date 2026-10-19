@@ -4,7 +4,7 @@ import { isRemoteStoreRef, resolveRepoState } from './repo-state'
 import {
   classifyClient,
   compatibilityAdvice,
-  stableVersion,
+  releaseVersion,
   supportedClientRangeSchema,
 } from '../store/remote/compatibility'
 
@@ -58,7 +58,7 @@ export async function checkUpgradeCompatibility(options: {
       })(),
       expired,
     ]).finally(() => clearTimeout(timeout))
-    if (!response || !stableVersion(response.autobuildVersion)) return unknown()
+    if (!response || !releaseVersion(response.autobuildVersion)) return unknown()
     const serviceVersion = response.autobuildVersion as string
     if (!Object.hasOwn(response, 'supportedClientRange')) {
       if (targetVersion !== serviceVersion)
