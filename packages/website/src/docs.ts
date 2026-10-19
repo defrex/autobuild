@@ -54,7 +54,7 @@ export const DOCS_PAGES: readonly DocsPage[] = [
 <p>It favors throughput over the latency of one change: independent builds can run side by side, while each still pays for planning, review, and verification. A small edit that needs an immediate answer may be better handled directly in your coding agent.</p>
 <p>It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove the operator's responsibility.</p>
 <h2>Using these docs</h2>
-<p>Start with <a href="/docs/getting-started/">Getting started</a> for installation and a first ticket. These pages introduce the system for engineers evaluating it. Feature-area guides will be added separately; the repository holds the detailed references today.</p>
+<p>Start with <a href="/docs/getting-started/">Getting started</a> for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read <a href="/docs/operating/">Operating</a> for day-to-day control, <a href="/docs/seams/">Seams</a> for infrastructure choices, and <a href="/docs/configuration/">Configuration</a> for the repository settings. Each guide links to detailed repository references.</p>
 <p>The ${reference('docs/configuration.md', 'configuration reference')} describes what you configure. The ${reference('docs/spec-standard.md', 'spec standard')} defines a buildable ticket.</p>`,
   },
   {
@@ -88,6 +88,88 @@ ${command('bun ab dispatch')}
 <p>The dispatcher claims ready work and shows a live dashboard. The README quickstart starts dispatch before grooming; either order works because the dispatcher claims ready tickets as they arrive.</p>
 <p>Each claimed work ticket gets an isolated build and moves through planning, review, implementation, verification, and PR creation. Watch the build's recorded state. When it escalates, an operator must answer the question before it can continue. Merge still follows the configured landing policy and gates.</p>
 <p>For deeper reference, read the ${reference('docs/configuration.md', 'configuration reference')}, ${reference('docs/architecture.md', 'architecture map')}, and ${reference('SPEC.md', 'design specification')}. Return to the <a href="/docs/">overview</a> for the lifecycle and its limits.</p>`,
+  },
+  {
+    path: '/docs/operating/',
+    file: 'docs/operating/index.html',
+    label: 'Operating',
+    title: 'Operating Autobuild',
+    description:
+      'Watch durable progress, answer escalations, pause work, and authorize landing through the CLI or an external operator agent.',
+    content: `
+<p>The operator keeps work moving: watch recorded progress, answer questions, and decide when consent-gated changes may land. An operator can be a human or an external coding agent. Autobuild does not start or host an orchestrator agent.</p>
+<h2>Watch for attention</h2>
+${command('bun ab watch --json')}
+<p>This standing monitor follows active builds, newly created builds, and the repository journal. Its default filter reports actionable attention, including escalations and ready landings that need consent. Use event filters when you want routine lifecycle events too. A fresh watch starts from now; inspect current status as well to reconcile attention that already exists.</p>
+<p>Save the opaque cursor from the JSON output and pass it back with <code>--since</code> to resume through events recorded while the monitor was away. The final JSON line carries a cursor even when no event matched. The default watch duration is 30 minutes; <code>--timeout 0</code> keeps it open.</p>
+${command('bun ab wait my-build --for attention --json --timeout 5m')}
+<p><code>wait</code> is a bounded, one-shot wait for a build condition. It exits 0 on a match, 2 if all named builds end without matching, and 3 on timeout. Existing attention returns immediately, even with a cursor, so repeatedly waiting for the same current condition is not an event-consumption loop. Use <code>watch --since</code> for that.</p>
+<h2>Answer and pause</h2>
+${command('bun ab answer my-build "Keep the public API compatible"')}
+<p>An open escalation parks work until an answer is recorded. Guidance becomes input to the next round. The answer command also supports a bare retry and explicit revised-spec resolutions when the contract itself needs to change; consult CLI help and the ${reference('SPEC.md', 'design specification')} before choosing a resolution.</p>
+${command('bun ab pause my-build\nbun ab resume my-build')}
+<p>Pause requests stop a build at its supported boundary; resume releases a cleanly paused build. Resume does not answer an escalation. <code>bun ab pause --all</code> holds queued work, turns intake off, and requests pauses on running builds. <code>bun ab resume --all</code> releases that hold, enables intake, and resumes cleanly paused builds.</p>
+<p>Turning intake off alone stops new ticket claims. Repository pause also holds queued builds. Neither action withdraws landing consent: use a hold when the intended action is to stop a landing.</p>
+<h2>Authorize landing</h2>
+<p>Ordered landing rules select automatic authorization or explicit consent. Without a matching rule, leaves default to auto and integration nodes to consent. Authorization always remains subject to verification, checks, protection, and merge gates.</p>
+${command('bun ab land my-build\nbun ab hold my-build')}
+<p><code>land</code> requires a ready build, clears its hold, and grants consent to land into its destination. <code>hold</code> suppresses landing and revokes consent, even before readiness. Consent survives head changes, restacking, verification, and re-finalization until hold or completion; accepted node reparenting revokes it. Review the ${reference('docs/landing-policy.md', 'landing policy reference')} for the exact readiness and forge requirements.</p>
+<h2>Choose an operator surface</h2>
+<p>The live terminal dashboard shown by <code>bun ab dispatch</code> and the hosted web operator app both read durable state. They expose build progress, escalations, and pause/resume controls. The web app also lets you inspect sessions and transcripts. Landing consent and hold are available through the CLI, terminal keys <code>l</code>/<code>o</code>, and MCP/operator tools; the web app has no consent controls.</p>
+<p>Any external agent with shell access can operate through the CLI. <code>bun ab mcp</code> serves the operator tools locally over stdio. The hosted service exposes its authenticated <code>/mcp</code> connector for agents running elsewhere, without requiring a repository checkout on the operator's machine.</p>
+<p>Read the ${reference('docs/operator-api.md', 'operator API reference')} and ${reference('docs/mcp.md', 'hosted MCP guide')} for remote access. The ${reference('SPEC.md', 'design specification')} records the CLI and escalation contracts.</p>`,
+  },
+  {
+    path: '/docs/seams/',
+    file: 'docs/seams/index.html',
+    label: 'Seams',
+    title: 'Infrastructure seams',
+    description:
+      'Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.',
+    content: `
+<p>Autobuild separates the pipeline from the infrastructure that runs it. Adapters supply storage, agent execution, code publication, workspaces, and tickets. Choose each responsibility explicitly; selecting a remote database does not move computation to a remote machine.</p>
+<h2>Storage and tickets</h2>
+<p>The default local BuildStore uses SQLite and filesystem artifacts. A separate Postgres adapter provides database-backed storage. The hosted HTTP service exposes a network-accessible Store backed by Postgres. A storage adapter and the service that exposes it are distinct parts of a deployment.</p>
+<p>Ticket sources are selected independently of the BuildStore: local files, Linear, or hosted tickets. Using a hosted Store does not require using hosted tickets. See the ${reference('docs/architecture.md', 'architecture map')} and ${reference('docs/hosted-service.md', 'hosted service reference')} for the boundaries.</p>
+<h2>Agents, code, and workspaces</h2>
+<ul>
+<li><strong>Agent runtimes.</strong> Claude Code, Codex, and Pi are shipped adapters. Roles choose runtimes and models. Model selection does not itself decide where an agent runs.</li>
+<li><strong>Forges.</strong> GitHub and local git are shipped adapters. Local git permits local operation without GitHub pull requests; it does not supply the GitHub publication path required by the remote setup.</li>
+<li><strong>Workspaces.</strong> Local builds use disposable git worktrees. Vercel Sandbox provisions remote machines for build runners, agents, and checks.</li>
+</ul>
+<p>Each environment needs the selected runtime, tools, dependencies, and credentials. Remote execution also needs provisioning and reproducible setup. Follow the ${reference('docs/setup.md', 'setup reference')} for the supported adapter combinations and readiness checks.</p>
+<h2>What runs where</h2>
+<p><strong>All local.</strong> The operator's machine runs the dispatcher, build runners, agent runtime CLIs, checks, git worktrees, and local Store. File tickets and the local-git forge can keep this arrangement independent of GitHub. You can watch dispatch in the terminal and operate through the local CLI.</p>
+<p><strong>All remote.</strong> A hosted scheduled dispatcher uses origin-mode repository configuration. Vercel Sandbox runs build runners, agents, and checks; GitHub holds code and receives publication. A hosted Store backed by Postgres records progress, and a remote ticket source supplies work. Operators use the browser or MCP connector. The operator agent remains external. Provisioning and credentials are still required; this is not enabled merely by choosing Postgres.</p>
+<p>Mixed deployments are supported within adapter constraints, such as a local dispatcher using a hosted Store and remote sandboxes. The ${reference('docs/hosted-dispatcher.md', 'hosted dispatcher reference')} explains scheduled operation; the ${reference('docs/setup.md', 'setup reference')} covers placement and credentials.</p>
+<h2>Extend the boundaries</h2>
+<p>Configured plugin modules can register ticket sources, agent runtimes, workspace providers, and forges. BuildStore extensions use the storage adapter or remote protocol contract, rather than a plugin manifest registration.</p>
+<p>Ordered verify and finalize steps and editable skills extend repository behavior while the phase grammar stays fixed. See <a href="/docs/configuration/">Configuration</a> and the ${reference('docs/configuration.md', 'full configuration reference')} for plugin modules and extension points.</p>`,
+  },
+  {
+    path: '/docs/configuration/',
+    file: 'docs/configuration/index.html',
+    label: 'Configuration',
+    title: 'Repository configuration',
+    description:
+      'Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.',
+    content: `
+<p><code>autobuild.toml</code> declares how your repository runs Autobuild. It chooses infrastructure, commands, agent roles, checks, and operating limits. Use the ${reference('docs/configuration.md', 'full configuration reference')} for every field and its defaults; this page maps the choices you need to make.</p>
+<h2>Commands and extension steps</h2>
+<p>Named commands define repository tasks. Verification is an ordered list of deterministic command checks or agent verifiers. A repository can also declare optional verify steps for a build's plan to select when relevant.</p>
+<p>Finalize post-steps run after PR creation, for work such as updating a changelog. A failed finalize post-step is recorded without failing an otherwise green build. Verify and finalize are the configurable extension points; configuration does not introduce arbitrary phases or reorder the fixed pipeline.</p>
+<h2>Roles, models, and limits</h2>
+<p>Agent roles inherit runtime and model settings from <code>roles.default</code> and can override them for a particular job. Ordered alternates provide a declared fallback chain when a provider is unavailable. Choose agents for planning, implementation, review, and agent steps according to the work each role does.</p>
+<p>Capacity bounds concurrent work. Policy limits bound review rounds, retries, and session budgets, defining when automation must stop for attention. These limits complement useful checks and clear specs; they do not establish correctness themselves.</p>
+<h2>Admission and landing</h2>
+<p>Ticket settings choose the source and readiness criteria the dispatcher uses to admit work. Landing rules are ordered and first-match: predicates select automatic authorization or explicit consent for a source and destination. The ${reference('docs/landing-policy.md', 'landing policy reference')} describes defaults, readiness, and forge gates. See <a href="/docs/operating/">Operating</a> for consent and hold commands.</p>
+<p>Build execution configuration is pinned for reproducibility, while dispatcher policy and role settings have live reload behavior. Consult the ${reference('docs/configuration.md', 'configuration reference')} for the boundary before changing settings during a build. Keep secrets outside committed TOML.</p>
+<h2>Editable skills and installation</h2>
+<p>The vendored <code>ab-*</code> skills are repository files you can edit. They supply agent judgment: how to plan, implement, review, and operate in your project. Code still owns transitions, state, and gates. Customizing a skill does not replace those deterministic checks.</p>
+${command('bun ab init\nbun ab init --validate')}
+<p><code>init</code> writes a stack-neutral configuration when absent, vendors skills, and hands repository-aware setup to a coding agent. It preserves existing configuration. Setup chooses meaningful commands and establishes adapter prerequisites; init does not invent checks from your stack. <code>init --validate</code> checks readiness for the configured arrangement.</p>
+${command('bun ab upgrade')}
+<p><code>upgrade</code> updates the installation on its distribution channel and merges upstream skill changes with repository edits, surfacing conflicts for resolution. It preserves customization rather than blindly replacing the installed skills. See the ${reference('docs/setup.md', 'setup reference')} and ${reference('SPEC.md#163-skill-installation-vendored-namespaced-editable-d11', 'skill installation contract')} for installation, validation, and upgrade details.</p>`,
   },
 ]
 
