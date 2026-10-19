@@ -54,7 +54,7 @@ export const DOCS_PAGES: readonly DocsPage[] = [
 <p>It favors throughput over the latency of one change: independent builds can run side by side, while each still pays for planning, review, and verification. A small edit that needs an immediate answer may be better handled directly in your coding agent.</p>
 <p>It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove the operator's responsibility.</p>
 <h2>Using these docs</h2>
-<p>Start with <a href="/docs/getting-started/">Getting started</a> for installation and a first ticket. These pages introduce the system for engineers evaluating it. Feature-area guides will be added separately; the repository holds the detailed references today.</p>
+<p>Start with <a href="/docs/getting-started/">Getting started</a> for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about <a href="/docs/builds/">builds</a>, the <a href="/docs/dispatcher/">dispatcher</a>, <a href="/docs/integration/">integration</a>, and <a href="/docs/tickets/">tickets</a>; the repository holds the detailed references.</p>
 <p>The ${reference('docs/configuration.md', 'configuration reference')} describes what you configure. The ${reference('docs/spec-standard.md', 'spec standard')} defines a buildable ticket.</p>`,
   },
   {
@@ -88,6 +88,112 @@ ${command('bun ab dispatch')}
 <p>The dispatcher claims ready work and shows a live dashboard. The README quickstart starts dispatch before grooming; either order works because the dispatcher claims ready tickets as they arrive.</p>
 <p>Each claimed work ticket gets an isolated build and moves through planning, review, implementation, verification, and PR creation. Watch the build's recorded state. When it escalates, an operator must answer the question before it can continue. Merge still follows the configured landing policy and gates.</p>
 <p>For deeper reference, read the ${reference('docs/configuration.md', 'configuration reference')}, ${reference('docs/architecture.md', 'architecture map')}, and ${reference('SPEC.md', 'design specification')}. Return to the <a href="/docs/">overview</a> for the lifecycle and its limits.</p>`,
+  },
+  {
+    path: '/docs/builds/',
+    file: 'docs/builds/index.html',
+    label: 'Builds',
+    title: 'One build, end to end',
+    description:
+      'Follow a work ticket through planning, review, verification, pull request creation, and landing.',
+    content: `
+<p>A build is one execution for one ticket, identified by a slug. A work ticket follows the fixed pipeline: <code>spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize</code>. Integration nodes have a <a href="/docs/integration/">different lifecycle</a> for collecting related changes.</p>
+<h2>The spec is the contract</h2>
+<p>Grooming establishes what to build before execution. At dispatch, Autobuild pins a conforming spec as a stored artifact. <code>spec</code> names that contract, not another agent phase. Planning, review, and verification judge the change against it.</p>
+<p>Ordinary execution uses the pinned spec rather than rereading mutable tracker text. If the contract needs to change, an escalation lets an operator record a revised spec and restart from planning.</p>
+<h2>Produce, then review</h2>
+<p>The planner proposes an implementation plan. A plan reviewer checks it against the spec. Once approved, the implementer makes local commits, and a code reviewer checks the change against the spec and plan. Either reviewer can approve, request revisions with structured findings, or escalate a question.</p>
+<p>Each agent phase starts in its own session. Within a review loop, the producer continues across rounds while each reviewer gets a fresh session. The spec, approved plan, implementation notes, findings, and verification reports carry context between phases as durable artifacts. A build does not depend on one agent remembering the whole conversation.</p>
+<p>Review loops have a configured review-round ceiling. They also have a stall limit: when a reviewer marks the same finding as persisting across enough rounds, deterministic code escalates the disagreement. Reaching either limit parks the build for an answer instead of spending rounds indefinitely. An operator can replace the ceiling for the parked loop and current spec revision.</p>
+<h2>Verify, then publish</h2>
+<p>After code review approves, Autobuild prepares the build's single net change on the sampled destination and runs the configured <code>verify:*</code> steps in order. A check verifier runs a command and uses its exit code. An agent verifier inspects evidence and records a pass, failure report, or explicit skip reason. Applicability rules can also skip a step with a recorded reason.</p>
+<p>A failed verifier returns the work build to implementation with its report, followed by code review and verification again. Once verification succeeds, the finalize agent writes the pull request description; Autobuild handles publication and opens the PR.</p>
+<p><code>verify:*</code> and <code>finalize:*</code> are the only configurable extension points. Optional <code>finalize:*</code> post-steps run after PR creation, for tasks such as a changelog or ticket link. They are failure-tolerant: a failed post-step records an observation rather than killing a green build. The core phase order stays fixed.</p>
+<h2>When a human is needed</h2>
+<p>After grooming, escalations are the pipeline's human judgment gates. An unclear requirement, a persistent review disagreement, or an exhausted policy bound can park the build with a recorded question. The operator records retry guidance or an answer through the CLI or operator tools. Restarting dispatch does not answer that question, and an answer does not force success.</p>
+<p>Landing consent is a separate policy decision: repositories can require it even for a green build. Verification, forge checks, and merge gates still apply. See <a href="/docs/integration/">integration and landing policy</a>.</p>
+<h2>The reconcile epilogue</h2>
+<p>After finalize, Autobuild continues watching the destination. A clean restack onto a newer base is automatic and starts no agent. A conflicted replay enters <code>reconcile</code>: an agent resolves the kernel-prepared change on a frozen refreshed base, then the configured post-reconcile verification runs. This epilogue repeats as needed until the PR is merged or closed.</p>
+<p>The ${reference('SPEC.md', 'design specification')} defines the pipeline and review limits. Read the ${reference('docs/architecture.md', 'architecture map')} for its boundaries and the ${reference('docs/restacking.md', 'restacking reference')} for replay and verification details. The <a href="/docs/dispatcher/">dispatcher guide</a> explains how builds run and resume.</p>`,
+  },
+  {
+    path: '/docs/dispatcher/',
+    file: 'docs/dispatcher/index.html',
+    label: 'Dispatcher',
+    title: 'The dispatcher and durable state',
+    description:
+      'How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.',
+    content: `
+<p>The dispatcher watches your configured ticket source for ready work. It claims eligible tickets, establishes their specs, and starts isolated build-runners up to the repository's capacity. Agents supply judgment inside the pipeline; deterministic code decides what runs next.</p>
+<h2>Ready work becomes a build</h2>
+<p>The ready gate combines the configured workflow state with any required labels and source-specific filters. A ticket must also satisfy its blockers and destination checks before claim. Work that cannot yet start stays queued. The <a href="/docs/tickets/">tickets guide</a> explains grooming and intake.</p>
+<p>Each work build runs in its own workspace: a local git worktree or a remote sandbox, depending on the selected workspace provider. Its build-runner owns the pipeline execution, keeping concurrent builds isolated. Capacity bounds concurrent execution; it does not make every queued ticket runnable at once.</p>
+<p>An integration node can collect children without an active runner or workspace. Idle collecting nodes consume no runner capacity; node verification temporarily uses execution capacity. See <a href="/docs/integration/">the integration tree</a>.</p>
+<h2>The log is the source of truth</h2>
+<p>Build processes append typed facts to a per-build, append-only event log in the BuildStore. Repository-wide workflows and operator settings use a separate repository journal. Specs, plans, reports, and other artifacts live with that durable record.</p>
+<p>State is reduced from events. A snapshot is only a cache that can be regenerated from the log. Agent stdout never determines a phase outcome: agents report through the typed <code>ab</code> CLI, and code validates deposits, applies gates, and records transitions.</p>
+<h2>Resume the work, not the chat</h2>
+<p>Running dispatch again recovers actionable current work from durable state. The runner reads the recorded phase, completed boundaries, artifacts, and feedback rather than needing a process or conversation to have survived. A replacement sandbox can resume the same build.</p>
+<p>Recovery does not erase a human gate. An unanswered escalation stays parked until an operator records an answer. Pending operator commands and other actionable work can still proceed; restarting the dispatcher does not grant permission or reset an exhausted budget.</p>
+<h2>The operator stays outside</h2>
+<p>The operator can be a human or an external coding agent acting as orchestrator. It files and grooms tickets, watches builds, answers escalations, and manages landing consent. Locally it uses the CLI; an agent connected over MCP can use the corresponding operator tools.</p>
+<p>Autobuild does not host or start that orchestrator agent. It runs the build pipeline and exposes durable state and controls for the operator to use. The operator's chat is separate from the build's paper trail.</p>
+<p>Read the ${reference('docs/architecture.md', 'architecture map')}, ${reference('docs/operator-api.md', 'operator API reference')}, and ${reference('docs/integration-tree.md', 'integration-tree reference')} for the process and control boundaries. Follow <a href="/docs/builds/">one build end to end</a> for the phases inside a runner.</p>`,
+  },
+  {
+    path: '/docs/integration/',
+    file: 'docs/integration/index.html',
+    label: 'Integration',
+    title: 'Integrating related work',
+    description:
+      'Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.',
+    content: `
+<p>Autobuild organizes work as a tree rooted at your configured <code>baseBranch</code>. Work tickets are leaves. Node tickets are finite integration points that collect children before landing into their parent. A repository can also send every work ticket directly to the root.</p>
+<h2>Targets form the tree</h2>
+<p>A node opens an <code>ab-node/&lt;slug&gt;</code> branch at its parent's sampled head. Nodes can nest. A work ticket targets a node by ticket id, or defaults to the root when its target is omitted. Claim freezes the destination build generation and branch; editing a claimed work ticket cannot silently redirect its change.</p>
+<p>Leaves run the <a href="/docs/builds/">normal build pipeline</a>. Nodes instead collect, verify, land, and close. A node finishes collecting when its targeting tickets are done or cancelled, frozen child claims have settled, and at least one contribution has landed. Idle nodes need no runner, and empty nodes have no PR.</p>
+<p>Node verification checks the exact node head and parent. A change to either invalidates landing eligibility and requires verification again, even after a clean restack. A failed node check can be repaired by a child ticket targeting that node. A landed node closes admission; it is not a perpetual staging branch.</p>
+<h2>One identity per leaf change</h2>
+<p>A leaf contributes one canonical net change, however many implementation commits it took. The <code>Autobuild-Build: &lt;slug&gt;</code> trailer carries its identity across commit SHA rewrites. Root leaf squash landings retain that identity, and node integration preserves the ordered contributing identities. A whole node does not become one leaf commit.</p>
+<p>Autobuild restacks changes when their destination moves and cascades parent movement through descendants. Clean replay is automatic. A conflict attaches a reconcile runner with the source change's context, followed by verification as required. Nodes always reverify a changed head or parent; a clean waiting leaf restack can retain its prior verification, whose reports keep their actual head and base citations.</p>
+<h2>Blockers are a separate graph</h2>
+<p>A target says where work integrates. A blocker says which prerequisite must be available before dependent work can start. In repositories with nodes, a blocker that has a build resolves when its change is present in the dependent's sampled destination, rather than merely when the source ticket says done.</p>
+<p>Presence is checked at claim, without interrupting existing builds. Sibling work may need to land into a common ancestor and cascade before it is available. Missing or ambiguous evidence keeps the dependent queued. Repositories without nodes, and blockers without builds, use the source's native done-state resolution.</p>
+<h2>Policy authorizes landing</h2>
+<p>Ordered <code>[[landing]]</code> rules in <code>autobuild.toml</code> select <code>auto</code> or <code>consent</code>. Rules can match the source kind, destination, and ticket label; the first matching rule wins. Without a match, leaves default to auto and nodes to consent.</p>
+<p><code>ab land &lt;slug&gt;</code> requires readiness, clears a hold, and records consent to the landing. <code>ab hold &lt;slug&gt;</code> can suppress landing before readiness and withdraw consent. Neither these controls nor automatic authorization bypass readiness, verification, forge checks, protection, or merge gates.</p>
+<p>Read the ${reference('docs/integration-tree.md', 'integration-tree reference')} for admission and node lifecycle, the ${reference('docs/restacking.md', 'restacking reference')} for change identity and recovery, and the ${reference('docs/landing-policy.md', 'landing-policy reference')} for rules and forge requirements. The <a href="/docs/tickets/">tickets guide</a> explains the input side of the tree.</p>`,
+  },
+  {
+    path: '/docs/tickets/',
+    file: 'docs/tickets/index.html',
+    label: 'Tickets',
+    title: 'Tickets are the interface',
+    description:
+      'Choose a ticket source, groom buildable specs, and admit proposed work through the ready gate.',
+    content: `
+<p>A ticket tells Autobuild what change to make and why it matters. Grooming turns that intent into a buildable spec. The tracker is the input interface; the build's pinned spec is the execution contract.</p>
+<h2>Choose a source</h2>
+<p>Autobuild ships file, direct Linear, and hosted ticket sources. The file source stores tickets in lifecycle directories. Direct Linear uses your team's workflow. Hosted tickets are their own project-scoped service, not a proxy for Linear. Plugins can register additional ticket sources through the same port.</p>
+<p>The source supplies ticket content, workflow states, labels, and blockers. Configuration chooses the source and ready gate; the rest of the build pipeline keeps the same vocabulary and behavior.</p>
+<h2>Groom a buildable spec</h2>
+<p>The spec standard asks for four things:</p>
+<ul>
+<li><strong>What and why.</strong> Describe the observable change and the reason it matters. Leave implementation strategy to planning.</li>
+<li><strong>Acceptance criteria.</strong> State verifiable facts that a reviewer or check can use to decide whether the work is done.</li>
+<li><strong>Out of scope.</strong> Name adjacent work the build must leave alone.</li>
+<li><strong>Evidence.</strong> Link the decision, incident, data, or observations supporting the request.</li>
+</ul>
+<p>A human grooms the ticket and moves it to the configured ready state with any required labels. Being present in a tracker is not enough. Dispatch's spec gate returns ready tickets that cannot become conforming specs to Triage with an explanation.</p>
+<h2>Ready is a gate, not a guarantee</h2>
+<p>The dispatcher claims only tickets meeting the configured ready state and label requirements, plus any source-specific filter. Unresolved blockers leave a ticket queued rather than creating a blocked build. Destination availability and execution capacity also affect when it can start.</p>
+<p>Blockers are distinct from a build escalation. They describe prerequisites between tickets. In a node-enabled repository, prerequisites with builds must be present at the sampled destination; see <a href="/docs/integration/">integration and blocker presence</a>.</p>
+<p>At dispatch, Autobuild pins the spec for the build. Changing tracker text later does not quietly change what its reviewers approved. A deliberate spec revision requires an operator answer to an escalation and restarts planning.</p>
+<h2>Intake proposes work</h2>
+<p>Anything that can write a ticket can propose work from an outside signal. Autobuild's shipped observation harvest collects discoveries agents record while staying within their current spec, synthesizes proposals, reviews them, and files approved tickets. Harvest is a repository workflow, not another build phase.</p>
+<p>Proposals default to the configured Triage state for a human to groom before dispatch. A repository can explicitly waive that harvest grooming gate with <code>[tickets].proposalState</code>, including choosing its ready state. That waiver does not waive blocker eligibility or the dispatch spec gate.</p>
+<p>Scheduled ingesters for signals such as telemetry remain proposed extensions; they are not shipped integrations. A signal is evidence for a proposal, not permission to dispatch work.</p>
+<p>Read the ${reference('docs/spec-standard.md', 'spec standard')}, ${reference('docs/configuration.md', 'ticket-source configuration reference')}, and ${reference('SPEC.md', 'design specification')} for the full contract and intake model. Follow the <a href="/docs/dispatcher/">dispatcher guide</a> to see what happens at claim, or <a href="/docs/getting-started/">Getting started</a> to groom a first ticket.</p>`,
   },
 ]
 
