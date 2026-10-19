@@ -95,10 +95,9 @@ export interface PluginDiagnosis {
 export interface PluginLoadOptions {
   /** Root whose installed dependencies satisfy bare package specifiers first. */
   packageRoot?: string
-  /** Autobuild installation root tried after `packageRoot`, so an extension
-   * installed next to the CLI (`bun add -g @defrex/autobuild-<extension>`)
-   * loads without being added to the repository. Defaults to the running
-   * distribution's root. */
+  /** Autobuild installation root tried as a fallback after `packageRoot`.
+   * Extensions normally live in the repository's development dependencies.
+   * Defaults to the running distribution's root. */
   installationRoot?: string
   /** Guest context (AUT-517): a package-kind specifier that cannot be
    * resolved from either candidate is skipped with a notice instead of

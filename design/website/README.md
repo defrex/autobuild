@@ -7,9 +7,17 @@ Design canvas so builds can read it without access to claude.ai.
   initial fully-local state. It renders on its own in a browser. Its markup is
   a design export, not implementation guidance.
 - `reference-desktop.png` (1440px wide) and `reference-phone.png` (390px wide)
-  are screenshots of `reference.html`. `reference-desktop-remote.png` and
-  `reference-phone-remote.png` show the seam selector after switching every seam
-  to remote, with Codex selected as the runtime.
+  and the corresponding `reference-desktop-remote.png` and
+  `reference-phone-remote.png` were refreshed on 2026-10-19 using
+  `bun run capture:website` from the implemented page for the approved
+  project-pinned-install command-copy revision: `bun add -d --exact
+  @defrex/autobuild`, `bun ab init`, and `bun ab dispatch`. The remote frames
+  switch every seam to remote, with Codex selected as the runtime.
+  All four frames were reviewed at their original widths; both phone probes
+  reported scrollWidth 390 with innerWidth 390. The longer command wraps in
+  the existing layout; no CSS, type, spacing, diagram, or hero assets changed.
+  These frames include the existing real dashboard and responsive diagrams
+  described below; `reference.html` remains the historical design export.
 - The hero dashboard in the reference is drawn by hand and its steps and
   states do not match the product. The built page supersedes it with the
   real `ab dispatch` frame (`packages/website/src/hero-frame.txt`, captured
