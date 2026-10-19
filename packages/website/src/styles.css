@@ -381,3 +381,83 @@ a.dim {
     display: inline;
   }
 }
+
+/* Read mode: the broadcast palette and type scale, within a 72-cell measure. */
+.docs {
+  color-scheme: dark;
+}
+.docs-wrap {
+  max-width: calc(72ch + 32px);
+  padding-inline: 16px;
+  margin-inline: auto;
+  min-width: 0;
+}
+.docs nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 3ch;
+  padding: 0;
+  margin: 0 0 48px;
+  list-style: none;
+}
+.docs nav a,
+.docs .masthead a,
+.docs .foot a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.docs nav [aria-current="page"] {
+  color: #e6e6e6;
+  font-weight: 700;
+  text-decoration-thickness: 2px;
+}
+.docs article {
+  overflow-wrap: anywhere;
+}
+.docs article h1 {
+  margin-bottom: 24px;
+}
+.docs article h2 {
+  color: #d7c84f;
+  font-size: 20px;
+  line-height: 28px;
+  margin: 48px 0 16px;
+}
+.docs article p,
+.docs article ul,
+.docs article ol {
+  margin: 0 0 24px;
+}
+.docs article ul,
+.docs article ol {
+  padding-left: 3ch;
+}
+.docs article li + li {
+  margin-top: 16px;
+}
+.docs article a {
+  text-underline-offset: 0.2em;
+}
+.docs .terminal {
+  margin: 24px 0;
+  padding: 24px 2ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.docs .foot {
+  margin-top: 72px;
+  flex-wrap: wrap;
+}
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  padding: 12px 1ch;
+  background: #141414;
+  transform: translateY(-120%);
+}
+.skip-link:focus {
+  transform: none;
+}
