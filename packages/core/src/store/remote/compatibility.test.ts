@@ -6,6 +6,7 @@ import {
   compatibilityAdvice,
   clientIdentityError,
   stableVersion,
+  releaseVersion,
   RELEASE_LINE_PROTOCOLS,
 } from './compatibility'
 
@@ -42,26 +43,22 @@ test('major families clamp rather than inventing previous major lines', () => {
   expect(supportedClientRange('0.100.0').minVersion).toBe('0.98.0')
 })
 
-test('identities are strict stable versions with known independent protocols', () => {
-  for (const value of [
-    null,
-    '',
-    'v0.11.0',
-    '0.11',
-    '0.11.0-rc.1',
-    '0.11.0+build',
-    '00.11.0',
-    ' 0.11.0',
-  ]) {
+test('identities reject noncanonical versions and enforce independent protocols', () => {
+  for (const value of [null, '', 'v0.11.0', '0.11', '0.11.0+build', '00.11.0', ' 0.11.0']) {
     expect(stableVersion(value)).toBeUndefined()
     expect(classifyClient(value, supportedClientRange())).toBe('invalid')
   }
   const oldest = supportedClientRange().minVersion
-  for (const value of [oldest, AUTOBUILD_VERSION.replace(/\.\d+$/, '.999')])
+  for (const value of [
+    oldest,
+    `${releaseVersion(AUTOBUILD_VERSION)!.major}.${releaseVersion(AUTOBUILD_VERSION)!.minor}.999`,
+  ])
     expect(
       clientIdentityError(
         value,
-        value === oldest ? RELEASE_LINE_PROTOCOLS[oldest.split('.').slice(0, 2).join('.')]! : '4',
+        releaseVersion(value)!.minor === releaseVersion(AUTOBUILD_VERSION)!.minor
+          ? REMOTE_STORE_PROTOCOL_VERSION
+          : RELEASE_LINE_PROTOCOLS[oldest.split('.').slice(0, 2).join('.')]!,
       ),
     ).toBeUndefined()
   for (const protocol of [null, '2', '3', '04'])
@@ -70,10 +67,10 @@ test('identities are strict stable versions with known independent protocols', (
 
 // Exercise negotiation, rather than just range arithmetic, against the actual
 // distribution and a synthetic next release before package.json is bumped.
-const installed = stableVersion(AUTOBUILD_VERSION)!
+const installed = releaseVersion(AUTOBUILD_VERSION)!
 const nextMinor = `${installed.major}.${installed.minor + 1}.0`
 for (const serviceVersion of [AUTOBUILD_VERSION, nextMinor, '2.0.0']) {
-  test(`every advertised line has a protocol identity for service ${serviceVersion}`, () => {
+  test(`recorded lines negotiate and unknown lines fail closed for service ${serviceVersion}`, () => {
     const range = supportedClientRange(serviceVersion)
     const first = stableVersion(range.minVersion)!
     const end = stableVersion(range.maxVersionExclusive)!
@@ -81,11 +78,10 @@ for (const serviceVersion of [AUTOBUILD_VERSION, nextMinor, '2.0.0']) {
       const line = `${first.major}.${minor}`
       const protocol =
         minor === end.minor - 1 ? REMOTE_STORE_PROTOCOL_VERSION : RELEASE_LINE_PROTOCOLS[line]
-      expect(protocol).toBeDefined()
       for (const patch of [0, 999]) {
-        expect(
-          clientIdentityError(`${line}.${patch}`, protocol ?? null, serviceVersion),
-        ).toBeUndefined()
+        const error = clientIdentityError(`${line}.${patch}`, protocol ?? null, serviceVersion)
+        if (protocol === undefined) expect(error).toContain('unsupported protocol identity')
+        else expect(error).toBeUndefined()
       }
     }
   })
@@ -138,5 +134,51 @@ test('a later service retains the published 0.14 protocol-4 identity', () => {
     expect(clientIdentityError(client, '3', '0.15.0', '4')).toContain(
       'unsupported protocol identity',
     )
+  }
+})
+
+test('canonical prereleases share stable release lines and independent protocol gates', () => {
+  const range = supportedClientRange('1.0.0-beta.1')
+  expect(range).toEqual(supportedClientRange('1.0.0'))
+  for (const client of [
+    '1.0.0-beta.0',
+    '1.0.0-beta.1',
+    '1.0.0',
+    '1.0.99-rc.a-1',
+    '1.0.0-0',
+    '1.0.0-alpha',
+    '1.0.0-a.1.Z-2',
+  ]) {
+    expect(releaseVersion(client)).toBeDefined()
+    expect(stableVersion(client)?.version).toBe(client.includes('-') ? undefined : client)
+    expect(clientIdentityError(client, '4', '1.0.0-beta.1')).toBeUndefined()
+    expect(clientIdentityError(client, '3', '1.0.0-beta.1')).toContain('unsupported protocol')
+    expect(classifyClient(client, supportedClientRange('1.0.0'))).toBe('supported')
+  }
+  for (const client of ['0.14.0', '1.1.0-beta.0']) {
+    expect(compatibilityAdvice(client, '1.0.0-beta.1', range)).toBe(
+      compatibilityAdvice(client, '1.0.0', range)?.replace(
+        'service Autobuild 1.0.0 ',
+        'service Autobuild 1.0.0-beta.1 ',
+      ),
+    )
+  }
+  expect(compatibilityAdvice('1.1.0-beta.0', '1.0.0', range)).toContain('service first')
+  expect(clientIdentityError('0.12.0-beta.0', '3', '0.14.0')).toBeUndefined()
+  expect(clientIdentityError('0.12.0-beta.0', '4', '0.14.0')).toContain('unsupported protocol')
+  expect(clientIdentityError('2.0.0-beta.0', '4', '2.1.0')).toContain('unsupported protocol')
+  for (const value of [
+    '1.0.0-',
+    '1.0.0-a..b',
+    '1.0.0-01',
+    '1.0.0+a',
+    '1.0.0-beta+a',
+    'v1.0.0',
+    ' 1.0.0',
+    '1.0.0\n',
+    '01.0.0',
+  ]) {
+    expect(releaseVersion(value)).toBeUndefined()
+    expect(classifyClient(value, range)).toBe('invalid')
   }
 })

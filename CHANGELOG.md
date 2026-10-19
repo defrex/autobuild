@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#650](https://github.com/defrex/autobuild/pull/650) — Treat prerelease versions as members of their release line
 - [#649](https://github.com/defrex/autobuild/pull/649) — Release prerelease versions under their own npm dist-tag
 - [#648](https://github.com/defrex/autobuild/pull/648) — Document the integration tree model end to end for 1.0
 - [#647](https://github.com/defrex/autobuild/pull/647) — Show the integration tree and landing consent queue
