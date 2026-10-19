@@ -78,3 +78,29 @@ and 192px phone, footer gaps match, and terminal-to-action spacing is 48px.
 The keyboard skip link was also checked in Chromium: focused, visible at the
 top of the viewport, with the existing 2px focus outline. The maintainer
 reviews this integrated reference set before the website node lands.
+## Pipeline motion (2026-10-19)
+
+The pipeline plays once on first viewport entry: twelve 400ms beats visit spec,
+plan, plan-review, plan (revision), plan-review (approval), implement,
+code-review, implement (revision), code-review (approval), verify:*, finalize,
+and merged. Each review return emphasizes its existing cyan connector. All
+labels remain selectable, in place and fully visible. After 4,800ms the drawing
+returns to its original colors; the native “Replay animation” word control stays
+below it. Replay uses the same controller intended for the other figures.
+
+The four `reference-*.png` baselines listed above continue to represent actual
+reduced motion, including the documentation links from the foundation revision above. Reduced motion and disabled JavaScript
+show the original complete drawing with no replay control. The additional
+`reference-desktop-motion-final.png`, `reference-phone-motion-final.png`,
+`reference-desktop-remote-motion-final.png`, and
+`reference-phone-remote-motion-final.png` record normal-motion completion with
+the replay control visible. They include those same documentation links and come from the same capture adapter at 4,800ms;
+they do not replace the reduced-motion baselines. `reference.html` remains the
+historical design export.
+
+Review evidence follows [the capture protocol](../../tools/website-capture.md):
+one logical `pipeline` marker covers both responsive drawings. Capture seeks
+the production timeline at 0, 2,400 and 4,800ms, and checks reduced-motion
+stillness and 390px overflow. Separate Chromium playback checks exercise actual
+viewport entry, both review returns, keyboard replay, rapid replay, breakpoint
+changes, preference changes and the JavaScript-disabled fallback.

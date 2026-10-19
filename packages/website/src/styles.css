@@ -461,3 +461,39 @@ a.dim {
 .skip-link:focus {
   transform: none;
 }
+
+/* State changes use the drawing's existing colors and never move its labels. */
+[data-motion-node][data-motion-active] {
+  outline: 2px solid #55b8b8;
+  outline-offset: -2px;
+}
+[data-motion-node][data-motion-active] b {
+  color: #55b8b8;
+}
+[data-motion-node="merged"][data-motion-active] {
+  outline-color: #65b868;
+}
+[data-motion-node="merged"][data-motion-active] b {
+  color: #65b868;
+}
+[data-motion-edge][data-motion-traversed="false"] {
+  opacity: 0.3;
+}
+/* Failure remains legible while the normal path is being explained. */
+[data-motion-edge="failure"][data-motion-traversed] {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .motion-replay {
+    display: none;
+  }
+  [data-motion-node][data-motion-active] {
+    outline: none;
+  }
+  [data-motion-node][data-motion-active] b {
+    color: inherit;
+  }
+  [data-motion-edge][data-motion-traversed] {
+    opacity: 1;
+  }
+}
