@@ -74,7 +74,34 @@ nested `bun test`'s printed test name. Prefix every release command with
 `env -u CLAUDECODE`. If that test is ever rewritten to assert on exit status
 instead of reporter output, this note can go.
 
-## What the command does for you
+## Prereleases
+
+Use an exact version selector for a prerelease:
+
+```sh
+env -u CLAUDECODE bun run release --version 1.0.0-beta.0 --dry-run
+env -u CLAUDECODE bun run release --version 1.0.0-beta.0
+```
+
+The first prerelease identifier names the npm dist-tag: `beta` for
+`1.0.0-beta.0`, `rc` for `1.0.0-rc.2`. Numeric identifiers, `latest`,
+and identifiers interpreted as semver ranges are refused before gates.
+Every published package uses `--tag <channel>`; the stable `latest` tag stays
+at the last stable release. GitHub receives `--prerelease --latest=false`.
+
+The same preflight, peer-floor guard, gates, summary, lock refresh and smoke
+checks run. A prerelease still requires nonempty Unreleased entries. Its
+GitHub notes contain those current entries under the version/date heading,
+with the optional summary. It leaves CHANGELOG.md, README.md, hosted deployment
+pins and hosted documentation byte-identical. Its commit contains only workspace
+manifests and bun.lock when the refresh changes it. Recovery commands preserve
+the channel and GitHub flags; run them exactly as printed.
+
+A later stable target consumes all accumulated Unreleased entries once, updates
+the README and hosted pins, and publishes under `latest`. Both
+`--version 1.0.0` and `--major` from `1.0.0-beta.2` select stable 1.0.0.
+
+## What the command does for a stable release
 
 A real run, in order: runs the three gates; asks Claude non-interactively for
 a short release summary; writes every workspace `package.json`,
@@ -93,8 +120,9 @@ non-private workspace package in dependency order (`@defrex/autobuild`, then
 `@defrex/autobuild-hosted-dispatcher`).
 
 Do not perform any of those steps by hand, and do not add files to the release
-commit — it validates that it contains exactly the changelog, README,
-workspace manifest paths, and `bun.lock` when the refresh changed it. A release
+commit. Stable releases validate workspace manifests, changelog, README, the
+hosted template/deployment manifests and hosted docs when present, and
+`bun.lock` when the refresh changed it. A release
 that leaves `bun.lock` stale makes every later install rewrite it, so builds
 start with a dirty lockfile.
 
@@ -121,3 +149,12 @@ start with a dirty lockfile.
 Restore any stash you took, and confirm the result: `git log --oneline -2`,
 `git tag --list`, `gh release list --limit 3`, and
 `npm view @defrex/autobuild version`.
+
+For prereleases, run `npm view @defrex/autobuild dist-tags` and confirm the
+beta or rc tag names the new version while latest still names the last stable
+release. A project can install the channel or pin an exact version:
+
+```sh
+bun add -g @defrex/autobuild@beta
+bun add -g @defrex/autobuild@1.0.0-beta.0
+```
