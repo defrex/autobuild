@@ -107,7 +107,7 @@ A real run, in order: runs the three gates; asks Claude non-interactively for
 a short release summary; writes every workspace `package.json`,
 `CHANGELOG.md` (cutting `## Unreleased` into `## vX.Y.Z — DATE` and leaving
 Unreleased empty), and the pinned README install command
-(`bun add -g @defrex/autobuild@X.Y.Z`); refreshes `bun.lock` with
+(`bun add -d --exact @defrex/autobuild@X.Y.Z`); refreshes `bun.lock` with
 `bun install --lockfile-only` so it records the new workspace versions;
 commits exactly those files as
 `chore: release vX.Y.Z`; creates an annotated tag; smokes the tag from a clean
@@ -152,9 +152,11 @@ Restore any stash you took, and confirm the result: `git log --oneline -2`,
 
 For prereleases, run `npm view @defrex/autobuild dist-tags` and confirm the
 beta or rc tag names the new version while latest still names the last stable
-release. A project can install the channel or pin an exact version:
+release. A project can install the channel or pin an exact version as a development
+dependency. The channel resolves at install time, and the resulting version
+is saved exactly:
 
 ```sh
-bun add -g @defrex/autobuild@beta
-bun add -g @defrex/autobuild@1.0.0-beta.0
+bun add -d --exact @defrex/autobuild@beta
+bun add -d --exact @defrex/autobuild@1.0.0-beta.0
 ```
