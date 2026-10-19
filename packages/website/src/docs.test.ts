@@ -8,7 +8,14 @@ import { REPO_URL, SITE_URL } from './constants'
 
 test('docs emit complete shared navigation and distinct metadata with rooted assets', async () => {
   const files = await buildFiles()
-  expect(DOCS_PAGES.map((p) => p.path)).toEqual(['/docs/', '/docs/getting-started/'])
+  expect(DOCS_PAGES.map((p) => p.path)).toEqual([
+    '/docs/',
+    '/docs/getting-started/',
+    '/docs/builds/',
+    '/docs/dispatcher/',
+    '/docs/integration/',
+    '/docs/tickets/',
+  ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
   for (const page of DOCS_PAGES) {
@@ -29,7 +36,7 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
   }
 })
 
-test('build writes both docs pages and cleans stale output', async () => {
+test('build writes all docs pages and cleans stale output', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'website-docs-'))
   try {
     await Bun.write(join(dir, 'stale.html'), 'stale')
