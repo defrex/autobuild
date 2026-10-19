@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { valid, prerelease, lt } from 'semver'
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -23,19 +24,36 @@ export const deploymentTemplatePaths = [
   'templates/hosted-service',
   'packages/hosted-store-service/deployment',
 ]
-export async function checkDeploymentTemplates() {
+export async function checkDeploymentTemplates(root = repoRoot) {
   for (const file of ['package.json', 'vercel.json']) {
-    const text = await readFile(join(repoRoot, deploymentTemplatePaths[0]!, file), 'utf8')
-    assert.equal(text, await readFile(join(repoRoot, deploymentTemplatePaths[1]!, file), 'utf8'))
-    const docs = await readFile(join(repoRoot, 'docs/hosted-service.md'), 'utf8')
+    const text = await readFile(join(root, deploymentTemplatePaths[0]!, file), 'utf8')
+    assert.equal(text, await readFile(join(root, deploymentTemplatePaths[1]!, file), 'utf8'))
+    const docs = await readFile(join(root, 'docs/hosted-service.md'), 'utf8')
     assert(docs.includes(text.trim()), `Documentation must contain canonical ${file}`)
   }
   const manifest = JSON.parse(
-    await readFile(join(repoRoot, deploymentTemplatePaths[0]!, 'package.json'), 'utf8'),
+    await readFile(join(root, deploymentTemplatePaths[0]!, 'package.json'), 'utf8'),
   )
-  const version = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version
-  assert.equal(manifest.dependencies['@defrex/autobuild'], version)
-  assert.equal(manifest.dependencies['@defrex/autobuild-hosted-store-service'], version)
+  const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
+  assert(
+    typeof version === 'string' && valid(version) === version,
+    'Root version must be exact semver',
+  )
+  const pin = manifest.dependencies?.['@defrex/autobuild']
+  assert(typeof pin === 'string' && valid(pin) === pin, 'Deployment pin must be exact semver')
+  assert.equal(
+    pin,
+    manifest.dependencies?.['@defrex/autobuild-hosted-store-service'],
+    'Deployment pins must match',
+  )
+  if (prerelease(version) === null) {
+    assert.equal(pin, version, 'Stable deployment pin must equal root version')
+  } else {
+    assert(
+      prerelease(pin) === null && lt(pin, version),
+      'Prerelease root requires a lower stable deployment pin',
+    )
+  }
 }
 
 async function command(
