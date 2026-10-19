@@ -503,12 +503,23 @@ optional `localPath` explicitly identifies dispatcher reachability. Local Forge
 operations fall back to the main checkout when `localPath` is absent.
 `packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
-resumes at the branch tip and never re-cuts, so the first provisioning fact
-remains immutable provenance. Separately, each successful implementation terminal in
+resumes at the branch tip, so the first provisioning fact remains immutable
+original provenance. A remote workspace lost before its branch is published
+can be freshly cut again; the latest `remote` or `local` provisioning base is
+the fallback review boundary, while `existing` facts only describe resumes.
+Separately, each successful implementation terminal in
 `packages/core/src/cli/terminals.ts` asks the Forge to snapshot its authoritative base when
 that optional capability exists; otherwise it privately refreshes the frozen
 target branch from `origin` and records
-the unique merge-base of that snapshot and `HEAD` in `implement.completed`.
+a provenance-bounded range in `implement.completed`. The current implementation
+or replay base takes precedence over provisioning. That effective base must be
+an ancestor of HEAD; the unique snapshot/HEAD merge-base is selected only when
+it descends from the effective base. A rewritten destination therefore cannot
+pull sibling contributions into review. Successful leaf `restack.rewritten`,
+`restack.completed`, and `reconcile.rewritten` facts project the current range
+as `targetBase..headSha`, without modifying historical events or implementation
+notes/round. Context exposes this projection to review and agent verify steps;
+node integration-cycle context remains separate.
 It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
 errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
 execution-time target refresh in `packages/core/src/processes/build-runner.ts` remains a

@@ -1,3 +1,4 @@
+import { leafRestackLog } from '../kernel/generators/leaf-restack-log'
 import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 /**
  * `ab context` materializer tests (SPEC §8.3): the exact `.ab/` tree per
@@ -1163,3 +1164,71 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
     ).rejects.toThrow(/pinned ticket asset mock\/gone revision 0 is missing/)
   })
 })
+
+test.each(['restack', 'reconcile'])(
+  'review and all configured agent verifies consume %s ranges before PR creation',
+  async (kind) => {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'original')
+    await writeFile(
+      join(workspace, 'autobuild.toml'),
+      `
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = ["first", "second"]
+[verify.first]
+kind = "agent"
+skill = "verify-first"
+[verify.second]
+kind = "agent"
+skill = "verify-second"
+`,
+    )
+    for (const event of leafRestackLog().slice(6))
+      await store.append(BUILD, { actor: event.actor, type: event.type, payload: event.payload })
+    let base = 'c'.repeat(40)
+    let head = 'e'.repeat(40)
+    if (kind === 'reconcile') {
+      base = '1'.repeat(40)
+      head = '2'.repeat(40)
+      const transaction = leafRestackLog().find((e) => e.type === 'restack.rewritten')!
+      const {
+        trigger: _trigger,
+        cycle: _cycle,
+        observation: _observation,
+        message: _message,
+        ...tx
+      } = transaction.payload
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.rewritten',
+        payload: {
+          ...tx,
+          attempt: 1,
+          targetBase: base,
+          headSha: head,
+          conflicted: false,
+        },
+      })
+      await store.append(BUILD, {
+        actor: agent('reconcile'),
+        type: 'reconcile.completed',
+        payload: {
+          headSha: head,
+          rewriteId: tx.id,
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        },
+      })
+    }
+    for (const phase of ['code-review', 'verify:first', 'verify:second'] as const) {
+      const context = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1 }),
+        workspacePath: workspace,
+      })
+      expect(context.commitRange).toEqual({ base, head })
+    }
+  },
+)
