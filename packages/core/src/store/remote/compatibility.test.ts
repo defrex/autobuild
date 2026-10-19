@@ -1,6 +1,7 @@
 import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 import { expect, test } from 'bun:test'
 import {
+  clientSupportsIntegrationAuditPending,
   classifyClient,
   supportedClientRange,
   compatibilityAdvice,
@@ -181,4 +182,36 @@ test('canonical prereleases share stable release lines and independent protocol 
     expect(releaseVersion(value)).toBeUndefined()
     expect(classifyClient(value, range)).toBe('invalid')
   }
+})
+
+test('audit capability follows its introduction line independently of admission', () => {
+  for (const version of [
+    '0.14.0',
+    '0.14.999',
+    '0.14.0-beta.0',
+    '0.15.0',
+    '1.0.0-beta.0',
+    '1.0.0',
+    AUTOBUILD_VERSION,
+    '1.99.0',
+    '2.0.0',
+  ])
+    expect(clientSupportsIntegrationAuditPending(version)).toBe(true)
+  for (const version of [
+    '0.0.0',
+    '0.12.0',
+    '0.13.999',
+    null,
+    undefined,
+    '',
+    'v1.0.0',
+    '1.0',
+    '1.0.0+build',
+    '01.0.0',
+    '1.0.0-01',
+    ' 1.0.0',
+  ])
+    expect(clientSupportsIntegrationAuditPending(version)).toBe(false)
+  expect(clientIdentityError('0.13.0', '3', '0.14.0', '4')).toBeUndefined()
+  expect(clientSupportsIntegrationAuditPending('0.13.0')).toBe(false)
 })
