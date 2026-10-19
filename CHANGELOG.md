@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#659](https://github.com/defrex/autobuild/pull/659) — Document builds, dispatch, integration and tickets on the website
 - [#657](https://github.com/defrex/autobuild/pull/657) — Add a documentation section to the website
 - [#655](https://github.com/defrex/autobuild/pull/655) — Extend website capture coverage to docs and animated figures
 - [#654](https://github.com/defrex/autobuild/pull/654) — Recommend project-pinned Autobuild installation
