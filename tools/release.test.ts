@@ -278,12 +278,36 @@ describe('release transforms', () => {
     ).toThrow('has no entries')
   })
 
+  test('tracked README and future stable pins agree with the release renderer', async () => {
+    const assertStableInstall = (readme: string) => {
+      const block = readme.split(README_INSTALL_START)[1]?.split(README_INSTALL_END)[0]
+      const match = block?.match(
+        /^\n\n```sh\nbun add -d --exact @defrex\/autobuild@(\d+\.\d+\.\d+)\n```\n\n$/,
+      )
+      expect(match).not.toBeNull()
+      expect(match?.[1]).toBeDefined()
+      expect(replaceReadmeInstall(readme, match?.[1] ?? '')).toBe(readme)
+    }
+    assertStableInstall(await readFile(join(repoRoot, 'README.md'), 'utf8'))
+    assertStableInstall(replaceReadmeInstall(fixtureReadme, '1.0.0'))
+  })
+
   test('strictly replaces only the fenced README command and manifest version', () => {
     const replaced = replaceReadmeInstall(fixtureReadme, '2.1.0')
-    expect(replaced).toContain('bun add -g @defrex/autobuild@2.1.0')
+    expect(replaced).toBe(
+      fixtureReadme.replace(
+        'bun add -g @defrex/autobuild@0.0.0',
+        'bun add -d --exact @defrex/autobuild@2.1.0',
+      ),
+    )
     expect(replaced).not.toContain('github:')
     expect(replaced.match(/release-install:start/g)).toHaveLength(1)
     expect(() => replaceReadmeInstall('# no markers\n', '2.1.0')).toThrow('exactly one')
+    for (const marker of [README_INSTALL_START, README_INSTALL_END]) {
+      expect(() => replaceReadmeInstall(`${fixtureReadme}${marker}`, '2.1.0')).toThrow(
+        'exactly one',
+      )
+    }
     expect(() =>
       replaceReadmeInstall(`${README_INSTALL_END}\n${README_INSTALL_START}`, '2.1.0'),
     ).toThrow('out of order')
@@ -615,7 +639,7 @@ describe('release orchestration', () => {
       '"version": "2.0.1"',
     )
     expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain(
-      '@defrex/autobuild@2.0.1',
+      'bun add -d --exact @defrex/autobuild@2.0.1',
     )
     expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
   })
@@ -769,7 +793,7 @@ describe('release orchestration', () => {
     expect(testHarness.requests.some((request) => request.command === 'claude')).toBe(true)
     expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
     expect(testHarness.logs.join('\n')).toContain('This release adds a new capability')
-    expect(testHarness.logs.join('\n')).toContain('bun add -g @defrex/autobuild@2.1.0')
+    expect(testHarness.logs.join('\n')).toContain('bun add -d --exact @defrex/autobuild@2.1.0')
     expect(testHarness.logs.join('\n')).toContain(
       'Would publish fixture@2.1.0, @fixture/core@2.1.0 to the npm registry, in that order, as release-bot.',
     )
@@ -1259,7 +1283,9 @@ describe('prerelease publishing', () => {
           'packages/hosted-store-service/package.json',
         ])
       } else {
-        expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain('@3.0.0')
+        expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain(
+          'bun add -d --exact @defrex/autobuild@3.0.0',
+        )
         expect(await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')).toContain('## v3.0.0 —')
       }
       expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
