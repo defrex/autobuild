@@ -126,8 +126,8 @@ resolve first from the consuming repository's main checkout, so they use that
 repository's installed dependencies and remain available when a local store
 places linked worktrees outside the checkout's package ancestry; a package the
 repository lacks then resolves from the Autobuild installation the CLI runs
-from, so an extension installed next to the CLI (`bun add -g
-@defrex/autobuild-<extension>`) loads without being added to the repository. A
+from as a fallback. Install extensions as repository development dependencies
+with `bun add -d --exact @defrex/autobuild-<extension>`. A
 repository copy always wins over an installed one. Dispatch and sessionless
 commands naturally use the main checkout for both repository roots. Autobuild
 does not install a missing package.

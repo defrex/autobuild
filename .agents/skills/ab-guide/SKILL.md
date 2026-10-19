@@ -5,6 +5,10 @@ description: Authoritative reference for the autobuild system as installed in th
 
 # Autobuild system guide
 
+Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
+Here, `ab <command>` means the repository-installed CLI; run it as
+`bun ab <command>`, for example `bun ab init`.
+
 Reference material for an agent working on a repository that uses autobuild.
 This skill describes the *system*. It drives no phase and changes no files.
 
@@ -298,9 +302,9 @@ under the preceding table.
 Repository-path specifiers resolve from the config-bearing root, which is the
 immutable build worktree in scoped phases. npm package specifiers resolve from
 the consuming main checkout's installed dependencies first, then from the
-Autobuild installation the CLI runs from, so an extension installed next to
-the CLI (`bun add -g @defrex/autobuild-<extension>`) loads without being added
-to the repository; a repository copy wins over an installed one, and missing
+Autobuild installation the CLI runs from as a fallback. Install extensions in
+the consuming repository with `bun add -d --exact @defrex/autobuild-<extension>`;
+a repository copy wins over an installed one, and missing
 packages fail and are never installed automatically. Specifier strings must be
 unique: an exact repeat fails config
 validation before resolution or evaluation, identifies the repeated value and
