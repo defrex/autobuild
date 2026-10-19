@@ -24,7 +24,7 @@ needs an authenticated [`gh` CLI](https://cli.github.com) or an exported
 <!-- release-install:start -->
 
 ```sh
-bun add -g @defrex/autobuild@0.14.0
+bun add -d --exact @defrex/autobuild@0.14.0
 ```
 
 <!-- release-install:end -->
