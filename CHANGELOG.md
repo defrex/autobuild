@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#663](https://github.com/defrex/autobuild/pull/663) — Show the integration tree on the landing page
 - [#660](https://github.com/defrex/autobuild/pull/660) — Document operating, seams and configuration on the website
 - [#658](https://github.com/defrex/autobuild/pull/658) — Animate the website pipeline figure through its review loops
 - [#659](https://github.com/defrex/autobuild/pull/659) — Document builds, dispatch, integration and tickets on the website
