@@ -51,7 +51,13 @@ describe('static site', () => {
     const dir = await mkdtemp(join(tmpdir(), 'website-'))
     tmp.push(dir)
     await buildSite(dir)
-    expect((await readdir(dir)).sort()).toEqual(['index.html', 'og.png', 'site.css', 'site.js'])
+    expect((await readdir(dir)).sort()).toEqual([
+      'docs',
+      'index.html',
+      'og.png',
+      'site.css',
+      'site.js',
+    ])
   })
 
   test('copy matches the design reference word for word, except the hero frame', async () => {
@@ -63,9 +69,12 @@ describe('static site', () => {
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
     const reference = textOf(withoutHeroFigure(updatedReference))
+    const landing = html
+      .replace('<a class="btn" href="/docs/">Documentation</a>', '')
+      .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(words(textOf(withoutHeroFigure(html)))).toEqual(words(reference))
+    expect(words(textOf(withoutHeroFigure(landing)))).toEqual(words(reference))
   })
 
   test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
@@ -98,7 +107,7 @@ describe('static site', () => {
     expect(html).not.toContain('inside one build-runner')
     expect(html).not.toContain('setup.md')
     const last = html.slice(html.lastIndexOf('<section'))
-    expect(last.match(/<a class="btn"/g)).toHaveLength(1)
+    expect(last.match(/<a class="btn"/g)).toHaveLength(2)
     expect(last).toContain(`<a class="btn" href="${REPO_URL}">View on GitHub</a>`)
     expect(css).toContain('gap: 288px')
     const phone = css.slice(css.indexOf('@media (max-width: 719px)'))
