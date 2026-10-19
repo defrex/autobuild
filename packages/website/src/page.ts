@@ -20,7 +20,7 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
 }
 
 const hero = (frame: string): string =>
-  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${heroFrame(frame)}</section>`
+  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a><a class="btn" href="/docs/">Documentation</a></div></div>${heroFrame(frame)}</section>`
 
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}${pipelineDiagram()}</section>`
 
@@ -32,7 +32,7 @@ const throughput = `<section class="section">${intro('autobuild · throughput', 
 
 const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}${intakeDiagram()}</section>`
 
-const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'bun ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'bun ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
+const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'bun ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'bun ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="/docs/getting-started/">Getting started</a><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
 export interface PageInput {
   /** The tracked `hero-frame.txt`: the dashboard's own ANSI lines. */
