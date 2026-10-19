@@ -267,6 +267,8 @@ export interface SubscribeOptions {
 }
 
 export interface BuildStore {
+  /** Reads cross a network boundary; presentation polling may use a relaxed cadence. */
+  readonly networkReads?: boolean
   /** Return an interface-enforced handle with authority over exactly `slug`.
    * The handle retains this shape so foreign/admin calls fail loudly. */
   scopeBuild(slug: string): BuildScopedStore
