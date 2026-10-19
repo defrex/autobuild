@@ -170,6 +170,7 @@ export interface RemoteBuildStoreOptions {
 }
 
 export class RemoteBuildStore implements BuildStore {
+  readonly networkReads = true
   private readonly base: string
   private readonly token: string | undefined
   private readonly fetchFn: typeof fetch

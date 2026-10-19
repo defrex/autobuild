@@ -3755,17 +3755,21 @@ class DispatchLoop {
 
   private startRendering(): void {
     if (!this.dashboard || this.refresh !== undefined) return
-    this.refresh = new DashboardRefresh(async () => {
-      try {
-        await this.readFrame()
-      } catch (error) {
-        if (this.refresh?.isFocused)
-          this.warn(
-            `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
-          )
-        throw error
-      }
-    })
+    this.refresh = new DashboardRefresh(
+      async () => {
+        try {
+          await this.readFrame()
+        } catch (error) {
+          if (this.refresh?.painting)
+            this.warn(
+              `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          throw error
+        }
+      },
+      undefined,
+      this.presentationStore.networkReads,
+    )
     if (this.opts.once !== true) {
       if (this.opts.input !== undefined) this.opts.terminal?.modes.enter(FOCUS_REPORTING_MODE)
       if (this.opts.terminal !== undefined && this.opts.input !== undefined) {

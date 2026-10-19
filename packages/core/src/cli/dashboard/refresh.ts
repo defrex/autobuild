@@ -39,6 +39,7 @@ export class DashboardRefresh {
   constructor(
     private readonly refresh: () => Promise<void>,
     private readonly time: RefreshScheduler = scheduler,
+    private readonly networkReads = false,
   ) {}
 
   get painting(): boolean {
@@ -50,7 +51,7 @@ export class DashboardRefresh {
   }
 
   get admitted(): boolean {
-    return this.active && !this.suspended && (this.focused || this.permit === this.generation)
+    return this.active && !this.suspended
   }
 
   activity(live: boolean): void {
@@ -58,10 +59,13 @@ export class DashboardRefresh {
   }
 
   focus(focused: boolean): void {
+    if (this.focused === focused) return
     this.focused = focused
-    this.generation += 1
-    this.cancel()
     if (focused) void this.request()
+    else if (this.networkReads) {
+      this.cancel()
+      if (this.flight === undefined) this.schedule()
+    }
   }
 
   interaction(): void {
@@ -77,7 +81,8 @@ export class DashboardRefresh {
 
   resume(): void {
     this.suspended = false
-    this.focus(true)
+    this.focused = true
+    void this.request()
   }
 
   stop(): void {
@@ -103,11 +108,10 @@ export class DashboardRefresh {
   }
 
   request(interaction = false): Promise<void> {
-    if (!this.active || this.suspended || (!this.focused && !interaction)) return Promise.resolve()
+    if (!this.active || this.suspended) return Promise.resolve()
     if (this.flight !== undefined) {
-      // A focus round trip invalidates an outstanding read. Refresh again after
-      // it settles, rather than losing the focus-in wakeup.
-      if (this.permit !== this.generation) this.wake = true
+      // Retain an explicit wakeup that arrives during outstanding I/O.
+      if (interaction || this.permit !== this.generation) this.wake = true
       return this.flight
     }
     this.cancel()
@@ -121,7 +125,7 @@ export class DashboardRefresh {
         if (this.flight !== current) return
         this.flight = undefined
         this.permit = undefined
-        if (this.wake && this.active && !this.suspended && this.focused) {
+        if (this.wake && this.active && !this.suspended) {
           this.wake = false
           void this.request()
         } else this.schedule()
@@ -137,15 +141,18 @@ export class DashboardRefresh {
 
   /** Current admission cadence, also used to bound presentation staleness. */
   get intervalMs(): number {
+    if (this.networkReads && !this.focused) return 5000
     return this.live || this.time.now() < this.deadline ? 500 : 5000
   }
 
   private schedule(): void {
-    if (!this.active || this.suspended || !this.focused) return
+    if (!this.active || this.suspended) return
     const interval = this.intervalMs
     // Slow/failing requests do not spin when their start deadline is overdue.
-    const remaining = this.started + interval - this.time.now()
-    const delay = remaining > 0 ? remaining : 50
+    const remaining = Number.isFinite(this.started)
+      ? this.started + interval - this.time.now()
+      : interval
+    const delay = remaining > 0 ? remaining : this.networkReads && !this.focused ? interval : 50
     this.timer = this.time.set(() => {
       this.timer = undefined
       void this.request()
@@ -155,7 +162,7 @@ export class DashboardRefresh {
 
 /** Guard each asynchronous read stage, including reads inside shared caches.
  * Operator mutations keep their original store; only presentation readers use
- * this facade. A focus loss cannot recall I/O already dispatched. */
+ * this facade. Suspension and stop fence subsequent read stages. */
 export function presentationReader<T extends object>(store: T, admitted: () => boolean): T {
   return new Proxy(store, {
     get(target, key, receiver) {
