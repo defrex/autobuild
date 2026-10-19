@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#652](https://github.com/defrex/autobuild/pull/652) — Pin release install commands as exact dev dependencies
 - [#651](https://github.com/defrex/autobuild/pull/651) — Restore remote audit signals for 1.0 clients
 - [#650](https://github.com/defrex/autobuild/pull/650) — Treat prerelease versions as members of their release line
 - [#649](https://github.com/defrex/autobuild/pull/649) — Release prerelease versions under their own npm dist-tag

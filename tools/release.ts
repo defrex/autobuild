@@ -311,7 +311,7 @@ export function replaceReadmeInstall(readme: string, version: string): string {
   const start = readme.indexOf(README_INSTALL_START)
   const end = readme.indexOf(README_INSTALL_END)
   if (end <= start) throw new Error('README.md release-install markers are out of order')
-  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add -g ${PUBLISHED_CLI_PACKAGE}@${version}\n\`\`\`\n\n`
+  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add -d --exact ${PUBLISHED_CLI_PACKAGE}@${version}\n\`\`\`\n\n`
   return `${readme.slice(0, start)}${replacement}${readme.slice(end)}`
 }
 
