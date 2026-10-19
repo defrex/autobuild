@@ -1,3 +1,4 @@
+import { replayControl } from './motion-control'
 import {
   type Connector,
   type ConnectorKind,
@@ -33,6 +34,48 @@ const DISPATCHER_DESCRIPTION =
 const INTAKE_DESCRIPTION =
   'Customer support, meetings, telemetry and errors, and build observations all feed the PM agent. The PM agent sends tickets to the autobuild dispatcher. Escalations return from the dispatcher to the PM agent, which answers them itself. The PM agent and you are linked both ways, for only the real product calls.'
 
+// Several desktop segments form one semantic edge; phone routing uses the same keys.
+const desktopEdges = [
+  'plan',
+  'plan',
+  'plan',
+  'implement',
+  'plan-review',
+  'plan-return',
+  'code-review',
+  'code-return',
+  'verify:*',
+  'verify:*',
+  'verify:*',
+  'finalize',
+  'merged',
+  'failure',
+  'failure',
+  'failure',
+]
+const phoneEdges = [
+  'plan',
+  'implement',
+  'finalize',
+  'merged',
+  'verify:*',
+  'plan-review',
+  'plan-return',
+  'code-review',
+  'code-return',
+  'failure',
+]
+
+function pipelineEdge(edge: Connector, key: string): string {
+  return connector(edge).replace('<svg ', `<svg data-motion-edge="${key}" `)
+}
+
+function pipelineNode(...args: Parameters<typeof plainNode>): string {
+  return plainNode(...args)
+    .replace(/<b style="color: [^"]+">/, '<b>')
+    .replace('<div ', `<div data-motion-node="${args[4]}" `)
+}
+
 export function pipelineDiagram(): string {
   const connectors = [
     c('flow', 136, 204, 24, 8, 'M 0 4 L 24 4'),
@@ -53,14 +96,14 @@ export function pipelineDiagram(): string {
     c('fail', 432, 48, 8, 46, 'M 4 0 L 4 46', true),
   ]
   const nodes = [
-    plainNode(0, 180, 136, 56, 'spec'),
-    plainNode(184, 96, 136, 56, 'plan'),
-    plainNode(184, 264, 136, 56, 'plan-review'),
-    plainNode(368, 96, 136, 56, 'implement'),
-    plainNode(368, 264, 136, 56, 'code-review'),
-    plainNode(576, 180, 136, 56, 'verify:*'),
-    plainNode(760, 180, 136, 56, 'finalize'),
-    plainNode(944, 180, 136, 56, 'merged', COLOR.ok),
+    pipelineNode(0, 180, 136, 56, 'spec'),
+    pipelineNode(184, 96, 136, 56, 'plan'),
+    pipelineNode(184, 264, 136, 56, 'plan-review'),
+    pipelineNode(368, 96, 136, 56, 'implement'),
+    pipelineNode(368, 264, 136, 56, 'code-review'),
+    pipelineNode(576, 180, 136, 56, 'verify:*'),
+    pipelineNode(760, 180, 136, 56, 'finalize'),
+    pipelineNode(944, 180, 136, 56, 'merged', COLOR.ok),
   ]
   const captions = [
     caption({ left: 287, top: 200, width: 56, text: 'revise', color: COLOR.live }),
@@ -75,12 +118,20 @@ export function pipelineDiagram(): string {
     }),
   ]
   return (
+    '<div data-capture-figure="pipeline" data-capture-animated>' +
     diagram(
       1120,
       340,
       PIPELINE_DESCRIPTION,
-      [...connectors.map(connector), ...nodes, ...captions].join(''),
-    ) + pipelinePhone()
+      [
+        ...connectors.map((edge, index) => pipelineEdge(edge, desktopEdges[index]!)),
+        ...nodes,
+        ...captions,
+      ].join(''),
+    ) +
+    pipelinePhone() +
+    replayControl('pipeline') +
+    '</div>'
   )
 }
 
@@ -96,14 +147,14 @@ function pipelinePhone(): string {
     c('fail', 4, 200, 20, 152, 'M 20 148 L 4 148 L 4 4 L 18 4', true),
   ]
   const nodes = [
-    plainNode(24, 0, 140, 56, 'spec'),
-    plainNode(24, 88, 140, 56, 'plan'),
-    plainNode(218, 88, 140, 56, 'plan-review'),
-    plainNode(24, 176, 140, 56, 'implement'),
-    plainNode(218, 176, 140, 56, 'code-review'),
-    plainNode(24, 320, 140, 56, 'verify:*'),
-    plainNode(24, 408, 140, 56, 'finalize'),
-    plainNode(24, 496, 140, 56, 'merged', COLOR.ok),
+    pipelineNode(24, 0, 140, 56, 'spec'),
+    pipelineNode(24, 88, 140, 56, 'plan'),
+    pipelineNode(218, 88, 140, 56, 'plan-review'),
+    pipelineNode(24, 176, 140, 56, 'implement'),
+    pipelineNode(218, 176, 140, 56, 'code-review'),
+    pipelineNode(24, 320, 140, 56, 'verify:*'),
+    pipelineNode(24, 408, 140, 56, 'finalize'),
+    pipelineNode(24, 496, 140, 56, 'merged', COLOR.ok),
   ]
   const captions = [
     caption({ left: 164, top: 146, width: 54, text: 'revise', color: COLOR.live, align: 'center' }),
@@ -120,7 +171,11 @@ function pipelinePhone(): string {
   return phoneDiagram(
     552,
     PIPELINE_DESCRIPTION,
-    [...connectors.map(connector), ...nodes, ...captions].join(''),
+    [
+      ...connectors.map((edge, index) => pipelineEdge(edge, phoneEdges[index]!)),
+      ...nodes,
+      ...captions,
+    ].join(''),
   )
 }
 
