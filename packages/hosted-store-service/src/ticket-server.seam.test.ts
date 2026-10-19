@@ -309,7 +309,7 @@ test('retired 0.10 clients are rejected before ticket source access, regardless 
   expect(contexts).toEqual([])
 })
 
-test('revision opt-in distinguishes new and released clients reporting the same 0.12.0 version', async () => {
+test('revision opt-in distinguishes new and released clients reporting the same admitted identity', async () => {
   const { server } = harness()
   const headersSeen: Headers[] = []
   const source = new HostedTicketSource({
@@ -318,8 +318,8 @@ test('revision opt-in distinguishes new and released clients reporting the same 
     teamKey: 'ENG',
     fetchFn: async (input, init) => {
       const req = new Request(String(input), init)
-      req.headers.set(AUTOBUILD_VERSION_HEADER, '0.12.0')
-      req.headers.set(REMOTE_STORE_PROTOCOL_VERSION_HEADER, '3')
+      req.headers.set(AUTOBUILD_VERSION_HEADER, AUTOBUILD_VERSION)
+      req.headers.set(REMOTE_STORE_PROTOCOL_VERSION_HEADER, REMOTE_STORE_PROTOCOL_VERSION)
       headersSeen.push(new Headers(req.headers))
       return server.fetch(req)
     },
@@ -330,25 +330,30 @@ test('revision opt-in distinguishes new and released clients reporting the same 
   expect((await source.get(created.ref.id))?.revision).toBe(created.revision)
   expect((await source.listReady({})).tickets[0]?.revision).toBe(created.revision)
   for (const headers of headersSeen) {
-    expect(headers.get(AUTOBUILD_VERSION_HEADER)).toBe('0.12.0')
+    expect(headers.get(AUTOBUILD_VERSION_HEADER)).toBe(AUTOBUILD_VERSION)
+    expect(headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)).toBe(REMOTE_STORE_PROTOCOL_VERSION)
     expect(headers.get(TICKET_REVISIONS_HEADER)).toBe(TICKET_REVISIONS_CAPABILITY)
   }
-  // An unknown capability must retain the strict released decoder shape.
-  const response = await server.fetch(
-    new Request('https://tickets.example/tickets/get', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${operator}`,
-        [AUTOBUILD_VERSION_HEADER]: '0.12.0',
-        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '3',
-        [TICKET_REVISIONS_HEADER]: 'unknown',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: created.ref.id } }),
-    }),
-  )
-  expect(response.status).toBe(200)
-  expect(releasedTicketSchema.parse(await response.json()).title).toBe('New client')
+  // Missing and unknown capabilities retain the strict released decoder shape.
+  for (const capability of [undefined, 'unknown']) {
+    const response = await server.fetch(
+      new Request('https://tickets.example/tickets/get', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          ...(capability ? { [TICKET_REVISIONS_HEADER]: capability } : {}),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: created.ref.id } }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body).not.toHaveProperty('revision')
+    expect(releasedTicketSchema.parse(body).title).toBe('New client')
+  }
 })
 
 test('comments require explicit capability independently of client version on every ticket route', async () => {
