@@ -1,3 +1,4 @@
+import { bindPipelineMotion } from './pipeline-motion'
 import {
   SEAMS,
   initialState,
@@ -80,6 +81,7 @@ function bindCopy(button: HTMLButtonElement): void {
 }
 
 if (typeof document !== 'undefined') {
+  bindPipelineMotion()
   const selector = document.querySelector<HTMLElement>('.seam-selector')
   if (selector && SEAMS.length > 0) bindSeams(selector)
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) bindCopy(button)
