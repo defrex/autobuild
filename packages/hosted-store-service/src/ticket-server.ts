@@ -13,7 +13,7 @@ import {
 import { systemClock, type Clock, type TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   clientIdentityError,
-  stableVersion,
+  releaseVersion,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
   type ErrorBody,
@@ -184,7 +184,7 @@ export function createTicketServer(options: TicketServerOptions): {
 
     // Both v0.9 and v0.10 use strict ticket decoders without resolution fields.
     // Project only the ticket boundary; current domain values remain authoritative.
-    const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
+    const client = releaseVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
       if (ticket === null) return ticket
       const {

@@ -94,3 +94,28 @@ test('unreadable distribution identity remains advisory and local upgrades need 
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('could not be verified')
 })
+
+for (const [version, expected] of [
+  ['1.0.0-beta.0', undefined],
+  ['1.0.0', undefined],
+  ['0.14.0', "upgrade the project's Autobuild"],
+  ['1.1.0-beta.0', 'service first'],
+] as const) {
+  test(`beta service upgrade probe classifies ${version}`, async () => {
+    const warnings: string[] = []
+    await checkUpgradeCompatibility({
+      targetRepo: '/target',
+      version,
+      env: { AB_STORE: 'https://service.test' },
+      stderr: (line) => warnings.push(line),
+      fetch: async () =>
+        Response.json({
+          autobuildVersion: '1.0.0-beta.1',
+          supportedClientRange: { minVersion: '1.0.0', maxVersionExclusive: '1.1.0' },
+        }),
+    })
+    if (expected) expect(warnings.join()).toContain(expected)
+    else expect(warnings).toEqual([])
+    expect(warnings.join()).not.toContain('could not be verified')
+  })
+}
