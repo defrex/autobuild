@@ -1,11 +1,13 @@
 import { mkdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { renderPage } from './page'
+import { DOCS_PAGES, renderDocsPage } from './docs'
 
 const SRC = import.meta.dir
 export const DEFAULT_OUT = join(SRC, '..', 'dist')
 
 export interface SiteFiles {
+  [path: `${string}.html`]: string
   'index.html': string
   'site.css': string
   'site.js': string
@@ -28,6 +30,7 @@ export async function buildFiles(): Promise<SiteFiles> {
   if (!bundle.success) throw new Error(bundle.logs.map(String).join('\n'))
   const [output] = bundle.outputs
   return {
+    ...Object.fromEntries(DOCS_PAGES.map((page) => [page.file, renderDocsPage(page)])),
     'index.html': renderPage({ heroFrame: await heroFrameText() }),
     'site.css': await Bun.file(join(SRC, 'styles.css')).text(),
     'site.js': await (output as Bun.BuildArtifact).text(),
@@ -39,7 +42,11 @@ export async function buildSite(outDir: string = DEFAULT_OUT): Promise<string> {
   const files = await buildFiles()
   await rm(outDir, { recursive: true, force: true })
   await mkdir(outDir, { recursive: true })
-  for (const [name, content] of Object.entries(files)) await Bun.write(join(outDir, name), content)
+  for (const [name, content] of Object.entries(files)) {
+    const destination = join(outDir, name)
+    await mkdir(dirname(destination), { recursive: true })
+    await Bun.write(destination, content)
+  }
   return outDir
 }
 
