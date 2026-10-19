@@ -78,3 +78,22 @@ and 192px phone, footer gaps match, and terminal-to-action spacing is 48px.
 The keyboard skip link was also checked in Chromium: focused, visible at the
 top of the viewport, with the existing 2px focus outline. The maintainer
 reviews this integrated reference set before the website node lands.
+
+## Operating, seams, and configuration reference revision
+
+On 2026-10-19, the `operating-seams-configuration` spec explicitly authorized
+one text link to `/docs/seams/` in the landing seams section. The four landing
+reference PNGs now include “Explore the infrastructure seams” below the seam
+selector, using the existing cyan underlined link style. Following sections
+shift down with the added line; existing copy, diagrams, styles, and assets
+remain unchanged. `reference.html` stays the historical design export.
+
+Evidence: `bun run capture:website` produced 14 reviewed full-page PNGs:
+local and remote landing states at 1440px and 390px, and all five docs pages
+at both widths. All seven phone probes reported scrollWidth 390 and
+innerWidth 390. Every frame loaded its stylesheet and reported reduced-motion
+still evidence with zero marked animated figures. Landing section gaps remain
+288px desktop and 192px phone, footer gaps match, and terminal-to-action
+spacing is 48px. The refreshed landing references match these captured PNGs
+byte for byte. The maintainer reviews the integrated reference set before the
+website node lands.
