@@ -1,3 +1,4 @@
+import type { NativeSessionHandle } from '../ports/types'
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
@@ -95,6 +96,8 @@ export interface PendingCommand {
  * logs remain open and readable; a recovering runner explicitly ends every
  * session open at its resume boundary before announcing attachment (§15.6-C). */
 export interface OpenSession {
+  /** Absent means the harness has not reported an identity. */
+  nativeHandle?: NativeSessionHandle
   session: string
   role: string
   runner: string
@@ -306,7 +309,7 @@ export interface BuildState {
   discardRequest?: { seq: number; actor: Actor }
   /** Unacknowledged runner-owned operator commands in request order (D2). */
   pendingCommands: PendingCommand[]
-  sessions: { open: OpenSession[] }
+  sessions: { open: OpenSession[]; nativeHandles: Record<string, NativeSessionHandle> }
   /** `phase.failed` tally per phase (verify steps key as `verify:<step>`) —
    * retry policy input (§8.4). */
   failures: Record<string, number>
@@ -375,13 +378,14 @@ export interface BuildAcc {
   cleanupAttempts: BuildState['cleanupAttempts']
   discardRequest: BuildState['discardRequest']
   pending: Record<PendingCommand['command'], PendingCommand[]>
+  nativeHandles: Record<string, NativeSessionHandle>
   openSessions: OpenSession[]
   failures: Record<string, number>
   lastEvent?: AbEvent
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 11
+export const BUILD_REDUCER_VERSION = 12
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -416,6 +420,7 @@ function initialBuildAcc(): BuildAcc {
     cleanupAttempts: [],
     discardRequest: undefined,
     pending: { pause: [], resume: [], abort: [] },
+    nativeHandles: {},
     openSessions: [],
     failures: {},
   }
@@ -694,6 +699,20 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
+      case 'session.native-handle-recorded': {
+        const { session, phase, round, handle } = event.payload
+        const open = openSessions.get(session)
+        if (
+          open !== undefined &&
+          open.phase === phase &&
+          open.round === round &&
+          open.nativeHandle === undefined
+        ) {
+          openSessions.set(session, { ...open, nativeHandle: handle })
+          acc.nativeHandles[session] = handle
+        }
+        break
+      }
       case 'session.ended':
         openSessions.delete(event.payload.session)
         break
@@ -1035,7 +1054,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(
       (a, b) => a.seq - b.seq,
     ),
-    sessions: { open: [...acc.openSessions] },
+    sessions: { open: [...acc.openSessions], nativeHandles: { ...acc.nativeHandles } },
     failures: acc.failures,
   }
 }

@@ -1213,3 +1213,49 @@ describe('reconcile rewrite protocol', () => {
     ).toThrow()
   })
 })
+
+describe('native session handle facts', () => {
+  const handle = {
+    version: 1,
+    runner: 'codex',
+    nativeId: 'thread',
+    host: 'worker',
+    workspacePath: '/repo',
+  }
+  const payload = { session: 's_1', phase: 'implement', round: 1, handle }
+  test('strict, versioned, kernel-only facts', () => {
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.native-handle-recorded', payload }),
+    ).toMatchObject({ payload })
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('implement', 's_1'),
+        type: 'session.native-handle-recorded',
+        payload,
+      }),
+    ).toThrow(/may not emit/)
+    for (const invalid of [
+      { ...handle, version: 2 },
+      { ...handle, nativeId: ' ' },
+      { ...handle, host: '' },
+      { ...handle, workspacePath: 'relative' },
+      { ...handle, statePath: 'relative' },
+      { ...handle, token: 'secret' },
+    ]) {
+      expect(
+        eventPayloadSchemas['session.native-handle-recorded'].safeParse({
+          ...payload,
+          handle: invalid,
+        }).success,
+      ).toBe(false)
+    }
+    for (const invalid of [
+      { ...payload, phase: 'unknown' },
+      { ...payload, round: 0 },
+      { ...payload, session: '' },
+    ])
+      expect(eventPayloadSchemas['session.native-handle-recorded'].safeParse(invalid).success).toBe(
+        false,
+      )
+  })
+})
