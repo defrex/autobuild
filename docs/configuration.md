@@ -1061,7 +1061,7 @@ session starts, with a copyable table and all registered runtime names.
 | `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
 | `args` | inherited; otherwise `[]` | optional array of nonempty strings; `[]` allowed | Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`. |
-| `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Wall-clock budget for each build phase session routed through this logical role. One budget covers the primary and every alternate target. |
+| `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target. |
 | `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op. |
 
 <!-- config-fragment:roles -->
@@ -1200,7 +1200,7 @@ Optional. Every field receives its own default. All are positive integers except
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
-| `sessionBudgetSeconds` | `3600` | positive integer | Wall-clock bound for each build agent session unless its logical role overrides it. |
+| `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it. |
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxDispatchAttempts` | `3` | positive integer | Bound consecutive dispatch failures before human escalation. |

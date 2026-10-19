@@ -22,6 +22,10 @@ import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../st
 import { join } from 'node:path'
 import { z } from 'zod'
 import { loadConfig } from '../config/load'
+import { readTerminalGuardBoundary } from '../store/reduced-reads'
+import type { EventType } from '../events/payloads'
+import type { EventWrite } from '../events/catalog'
+import type { ArtifactInput } from '../store/types'
 import type { EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
@@ -72,6 +76,32 @@ export interface TerminalDeps {
 async function assertNoPriorTerminal(store: BuildStore, env: CliEnv): Promise<void> {
   const result = await readTerminalGuard(store, env.build, env.phase, env.round, env.session)
   if (result.diagnostic) throw new Error(result.diagnostic)
+}
+
+/** Validate and commit against exactly one prefix; suspension and terminal
+ * writers share the store's compare-and-append boundary. */
+async function terminalDeposit<T extends EventType>(
+  deps: TerminalDeps,
+  artifacts: ArtifactInput[],
+  makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
+  for (;;) {
+    const boundary = await readTerminalGuardBoundary(
+      deps.store,
+      deps.env.build,
+      deps.env.phase,
+      deps.env.round,
+      deps.env.session,
+    )
+    if (boundary.value.diagnostic) throw new Error(boundary.value.diagnostic)
+    const deposited = await deps.store.appendWithArtifactsIfCurrent(
+      deps.env.build,
+      boundary.cursor,
+      artifacts,
+      makeEvent,
+    )
+    if (deposited !== null) return deposited
+  }
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -314,11 +344,11 @@ export async function completeFinalizePr(
     if (cancellation.kind !== 'applied')
       throw new Error('node-target native auto-merge cancellation unconfirmed')
   }
-  const event = await store.append(env.build, {
-    actor: KERNEL,
-    type: 'finalize.completed',
-    payload: { pr },
-  })
+  const write = { actor: KERNEL, type: 'finalize.completed', payload: { pr } } as const
+  const event =
+    input.expectedHeadSha !== undefined
+      ? await store.append(env.build, write)
+      : (await terminalDeposit(deps, [], () => write)).event
 
   return event
 }
@@ -368,7 +398,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       }
       const config = await loadConfig(join(deps.workspacePath, 'autobuild.toml'))
       const verifySteps = resolvePlanVerifySteps(textContent(plan), config)
-      return store.append(env.build, {
+      return terminalDeposit(deps, [], () => ({
         actor,
         type: 'plan.completed',
         payload: {
@@ -376,7 +406,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
           artifact: { kind: 'plan', rev: latest.revision },
           verifySteps,
         },
-      })
+      })).then(({ event }) => event)
     }
 
     case 'implement': {
@@ -394,8 +424,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
       if (remotePublication(events)) {
-        const { event } = await store.appendWithArtifacts(
-          env.build,
+        const { event } = await terminalDeposit(
+          deps,
           [{ kind: 'implement-notes', content: notes }],
           (deposited) => ({
             actor,
@@ -415,8 +445,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       // Local publication remains immediate and push-before-fact.
       await suspendNativeLanding({ ...deps, slug: env.build }, `implement:${env.round}`)
       await deps.forge.pushBranch(deps.workspacePath, branch)
-      const { event } = await store.appendWithArtifacts(
-        env.build,
+      const { event } = await terminalDeposit(
+        deps,
         [{ kind: 'implement-notes', content: notes }],
         (deposited) => ({
           actor,
@@ -452,7 +482,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       if (remotePublication(events)) {
         await assertCleanWorktree(deps)
         const head = await git(deps, ['rev-parse', '--verify', 'HEAD^{commit}'])
-        return await store.append(env.build, {
+        return await terminalDeposit(deps, [], () => ({
           actor,
           type: 'publication.requested',
           payload: {
@@ -461,7 +491,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
             sha: head.trim(),
             description: { kind: description.meta.kind, rev: description.meta.revision },
           },
-        })
+        })).then(({ event }) => event)
       }
       return completeFinalizePr(deps, events, {
         branch,
@@ -483,8 +513,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
         await validateNodeChange(deps, change, conflict.base, head)
         await retainReplay({ ...deps, slug: env.build }, head, conflict.base)
-        const deposited = await store.appendWithArtifacts(
-          env.build,
+        const deposited = await terminalDeposit(
+          deps,
           [{ kind: 'reconcile-notes', content: notes }],
           () => ({
             actor: KERNEL,
@@ -498,15 +528,15 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
             },
           }),
         )
-        return store.append(env.build, {
+        return terminalDeposit(deps, [], () => ({
           actor,
           type: 'reconcile.completed',
           payload: {
             headSha: head,
-            rewriteId: node.active.id,
+            rewriteId: node.active!.id,
             artifact: refOf(deposited.artifacts[0]),
           },
-        })
+        })).then(({ event }) => event)
       }
       const transaction = events.reconcileTransaction
       if (transaction === undefined || transaction.attempt !== env.round)
@@ -530,8 +560,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       await retainReplay(restack, head, transaction.targetBase)
       const conflicted =
         events.reconcileReplay?.id === transaction.id && events.reconcileReplay.conflicted
-      const { event: intended } = await store.appendWithArtifacts(
-        env.build,
+      const { event: intended } = await terminalDeposit(
+        deps,
         [{ kind: 'reconcile-notes', content: notes }],
         (deposited) => ({
           actor: KERNEL,
@@ -540,7 +570,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         }),
       )
       // All resolver publications wait until the agent turn has ended.
-      return store.append(env.build, {
+      return terminalDeposit(deps, [], () => ({
         actor,
         type: 'publication.requested',
         payload: {
@@ -550,7 +580,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
           artifact: intended.payload.artifact,
           rewrite: { ...transaction, conflicted },
         },
-      })
+      })).then(({ event }) => event)
     }
 
     default:
@@ -661,21 +691,17 @@ async function reviewVerdict(
     env.phase === 'plan-review' ? 'plan-review.verdict' : 'code-review.verdict'
   // Atomic bundle (D6): notes artifact + verdict event in one operation — no
   // state where the artifact exists without its event or vice versa.
-  const { event } = await store.appendWithArtifacts(
-    env.build,
-    [{ kind, content: notes }],
-    (deposited) => ({
-      actor,
-      type,
-      payload: {
-        round: env.round,
-        verdict: opts.verdict as ReviewVerdictKind,
-        findings,
-        artifact: refOf(deposited[0]),
-        ...(reason !== undefined ? { reason } : {}),
-      },
-    }),
-  )
+  const { event } = await terminalDeposit(deps, [{ kind, content: notes }], (deposited) => ({
+    actor,
+    type,
+    payload: {
+      round: env.round,
+      verdict: opts.verdict as ReviewVerdictKind,
+      findings,
+      artifact: refOf(deposited[0]),
+      ...(reason !== undefined ? { reason } : {}),
+    },
+  }))
   const out: EventEnvelope[] = [event]
 
   if (opts.verdict === 'escalate') {
@@ -808,8 +834,8 @@ async function agentVerifyVerdict(
     // carries the ref — provenance for a pass is welcome, just not required.
     if (opts.notes !== undefined) {
       const notes = await readTextFile(opts.notes, '--notes')
-      const { event } = await store.appendWithArtifacts(
-        env.build,
+      const { event } = await terminalDeposit(
+        deps,
         [{ kind: reportKind, content: notes }],
         (deposited) => ({
           actor,
@@ -859,8 +885,8 @@ async function agentVerifyVerdict(
     )
   }
   const report = await readTextFile(opts.report, '--report')
-  const { event } = await store.appendWithArtifacts(
-    env.build,
+  const { event } = await terminalDeposit(
+    deps,
     [{ kind: reportKind, content: report }],
     (deposited) => ({
       actor,
@@ -894,7 +920,7 @@ export async function escalate(
   }
   const _events = (await readBuildFacts(store, env.build)).value
   await assertNoPriorTerminal(store, env)
-  return store.append(env.build, {
+  return terminalDeposit(deps, [], () => ({
     actor: agentActor(env.phase, env.session),
     type: 'escalation.raised',
     payload: {
@@ -905,5 +931,5 @@ export async function escalate(
       question: opts.question,
       ...(opts.refs !== undefined && opts.refs.length > 0 ? { refs: opts.refs } : {}),
     },
-  })
+  })).then(({ event }) => event)
 }

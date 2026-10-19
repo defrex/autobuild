@@ -50,6 +50,8 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:builds-native-sessions-wide:png .ab/web-dashboard-frames/builds-native-sessions-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-native-sessions-narrow:png .ab/web-dashboard-frames/builds-native-sessions-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-forge-readiness-wide:png .ab/web-dashboard-frames/builds-forge-readiness-wide.png --attach
    ab artifact put web-dashboard-frame:builds-forge-readiness-narrow:png .ab/web-dashboard-frames/builds-forge-readiness-narrow.png --attach
    ab artifact put web-dashboard-frame:integration-wide:png .ab/web-dashboard-frames/integration-wide.png --attach

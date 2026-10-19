@@ -1,3 +1,4 @@
+import { isRemoteWorkspace } from '../events/workspace-remote'
 import { readBuildFacts } from '../store/reduced-reads'
 import { hostname } from 'node:os'
 import { createForge } from '../ports/forge/create'
@@ -33,7 +34,7 @@ export async function runBuildChild(
   input: BuildExecutionStart,
   env: Record<string, string | undefined> = process.env,
   openStore: (ref: string, token?: string) => BuildStore = openProductionStore,
-  opts: { guest?: boolean } = {},
+  opts: { guest?: boolean; shutdownSignal?: AbortSignal } = {},
 ): Promise<void> {
   const fullStore = openStore(input.storeRef, env.AB_TOKEN)
   const store = fullStore.scopeBuild(input.slug)
@@ -95,6 +96,9 @@ export async function runBuildChild(
       getConfig,
       runtimes,
       workspacePath: workspace.path ?? workspace.ref,
+      workspaceProvider: workspace.provider,
+      workspaceRemote: opts.guest === true || isRemoteWorkspace(workspace),
+      shutdownSignal: opts.shutdownSignal,
       branch: workspace.branch,
       slug: input.slug,
       exec: spawnExec,

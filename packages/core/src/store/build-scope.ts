@@ -133,6 +133,15 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       own('appendWithArtifacts', slug)
       return store.appendWithArtifacts(slug, artifacts, makeEvent)
     },
+    async appendWithArtifactsIfCurrent<T extends EventType>(
+      slug: string,
+      expectedSeq: number,
+      artifacts: ArtifactInput[],
+      makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+    ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+      own('appendWithArtifactsIfCurrent', slug)
+      return store.appendWithArtifactsIfCurrent(slug, expectedSeq, artifacts, makeEvent)
+    },
     async getEvents(
       slug: string,
       sinceSeq?: number,
