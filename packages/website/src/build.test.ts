@@ -58,7 +58,11 @@ describe('static site', () => {
     // The reference draws the hero dashboard by hand; the page shows the real
     // captured frame instead, so both figures are set aside before comparing.
     const { 'index.html': html } = await buildFiles()
-    const reference = textOf(withoutHeroFigure(await readFile(REFERENCE, 'utf8')))
+    const updatedReference = (await readFile(REFERENCE, 'utf8'))
+      .replaceAll('bun add -g @defrex/autobuild', 'bun add -d --exact @defrex/autobuild')
+      .replaceAll('>ab init<', '>bun ab init<')
+      .replaceAll('>ab dispatch<', '>bun ab dispatch<')
+    const reference = textOf(withoutHeroFigure(updatedReference))
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
     expect(words(textOf(withoutHeroFigure(html)))).toEqual(words(reference))
@@ -83,6 +87,9 @@ describe('static site', () => {
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
     expect(html).toContain('fully local')
+    expect(html).toContain('bun add -d --exact @defrex/autobuild')
+    expect(html).toContain('bun ab init')
+    expect(html).toContain('bun ab dispatch')
   })
 
   test('sections are separated by space alone and the page closes on GitHub', async () => {
@@ -186,7 +193,7 @@ describe('copy control', () => {
       },
     }
     expect(await copyText(clipboard, INSTALL_COMMAND)).toBe(true)
-    expect(written).toEqual(['bun add -g @defrex/autobuild'])
+    expect(written).toEqual(['bun add -d --exact @defrex/autobuild'])
   })
 
   test('a refused or missing clipboard does not throw', async () => {

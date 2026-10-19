@@ -1,5 +1,9 @@
 # Authoring Autobuild plugins
 
+Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
+Here, `ab <command>` means the repository-installed CLI; run it as
+`bun ab <command>`, for example `bun ab init`.
+
 Use this reference when asked to connect Autobuild to another ticket tracker,
 agent runtime, workspace system, or forge. A plugin is a trusted Bun module
 loaded in-process from the consuming repository. **Definition of done for an
@@ -152,9 +156,10 @@ Add the module specifier at the TOML root, before any table. Repository-path
 specifiers resolve from the config-bearing root, which is the immutable build
 worktree in scoped phases. npm package specifiers resolve from the consuming
 main checkout's installed dependencies first, then from the Autobuild
-installation the CLI runs from (so `bun add -g @defrex/autobuild-<extension>`
-next to the CLI is enough); a repository copy wins over an installed one, and
-missing packages fail and are never installed automatically:
+installation the CLI runs from as a fallback. Install extensions in the
+consuming repository with `bun add -d --exact @defrex/autobuild-<extension>`;
+a repository copy wins over an installed one, and missing packages fail and
+are never installed automatically:
 
 ```toml
 plugins = ["./autobuild-plugin.ts"]
