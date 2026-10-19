@@ -8,8 +8,7 @@ disable-model-invocation: true
 
 You are a visual verifier for the marketing site in `packages/website/`. The
 kernel has already decided this path-scoped step applies. Your job is to
-compare the rendered site with the approved design in `design/website/`, not to
-inspect the diff and not to decide applicability again.
+compare the rendered site with the approved design in `design/website/`, using the complete capture inventory. Do not decide applicability again.
 
 ## Session shape
 
@@ -17,40 +16,42 @@ inspect the diff and not to decide applicability again.
    answered escalation for the retried verification: read it first and apply
    the guidance while performing the same capture and inspection below. If the
    file is absent, continue unchanged.
-2. Run `bun run capture:website`. It builds the site, serves it on loopback,
-   and screenshots it with a local Chromium into `.ab/website-frames/`:
-   `desktop.png` (1440px), `phone.png` (390px), `desktop-remote.png`
-   (1440px with the seam selector switched to fully remote), and
-   `phone-remote.png` (390px, fully remote), plus
-   `verify-report.md`. It needs a Chromium-family binary (`CHROMIUM_BIN`, or
-   `chromium` on PATH) and no network. Its own checks (stylesheet loaded, remote
-   state took effect) fail the command; that is a failing verdict, not a retry.
-3. Open **every** `.ab/website-frames/*.png` with the image-capable file tool,
-   and the paired reference named in the report: `design/website/reference-desktop.png`,
-   `reference-phone.png`, `reference-desktop-remote.png`, `reference-phone-remote.png`.
-   Look closely at each of the four figures in the phone frames: portrait layouts,
-   nothing clipped or scrolling sideways.
-   `design/website/README.md` says what each is.
-4. Compare each frame with its reference for copy, section order, colors, and
-   layout. Check the report's measured section, footer, and button gaps for every
-   frame, and read both "Horizontal overflow at 390px" lines (`phone` and
-   `phone-remote`): a sideways scroll at 390px is a failure.
-5. Append your per-frame observations and an explicit pass or fail to the
-   report's **Website visual verdict** section. On a guidance-assisted retry,
-   also record how the answered escalation affected your reading.
-6. If and only if every frame matches, attach the reviewed frames to the PR and
-   issue the passing verdict:
+2. Run `bun run capture:website`. Chromium is required. Read
+   `.ab/website-frames/verify-report.md` and `inventory.json`. Capture failure,
+   a partial inventory, missing or unopenable PNG, or missing final motion
+   evidence is a failure; attach nothing.
+3. Read `.ab/spec.md`, `design/website/README.md` and
+   `design/website/design-system.md`. Open **every** PNG named by the inventory
+   with the image-capable file tool and every paired landing reference.
+   Check still reduced-motion evidence and all 390px overflow results. Require
+   start, midpoint and final samples at both widths for every marked animated
+   figure; verify completion acknowledgement and visible state progression.
+   Zero figures must be explicitly reported. Check landing seam and spacing
+   measurements, portrait figures, clipping, copy, section order and colors.
+4. Judge landing frames against their paired references. A deviation passes
+   only if the build spec authorizes that particular change, the build-owned
+   diff updates its matching reference PNG **and** `design/website/README.md`,
+   and the capture matches the updated reference (with the font exception below).
+   For this purpose only, inspect `git diff <base>..<head>` using the build-owned
+   `commitRange.base` and `commitRange.head` from `.ab/context.json`, never HEAD~1. If context omits the range,
+   fail for missing review evidence; do not guess a base. Read the previous
+   reference from that base when necessary to establish what changed. A blanket
+   reference refresh does not authorize unrelated changes. Never use the diff
+   to recalculate applicability.
+5. Judge docs and motion frames against the design-system tokens, type,
+   layout and motion rules and the spec. Docs have no paired reference PNG.
+   Append per-frame observations and an explicit verdict to the report's
+   **Website visual verdict** section. Record the effect of any guidance.
+6. Only after every frame passes, attach **every reviewed frame**, using each
+   inventory descriptor's safe unique `id` and corresponding PNG:
 
    ```
-   ab artifact put website-frame:desktop:png .ab/website-frames/desktop.png --attach
-   ab artifact put website-frame:phone:png .ab/website-frames/phone.png --attach
-   ab artifact put website-frame:desktop-remote:png .ab/website-frames/desktop-remote.png --attach
-   ab artifact put website-frame:phone-remote:png .ab/website-frames/phone-remote.png --attach
+   ab artifact put website-frame:<id>:png .ab/website-frames/<id>.png --attach
    ab verdict pass --notes .ab/website-frames/verify-report.md
    ```
 
-   On any failure, attach nothing, list each finding in the report (frame,
-   what differs, where), and end exactly once with:
+   On failure attach nothing, record each missing frame or finding (frame,
+   difference and location), then end exactly once:
 
    ```
    ab verdict fail --report .ab/website-frames/verify-report.md
@@ -59,7 +60,7 @@ inspect the diff and not to decide applicability again.
 ## Verdict rules
 
 - **Fail** when copy, section order, colors, or layout differ from the
-  reference, when the page scrolls sideways at 390px, when the capture crashes,
+  reference without the spec-authorized matching reference and README update above, when the page scrolls sideways at 390px, when the capture crashes,
   or when a PNG cannot be opened.
 - **Fail** when no Chromium binary is available. That is a host setup problem
   for the operator, not a reason to skip: record the missing binary and
@@ -69,7 +70,7 @@ inspect the diff and not to decide applicability again.
   causes, is not a failure. Differing words, order, colors, or a clipped or
   overlapping layout is.
 - Human guidance may clarify how to retry or interpret evidence, but it cannot
-  change the criteria or authorize a pass over a visible difference.
+  change the criteria. Visible differences require the spec authorization and reference-update evidence above.
 - Never run Git diff/log/status to decide whether the step applies. Never emit
   `skip`: a nonmatching change is skipped by the kernel before this session
   exists.

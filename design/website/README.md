@@ -41,3 +41,19 @@ Design canvas so builds can read it without access to claude.ai.
 
 Source canvas: https://claude.ai/artifact/44JujTnC3hfGby38ukT71J (version 33)
 Design system: https://claude.ai/artifact/32vkyg5RhPFRmiMwEpinrT
+
+## Reviewing reference updates
+
+Landing deviations require specific authorization in the build spec, an update
+to the matching reference PNG and this README in the build-owned diff, and a
+capture matching the new reference. Review the previous approved reference when
+needed; a blanket refresh does not authorize unrelated changes. The maintainer
+reviews the integrated reference set before the website node lands.
+
+Docs pages and motion samples are judged against `design-system.md` and the
+build spec. The generated inventory includes every built docs HTML page at
+1440px and 390px, reduced-motion still evidence, and start/midpoint/final samples
+for marked animated figures. Every phone variant must pass overflow checks.
+See [the capture protocol](../../tools/website-capture.md) for adapter and
+inventory details. This tooling revision preserves all approved PNG bytes and
+the approval history above.
