@@ -3,6 +3,7 @@ import { buildFiles } from '../packages/website/src/build'
 import {
   assertOutputUnderScratch,
   captureWebsite,
+  discoverFrames,
   chromiumBinary,
   injectProbe,
   type Probe,
@@ -323,4 +324,16 @@ test('website applicability includes all website inputs and capture tooling', as
     '.agents/skills/verify-website/SKILL.md',
   ])
     expect(paths).toContain(path)
+})
+
+test('real built docs are discovered at desktop and phone widths', async () => {
+  const frames = discoverFrames({ ...(await buildFiles()) }).filter(
+    (frame) => frame.kind === 'docs',
+  )
+  expect(frames.map((frame) => [frame.page, frame.width])).toEqual([
+    ['docs/getting-started/index.html', 1440],
+    ['docs/getting-started/index.html', 390],
+    ['docs/index.html', 1440],
+    ['docs/index.html', 390],
+  ])
 })
