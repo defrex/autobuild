@@ -128,3 +128,44 @@ gaps and 48px terminal-to-action spacing. Docs add no figures and retain the
 2px cyan outline remains visible on the expanded docs navigation and the new
 landing link at phone width. The maintainer reviews the integrated reference
 set before the website node lands.
+
+## Integration-tree figure reference revision
+
+On 2026-10-19, the `integration-tree-figure` spec authorized the integration
+section immediately after the dispatcher: an eyebrow, headline, two-sentence
+lead, one link to `/docs/integration/`, and a responsive figure. The desktop
+figure places its four-step sequence to the right of the tree; the phone
+figure places it below. The drawing keeps main, the node ticket and its branch,
+and both child builds visible in the existing broadcast diagram vocabulary.
+
+One logical `data-capture-figure="integration-tree"` marker covers both
+responsive drawings. Its six 1,000ms beats show A landing, B restacking onto
+the new node head, B landing, node completion, verification, and consented
+node landing into main. The complete drawing is the default HTML and the
+reduced-motion and JavaScript-disabled state. The figure shares the pipeline's
+motion controller and once-on-entry/replay behavior, with one native replay
+control for its two responsive drawings. Reduced motion hides that control.
+
+`bun run capture:website` produced a successful 40-PNG inventory at
+`.ab/website-frames/inventory.json`: four landing baselines, twelve docs
+frames, and twenty-four motion samples across both figures. Every phone probe
+reported scrollWidth 390 and innerWidth 390; all stylesheets loaded and all
+reduced-motion frames remained still. The four reduced-motion landing
+references were copied from that capture. The four `*-motion-final.png`
+references were captured in Chromium by seeking both production adapters to
+their durations, with both replay controls visible. These supersede the
+pipeline-only final-state provenance recorded above.
+
+Separate Chromium playback checks passed for viewport entry, completion,
+keyboard and rapid replay, responsive resizing, preference changes, and the
+JavaScript-disabled fallback. Visibility handling was exercised with a
+synthetic `document.hidden` event. The focused caption correction moved
+`land ↑` and `restack → land ↑` below the child build boxes; review of the
+refreshed desktop and phone crops marked that collision fix resolved and
+approved it to ship. A motion-frame inspection also caught an SVG outline specificity issue; the
+corrected capture retains cyan connector paths without rectangular outlines,
+and review marked that fix resolved. These verdicts cover those two fixes only.
+
+The historical `reference.html` remains intact. Existing documentation
+references and unrelated guides are unchanged. The maintainer reviews the
+integrated reference set before the website node lands.
