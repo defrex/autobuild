@@ -1301,15 +1301,19 @@ describe('ab done — finalize', () => {
       workspacePath: workspace,
       forge,
     })
-    const append = store.append.bind(store)
+    const append = store.appendWithArtifactsIfCurrent.bind(store)
     let failFinalizeOnce = true
-    store.append = (async (slug, event) => {
-      if (event.type === 'finalize.completed' && failFinalizeOnce) {
+    store.appendWithArtifactsIfCurrent = (async (slug, expectedSeq, artifacts, makeEvent) => {
+      if (
+        artifacts.length === 0 &&
+        makeEvent([]).type === 'finalize.completed' &&
+        failFinalizeOnce
+      ) {
         failFinalizeOnce = false
         throw new Error('store unavailable at finalize commit')
       }
-      return append(slug, event)
-    }) as typeof store.append
+      return append(slug, expectedSeq, artifacts, makeEvent)
+    }) as typeof store.appendWithArtifactsIfCurrent
 
     await expect(done(deps)).rejects.toThrow('store unavailable at finalize commit')
     expect(forge.prAttachmentUploads).toHaveLength(1)
@@ -2320,5 +2324,107 @@ describe('ab escalate', () => {
   test('an empty question is rejected', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'plan' }) })
     await expect(escalate(deps, { question: '   ' })).rejects.toThrow(/requires a question/)
+  })
+})
+
+describe('terminal versus suspension ordering', () => {
+  async function suspension() {
+    const events = await store.getEvents(BUILD)
+    return store.appendWithArtifactsIfCurrent(
+      BUILD,
+      events.at(-1)!.seq,
+      [{ kind: 'transcript', content: 'interrupted evidence' }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'session.suspended',
+        payload: {
+          session: 's_test',
+          phase: 'plan',
+          round: 1,
+          cause: 'shutdown',
+          activeMs: 10,
+          handle: {
+            version: 1,
+            runner: 'fake',
+            nativeId: 'native',
+            host: 'host',
+            workspacePath: planWorkspace,
+          },
+          transcript: { kind: 'transcript', rev: deposited[0]!.revision },
+        },
+      }),
+    )
+  }
+
+  test('suspension-first rejects a terminal already validated against the previous head', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_test',
+        phase: 'plan',
+        round: 1,
+        role: 'plan',
+        runner: 'fake',
+      },
+    })
+    const append = store.appendWithArtifactsIfCurrent.bind(store)
+    let ready!: () => void
+    let release!: () => void
+    const validated = new Promise<void>((r) => {
+      ready = r
+    })
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let first = true
+    store.appendWithArtifactsIfCurrent = async (...args) => {
+      if (first) {
+        first = false
+        ready()
+        await gate
+      }
+      return append(...args)
+    }
+    const terminal = done(planDeps())
+    const rejected = terminal.catch((error: Error) => error)
+    await validated
+    await suspension()
+    release()
+    expect(await rejected).toBeInstanceOf(Error)
+    expect(((await rejected) as Error).message).toMatch(/already suspended/)
+    expect((await store.getEvents(BUILD)).filter((e) => e.type === 'plan.completed')).toHaveLength(
+      0,
+    )
+    await expect(escalate(planDeps(), { question: 'late' })).rejects.toThrow(/already suspended/)
+    await expect(
+      verdict(makeDeps({ store, env: makeEnv({ phase: 'plan-review' }) }), {
+        verdict: 'approve',
+        notes: await stash('notes.md', 'notes'),
+      }),
+    ).rejects.toThrow(/already suspended/)
+  })
+
+  test('terminal-first invalidates the suspension head without depositing an artifact', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan' })
+    const events = await store.getEvents(BUILD)
+    const boundary = events.at(-1)!.seq
+    await done(planDeps())
+    const result = await store.appendWithArtifactsIfCurrent(
+      BUILD,
+      boundary,
+      [{ kind: 'transcript', content: 'must not deposit' }],
+      () => ({
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'irrelevant', host: 'host' },
+      }),
+    )
+    expect(result).toBeNull()
+    expect(await store.listArtifacts(BUILD, 'transcript')).toHaveLength(0)
+    expect(
+      (await store.getEvents(BUILD)).filter((e) => e.type === 'session.suspended'),
+    ).toHaveLength(0)
   })
 })

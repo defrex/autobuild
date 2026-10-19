@@ -58,6 +58,12 @@ function stripStreamFields(events: AbEvent[], tmp: string): unknown[] {
           void _stream
           return { type: event.type, payload }
         }
+        if (event.type === 'session.ended' && 'activeMs' in event.payload) {
+          // Monotonic observed duration varies with execution overhead; it
+          // does not change the phase/terminal decisions compared here.
+          const { activeMs: _elapsed, ...payload } = event.payload
+          return { type: event.type, payload }
+        }
         if (event.type === 'restack.rewritten') {
           // Unique object count can differ when two Git commands straddle a
           // wall-clock second; normalized identities, not archive cardinality,

@@ -95,7 +95,8 @@ export function parseTranscript(content: string): TranscriptPresentation {
           "Producer boundary record: this session was kept live for continuation; only this round's final turn was deposited.",
         turns: [
           {
-            prompt: '(producer round invocation)',
+            prompt:
+              typeof boundary.prompt === 'string' ? boundary.prompt : '(producer round invocation)',
             text: boundary.text,
             ...(usage(boundary.usage) !== undefined ? { usage: usage(boundary.usage)! } : {}),
           },

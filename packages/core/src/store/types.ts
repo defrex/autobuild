@@ -334,6 +334,15 @@ export interface BuildStore {
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }>
 
+  /** Atomic conditional deposit. A stale head returns null without revisions,
+   * timestamps, retention changes or artifact deposits. */
+  appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null>
+
   /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
    * When nothing newer exists and `opts.waitSeconds` is given (whole
    * seconds; clamped at the adapter's ceiling, never rejected), the adapter

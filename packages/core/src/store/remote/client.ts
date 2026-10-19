@@ -373,6 +373,42 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
+  async appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    const sentinels: ArtifactMeta[] = artifacts.map((artifact, index) => ({
+      build: slug,
+      kind: artifact.kind,
+      revision: placeholderRev(index),
+      blobRef: '',
+      metadata: structuredClone(artifact.metadata ?? {}),
+      createdAt: '',
+    }))
+    const write = makeEvent(sentinels)
+    const result = await this.requestJson(
+      'POST',
+      `${this.buildPath(slug)}/deposits/conditional`,
+      depositsResponseSchema.nullable(),
+      {
+        expectedSeq,
+        artifacts: artifacts.map((artifact) => ({
+          kind: artifact.kind,
+          contentBase64: encodeBase64(toBytes(artifact.content)),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
+        })),
+        event: { actor: write.actor, type: write.type, payload: write.payload },
+      },
+    )
+    if (result === null) return null
+    return {
+      event: result.event as unknown as EventEnvelope<T>,
+      artifacts: result.artifacts,
+    }
+  }
+
   /** The BuildStore abort contract (AUT-380): a held read whose caller's
    * signal fires resolves with the empty result — the client-side mirror of
    * the server's `withDisconnect`, which discards the aborted response

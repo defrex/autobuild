@@ -160,6 +160,8 @@ export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
+  suspendedSessions: OpenSession[]
+  sessionTotals: BuildState['sessions']['totals']
   openSessions: StatusOpenSession[]
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
@@ -351,6 +353,8 @@ export function detailFromFacts(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
+    suspendedSessions: state.sessions.suspended,
+    sessionTotals: state.sessions.totals,
     openSessions: state.sessions.open.map((session) => {
       const record = streamStatus.get(`session:${session.session}`)
       return {
@@ -713,6 +717,11 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     }
   }
 
+  if (d.suspendedSessions.length > 0) {
+    lines.push(`  suspended sessions (${d.suspendedSessions.length}):`)
+    for (const session of d.suspendedSessions)
+      lines.push(`    ${session.session} — suspended (shutdown) on ${session.phase}`)
+  }
   if (d.openSessions.length > 0) {
     lines.push(`  open sessions (${d.openSessions.length}):`)
     for (const session of d.openSessions) {
@@ -721,7 +730,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
           ? ` — stream ${session.stream} (${session.streamStatus ?? 'open'})`
           : ''
       lines.push(
-        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})${stream}`,
+        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})${session.resumed ? ' — resumed' : ''}${stream}`,
       )
     }
   }

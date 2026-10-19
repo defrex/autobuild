@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../../events/catalog'
 import { projectSessions } from './detail'
 
-function event(seq: number, type: 'session.started' | 'session.ended', payload: unknown): AbEvent {
+function event(seq: number, type: AbEvent['type'], payload: unknown): AbEvent {
   return {
     build: 'drilldown',
     seq,
@@ -154,4 +154,69 @@ describe('projectSessions: stream enrichment (SPEC §9)', () => {
     expect(session?.stream).toBeUndefined()
     expect(session?.streamStatus).toBe('closed')
   })
+})
+
+test('suspended and resumed segments retain separate usage and transcript navigation', () => {
+  const native = {
+    version: 1,
+    runner: 'pi',
+    nativeId: 'native',
+    host: 'host',
+    workspacePath: '/repo',
+  }
+  const sessions = projectSessions([
+    event(1, 'session.started', {
+      session: 'old',
+      role: 'plan',
+      runner: 'pi',
+      phase: 'plan',
+      round: 1,
+    }),
+    event(2, 'session.suspended', {
+      session: 'old',
+      phase: 'plan',
+      round: 1,
+      handle: native,
+      cause: 'shutdown',
+      activeMs: 10,
+      transcript: { kind: 'transcript', rev: 1 },
+      usage: { inputTokens: 3, outputTokens: 2, turns: 1 },
+    }),
+    event(3, 'session.started', {
+      session: 'new',
+      role: 'plan',
+      runner: 'pi',
+      phase: 'plan',
+      round: 1,
+      continuation: {
+        predecessor: 'old',
+        root: 'old',
+        handle: native,
+        cause: 'shutdown',
+        activeMs: 10,
+        budgetMs: 1000,
+      },
+    }),
+    event(4, 'session.resumed', {
+      session: 'new',
+      predecessor: 'old',
+      root: 'old',
+      handle: native,
+      stale: false,
+    }),
+    event(5, 'session.resumed', {
+      session: 'old',
+      predecessor: 'older',
+      root: 'old',
+      handle: native,
+      stale: true,
+    }),
+  ])
+  expect(sessions[0]).toMatchObject({
+    status: 'suspended',
+    cause: 'shutdown',
+    transcript: { rev: 1 },
+    usage: { inputTokens: 3 },
+  })
+  expect(sessions[1]).toMatchObject({ status: 'resumed', predecessor: 'old', root: 'old' })
 })
