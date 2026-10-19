@@ -15,6 +15,9 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/dispatcher/',
     '/docs/integration/',
     '/docs/tickets/',
+    '/docs/operating/',
+    '/docs/seams/',
+    '/docs/configuration/',
   ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
@@ -69,4 +72,20 @@ test('docs renderer escapes page metadata', () => {
   const html = renderDocsPage({ ...DOCS_PAGES[0]!, title: '<unsafe>"&', description: '"<text>&' })
   expect(html).toContain('<title>&lt;unsafe&gt;&quot;&amp; · Autobuild docs</title>')
   expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
+})
+
+test('feature guides are text-only and link to repository references', () => {
+  for (const page of DOCS_PAGES.slice(2)) {
+    expect(page.content).toContain(`${REPO_URL}/blob/main/docs/`)
+    expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
+  }
+})
+
+test('landing links once to the seams guide from its seams section', async () => {
+  const { 'index.html': html } = await buildFiles()
+  expect(html.match(/href="\/docs\/seams\/"/g)).toHaveLength(1)
+  const section = html.split('<section').find((part) => part.includes('autobuild · seams'))!
+  expect(section.slice(0, section.indexOf('</section>'))).toContain(
+    '<a href="/docs/seams/">Explore the infrastructure seams</a>',
+  )
 })
