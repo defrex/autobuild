@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#658](https://github.com/defrex/autobuild/pull/658) — Animate the website pipeline figure through its review loops
 - [#655](https://github.com/defrex/autobuild/pull/655) — Extend website capture coverage to docs and animated figures
 - [#654](https://github.com/defrex/autobuild/pull/654) — Recommend project-pinned Autobuild installation
 - [#653](https://github.com/defrex/autobuild/pull/653) — Keep the terminal dashboard live when its pane loses focus
