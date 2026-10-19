@@ -1,3 +1,4 @@
+import { nativeSessionHandleSchema } from './native-session'
 /**
  * The event vocabulary (SPEC §15.3), frozen as schemas — this closes open
  * thread §18.1. It is simultaneously the store schema, the kernel's I/O, the
@@ -706,6 +707,12 @@ export const eventPayloadSchemas = {
     stream: z.string().min(1).optional(),
     /** Present only when this target substituted for the preceding failed one. */
     substitution: providerSubstitutionSchema.optional(),
+  }),
+  'session.native-handle-recorded': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round: round.optional(),
+    handle: nativeSessionHandleSchema,
   }),
   'session.ended': z.union([
     /** Ordinary completion retains the historical transcript-bearing shape. */

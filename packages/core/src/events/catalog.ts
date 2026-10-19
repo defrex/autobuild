@@ -122,6 +122,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'spec.revised': ['kernel'],
 
   'session.started': ['kernel'],
+  'session.native-handle-recorded': ['kernel'],
   'session.ended': ['kernel'],
 
   'plan.started': ['kernel'],

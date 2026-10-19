@@ -300,6 +300,7 @@ class OneShotPostAppendFaultStore extends MemoryBuildStore {
 }
 
 interface HarnessOptions {
+  nativeSessions?: boolean
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
   failCommands?: string[]
@@ -446,7 +447,10 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     if (!handler) throw new Error(`no handler for skill "${ctx.opts.skill}"`)
     return handler(ctx)
   }
-  const runner = new ScriptedAgentRunner({ script })
+  const runner = new ScriptedAgentRunner({
+    script,
+    nativeState: options.nativeSessions ? new Map() : undefined,
+  })
 
   const failing = new Set(options.failCommands ?? [])
   const throwing = new Set(options.throwCommands ?? [])
@@ -5674,4 +5678,165 @@ describe('frozen post-reconcile verification policy', () => {
           },
     )
   })
+})
+
+describe('native identity recording', () => {
+  test('the fact lands before the native turn completes and deduplicates within a bracket', async () => {
+    const { nativeHandle } = await import('../ports/runner/native-session')
+    let unblock!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve
+    })
+    let observed!: () => void
+    const observation = new Promise<void>((resolve) => {
+      observed = resolve
+    })
+    const h = await makeHarness({
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        const plan = handlers['ab-plan'] ?? handlers.plan!
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            const handle = nativeHandle('scripted', 'native-thread', ctx.opts.workspacePath)
+            await ctx.opts.onNativeSession?.(handle)
+            await ctx.opts.onNativeSession?.(handle)
+            observed()
+            await blocked
+            return plan(ctx)
+          },
+        }
+      },
+    })
+    const running = h.br.run()
+    await observation
+    const facts = ofType(await h.store.getEvents(SLUG), 'session.native-handle-recorded')
+    expect(facts).toHaveLength(1)
+    expect(facts[0]?.payload).toMatchObject({
+      phase: 'plan',
+      round: 1,
+      handle: { nativeId: 'native-thread' },
+    })
+    expect(
+      reduceBuild(await h.store.getEvents(SLUG)).sessions.open[0]?.nativeHandle?.nativeId,
+    ).toBe('native-thread')
+    unblock()
+    await running
+    const all = await h.store.getEvents(SLUG)
+    expect(all.findIndex((e) => e.type === 'session.native-handle-recorded')).toBeLessThan(
+      all.findIndex((e) => e.type === 'session.ended'),
+    )
+  })
+
+  test('late native callbacks after a budget boundary cannot write a handle', async () => {
+    const { nativeHandle } = await import('../ports/runner/native-session')
+    const timers = new ManualSessionBudgetScheduler()
+    let callback: import('../ports/types').NativeSessionObserver | undefined
+    let workspacePath = ''
+    const runner: AgentRunner = {
+      name: 'late',
+      start: async (opts) => {
+        callback = opts.onNativeSession
+        workspacePath = opts.workspacePath
+        return new Promise(() => {})
+      },
+      continue: async () => defaultTurnResult(),
+      end: async () => ({
+        content: '',
+        metadata: { runner: 'late', usage: { inputTokens: 0, outputTokens: 0, turns: 0 } },
+      }),
+    }
+    const h = await makeHarness({
+      runtimeRunner: runner,
+      runnerOpts: { maxPhaseAttempts: 1, scheduleSessionBudget: timers.schedule },
+    })
+    const running = h.br.run()
+    await timers.expireNext()
+    await running
+    await callback?.(nativeHandle('late', 'too-late', workspacePath))
+    expect(ofType(await h.store.getEvents(SLUG), 'session.native-handle-recorded')).toHaveLength(0)
+  })
+
+  test('a rejected native fact append surfaces as infrastructure failure', async () => {
+    const { nativeHandle } = await import('../ports/runner/native-session')
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'ab-plan': async (ctx) => {
+          await ctx.opts.onNativeSession?.(
+            nativeHandle('scripted', 'native-thread', ctx.opts.workspacePath),
+          )
+          return defaultTurnResult()
+        },
+      }),
+    })
+    const append = h.store.append.bind(h.store)
+    h.store.append = async (slug, write) => {
+      if (write.type === 'session.native-handle-recorded')
+        throw new Error('native fact store unavailable')
+      return append(slug, write)
+    }
+    await expect(h.br.run()).rejects.toThrow('native fact store unavailable')
+  })
+})
+
+test('native facts follow the current bracket across reused producer rounds', async () => {
+  const h = await makeHarness({ nativeSessions: true, handlers: reviseThenApproveHandlers })
+  await h.br.run()
+  const events = await h.store.getEvents(SLUG)
+  const facts = ofType(events, 'session.native-handle-recorded').filter(
+    (event) => event.payload.phase === 'implement',
+  )
+  expect(facts).toHaveLength(2)
+  expect(facts.map((event) => event.payload.round)).toEqual([1, 2])
+  expect(facts[0]!.payload.session).not.toBe(facts[1]!.payload.session)
+  expect(facts[0]!.payload.handle.nativeId).toBe(facts[1]!.payload.handle.nativeId)
+  for (const fact of facts) {
+    const start = ofType(events, 'session.started').find(
+      (event) => event.payload.session === fact.payload.session,
+    )!
+    const end = ofType(events, 'session.ended').find(
+      (event) => event.payload.session === fact.payload.session,
+    )!
+    expect(start.seq).toBeLessThan(fact.seq)
+    expect(fact.seq).toBeLessThan(end.seq)
+  }
+})
+
+test('restart still reclaims and reruns a phase even when a durable native handle exists', async () => {
+  const { nativeHandle } = await import('../ports/runner/native-session')
+  const h = await makeHarness()
+  await seedPlanApproved(h.store)
+  await h.store.append(SLUG, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 's_dead',
+      phase: 'implement',
+      round: 1,
+      role: 'implement',
+      runner: 'scripted',
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.native-handle-recorded',
+    payload: {
+      session: 's_dead',
+      phase: 'implement',
+      round: 1,
+      handle: nativeHandle('scripted', 'dead-native', h.workspacePath),
+    },
+  })
+  await h.br.attach()
+  await h.br.step()
+  const events = await h.store.getEvents(SLUG)
+  expect(
+    ofType(events, 'session.ended').find((event) => event.payload.session === 's_dead')?.payload,
+  ).toMatchObject({ outcome: 'reclaimed' })
+  const fresh = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-implement')!
+  expect(fresh.messages).toEqual([])
+  expect(fresh.turns).toHaveLength(1)
+  expect(reduceBuild(events).sessions.nativeHandles.s_dead?.nativeId).toBe('dead-native')
 })

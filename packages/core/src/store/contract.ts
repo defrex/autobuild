@@ -1414,6 +1414,53 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('named reducer value reads', () => {
+      test('native handles survive open, ended and cached build-state reads', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'native-handle-values'
+          await store.createBuild(sampleBuildInput(slug))
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'session.started',
+            payload: {
+              session: 's_native',
+              phase: 'implement',
+              round: 1,
+              role: 'implement',
+              runner: 'alias',
+            },
+          })
+          expect((await readBuildFacts(store, slug)).value.state.sessions.nativeHandles).toEqual({})
+          const handle = {
+            version: 1 as const,
+            runner: 'codex',
+            nativeId: 'thread',
+            host: 'worker',
+            workspacePath: '/repo',
+          }
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'session.native-handle-recorded',
+            payload: { session: 's_native', phase: 'implement', round: 1, handle },
+          })
+          expect(
+            (await readBuildFacts(store, slug)).value.state.sessions.open[0]?.nativeHandle,
+          ).toEqual(handle)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'session.ended',
+            payload: {
+              session: 's_native',
+              transcript: { kind: 'transcript', rev: 0 },
+              usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+            },
+          })
+          const state = (await readBuildFacts(store, slug)).value.state
+          expect(state.sessions).toEqual({ open: [], nativeHandles: { s_native: handle } })
+          expect(state).toEqual(reduceBuild(await store.getEvents(slug)))
+          expect((await readBuildFacts(store, slug)).value.state.sessions).toEqual(state.sessions)
+        })
+      })
+
       test('automatic restack identity, publication settlement and base-pinned evidence survive persisted reads', async () => {
         await withStore(factory, undefined, async (store) => {
           const slug = 'automatic-restack-values'
