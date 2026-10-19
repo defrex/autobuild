@@ -123,6 +123,7 @@ function makeStore(
     ...(opts.token !== undefined ? { token: opts.token } : {}),
     fetchFn,
   })
+  expect(store.networkReads).toBe(true)
   return { store, calls }
 }
 

@@ -2177,12 +2177,13 @@ and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 
 Interactive watch presentation enables xterm focus reporting (mode 1004) only
-while it owns terminal input. A focus-out report pauses all automatic dashboard
-reads, including session feeds; focus-in refreshes immediately. Terminals that
-send no reports remain focused. Every operator key requests an immediate refresh
+while it owns terminal input. Local-store reads keep the same cadence regardless
+of focus. Network stores (remote HTTP and Postgres) use 5-second polling while
+unfocused, including session feeds and automatic session recovery. Focus-in
+refreshes immediately. Terminals that send no reports remain focused. Every operator key requests an immediate refresh
 unless one is already running and holds the 500 ms cadence for at least 30
-seconds. Otherwise retained nonterminal builds (including abort cleanup) use
-500 ms polling and an empty dashboard uses 5 seconds. Cached elapsed counters
+seconds while focused (or on a local store). Otherwise retained nonterminal
+builds (including abort cleanup) use 500 ms polling and an empty dashboard uses 5 seconds. Cached elapsed counters
 may repaint without reads. Focus never pauses the dispatcher kernel. Job-control
 suspension restores owned terminal modes and raw input before stopping; resume
 reenables them, assumes focus, and refreshes immediately. Teardown disables focus
@@ -2196,8 +2197,8 @@ same transaction as build creation, build/repository event insertion (including
 artifact-backed and tick writes), or a stored dispatcher lease holder transition.
 Other repositories, failed writes, denied claims, same-holder renewals, heartbeats,
 and passive expiry do not advance it. It is separate from journal sequence cursors.
-Unchanged positions reuse the complete presentation snapshot; a focused ordinary
-refresh then makes exactly one store request. Discovery uses required exact-repo
+Unchanged positions reuse the complete presentation snapshot; an ordinary refresh, focused or unfocused,
+then makes exactly one store request. Discovery uses required exact-repo
 `listBuildsForRepo(repo)`, never a global listing. Initial hydration, position or
 configuration changes, and at most ten seconds between full reads refresh the
 snapshot, including mutable lease/stream/artifact/ticket enrichment. Failed or
