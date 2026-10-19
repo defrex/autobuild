@@ -56,8 +56,9 @@ test('published Autobuild peers retain stable ranges and admit the beta set', as
 
 test('npm and Bun install real beta package tarballs together without peer diagnostics', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'ab-beta-peers-'))
+  let registry: ReturnType<typeof Bun.serve> | undefined
   try {
-    const tarballs: string[] = []
+    const tarballs: Record<string, string> = {}
     for (const path of packages) {
       const source = join(root, path)
       const target = join(temp, 'distribution', path)
@@ -86,13 +87,60 @@ test('npm and Bun install real beta package tarballs together without peer diagn
         code: 0,
       })
       const archive = (await readdir(target)).find((file) => file.endsWith('.tgz'))!
-      tarballs.push(join(target, archive))
+      const { name } = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'))
+      tarballs[name] = `file:${join(target, archive)}`
     }
+    // Bun resolves exact transitive workspace dependencies through registry metadata
+    // even when the same version is a direct tarball dependency. Serve the actual
+    // packed manifests/tarballs locally; peer declarations and resolution stay intact.
+    const published = new Map<string, Record<string, unknown>>()
+    for (const [name, archive] of Object.entries(tarballs)) {
+      const extracted = await spawnExec(
+        ['tar', '-xOf', archive.slice(5), 'package/package.json'],
+        {},
+      )
+      expect(extracted.exitCode).toBe(0)
+      published.set(name, JSON.parse(extracted.stdout))
+    }
+    registry = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        const name = decodeURIComponent(url.pathname.slice(1))
+        if (name.startsWith('tarballs/')) {
+          const archive = Object.values(tarballs)[Number(name.slice(9))]
+          return archive
+            ? new Response(Bun.file(archive.slice(5)))
+            : new Response('', { status: 404 })
+        }
+        const manifest = published.get(name)
+        if (!manifest) return new Response('', { status: 404 })
+        return Response.json({
+          name,
+          'dist-tags': { latest: '1.0.0-beta.1' },
+          versions: {
+            '1.0.0-beta.1': {
+              ...manifest,
+              dist: { tarball: `${url.origin}/tarballs/${Object.keys(tarballs).indexOf(name)}` },
+            },
+          },
+        })
+      },
+    })
     for (const manager of ['npm', 'bun']) {
       const consumer = join(temp, manager)
       await mkdir(consumer)
-      await writeFile(join(consumer, 'package.json'), '{"name":"beta-consumer","private":true}')
-      const args = ['--ignore-scripts', ...tarballs]
+      await writeFile(
+        join(consumer, 'package.json'),
+        JSON.stringify({
+          name: 'beta-consumer',
+          private: true,
+          dependencies: tarballs,
+        }),
+      )
+      await writeFile(join(consumer, '.npmrc'), `@defrex:registry=${registry.url}\n`)
+      const args = ['--ignore-scripts']
       const installed =
         manager === 'bun'
           ? await installPackedDistribution(args, consumer)
@@ -113,6 +161,7 @@ test('npm and Bun install real beta package tarballs together without peer diagn
       }
     }
   } finally {
+    registry?.stop(true)
     await rm(temp, { recursive: true, force: true })
   }
 }, 480_000)
