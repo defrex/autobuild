@@ -118,6 +118,7 @@ export { publicationPending } from './publication-state'
 class AutomaticRewriteDeferred extends Error {}
 class SessionShutdown extends Error {}
 class RecoveryBoundaryChanged extends Error {}
+class FreshSessionRequired extends Error {}
 
 /** Another sandbox owns the build (§7.4): its lease is live, so this runner
  * must not execute. The dispatcher retries once the lease expires. */
@@ -645,7 +646,6 @@ export class BuildRunner {
     string,
     NonNullable<EventPayload<'session.started'>['continuation']>
   >()
-  private readonly freshFallbacks = new Set<string>()
   private readonly interruptionPrompts = new Map<string, string>()
   private readonly bracketStreams = new Map<string, SessionBracketStream>()
   private readonly activeDurations = new Map<string, number>()
@@ -773,8 +773,24 @@ export class BuildRunner {
       if (stale) throw new Error('Native resume attempt is no longer current')
       break
     }
-    this.freshFallbacks.add(session)
-    return runner.start(opts)
+    // The unavailable native attempt has no fresh turn to account for. Close
+    // its evidence and credentials before re-deciding the ordinary phase path.
+    // That path resolves today's policy and opens an independent budget/root.
+    await this.bracketStreams.get(session)?.sink.close('aborted')
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session,
+        outcome: 'reclaimed',
+        reclaimedBy: {
+          instance: this.deps.instance,
+          resumedFromSeq: (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+            .lastSeq,
+        },
+      },
+    })
+    throw new FreshSessionRequired()
   }
 
   private readonly maxPhaseAttempts: number
@@ -1144,6 +1160,7 @@ export class BuildRunner {
           return decision
       }
     } catch (error) {
+      if (error instanceof FreshSessionRequired) return this.step()
       if (error instanceof RecoveryBoundaryChanged) return decision
       throw error
     }
@@ -2550,7 +2567,6 @@ export class BuildRunner {
     )
     let closed = false
     let recorded: string | undefined
-    let fallbackObserved = false
     let recording = Promise.resolve()
     const onNativeSession: NativeSessionObserver = (handle) => {
       if ((closed || controller.signal.aborted) && !continuation) return Promise.resolve()
@@ -2559,15 +2575,11 @@ export class BuildRunner {
         const validated = nativeSessionHandleSchema.parse(handle)
         if (validated.host !== hostname() || validated.workspacePath !== this.deps.workspacePath)
           throw new Error('Native identity execution location mismatch')
-        if (this.freshFallbacks.has(started.payload.session) && !fallbackObserved) {
-          recorded = undefined
-          fallbackObserved = true
-        }
         const bytes = JSON.stringify(validated)
         if (recorded === bytes) return
         if (recorded !== undefined)
           throw new Error('Conflicting native identities in session bracket')
-        if (continuation && !this.freshFallbacks.has(started.payload.session)) {
+        if (continuation) {
           for (;;) {
             const facts = await readBuildFacts(store, slug)
             const current = facts.value.state.sessions.open.some(
@@ -2646,6 +2658,8 @@ export class BuildRunner {
     try {
       const settlement = await Promise.race([pending, expiry])
       await recording
+      if (settlement.kind === 'error' && settlement.error instanceof FreshSessionRequired)
+        throw settlement.error
       this.activeDurations.set(
         started.payload.session,
         Math.max(0, performance.now() - turnStarted),

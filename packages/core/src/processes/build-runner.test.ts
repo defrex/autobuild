@@ -6031,6 +6031,7 @@ describe('native recovery fallback boundaries', () => {
       let h!: Harness
       let starts = 0
       let resumes = 0
+      const timers = new ManualSessionBudgetScheduler()
       const delegate: AgentRunner = {
         name: 'scripted',
         start: (opts) => {
@@ -6050,6 +6051,8 @@ describe('native recovery fallback boundaries', () => {
       }
       h = await makeHarness({
         workspaceProvider: 'git-worktree',
+        configToml: `${CONFIG_TOML}\n[policy]\nsessionBudgetSeconds = 1\n`,
+        runnerOpts: { scheduleSessionBudget: timers.schedule },
         workspaceRemote: scenario === 'remote',
         runtimeRunner: delegate,
         clock: () => new Date(),
@@ -6064,6 +6067,7 @@ describe('native recovery fallback boundaries', () => {
           runner: 'scripted',
           phase: 'plan',
           round: 1,
+          budgetMs: 1000,
         },
       })
       if (scenario !== 'missing-handle') {
@@ -6081,6 +6085,22 @@ describe('native recovery fallback boundaries', () => {
           },
         })
       }
+      if (scenario === 'missing-state') {
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.suspended',
+          payload: {
+            session: 'lost',
+            phase: 'plan',
+            round: 1,
+            handle: nativeHandle('scripted', 'unavailable-native', h.workspacePath),
+            cause: 'shutdown',
+            activeMs: 900,
+            transcript: { kind: 'transcript', rev: 0 },
+            usage: { inputTokens: 17, outputTokens: 19, turns: 1 },
+          },
+        })
+      }
       await h.br.attach()
       await h.br.step()
       expect(starts).toBe(1)
@@ -6095,6 +6115,23 @@ describe('native recovery fallback boundaries', () => {
             ? 'unsupported-runtime'
             : scenario,
       )
+      if (scenario === 'missing-state') {
+        expect(timers.delays).toEqual([100, 1000])
+        const brackets = ofType(events, 'session.started')
+        expect(brackets).toHaveLength(3)
+        const fresh = brackets.at(-1)!.payload
+        expect(fresh.continuation).toBeUndefined()
+        expect(fresh.session).not.toBe(brackets[1]!.payload.session)
+        const totals = reduceBuild(events).sessions.totals
+        expect(totals.lost?.usage).toEqual({ inputTokens: 17, outputTokens: 19, turns: 1 })
+        expect(totals[fresh.session]).toBeDefined()
+        const transcript = (await h.store.listArtifacts(SLUG, 'transcript')).find(
+          (artifact) => artifact.metadata.session === fresh.session,
+        )
+        expect(transcript).toBeDefined()
+        expect(transcript!.metadata.interruptionPrompt).toBeUndefined()
+        expect(ofType(events, 'phase.failed')).toHaveLength(0)
+      }
       expect(ofType(events, 'plan.completed')).toHaveLength(1)
       expect((await readBuildFacts(h.store, SLUG)).value.state.sessions.open).toEqual([])
     })
