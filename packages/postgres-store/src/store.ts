@@ -165,6 +165,7 @@ export interface PostgresBuildStoreOptions {
 }
 
 export class PostgresBuildStore implements BuildStore {
+  readonly networkReads = true
   readonly blobs: BlobStore
   private readonly clock: Clock
   private readonly maxRevisions: number

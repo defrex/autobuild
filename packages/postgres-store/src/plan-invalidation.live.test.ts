@@ -52,6 +52,7 @@ if (testUrl) {
       const database = await isolatedDatabase()
       const sql = new SQL(database.url, { max: 1 })
       const store = new PostgresBuildStore(sql, { blobs: new MemoryBlobStore() })
+      expect(store.networkReads).toBe(true)
       try {
         const created = await store.createBuild(sampleBuildInput('plan-probe'))
         // Warm the `SELECT * FROM builds` plan on the store's connection.

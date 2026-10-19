@@ -962,18 +962,22 @@ export class DispatchFrontend {
 
   private startPresentation(): void {
     this.accepting = true
-    this.refresh = new DashboardRefresh(async () => {
-      try {
-        await this.readFrame()
-      } catch (error) {
-        if (this.refresh?.admitted)
-          await this.report(
-            `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
-            'warning',
-          )
-        throw error
-      }
-    }, this.opts.refreshScheduler)
+    this.refresh = new DashboardRefresh(
+      async () => {
+        try {
+          await this.readFrame()
+        } catch (error) {
+          if (this.refresh?.admitted)
+            await this.report(
+              `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
+              'warning',
+            )
+          throw error
+        }
+      },
+      this.opts.refreshScheduler,
+      this.opts.store.networkReads,
+    )
     this.listen()
     this.opts.terminal.modes.enter(FOCUS_REPORTING_MODE)
     this.suspension = installPresentationSuspension(
