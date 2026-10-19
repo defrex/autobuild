@@ -1,5 +1,9 @@
 # Configuration reference
 
+Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
+Here, `ab <command>` means the repository-installed CLI; run it as
+`bun ab <command>`, for example `bun ab init`.
+
 Autobuild reads one declarative `autobuild.toml` from the repository root.
 Commands in the file are shell strings; the file itself is never evaluated as
 code. A running dispatcher owns an accepted snapshot from the main checkout,
@@ -278,8 +282,8 @@ root whose config is being read. In a scoped phase process that root is the
 immutable build worktree. Bare npm package specifiers resolve first from the
 consuming repository's main checkout and therefore use its installed
 dependencies; a package the repository lacks then resolves from Autobuild's own
-installation, so an extension installed next to the CLI (`bun add -g
-@defrex/autobuild-<extension>`) loads without being added to the repository. A
+installation as a fallback. Install extensions in the consuming repository with
+`bun add -d --exact @defrex/autobuild-<extension>`. A
 repository copy always wins over an installed one. This package lookup remains
 stable when a relocated local store places a linked worktree outside the
 checkout. Dispatch and sessionless commands use the main checkout for both
