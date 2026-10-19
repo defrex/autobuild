@@ -2853,7 +2853,14 @@ test('frontend standby refreshes ownership independently of yield notices and re
   }
 })
 
-for (const mode of ['paused', 'idle', 'live'] as const) {
+for (const mode of [
+  'unfocused-local',
+  'unfocused-local-live',
+  'unfocused-network',
+  'unfocused-network-live',
+  'idle',
+  'live',
+] as const) {
   test(`frontend full store boundary: ${mode} minute, key wakeup, kernel independence`, async () => {
     const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
     const time = new FakeRefreshScheduler()
@@ -2864,6 +2871,7 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
     const store = new Proxy(backing, {
       get(target, key) {
         const value = Reflect.get(target, key, target)
+        if (key === 'networkReads') return mode.startsWith('unfocused-network')
         if (typeof value !== 'function') return value
         return (...args: unknown[]) => {
           if (/^(get|list|read)/u.test(String(key)))
@@ -2882,7 +2890,7 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
         payload: { repo, ticket, baseBranch: 'main' },
       })
     }
-    if (mode === 'live') await addBuild()
+    if (mode.endsWith('live')) await addBuild()
     let hooks: import('./terminal').TerminalInputHooks | undefined
     let key: ((event: TerminalInputEvent) => void) | undefined
     const done = deferred<DispatchChildResult>()
@@ -2956,18 +2964,30 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
       await time.settle()
       await time.advance(501)
       expect(frames.length).toBeGreaterThan(0)
-      if (mode === 'paused') hooks!.onFocus!(false)
+      if (mode.startsWith('unfocused')) hooks!.onFocus!(false)
       for (const name of Object.keys(calls)) calls[name] = 0
+      if (mode.startsWith('unfocused-network')) {
+        // The cadence transition may bring the ten-second enrichment deadline
+        // forward. Warm that read before measuring an ordinary unchanged poll.
+        if (mode.endsWith('live')) {
+          await time.advance(5000)
+          for (const name of Object.keys(calls)) calls[name] = 0
+        }
+        await time.advance(5000)
+        expect(calls.getRepoChangePosition).toBe(1)
+        expect(Object.values(calls).reduce((sum, count) => sum + count, 0)).toBe(1)
+        for (const name of Object.keys(calls)) calls[name] = 0
+      }
       await time.advance(60_000)
-      const expected = mode === 'paused' ? 0 : mode === 'idle' ? 12 : 120
-      const full = mode === 'paused' ? 0 : 6
+      const expected = mode.endsWith('live') && !mode.startsWith('unfocused-network') ? 120 : 12
+      const full = 6
       expect(calls.getRepoChangePosition ?? 0).toBe(expected)
       expect(calls.listBuilds ?? 0).toBe(0)
       expect(calls.listBuildsForRepo ?? 0).toBe(full)
       expect(calls.getRepoBuildDigests ?? 0).toBe(full)
       expect(calls.getRepoEvents ?? 0).toBe(full)
       expect(calls.getRepo ?? 0).toBe(full)
-      expect(calls.getArtifact ?? 0).toBe(mode === 'live' ? full : 0)
+      expect(calls.getArtifact ?? 0).toBe(mode.endsWith('live') ? full : 0)
       expect(calls.readStream ?? 0).toBe(0)
       if (mode === 'idle') {
         await addBuild()
@@ -2984,21 +3004,17 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
         await time.advance(4500)
         expect(calls.listBuilds).toBe(afterCompletion)
       }
-      if (mode === 'paused') {
-        expect(Object.values(calls).reduce((sum, n) => sum + n, 0)).toBe(0)
-        // Simulated kernel commits independently, through the original store.
-        await addBuild()
-        await time.advance(60_000)
-        expect(calls.listBuilds ?? 0).toBe(0)
-        hooks!.onFocus!(true)
-        await time.settle()
+      if (mode.startsWith('unfocused')) {
+        if (!mode.endsWith('live')) await addBuild()
+        await time.advance(5001)
         expect(frames.at(-1)!.builds.map((build) => build.slug)).toContain('new-build')
-        hooks!.onFocus!(false)
         key!({ type: 'text', text: '?' })
         await time.settle()
-        const afterKey = calls.listBuilds
-        await time.advance(60_000)
-        expect(calls.listBuilds).toBe(afterKey)
+        const beforePoll = calls.getRepoChangePosition!
+        await time.advance(mode.startsWith('unfocused-network') ? 4999 : 499)
+        expect(calls.getRepoChangePosition).toBe(beforePoll)
+        await time.advance(2)
+        expect(calls.getRepoChangePosition).toBe(beforePoll + 1)
       }
       hooks!.onFocus!(false)
       const beforeQuit = { ...calls }
@@ -3014,45 +3030,49 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
   })
 }
 
-test('focus loss pauses the session feed as well as frame reads for a simulated minute', async () => {
-  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
-  const time = new FakeRefreshScheduler()
-  let reads = 0
-  const h = await seedSessionViewHarness({
-    refreshScheduler: time,
-    wrapStore: (backing) =>
-      new Proxy(backing, {
-        get(target, key) {
-          const value = Reflect.get(target, key, target)
-          if (typeof value !== 'function') return value
-          return (...args: unknown[]) => {
-            if (/^(get|list|read)/u.test(String(key))) reads++
-            return Reflect.apply(value, target, args)
-          }
-        },
-      }),
+for (const network of [false, true]) {
+  test(`focus loss keeps session feeds live (network=${network})`, async () => {
+    const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+    const time = new FakeRefreshScheduler()
+    let reads = 0
+    const h = await seedSessionViewHarness({
+      refreshScheduler: time,
+      wrapStore: (backing) =>
+        new Proxy(backing, {
+          get(target, key) {
+            if (key === 'networkReads') return network
+            const value = Reflect.get(target, key, target)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              if (/^(get|list|read)/u.test(String(key))) reads++
+              return Reflect.apply(value, target, args)
+            }
+          },
+        }),
+    })
+    try {
+      await time.advance(501)
+      h.press({ type: 'down' })
+      h.press({ type: 'enter' })
+      await time.settle()
+      h.press({ type: 'enter' })
+      await time.settle()
+      expect(h.frame()).toContain('Prompt: watch the limiter')
+      h.focus(false)
+      reads = 0
+      await h.store.appendStreamParts(h.streamId, [textDeltaPart('t1', ' updated while away')])
+      await time.advance(network ? 5001 : 501)
+      expect(reads).toBeGreaterThan(0)
+      expect(h.frame()).toContain('updated while away')
+      h.focus(true)
+      await time.settle()
+      expect(h.frame()).toContain('updated while away')
+      expect(reads).toBeGreaterThan(0)
+    } finally {
+      await h.finish()
+    }
   })
-  try {
-    await time.advance(501)
-    h.press({ type: 'down' })
-    h.press({ type: 'enter' })
-    await time.settle()
-    h.press({ type: 'enter' })
-    await time.settle()
-    expect(h.frame()).toContain('Prompt: watch the limiter')
-    h.focus(false)
-    reads = 0
-    await h.store.appendStreamParts(h.streamId, [textDeltaPart('t1', ' updated while away')])
-    await time.advance(60_000)
-    expect(reads).toBe(0)
-    h.focus(true)
-    await time.settle()
-    expect(h.frame()).toContain('updated while away')
-    expect(reads).toBeGreaterThan(0)
-  } finally {
-    await h.finish()
-  }
-})
+}
 
 test('gated and always-read frontend frames agree after repository and build mutations', async () => {
   const { manualClock } = await import('../testing/fixed')

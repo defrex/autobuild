@@ -10970,7 +10970,7 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
   })
 }
 
-test('focus-paused frontend leaves the supervised kernel ticking and running a ready ticket', async () => {
+test('unfocused frontend leaves the supervised kernel ticking and running a ready ticket', async () => {
   const { DispatchFrontend } = await import('./dispatch-frontend')
   const fx = await makeFixture(readyTicket('T-focus-kernel'), happyHandlers())
   const stop = new AbortController()
@@ -11037,10 +11037,9 @@ test('focus-paused frontend leaves the supervised kernel ticking and running a r
     const journal = await fx.store.getRepoEvents(fx.origin)
     expect(journal.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
     expect(fx.tickets.claims.length).toBeGreaterThan(0)
-    expect(reads).toBe(0)
     const slug = (await fx.store.listBuilds())[0]!.slug
-    focus!(true)
     await waitFor(() => term.all().includes(slug))
+    focus!(true)
     expect(reads).toBeGreaterThan(0)
   } finally {
     stop.abort()
@@ -11377,3 +11376,65 @@ test('multiple watch ticks and refreshes inspect and publish each hard requireme
     await fx.cleanup()
   }
 })
+
+for (const network of [false, true]) {
+  test(`compatibility dashboard keeps polling unfocused (network=${network})`, async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const slug = 'focus-cadence'
+    const ticket = { source: 'fake', id: 'FOCUS-CADENCE', title: 'Focus cadence' }
+    await fx.store.createBuild({ slug, repo: fx.origin, ticket, branch: `ab/${slug}` })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: fx.origin, ticket, baseBranch: 'main' },
+    })
+    const stop = new AbortController()
+    const term = fakeTerminal()
+    let focus!: (focused: boolean) => void
+    let positions = 0
+    const store = new Proxy(fx.store, {
+      get(target, key) {
+        if (key === 'networkReads') return network
+        const value = Reflect.get(target, key, target)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          if (key === 'getRepoChangePosition') positions++
+          return Reflect.apply(value, target, args)
+        }
+      },
+    })
+    const running = abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      intervalMs: 60_000,
+      wire: () => ({ ...fx.wire(), store }),
+      terminal: term,
+      signal: stop.signal,
+      input: {
+        start(_handler, hooks) {
+          focus = hooks!.onFocus!
+          return () => {}
+        },
+      },
+    })
+    try {
+      await waitFor(() => term.all().includes('Autobuild'))
+      focus(false)
+      positions = 0
+      await new Promise((resolve) => setTimeout(resolve, 750))
+      if (network) expect(positions).toBe(0)
+      else expect(positions).toBeGreaterThan(0)
+      await waitFor(() => positions > 0, 6000)
+      const before = positions
+      focus(true)
+      await waitFor(() => positions > before)
+    } finally {
+      stop.abort()
+      await running
+      await fx.cleanup()
+    }
+  }, 15_000)
+}
