@@ -3,10 +3,13 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { checkDeploymentTemplates } from './hosted-service-packaging'
+import { addDeploymentFixture } from './hosted-service-packaging.test-fixture'
 import { repoRoot } from './git-tracked'
 import { readWorkspaceManifests } from './workspace-manifest-check'
 import type { WorkspaceManifest } from './workspace-manifest-check'
 import {
+  releasePolicy,
   normalizeClaudeSummary,
   parseReleaseArguments,
   peerFloorRefusalMessage,
@@ -1126,3 +1129,241 @@ test('hosted release frozen installs succeed before the new core version is publ
   expect(lockfile).toContain(`"version": "${releaseVersion}"`)
   expect(lockfile).not.toContain('"version": "2.0.0"')
 }, 30_000)
+
+describe('prerelease publishing', () => {
+  test('derives channels and resolves stable targets from beta', () => {
+    expect(releasePolicy('1.0.0-beta.0')).toEqual({ prerelease: true, distTag: 'beta' })
+    expect(releasePolicy('1.0.0-rc.2')).toEqual({ prerelease: true, distTag: 'rc' })
+    for (const identifier of ['0', '99999999999999999999', 'latest', 'x', 'v1']) {
+      expect(() => releasePolicy(`1.0.0-${identifier}`)).toThrow(identifier)
+    }
+    for (const selector of [{ version: '1.0.0' }, { bump: 'major' as const }]) {
+      expect(resolveReleaseVersion('1.0.0-beta.2', { dryRun: false, ...selector })).toBe('1.0.0')
+    }
+  })
+
+  test('invalid channels fail before gates or summary', async () => {
+    const fixture = await createFixture()
+    for (const channel of ['0', 'latest', 'x']) {
+      const h = harness()
+      await expectReleaseFailure(fixture.root, /first prerelease identifier/, h, [
+        '--version',
+        `3.0.0-${channel}`,
+      ])
+      expect(h.requests.some((r) => ['sh', 'claude'].includes(r.command))).toBe(false)
+    }
+  })
+
+  test('dry-run identifies prerelease, channel, flags and workspace-only candidates', async () => {
+    const fixture = await createFixture()
+    const h = harness()
+    const head = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout
+    await runRelease(['--version', '3.0.0-beta.0', '--dry-run'], fixture.root, {
+      run: h.run,
+      output: h.output,
+    })
+    const logs = h.logs.join('\n')
+    expect(logs).toContain('prerelease; npm dist-tag: beta')
+    expect(logs).toContain('--prerelease --latest=false')
+    expect(logs).toContain('package.json (candidate)')
+    expect(logs).not.toContain('CHANGELOG.md (candidate)')
+    expect(logs).not.toContain('README.md (candidate)')
+    expect(h.requests.filter((r) => r.command === 'sh')).toHaveLength(3)
+    expect(h.requests.some((r) => r.command === 'claude')).toBe(true)
+    expect((await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout).toBe(head)
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+  })
+
+  test('beta, beta and stable releases preserve then cut accumulated notes and pins', async () => {
+    const fixture = await createFixture()
+    await addDeploymentFixture(fixture.root, '2.0.0')
+    await writeFile(
+      join(fixture.root, 'packages/hosted-store-service/package.json'),
+      `${JSON.stringify({ name: '@fixture/private', version: '2.0.0', private: true }, null, 2)}\n`,
+    )
+    // Exercise real lock refreshes without dependencies or registry access.
+    await command(fixture.root, 'bun', ['install', '--lockfile-only'])
+    await command(fixture.root, 'git', ['add', '.'])
+    await command(fixture.root, 'git', ['commit', '-m', 'deployment fixtures and lock'])
+    const preserved = [
+      'CHANGELOG.md',
+      'README.md',
+      'templates/hosted-service/package.json',
+      'packages/hosted-store-service/deployment/package.json',
+      'docs/hosted-service.md',
+    ]
+    const before = await Promise.all(preserved.map((p) => readFile(join(fixture.root, p), 'utf8')))
+    for (const version of ['3.0.0-beta.0', '3.0.0-beta.2', '3.0.0-rc.2', '3.0.0']) {
+      const h = harness()
+      const run: CommandRunner = async (request) => {
+        if (request.command === 'sh') await checkDeploymentTemplates(fixture.root)
+        if (request.command === 'bun' && request.args.join(' ') === 'install --lockfile-only') {
+          return spawnCommand(request)
+        }
+        return h.run(request)
+      }
+      await runRelease(['--version', version], fixture.root, {
+        run,
+        output: h.output,
+        repositoryUrl: fixture.remote,
+        packageArchive: async () => new Uint8Array([1]),
+        today: () => '2026-10-19',
+      })
+      await checkDeploymentTemplates(fixture.root)
+      const beta = version.includes('-')
+      const publishes = h.requests.filter((r) => r.command === 'bun' && r.args[0] === 'publish')
+      expect(publishes).toHaveLength(2)
+      for (const publish of publishes) {
+        expect(publish.args).toEqual([
+          'publish',
+          '--access',
+          'public',
+          '--ignore-scripts',
+          ...(beta ? ['--tag', releasePolicy(version).distTag] : []),
+        ])
+      }
+      const gh = h.requests.find((r) => r.command === 'gh' && r.args[1] === 'create')!
+      expect(gh.args).toEqual([
+        'release',
+        'create',
+        `v${version}`,
+        '--verify-tag',
+        '--title',
+        `v${version}`,
+        '--notes-file',
+        '-',
+        ...(beta ? ['--prerelease', '--latest=false'] : []),
+      ])
+      expect(gh.stdin).toContain(`## v${version} — 2026-10-19`)
+      expect(gh.stdin).toContain('New capability')
+      const paths = (
+        await command(fixture.root, 'git', [
+          'diff-tree',
+          '--no-commit-id',
+          '--name-only',
+          '-r',
+          'HEAD',
+        ])
+      ).stdout
+        .trim()
+        .split('\n')
+        .sort()
+      if (beta) {
+        expect(
+          await Promise.all(preserved.map((p) => readFile(join(fixture.root, p), 'utf8'))),
+        ).toEqual(before)
+        expect(paths).toEqual([
+          'bun.lock',
+          'package.json',
+          'packages/core/package.json',
+          'packages/hosted-store-service/package.json',
+        ])
+      } else {
+        expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain('@3.0.0')
+        expect(await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')).toContain('## v3.0.0 —')
+      }
+      expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+    }
+  })
+
+  test('rc release omits an unchanged lock and retries only unpublished packages', async () => {
+    const fixture = await createFixture()
+    await writeFile(join(fixture.root, 'bun.lock'), 'unchanged fixture lock')
+    await command(fixture.root, 'git', ['add', 'bun.lock'])
+    await command(fixture.root, 'git', ['commit', '-m', 'fixture lock'])
+    const h = harness()
+    let publishes = 0
+    const run: CommandRunner = async (request) => {
+      if (request.command === 'bun' && request.args[0] === 'publish' && ++publishes === 2) {
+        return { exitCode: 1, stdout: '', stderr: 'second package failed' }
+      }
+      return h.run(request)
+    }
+    let message = ''
+    try {
+      await runRelease(['--version', '3.0.0-rc.2'], fixture.root, {
+        run,
+        output: h.output,
+        repositoryUrl: fixture.remote,
+        packageArchive: async () => new Uint8Array([1]),
+      })
+    } catch (error) {
+      message = thrownMessage(error)
+    }
+    expect(message).toContain(
+      '(cd packages/core && bun publish --access public --ignore-scripts --tag rc)',
+    )
+    expect(message).not.toContain('\n\nbun publish')
+    expect(publishes).toBe(2)
+    expect(
+      (
+        await command(fixture.root, 'git', [
+          'diff-tree',
+          '--no-commit-id',
+          '--name-only',
+          '-r',
+          'HEAD',
+        ])
+      ).stdout
+        .trim()
+        .split('\n')
+        .sort(),
+    ).toEqual(['package.json', 'packages/core/package.json'])
+    expect(await readFile(join(fixture.root, 'bun.lock'), 'utf8')).toBe('unchanged fixture lock')
+  })
+
+  test('rc publish and GitHub failures preserve channel flags in recovery', async () => {
+    for (const stage of ['github', 'publish', 'canonical', 'local', 'staging']) {
+      const fixture = await createFixture()
+      const h = harness()
+      let clones = 0
+      const run: CommandRunner = async (request) => {
+        if (request.command === 'git' && request.args[0] === 'clone') {
+          clones++
+          if ((stage === 'local' && clones === 1) || (stage === 'canonical' && clones === 2))
+            return { exitCode: 1, stdout: '', stderr: 'smoke failure' }
+        }
+        if (stage === 'staging' && request.command === 'git' && request.args[0] === 'add') {
+          await writeFile(join(fixture.root, 'unexpected'), 'unexpected')
+          await command(fixture.root, 'git', ['add', 'unexpected'])
+        }
+        if (
+          (stage === 'github' && request.command === 'gh' && request.args[1] === 'create') ||
+          (stage === 'publish' && request.command === 'bun' && request.args[0] === 'publish')
+        )
+          return { exitCode: 1, stdout: '', stderr: 'publication failure' }
+        return h.run(request)
+      }
+      let message = ''
+      try {
+        await runRelease(['--version', '3.0.0-rc.2'], fixture.root, {
+          run,
+          output: h.output,
+          repositoryUrl: fixture.remote,
+          packageArchive: async () => new Uint8Array([1]),
+        })
+      } catch (error) {
+        message = thrownMessage(error)
+      }
+      expect(message).not.toBe('')
+      if (stage === 'github' || stage === 'canonical') {
+        expect(message).toContain('--prerelease --latest=false')
+        expect(message).toContain('## v3.0.0-rc.2')
+      }
+      if (stage === 'github' || stage === 'publish') expect(message).toContain('--tag rc')
+      const tags = (await command(fixture.root, 'git', ['tag', '--list'])).stdout
+      expect(tags.includes('v3.0.0-rc.2')).toBe(!['local', 'staging'].includes(stage))
+      expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+    }
+  })
+
+  test('prereleases still refuse missing or empty Unreleased', async () => {
+    for (const changelog of ['# Changelog\n', '# Changelog\n\n## Unreleased\n']) {
+      const fixture = await createFixture({ changelog })
+      await expectReleaseFailure(fixture.root, /Unreleased/, harness(), [
+        '--version',
+        '3.0.0-beta.0',
+      ])
+    }
+  })
+})
