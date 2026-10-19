@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runLiveAgentRunnerContract } from './live-contract-fixture'
+import { runLiveAgentRunnerContract, runLiveNativeResumeContract } from './live-contract-fixture'
 import { JsonlDecoder, PI_BRIDGE_PATH } from './pi-rpc'
 import { checkLocalPi, PiAgentRunner } from './pi'
 
@@ -278,5 +278,8 @@ describe.skipIf(!enabled)('Pi live AgentRunner contract (opt-in)', () => {
 
   test('runs start, continue, end, ambient/PATH probe, and one-shot against the local Pi CLI', async () => {
     await runLiveAgentRunnerContract(new PiAgentRunner(), requiredModel())
+  }, 300_000)
+  test('resumes a recorded handle in a separate process with native memory', async () => {
+    await runLiveNativeResumeContract('pi', requiredModel())
   }, 300_000)
 })

@@ -1,6 +1,6 @@
 import { describe, test } from 'bun:test'
 import { ClaudeAgentRunner } from './claude'
-import { runLiveAgentRunnerContract } from './live-contract-fixture'
+import { runLiveAgentRunnerContract, runLiveNativeResumeContract } from './live-contract-fixture'
 
 const enabled = process.env.AB_RUN_LIVE_PORT_CONTRACTS === '1'
 
@@ -17,5 +17,8 @@ function requiredModel(): string {
 describe.skipIf(!enabled)('Claude live AgentRunner contract (opt-in)', () => {
   test('runs start, continue, end, ambient/PATH probe, and one-shot against the real Claude Code CLI', async () => {
     await runLiveAgentRunnerContract(new ClaudeAgentRunner(), requiredModel())
+  }, 300_000)
+  test('resumes a recorded handle in a separate process with native memory', async () => {
+    await runLiveNativeResumeContract('claude', requiredModel())
   }, 300_000)
 })

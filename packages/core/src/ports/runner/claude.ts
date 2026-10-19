@@ -1,3 +1,13 @@
+import { hostname } from 'node:os'
+import {
+  guardNativeHandle,
+  nativeObserver,
+  nativeStateUnavailable,
+  NativeIdentityMismatch,
+  NativeObservationError,
+  notResumable,
+} from './native-session'
+import type { NativeSessionHandle, AgentResumeResult } from '../types'
 /**
  * ClaudeAgentRunner (SPEC §9): AgentRunner over the locally installed Claude
  * Code CLI. Each turn runs `claude -p` with structured streaming output;
@@ -159,6 +169,7 @@ interface TurnRecord {
 }
 
 interface SessionState {
+  nativeId?: string
   opts: AgentStartOpts
   model?: string
   turns: TurnRecord[]
@@ -191,16 +202,19 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
 
   private readonly runCli: ClaudeCliRunFn
   private readonly runCliStream: ClaudeCliStreamFn | undefined
+  private readonly host: () => string
   private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
   constructor(
     opts: {
+      hostname?: () => string
       runCli?: ClaudeCliRunFn
       runCliStream?: ClaudeCliStreamFn
       createSessionId?: () => string
     } = {},
   ) {
+    this.host = opts.hostname ?? hostname
     this.runCli = opts.runCli ?? runClaudeCli
     // A test injecting only the buffered boundary takes the buffered
     // translation path for streaming turns (degraded latency, same content);
@@ -244,6 +258,9 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     this.sessions.set(session.id, {
       opts,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
+      nativeId: turn.events
+        .map((e) => e.session_id)
+        .find((id): id is string => typeof id === 'string' && id.trim().length > 0),
       turns: [this.turnRecord(1, prompt, turn)],
     })
     return { session, result: this.toResult(turn) }
@@ -265,10 +282,64 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts),
       stream: opts?.stream,
+      onNativeSession: opts?.onNativeSession,
     }
-    const turn = await this.runTurn(message, turnOpts, { resume: session.id }, opts?.signal)
+    if (state.nativeId !== undefined) {
+      const observe = nativeObserver({ ...turnOpts }, this.name, this.host(), state.nativeId)
+      await observe(state.nativeId)
+      turnOpts.onNativeSession = async (handle) => observe(handle.nativeId)
+    }
+    const turn = await this.runTurn(
+      message,
+      turnOpts,
+      { resume: state.nativeId ?? session.id },
+      opts?.signal,
+    )
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
+  }
+
+  async resume(
+    handle: NativeSessionHandle,
+    message: string,
+    opts: AgentStartOpts,
+  ): Promise<AgentResumeResult> {
+    const invalid = guardNativeHandle(handle, this.name, opts, this.host())
+    if (invalid !== undefined) return invalid
+    let observed = false
+    const callerObserver = opts.onNativeSession
+    opts = {
+      ...opts,
+      onNativeSession: async (native) => {
+        observed = true
+        await callerObserver?.(native)
+      },
+    }
+    let turn: ClaudeTurn
+    try {
+      turn = await this.runTurn(message, opts, { resume: handle.nativeId })
+    } catch (error) {
+      if (error instanceof NativeIdentityMismatch)
+        return notResumable('missing-state', 'Native resume returned a different identity')
+      throw error
+    }
+    if (turn.failure !== undefined && nativeStateUnavailable(turn.failure))
+      return notResumable('missing-state', turn.failure.message)
+    if (!observed && turn.failure === undefined)
+      return notResumable('missing-state', 'Native resume reported no identity')
+    const id = handle.nativeId
+    const session: AgentSessionHandle = {
+      id,
+      runner: this.name,
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+    }
+    this.sessions.set(id, {
+      opts,
+      model: opts.model,
+      nativeId: id,
+      turns: [this.turnRecord(1, message, turn)],
+    })
+    return { kind: 'resumed', session, result: this.toResult(turn) }
   }
 
   async end(session: AgentSessionHandle): Promise<Transcript> {
@@ -316,6 +387,28 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     session: { sessionId: string } | { resume: string },
     signal: AbortSignal | undefined = opts.signal,
   ): Promise<ClaudeTurn> {
+    const observe = nativeObserver(
+      opts,
+      this.name,
+      this.host(),
+      'resume' in session ? session.resume : undefined,
+    )
+    const observeEvent = async (event: JsonRecord) => {
+      const id = event.session_id
+      if (typeof id === 'string') await observe(id)
+    }
+    const conflict = (opts.args ?? []).find((arg) =>
+      CLAUDE_SESSION_ARGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+    )
+    if (conflict !== undefined) {
+      const failed = launchFailure(new Error(`Conflicting session-control argument: ${conflict}`))
+      failed.failure = {
+        message: `Conflicting session-control argument: ${conflict}`,
+        permanent: true,
+        cause: 'configuration',
+      }
+      return failed
+    }
     const args = this.baseArgs()
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
@@ -331,7 +424,15 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       env: sessionEnv(opts.env),
       ...(signal !== undefined ? { signal } : {}),
     }
-    if (opts.stream === undefined) return this.runPrompt(invocation)
+    if (opts.stream === undefined && opts.onNativeSession === undefined)
+      return this.runPrompt(invocation)
+    if (opts.stream === undefined) {
+      if (this.runCliStream !== undefined)
+        return this.runStreamingPrompt(invocation, undefined, observe)
+      const turn = await this.runPrompt(invocation)
+      for (const event of turn.events) await observeEvent(event)
+      return turn
+    }
 
     // Streaming turn: translate while the CLI runs. Without an injected
     // streaming boundary (offline fakes), the buffered path still translates
@@ -340,10 +441,11 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
     let turn: ClaudeTurn
     if (this.runCliStream !== undefined) {
-      turn = await this.runStreamingPrompt(invocation, emitter)
+      turn = await this.runStreamingPrompt(invocation, emitter, observe)
     } else {
       turn = await this.runPrompt(invocation)
-      translateBufferedClaudeTurn(turn, (parts) => emitter.append(parts))
+      for (const event of turn.events) await observeEvent(event)
+      translateBufferedClaudeTurn(turn, (parts) => emitter?.append(parts))
     }
     this.emitTurnEnd(turn, emitter, signal)
     return turn
@@ -394,16 +496,24 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
    * feed the ordinary accumulators (so outcome classification is identical). */
   private async runStreamingPrompt(
     invocation: ClaudeCliInvocation,
-    emitter: SessionStreamEmitter,
+    emitter: SessionStreamEmitter | undefined,
+    observe: (id: string) => Promise<void>,
   ): Promise<ClaudeTurn> {
     let handle: ClaudeCliStreamHandle
+    const controller = new AbortController()
     try {
-      handle = this.runCliStream!(invocation)
+      handle = this.runCliStream!({
+        ...invocation,
+        signal:
+          invocation.signal === undefined
+            ? controller.signal
+            : AbortSignal.any([invocation.signal, controller.signal]),
+      })
     } catch (error) {
       return launchFailure(error)
     }
     const acc = new ClaudeOutputAccumulator()
-    const translator = createClaudeStreamTranslator((parts) => emitter.append(parts))
+    const translator = createClaudeStreamTranslator((parts) => emitter?.append(parts))
     try {
       for await (const line of handle.lines) {
         let value: unknown
@@ -417,10 +527,17 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
           acc.push(line)
           continue
         }
+        const id = value.session_id
+        if (typeof id === 'string') await observe(id)
         acc.pushRecord(value)
         translator.onEvent(value)
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof NativeObservationError) {
+        controller.abort(error)
+        void handle.result.catch(() => {})
+        throw error
+      }
       // The result promise below still carries the CLI's exit and stderr.
     }
     const cli = await handle.result
@@ -429,7 +546,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     // nothing streamed, translate the buffered events instead.
     if (!translator.streamedAnything()) {
       const turn = this.finishTurn(cli, parsed)
-      translateBufferedClaudeTurn(turn, (parts) => emitter.append(parts))
+      translateBufferedClaudeTurn(turn, (parts) => emitter?.append(parts))
       return turn
     }
     return this.finishTurn(cli, parsed)
@@ -871,3 +988,13 @@ function translateBufferedClaudeTurn(turn: ClaudeTurn, emit: (parts: StreamPart[
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+const CLAUDE_SESSION_ARGS = [
+  '--resume',
+  '-r',
+  '--continue',
+  '-c',
+  '--session-id',
+  '--fork-session',
+  '--no-session-persistence',
+]

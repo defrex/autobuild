@@ -1,6 +1,6 @@
 import { describe, test } from 'bun:test'
 import { CodexAgentRunner } from './codex'
-import { runLiveAgentRunnerContract } from './live-contract-fixture'
+import { runLiveAgentRunnerContract, runLiveNativeResumeContract } from './live-contract-fixture'
 
 const enabled = process.env.AB_RUN_LIVE_PORT_CONTRACTS === '1'
 
@@ -17,5 +17,8 @@ function requiredModel(): string {
 describe.skipIf(!enabled)('Codex live AgentRunner contract (opt-in)', () => {
   test('runs start, continue, end, ambient/PATH probe, and one-shot against the real Codex CLI', async () => {
     await runLiveAgentRunnerContract(new CodexAgentRunner(), requiredModel())
+  }, 300_000)
+  test('resumes a recorded handle in a separate process with native memory', async () => {
+    await runLiveNativeResumeContract('codex', requiredModel())
   }, 300_000)
 })

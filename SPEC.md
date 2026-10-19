@@ -1470,6 +1470,7 @@ type Result =
 interface AgentRunner {
   start(opts: { skill, invocation, workspace, model, … }): { session, result }
   continue(session, message): Result    // review-loop rounds
+  resume?(nativeHandle, message, freshOpts): ResumeResult
   end(session): Transcript              // → store, always
 }
 ```
@@ -1488,6 +1489,26 @@ legacy plugin may omit `cause`; `permanent: false` remains alternate-eligible
 and `permanent: true` remains a stopping failure. A failed `start` still returns
 an endable session handle, guaranteeing transcript deposition.
 
+Native session identity is observed through an awaited `onNativeSession` callback
+on start and live continue, independently of UI streaming. The kernel appends
+`session.native-handle-recorded {session, phase, round?, handle}` before
+consuming further native output. Handles are versioned JSON facts containing
+adapter kind, native id, execution host, absolute workspace, and optional native
+state path; they contain no credentials or transcript. Requested/generated ids
+are not proof of a native session. No reported identity means no handle.
+The reducer exposes `sessions.nativeHandles` (retained after session end) and
+`nativeHandle` on matching open sessions. Legacy logs retain an empty map.
+
+The optional `resume` capability continues native state in a fresh process,
+using explicit new execution options and environment. Success returns
+`{kind: 'resumed', session, result}` with a normal turn result and an endable
+local session. Unsupported capability, wrong adapter/host/workspace, or missing
+native state returns `{kind: 'not-resumable', reason, message}` through the
+`resumeAgent` compatibility helper. Provider failures remain normal failed
+turns. Adapters never replay transcripts or silently start fresh sessions.
+This records capability only: pause behavior and §15.6 recovery remain unchanged;
+recovery still reclaims open brackets and reruns the phase from its start.
+
 Narrow non-phase judgments do not widen this contract. A runtime may
 separately register an optional one-shot completion capability (tool-free,
 non-resumable), used for slug naming (§6.3) and vendored-skill conflict
@@ -1500,7 +1521,7 @@ deterministic fail-safe.
   (minimum version 0.84.3), driven headlessly through `--mode rpc`, for every
   provider-qualified model that installation resolves. Each adapter uses its
   CLI's local authenticated login; pi also owns its local model catalog and
-  keeps one ephemeral RPC process alive across review-loop continuations. All
+  keeps one persistent RPC process alive across review-loop continuations. All
   three provide tool-free one-shot completion. Plugins may register additional
   adapters, each under a *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
@@ -2392,7 +2413,7 @@ with illustrative members:
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
-| Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
+| Sessions | `session.started`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
