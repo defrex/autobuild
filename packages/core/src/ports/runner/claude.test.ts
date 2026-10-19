@@ -308,7 +308,7 @@ describe('ClaudeAgentRunner start and continue', () => {
       '--verbose',
       '--dangerously-skip-permissions',
       '--resume',
-      session.id,
+      'cli-echoed-id',
       '--model',
       'claude-opus-4',
       '--bg',

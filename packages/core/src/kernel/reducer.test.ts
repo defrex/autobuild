@@ -1910,3 +1910,99 @@ test('dispatch exhaustion uses the ordinary blocked and answered projection', ()
   expect(state.status).toBe('queued')
   expect(state.openEscalations).toEqual([])
 })
+
+describe('durable native session handles', () => {
+  const handle = {
+    version: 1 as const,
+    runner: 'codex',
+    nativeId: 'thread',
+    host: 'worker',
+    workspacePath: '/repo',
+  }
+  test('legacy logs have no handle; open and ended brackets retain reported identity with incremental parity', () => {
+    const started = ev('session.started', {
+      session: 's_a',
+      role: 'implement',
+      runner: 'aliased-codex',
+      phase: 'implement',
+      round: 1,
+    })
+    const log = toLog([started])
+    expect(reduceBuild(log).sessions.nativeHandles).toEqual({})
+    expect(reduceBuild(log).sessions.open[0]?.nativeHandle).toBeUndefined()
+    const recorded = ev('session.native-handle-recorded', {
+      session: 's_a',
+      phase: 'implement',
+      round: 1,
+      handle,
+    })
+    const open = toLog([started, recorded])
+    expect(reduceBuild(open).sessions.open[0]?.nativeHandle).toEqual(handle)
+    const ended = ev('session.ended', {
+      session: 's_a',
+      transcript: { kind: 'transcript', rev: 0 },
+      usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+    })
+    const next = ev('session.started', {
+      session: 's_b',
+      role: 'implement',
+      runner: 'aliased-codex',
+      phase: 'implement',
+      round: 2,
+    })
+    const state = reduceBuild(
+      toLog([
+        started,
+        recorded,
+        ended,
+        next,
+        ev('session.native-handle-recorded', {
+          session: 's_b',
+          phase: 'implement',
+          round: 2,
+          handle,
+        }),
+      ]),
+    )
+    expect(state.sessions.nativeHandles).toEqual({ s_a: handle, s_b: handle })
+  })
+  test('unmatched, closed, and mismatched bracket facts are ignored', () => {
+    const started = ev('session.started', {
+      session: 's_a',
+      role: 'implement',
+      runner: 'codex',
+      phase: 'implement',
+      round: 1,
+    })
+    const state = reduceBuild(
+      toLog([
+        started,
+        ev('session.native-handle-recorded', {
+          session: 'unknown',
+          phase: 'implement',
+          round: 1,
+          handle,
+        }),
+        ev('session.native-handle-recorded', { session: 's_a', phase: 'plan', round: 1, handle }),
+        ev('session.native-handle-recorded', {
+          session: 's_a',
+          phase: 'implement',
+          round: 2,
+          handle,
+        }),
+        ev('session.ended', {
+          session: 's_a',
+          transcript: { kind: 'transcript', rev: 0 },
+          usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        }),
+        ev('session.native-handle-recorded', {
+          session: 's_a',
+          phase: 'implement',
+          round: 1,
+          handle,
+        }),
+      ]),
+    )
+    expect(state.sessions.nativeHandles).toEqual({})
+  })
+})
