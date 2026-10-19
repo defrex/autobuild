@@ -17,6 +17,9 @@ import { join } from 'node:path'
 import { stat } from 'node:fs/promises'
 
 const probe = (over: Partial<Probe> = {}): Probe => ({
+  reducedMotion: true,
+  still: true,
+  figures: [],
   scrollWidth: 390,
   innerWidth: 390,
   scrollHeight: 1000,
@@ -191,7 +194,7 @@ describe('website capture', () => {
   test.skipIf(!chromium)(
     'captures four real PNGs with the stylesheet loaded and the remote state applied',
     async () => {
-      const dir = join(import.meta.dir, '..', '.ab', 'website-capture-test')
+      const dir = join(import.meta.dir, '..', '.ab', `website-capture-test-${process.pid}`)
       await captureWebsite({ chromium, outputDir: dir })
       for (const frame of WEBSITE_FRAMES) {
         const png = join(dir, `${frame.id}.png`)
@@ -203,4 +206,121 @@ describe('website capture', () => {
     },
     120_000,
   )
+})
+
+const fixture = (extra = '') =>
+  `<!doctype html><html><head><link rel="stylesheet" href="/site.css"></head><body><h1>Documentation</h1>${extra}</body></html>`
+const fixtureFiles = (extra = '') => ({
+  'index.html': fixture(),
+  'site.css': 'body{margin:0;background:white}figure{height:80px}',
+  'site.js': '',
+  'docs/index.html': fixture(extra),
+  'docs/nested/page.html': fixture().replace('/site.css', '../../site.css'),
+})
+
+test('discovers sorted docs HTML with distinct complete-path IDs and relative bases', async () => {
+  const { discoverFrames, artifactId } = await import('./website-capture')
+  const files = {
+    ...fixtureFiles(),
+    'docs/a-b.html': fixture(),
+    'docs/a/b.html': fixture(),
+    'docs/x.png': '',
+  }
+  const frames = discoverFrames(files).filter((f) => f.kind === 'docs')
+  expect(frames.map((f) => f.page)).toEqual([
+    'docs/a-b.html',
+    'docs/a-b.html',
+    'docs/a/b.html',
+    'docs/a/b.html',
+    'docs/index.html',
+    'docs/index.html',
+    'docs/nested/page.html',
+    'docs/nested/page.html',
+  ])
+  expect(new Set(frames.map((f) => f.id)).size).toBe(8)
+  expect(artifactId('a/b')).not.toBe(artifactId('a-b'))
+  expect(injectProbe(fixture(), frames[0]!)).toContain('<base href="/docs/a-b.html">')
+  expect(probeProblems(frames[1]!, probe({ sectionGaps: [], footerGap: -1, ctaGap: -1 }))).toEqual(
+    [],
+  )
+  expect(probeProblems(frames[1]!, probe({ scrollWidth: 500 }))).toContain(
+    'page scrolls sideways (500 > 390)',
+  )
+})
+
+// Use docs-only descriptors for fixtures; the unchanged real landing is covered above.
+test.skipIf(!chromiumBinary())(
+  'captures docs and awaitable motion samples; rejects broken evidence',
+  async () => {
+    const { discoverFrames } = await import('./website-capture')
+    const animation = `<figure data-capture-figure="sequence" data-capture-animated>still</figure><script>
+window.__websiteCapture = { sequence: { duration: 100, async seek(timeMs, {still}) {
+ const node = document.querySelector('figure');
+ node.textContent = still ? 'reduced still' : String(timeMs);
+ node.style.background = still ? 'gray' : timeMs === 0 ? 'red' : timeMs === 50 ? 'green' : 'blue';
+ return {timeMs, still: still && matchMedia('(prefers-reduced-motion: reduce)').matches, complete: timeMs === 100};
+}}};</script>`
+    const files = fixtureFiles(animation)
+    const frames = discoverFrames(files).filter((f) => f.kind === 'docs')
+    const dir = join(import.meta.dir, '..', '.ab', `website-fixtures-${process.pid}`)
+    await captureWebsite({ files, frames, outputDir: dir })
+    const inventory = await Bun.file(join(dir, 'inventory.json')).json()
+    expect(inventory).toHaveLength(10)
+    for (const r of inventory)
+      expect((await stat(join(dir, `${r.frame.id}.png`))).size).toBeGreaterThan(0)
+    const samples = inventory.filter((r: { frame: { sample?: string } }) => r.frame.sample)
+    expect(samples.map((r: { probe: Probe }) => r.probe.figures[0]?.timeMs)).toEqual([
+      0, 50, 100, 0, 50, 100,
+    ])
+    expect(samples[2].probe.figures[0].complete).toBe(true)
+    for (const [name, extra, error] of [
+      ['missing', '<figure data-capture-figure="x" data-capture-animated></figure>', 'adapter'],
+      [
+        'duplicate',
+        '<figure data-capture-figure="same"></figure><figure data-capture-figure="same"></figure>',
+        'duplicate',
+      ],
+      [
+        'rejected',
+        animation.replace('const node =', 'throw Error("seek rejected"); const node ='),
+        'seek rejected',
+      ],
+      ['duration', animation.replace('duration: 100', 'duration: 0'), 'adapter'],
+      [
+        'final',
+        animation.replace('complete: timeMs === 100', 'complete: false'),
+        'acknowledgement',
+      ],
+      [
+        'running',
+        '<style>@keyframes spin{to{opacity:0}}h1{animation:spin 10s infinite}</style>',
+        'animation',
+      ],
+      ['overflow', '<div style="width:2000px">wide</div>', 'sideways'],
+    ]) {
+      const broken = fixtureFiles(extra)
+      await expect(
+        captureWebsite({
+          files: broken,
+          frames: discoverFrames(broken).filter((f) => f.kind === 'docs'),
+          outputDir: `${dir}-${name}`,
+        }),
+      ).rejects.toThrow(error)
+      expect(await Bun.file(`${dir}-${name}/verify-report.md`).text()).toContain('FAIL:')
+    }
+  },
+  240_000,
+)
+
+test('website applicability includes all website inputs and capture tooling', async () => {
+  const config = await Bun.file(join(import.meta.dir, '..', 'autobuild.toml')).text()
+  const paths = (Bun.TOML.parse(config) as { verify: { website: { paths: string[] } } }).verify
+    .website.paths
+  for (const path of [
+    'packages/website/**',
+    'design/website/**',
+    'tools/website-capture*',
+    '.agents/skills/verify-website/SKILL.md',
+  ])
+    expect(paths).toContain(path)
 })
