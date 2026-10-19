@@ -1416,3 +1416,11 @@ test('position endpoint reads only the counter and supports build-only and unkno
   expect(calls).toEqual(['getRepoChangePosition'])
   expect(await backing.getRepo('org/repo')).toBeNull()
 })
+
+test.each([...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0'])])(
+  'audit capability survives completion and clears on settlement for %s',
+  async (version) => {
+    const { verifyAuditCapability } = await import('./testing/audit-capability')
+    await verifyAuditCapability(version, REMOTE_STORE_PROTOCOL_VERSION, true)
+  },
+)
