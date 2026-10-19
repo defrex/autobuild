@@ -310,6 +310,10 @@ for (const conflict of [false, true])
         expect(await git(['show', '-s', '--format=%P', canonical])).toBe(target)
         expect(await git(['rev-list', '--count', `${target}..${canonical}`])).toBe('1')
         expect(await git(['diff', '--name-only', target, canonical])).toBe('feature')
+        expect((await readBuildFacts(store, BUILD)).value.state.implement.commits).toEqual({
+          base: target,
+          head: canonical,
+        })
         expect(selectVerifyDiffBase(await store.getEvents(BUILD))).toBe(target)
         expect(await runner.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
         const verification = (await store.getEvents(BUILD)).find(
