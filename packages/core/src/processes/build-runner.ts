@@ -69,7 +69,7 @@ import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
  *   as every phase.
  */
 import type { Config } from '../config/schema'
-import type { AbEvent, EventWrite } from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import type { IdSource } from '../ids'
@@ -697,7 +697,7 @@ export class BuildRunner {
         },
       }
     } else write = { ...write, payload: { ...write.payload, budgetMs } }
-    let started
+    let started: EventEnvelope<'session.started'> | null = null
     if (write.payload.continuation) {
       for (;;) {
         const facts = await readBuildFacts(store, slug)
