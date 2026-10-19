@@ -69,7 +69,11 @@ describe('static site', () => {
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
     const reference = textOf(withoutHeroFigure(updatedReference))
+    expect(
+      html.match(/<a href="\/docs\/seams\/">Explore the infrastructure seams<\/a>/g),
+    ).toHaveLength(1)
     const landing = html
+      .replace('<a href="/docs/seams/">Explore the infrastructure seams</a>', '')
       .replace('<a class="btn" href="/docs/">Documentation</a>', '')
       .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
       .replace('<a href="/docs/builds/">Follow one build end to end</a>', '')
