@@ -12,21 +12,24 @@ persistence requirements, and conformance bar for the protocol shipped in this
 distribution are all defined here. Protocol implementations must retain contracts for every supported client line;
 protocol changes update this document and executable contracts together.
 
-A service accepts stable clients from its own `major.minor` release line and
-the two preceding minor lines in the same major. A major starts a new family:
+A service accepts stable and prerelease clients from its own `major.minor`
+release line and the two preceding minor lines in the same major. A major starts a new family:
 X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
 Patch versions are interchangeable in both directions and must never change
 the protocol. Upgrade the service first, then projects independently within
 its window. Supported release lines retain their wire handlers and known
 protocol identities; an unknown protocol is refused independently of version.
-Malformed, missing, and prerelease identities are refused with HTTP 409.
+Stable and prerelease service and client identities share their numeric major/minor
+line. Malformed or missing identities, build metadata (`+…`), prefixes and
+whitespace are refused with HTTP 409.
 A newer client is told to upgrade the service; a client below the window is
 told to upgrade the project's Autobuild. Diagnostics name the service version
 and supported range.
 
 Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
 `protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
-The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+Range endpoints remain stable versions. The range is inclusive at the minimum
+and exclusive at the maximum; a 0.11.x
 service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
 headers, or available backend.
 

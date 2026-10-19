@@ -97,6 +97,6 @@
     "vercel": "^59.11.2"
   },
   "peerDependencies": {
-    "@defrex/autobuild": ">=0.11.0"
+    "@defrex/autobuild": ">=0.11.0 || >=1.0.0-0 <1.0.0"
   }
 }

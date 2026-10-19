@@ -52,7 +52,7 @@
     "ab-postgres-store": "./src/bin.ts"
   },
   "peerDependencies": {
-    "@defrex/autobuild": ">=0.7.0"
+    "@defrex/autobuild": ">=0.7.0 || >=1.0.0-0 <1.0.0"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
