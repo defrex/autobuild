@@ -128,3 +128,47 @@ gaps and 48px terminal-to-action spacing. Docs add no figures and retain the
 2px cyan outline remains visible on the expanded docs navigation and the new
 landing link at phone width. The maintainer reviews the integrated reference
 set before the website node lands.
+
+## Operating, seams, and configuration reference revision
+
+On 2026-10-19, the `operating-seams-configuration` spec explicitly authorized
+one text link to `/docs/seams/` in the landing seams section. The four landing
+reference PNGs now include “Explore the infrastructure seams” below the seam
+selector, using the existing cyan underlined link style. Following sections
+shift down with the added line; existing copy, diagrams, styles, and assets
+remain unchanged. `reference.html` stays the historical design export.
+
+Evidence: `bun run capture:website` produced 14 reviewed full-page PNGs:
+local and remote landing states at 1440px and 390px, and all five docs pages
+at both widths. All seven phone probes reported scrollWidth 390 and
+innerWidth 390. Every frame loaded its stylesheet and reported reduced-motion
+still evidence with zero marked animated figures. Landing section gaps remain
+288px desktop and 192px phone, footer gaps match, and terminal-to-action
+spacing is 48px. The refreshed landing references match these captured PNGs
+byte for byte. The maintainer reviews the integrated reference set before the
+website node lands.
+
+## Combined documentation and pipeline replay evidence
+
+Reconciliation onto the pipeline-motion change preserves both revisions above.
+A fresh capture of the combined site produced 26 reviewed frames: ten docs
+stills, four landing stills, and twelve pipeline samples at 0, 2,400 and
+4,800ms. Every frame loaded its stylesheet and had no horizontal overflow.
+The reduced-motion landing stills match the four seams-link references byte
+for byte. The four normal-motion final references are refreshed to include
+that same seams link while preserving the completed pipeline and replay
+control. The production animation code and timeline remain unchanged.
+
+## Combined core and operating documentation evidence
+
+Reconciliation onto `core-workflow-docs` preserves all seven feature guides,
+all nine docs routes, the three upstream landing links, and the seams link.
+A fresh capture produced 34 reviewed PNGs: eighteen docs stills, four landing
+stills, and twelve pipeline start/midpoint/final samples across both widths
+and local/remote states. Every frame loaded its stylesheet and had no sideways
+scroll; all seventeen phone probes stayed at 390px. Navigation wraps across
+three rows on phones, text and commands remain readable, and docs have no
+figures. Pipeline progression, completion, and replay remain unchanged.
+The eight landing references now match the combined capture byte for byte,
+including all four authorized text links. Section and footer gaps remain
+288px desktop and 192px phone; terminal-to-action spacing remains 48px.
