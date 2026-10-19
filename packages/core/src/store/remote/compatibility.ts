@@ -17,6 +17,12 @@ export function releaseVersion(value: unknown): semver.SemVer | undefined {
   return parsed && parsed.version === value ? parsed : undefined
 }
 
+/** Capability history, independent of admission: the audit signal arrived in 0.14. */
+export function clientSupportsIntegrationAuditPending(version: unknown): boolean {
+  const parsed = releaseVersion(version)
+  return parsed !== undefined && (parsed.major > 0 || parsed.minor >= 14)
+}
+
 const stableVersionSchema = z.string().refine((value) => stableVersion(value) !== undefined)
 export const supportedClientRangeSchema = z
   .strictObject({
