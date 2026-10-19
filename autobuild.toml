@@ -69,7 +69,7 @@ paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture
 [verify.website]
 kind = "agent"
 skill = "verify-website"
-paths = ["packages/website/**", "design/website/**"]
+paths = ["packages/website/**", "design/website/**", "tools/website-capture*", ".agents/skills/verify-website/SKILL.md"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.

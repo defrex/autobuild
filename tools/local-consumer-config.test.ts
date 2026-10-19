@@ -81,7 +81,12 @@ test('local rollout preserves this repository pipeline and Linear integration', 
   expect(config.verify.stepConfigs.website).toEqual({
     kind: 'agent',
     skill: 'verify-website',
-    paths: ['packages/website/**', 'design/website/**'],
+    paths: [
+      'packages/website/**',
+      'design/website/**',
+      'tools/website-capture*',
+      '.agents/skills/verify-website/SKILL.md',
+    ],
   })
   expect(config.finalize.steps).toEqual(['changelog'])
   expect(config.finalize.stepConfigs.changelog).toEqual({
@@ -99,19 +104,23 @@ test('local rollout preserves this repository pipeline and Linear integration', 
   })
 })
 
-test('the website step applies only to the site source and its design reference', async () => {
+test('the website step covers site source, design references and evidence tooling', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
   const step = config.verify.stepConfigs.website
   if (!step || !('paths' in step) || !step.paths) throw new Error('website step has no paths')
   const rule = { kind: 'paths' as const, step: 'website', paths: step.paths }
-  for (const path of ['packages/website/src/page.ts', 'design/website/reference.html']) {
+  for (const path of [
+    'packages/website/src/page.ts',
+    'packages/website/docs/start.md',
+    'design/website/reference.html',
+    'tools/website-capture.ts',
+    'tools/website-capture.test.ts',
+    'tools/website-capture.md',
+    '.agents/skills/verify-website/SKILL.md',
+  ]) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
   }
-  for (const path of [
-    'tools/website-capture.ts',
-    '.agents/skills/verify-website/SKILL.md',
-    'autobuild.toml',
-  ]) {
+  for (const path of ['docs/architecture.md', 'autobuild.toml']) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
   }
 })
