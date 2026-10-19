@@ -78,3 +78,27 @@ and 192px phone, footer gaps match, and terminal-to-action spacing is 48px.
 The keyboard skip link was also checked in Chromium: focused, visible at the
 top of the viewport, with the existing 2px focus outline. The maintainer
 reviews this integrated reference set before the website node lands.
+
+## Core workflow documentation reference revision
+
+On 2026-10-19, the `core-workflow-docs` spec authorized one ordinary text link
+in each of the existing pipeline, dispatcher, and intake sections, pointing to
+`/docs/builds/`, `/docs/dispatcher/`, and `/docs/tickets/`. The four landing
+reference PNGs were regenerated from `bun run capture:website` to include
+exactly those additions. Section contents below each link shift by the added
+paragraph and existing section spacing. The historical `reference.html`,
+diagrams, typography, styles, hero assets, and section order are unchanged.
+No integration-tree landing section or link is included; AUT-841 owns that work.
+
+The complete capture inventory contains 16 reviewed full-page PNGs: the four
+local/remote landing frames and six documentation routes at 1440px and 390px.
+The four new guides share the existing Read layout, reference links, and
+wrapping navigation. Every phone probe reports scrollWidth 390 and innerWidth
+390. All stylesheets loaded, all frames are still under reduced motion, and
+there are no marked animated figures or motion sample frames in this inventory.
+Landing section gaps remain 288px desktop and 192px phone, with matching footer
+gaps and 48px terminal-to-action spacing. Docs add no figures and retain the
+72ch reading column. A separate focused-link capture confirms the existing
+2px cyan outline remains visible on the expanded docs navigation and the new
+landing link at phone width. The maintainer reviews the integrated reference
+set before the website node lands.
