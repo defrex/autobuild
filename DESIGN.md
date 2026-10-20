@@ -213,7 +213,9 @@ Lane (`>` in cyan), ticket id and bold slug in a direct detail-toggle button, ri
 
 Integration rows add a text line below the identity: `integration into <destination>`,
 `N/T landed` in green, nonzero `N building` in cyan and `N queued` in slack,
-then `verified` in green when current verification passes. Unknown membership
+then `verified` in green when current verification passes. Parent distance uses
+the same slack subtext: `parent N commits ahead`, `parent current`, or
+`parent distance unknown`; it never outranks conflict, failure or consent alerts. Unknown membership
 reads `children unknown`; a known empty node reads `no children yet`. There is
 no web progress graphic. The list pipeline is spec, open, collect, verify, land;
 verify carries progress or failure, land carries its policy mode. A shared `!`

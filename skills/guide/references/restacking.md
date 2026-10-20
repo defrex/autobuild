@@ -25,10 +25,31 @@ verification; reports retain their actual cycle base/head. Conflicted replay
 runs reconcile and verification, and initial verification cannot be skipped
 through post-reconcile policy.
 
-Every open node observes its parent and cascades movement to descendants,
-including empty nodes without PRs. Movement coalesces onto the newest sample
-after an active frozen transaction finishes; no separate throttle is configured.
-Unlike clean waiting leaves, nodes must reverify any changed head or parent.
+Nodes observe parent movement durably but restack only on demand: before a
+complete nonempty node verifies; before landing if its parent moved; when queued
+dependency presence requires an ancestor change; on `ab restack <node>`; or on
+accepted re-parenting. There is no eager mode or cadence option. Nested nodes
+need their own demand. Existing frozen transactions, including ones reserved
+before upgrade, finish first; later demand coalesces onto the latest parent.
+Leaves keep verify-entry and awaiting-landing restacks for every target.
+
+Presence demand uses change identities, never ticket resolution alone. It follows
+only the path from the nearest proven ancestor source down to the dependent's
+actual destination, processing ancestors first. Unrelated siblings stay idle;
+changes absent from all ancestors cannot trigger a speculative replay. Tickets
+remain queued until presence is observed in their destination.
+
+`ab restack <node>` (operator tool `builds.restack`, input `{repo, slug}`) records
+a durable request, coalescing pending demand. It refuses leaves, terminal nodes,
+and unopened nodes. Paused or blocked nodes wait for their normal safety gates.
+A request arriving during replay survives until its parent and required identities
+are covered. Re-parenting invalidates requests for the old destination.
+
+Both dashboards show `parent N commits ahead`, `parent current`, or
+`parent distance unknown`. Distance counts commits reachable from the observed
+parent but not the last confirmed contribution base; it is not elapsed time or
+poll count. Samples are invalidated by replay or re-parenting. A stale node
+cannot verify or land; inventory and child landings continue while it collects.
 
 Before replacement the kernel publishes retained tips, displaced heads and the
 temporary change under immutable exact archive refs. `restack.*` facts record
@@ -60,7 +81,8 @@ child landings. Reservations freeze expected head, parent, contribution boundary
 archives, changes and merge proofs. Lease expiry recovers the same operation,
 not a competing one. Prepared/conflicted/replayed item receipts, publication
 intent, proven replacement and settlement distinguish each recovery boundary.
-Inventory exposes source identities, node-owned foreign commits, active operation,
+Inventory retains its sampled source boundary even while the confirmed parent
+boundary stays unchanged. It exposes source identities, node-owned foreign commits, active operation,
 conflict item and unsafe merge evidence.
 
 Only a conflicted item attaches a reconcile runner. It receives the original

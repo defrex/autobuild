@@ -590,6 +590,7 @@ function BuildRow({
             ) : (
               <span className="slack">children unknown</span>
             )}
+            <span className="slack"> · {row.integrationRow.parentDistance}</span>
             {row.integrationRow.verified && <span className="ok"> · verified</span>}
           </p>
           <StepLine steps={row.integrationRow.steps} now={now} label={`${row.slug} pipeline`} />
@@ -936,6 +937,9 @@ function BuildDetail({
                   <span>
                     <span className="k">Branch </span>
                     {displayText(detail.branch)} · restack {displayText(detail.restack)}
+                    {detail.parentDistance && (
+                      <span className="slack"> · {displayText(detail.parentDistance)}</span>
+                    )}
                   </span>
                 </div>
                 {detail.conflictFiles?.map((path) => (

@@ -113,6 +113,7 @@ JSON bodies are strict: unknown fields are rejected.
 | Method and path | Body |
 |---|---|
 | `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}` |
+| `POST …/builds/{slug}/restack` | Empty body; durable node restack demand. |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |
 | `POST …/settings/intake/toggle` | Empty body. |
@@ -312,3 +313,10 @@ Default attention includes `build.janitor-failing` and
 Active janitor attention clears on a successful attempt. Repository status
 includes forge degradation/reset and available request counts; `dispatcher.forge-persistent` requires a completed retry opportunity past
 the original reset, which later rate limits cannot postpone indefinitely.
+
+### Node restack request
+
+`builds.restack` accepts `{repo, slug}`. `POST /operator/v1/repos/:repo/builds/:slug/restack`
+uses the same service as `ab restack <node>`. The receipt contains `slug`,
+`request`, `coalesced` and `waiting`; execution is asynchronous. It refuses
+non-node, unopened and terminal builds and enforces repository ownership.

@@ -1,3 +1,4 @@
+import { requestNodeRestack } from '../operator/restack'
 import { projectBuild } from '../cli/dashboard/model'
 import { buildActionAvailability } from '../cli/dashboard/actions'
 import { summarize } from '../cli/status'
@@ -101,7 +102,7 @@ test('nodes open at full work capacity and abort immediately closes admission', 
   }
 })
 
-test('root movement cascades through nested nodes with owned foreign history and no agent sessions', async () => {
+test('operator demand restacks nested nodes independently with owned foreign history and no agent sessions', async () => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const h = await makeHarness({
@@ -129,6 +130,8 @@ test('root movement cascades through nested nodes with owned foreign history and
     }
     await foreign(a.branch!, 'foreign-a')
     for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: b.slug, user: 'operator' })
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await foreign(b.branch!, 'foreign-b')
     for (let i = 0; i < 4; i++) await h.dispatcher.tick()
     const before = new Map(nodes.map((r) => [r.slug, reduceBuild([]).pr]))
@@ -136,7 +139,15 @@ test('root movement cascades through nested nodes with owned foreign history and
     for (const round of [1, 2]) {
       await Bun.write(join(h.origin, `upstream-${round}`), `upstream ${round}`)
       const root = await commitAll(h.origin, `Root movement ${round}`)
-      for (let i = 0; i < 5; i++) await h.dispatcher.tick()
+      for (const node of [a, b, c]) {
+        await requestNodeRestack({
+          store: h.store,
+          repo: h.origin,
+          slug: node.slug,
+          user: 'operator',
+        })
+        for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      }
       expect(
         ofType(await h.events(a.slug), 'target.moved').filter(
           (event) => event.payload.sha === root,
@@ -220,6 +231,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
     const busy = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'BUSY')!
     await Bun.write(join(h.origin, 'rate-limit.txt'), 'new root behavior\n')
     await commitAll(h.origin, 'Root conflicts with source')
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: owner.slug, user: 'operator' })
     await h.dispatcher.tick()
     const conflictState = reduceBuild(await h.events(owner.slug))
     expect(conflictState.nodeRestack?.conflict).toBeDefined()
@@ -342,6 +354,12 @@ for (const waiting of ['blocked', 'paused'] as const)
       })
       await Bun.write(join(h.origin, 'rate-limit.txt'), 'new root behavior\n')
       await commitAll(h.origin, 'Root conflicts with source')
+      await requestNodeRestack({
+        store: h.store,
+        repo: h.origin,
+        slug: owner.slug,
+        user: 'operator',
+      })
       // Two unrelated running builds and three blocked descendants fill all five slots.
       const { DISPATCHER: actor } = await import('../events/envelope')
       for (const [index, target] of [undefined, owner.slug, owner.slug, owner.slug].entries()) {
@@ -531,6 +549,7 @@ test('unsafe foreign merge escalates once without moving the node and an authori
     await git(['worktree', 'remove', ws], h.origin)
     await Bun.write(join(h.origin, 'root-move'), 'root moved')
     await commitAll(h.origin, 'Move root')
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: node.slug, user: 'operator' })
     await h.dispatcher.tick()
     await h.dispatcher.tick()
     const blocked = reduceBuild(await h.events(node.slug))
@@ -633,6 +652,7 @@ for (const command of ['abort', 'pause'] as const) {
       await h.dispatcher.tick()
       await Bun.write(join(h.origin, 'collision'), 'parent intent\n')
       await commitAll(h.origin, 'Conflicting root change')
+      await requestNodeRestack({ store: h.store, repo: h.origin, slug: nodeSlug, user: 'operator' })
       await h.dispatcher.tick()
       await h.dispatcher.drainProvisioning()
       expect(h.launched.at(-1)?.slug).toBe(nodeSlug)
@@ -776,11 +796,19 @@ for (const checkout of ['scratch', 'absent'] as const) {
       const original = await git(['rev-parse', node.branch!], h.origin)
       await Bun.write(join(h.origin, 'origin-upstream'), 'upstream')
       const root = await commitAll(h.origin, 'Origin parent movement')
+      await requestNodeRestack({
+        store: h.store,
+        repo: h.origin,
+        slug: node.slug,
+        user: 'operator',
+      })
       expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
       expect(await git(['rev-parse', node.branch!], h.origin)).toBe(root)
       expect(ofType(await h.events(node.slug), 'node.rewritten')).toHaveLength(1)
       expect(original).not.toBe(root)
       expect(activity.indexOf('clone')).toBeLessThan(activity.indexOf('claim'))
+      // Settlement invalidates the immutable distance sample; refresh it once.
+      await dispatcher.tick({ acceptNewWork: false })
       const idleActivity = activity.length
       for (let i = 0; i < 2; i++)
         expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)

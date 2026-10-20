@@ -63,6 +63,12 @@ export class OperatorApiClient {
     this.fetchFn = options.fetchFn ?? fetch
   }
 
+  async restack(repo: string, slug: string) {
+    return this.request<
+      Awaited<ReturnType<typeof import('@defrex/autobuild/operator').requestNodeRestack>>
+    >(repo, `builds/${encodeURIComponent(slug)}/restack`, { method: 'POST' })
+  }
+
   private repoPath(repo: string, suffix: string): string {
     return `/operator/v1/repos/${encodeURIComponent(repo)}/${suffix}`
   }

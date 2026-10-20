@@ -82,7 +82,7 @@ export interface DigestAcc {
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 9
+export const BUILD_DIGEST_REDUCER_VERSION = 10
 
 export const buildDigestReducer: IncrementalReducer<
   DigestAcc,
@@ -102,6 +102,7 @@ export const buildDigestReducer: IncrementalReducer<
       if (event.rawUnknown) advanceCompatibility(acc.compatibility, [event.rawUnknown])
       if (
         [
+          'node.writer-settled',
           'node.opened',
           'node.contribution-recorded',
           'pr.closed',

@@ -62,6 +62,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: true,
     approval: 'never',
   },
+  'builds.restack': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'default',
+  },
   'builds.control': {
     readOnlyHint: false,
     destructiveHint: true,

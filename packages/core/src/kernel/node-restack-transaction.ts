@@ -1,3 +1,4 @@
+import { nodeRestackDemand } from './node-restack-demand'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
 import { observePresence, presenceInputs } from './change-presence'
@@ -87,11 +88,99 @@ export async function runNodeTransaction(
     const oldBase = source ? boundaries[source]! : state.nodeOpened?.sha
     if (!oldBase) throw new Error('node source provenance unavailable; operator review required')
     const parent = await snapshotParent(deps, input.parentBranch, `${destinationRef}-parent-head`)
-    if (parent === oldBase && oldBase === node?.contributionBase && !node?.parentChange) {
+    // Observe immutable Git distance even while the node intentionally trails.
+    const base = node?.contributionBase ?? oldBase
+    if (
+      node?.distance?.base !== base ||
+      node.distance.parent !== parent ||
+      node.distance.branch !== input.parentBranch
+    ) {
+      const result = await deps.exec(['git', 'rev-list', '--count', `${base}..${parent}`], {
+        cwd: deps.workspacePath,
+      })
+      const count =
+        result.exitCode === 0 && /^\d+$/.test(result.stdout.trim())
+          ? Number(result.stdout.trim())
+          : null
+      await append({
+        actor: KERNEL,
+        type: 'node.parent-distance',
+        payload: { base, parent, branch: input.parentBranch, count },
+      })
+    }
+    if (
+      !Object.keys(node?.requests ?? {}).length &&
+      !node?.parentChange &&
+      (!nodeRestackDemand(state) || (parent === oldBase && base === oldBase))
+    ) {
+      if (node?.inventory?.head !== expected) {
+        const inventory = await nodeInventory(deps, expected, oldBase)
+        if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
+          await append({
+            actor: KERNEL,
+            type: 'node.inventory',
+            payload: { ...inventory, base: oldBase },
+          })
+      }
+      return 'idle'
+    }
+    const upstream = await observePresence(deps, parent, evidence.landings, evidence.aliases, true)
+    const destinationPresence = await observePresence(
+      deps,
+      expected,
+      evidence.landings,
+      evidence.aliases,
+      true,
+    )
+    for (const request of Object.values(node?.requests ?? {})) {
+      if (request.branch !== input.parentBranch) {
+        await append({
+          actor: KERNEL,
+          type: 'node.restack-satisfied',
+          payload: { id: request.id, parent, outcome: 'destination-changed' },
+        })
+        continue
+      }
+      const covered = await deps.exec(
+        ['git', 'merge-base', '--is-ancestor', request.parent, base],
+        { cwd: deps.workspacePath },
+      )
+      if (
+        (request.reason === 'presence' || (base === parent && covered.exitCode === 0)) &&
+        (request.identities ?? []).every((id) => new Set<string>(destinationPresence).has(id))
+      )
+        await append({
+          actor: KERNEL,
+          type: 'node.restack-satisfied',
+          payload: { id: request.id, parent: base, outcome: 'covered' },
+        })
+    }
+    state = await current(deps.store, deps.slug)
+    node = state.nodeRestack
+    const availableRequests = Object.values(node?.requests ?? {}).filter(
+      (request) =>
+        request.branch === input.parentBranch &&
+        (request.identities ?? []).every((id) => new Set<string>(upstream).has(id)),
+    )
+    const demanded = nodeRestackDemand({
+      ...state,
+      nodeRestack: {
+        ...node!,
+        requests: Object.fromEntries(availableRequests.map((request) => [request.id, request])),
+      },
+    })
+    if (
+      !demanded ||
+      (parent === oldBase && oldBase === node?.contributionBase && !node?.parentChange)
+    ) {
       if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)
       if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
-        await append({ actor: KERNEL, type: 'node.inventory', payload: inventory })
+        await append({
+          actor: KERNEL,
+          type: 'node.inventory',
+          payload: { ...inventory, base: oldBase },
+        })
       return 'idle'
     }
     const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent }, evidence)
@@ -117,6 +206,7 @@ export async function runNodeTransaction(
       payload: {
         id: input.id,
         operation: 'restack',
+        requests: availableRequests.map((request) => request.id),
         expected,
         parent,
         oldBase,
@@ -253,5 +343,11 @@ export async function runNodeTransaction(
     type: 'node.writer-settled',
     payload: { id: active.id, outcome: 'completed' },
   })
+  for (const id of active.requests ?? [])
+    await append({
+      actor: KERNEL,
+      type: 'node.restack-satisfied',
+      payload: { id, parent: active.parent, outcome: 'covered' },
+    })
   return 'completed'
 }

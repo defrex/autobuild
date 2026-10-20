@@ -74,7 +74,7 @@ export function nodeRestackLog(): AbEvent[] {
     {
       actor: KERNEL,
       type: 'node.inventory',
-      payload: { head, builds: ['source'], foreign: [head] },
+      payload: { head, base: parent, builds: ['source'], foreign: [head] },
     },
     {
       actor: KERNEL,

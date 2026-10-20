@@ -1174,6 +1174,7 @@ describe('runCli — sessionless build controls', () => {
       ['hold', slug],
       ['answer', slug, 'retry please'],
       ['abort', slug],
+      ['restack', slug],
     ]
     for (const argv of attempts) {
       const d = controlDeps(storeRef, {
