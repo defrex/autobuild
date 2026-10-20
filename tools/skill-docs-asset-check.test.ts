@@ -76,7 +76,7 @@ describe('isRepoLocalSkillDoc', () => {
       '.agents/skills/readme-headline/SKILL.md',
       '.agents/skills/impeccable/SKILL.md',
       '.agents/skills/impeccable/reference/craft.md',
-      '.agents/skills/ab-finalize-changelog/SKILL.md',
+      '.agents/skills/finalize-changelog/SKILL.md',
     ]) {
       expect(isRepoLocalSkillDoc(path, canonicalNames), path).toBe(true)
     }

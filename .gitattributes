@@ -1,2 +1,0 @@
-# Keep concurrent changelog additions during build replays.
-/CHANGELOG.md merge=union

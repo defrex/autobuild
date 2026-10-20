@@ -86,7 +86,7 @@ test('local rollout preserves this repository pipeline and Linear integration', 
   expect(config.finalize.steps).toEqual(['changelog'])
   expect(config.finalize.stepConfigs.changelog).toEqual({
     kind: 'agent',
-    skill: 'ab-finalize-changelog',
+    skill: 'finalize-changelog',
   })
   expect(config.tickets).toMatchObject({
     source: 'linear',

@@ -78,7 +78,7 @@ steps = ["changelog"]
 
 [finalize.changelog]
 kind = "agent"
-skill = "ab-finalize-changelog"
+skill = "finalize-changelog"
 
 # Runtime, model, and args per phase role. `default` is the inheritance base
 # and is never dispatched as a phase; every other role overrides each field

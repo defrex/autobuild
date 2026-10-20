@@ -646,6 +646,14 @@ describe('release orchestration', () => {
 
   test('a local-tag migration smoke failure rolls back the commit and unpushed tag', async () => {
     const fixture = await createFixture()
+    const fragment = '- [#100](url) — Pending fragment\n'
+    await mkdir(join(fixture.root, '.changelog'))
+    await writeFile(join(fixture.root, '.changelog/100.md'), fragment)
+    await command(fixture.root, 'git', ['add', '.changelog/100.md'])
+    await command(fixture.root, 'git', ['commit', '-m', 'fragment'])
+    const originalChangelog = await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')
+    const originalHead = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout
+
     const testHarness = harness()
     const normalRun = testHarness.run
     testHarness.run = async (request) => {
@@ -661,6 +669,10 @@ describe('release orchestration', () => {
       /could not install v2\.0\.1 smoke checkout/,
       testHarness,
     )
+    expect(await readFile(join(fixture.root, '.changelog/100.md'), 'utf8')).toBe(fragment)
+    expect(await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')).toBe(originalChangelog)
+    expect((await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout).toBe(originalHead)
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
     expect((await command(fixture.root, 'git', ['tag', '--list', 'v2.0.1'])).stdout).toBe('')
     const clone = testHarness.requests.find(
       (request) => request.command === 'git' && request.args[0] === 'clone',
@@ -893,15 +905,14 @@ describe('release orchestration', () => {
     }
   })
 
-  test('the finalize skill explicitly inserts before the next release heading', async () => {
+  test('the finalize skill creates idempotent fragments', async () => {
     const skill = await readFile(
-      join(import.meta.dir, '..', '.agents/skills/ab-finalize-changelog/SKILL.md'),
+      join(import.meta.dir, '..', '.agents/skills/finalize-changelog/SKILL.md'),
       'utf8',
     )
-    expect(skill).toContain('bounded by that\n  heading and the next level-two heading')
-    expect(skill).toContain(
-      'before that release heading — never beneath or inside the released section',
-    )
+    expect(skill).toContain('create `.changelog/<number>.md` exclusively')
+    expect(skill).toContain('idempotent no-op')
+    expect(skill).toContain('Do not modify CHANGELOG.md')
   })
 })
 
@@ -1393,3 +1404,61 @@ describe('prerelease publishing', () => {
     }
   })
 })
+
+for (const fragmentOnly of [false, true]) {
+  for (const prerelease of [false, true]) {
+    for (const dryRun of [false, true]) {
+      test(`fragment release fragmentOnly=${fragmentOnly} prerelease=${prerelease} dryRun=${dryRun}`, async () => {
+        const fixture = await createFixture(
+          fragmentOnly ? { changelog: '# Changelog\n\n## Unreleased\n\n' } : {},
+        )
+        const path = '.changelog/100.md'
+        const fragment = '- [#100](https://example.test/100) — Fragment capability\n'
+        await mkdir(join(fixture.root, '.changelog'))
+        await writeFile(join(fixture.root, path), fragment)
+        await command(fixture.root, 'git', ['add', path])
+        await command(fixture.root, 'git', ['commit', '-m', 'fragment'])
+        const original = await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')
+        const testHarness = harness()
+        await runRelease(
+          ['--version', prerelease ? '3.0.0-beta.0' : '3.0.0', ...(dryRun ? ['--dry-run'] : [])],
+          fixture.root,
+          {
+            run: testHarness.run,
+            output: testHarness.output,
+            repositoryUrl: fixture.remote,
+            today: () => '2026-10-20',
+            packageArchive: async () => new Uint8Array([1, 2, 3]),
+          },
+        )
+        if (prerelease || dryRun) {
+          expect(await readFile(join(fixture.root, path), 'utf8')).toBe(fragment)
+          expect(await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')).toBe(original)
+        } else {
+          expect(existsSync(join(fixture.root, path))).toBe(false)
+          const cut = await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')
+          expect(cut).toContain('## Unreleased\n\n## v3.0.0')
+          expect(cut).toContain(fragment.trim())
+          if (!fragmentOnly) expect(cut.indexOf('[#100]')).toBeLessThan(cut.indexOf('[#2]'))
+          expect(
+            (await command(fixture.root, 'git', ['show', '--format=', '--name-status', 'HEAD']))
+              .stdout,
+          ).toContain(`D\t${path}`)
+        }
+        const summary = testHarness.requests.find((request) => request.command === 'claude')
+        expect(summary?.args.join(' ')).toContain('[#100]')
+        if (!dryRun)
+          expect(
+            testHarness.requests.find(
+              (request) =>
+                request.command === 'gh' &&
+                request.args[0] === 'release' &&
+                request.args[1] === 'create',
+            )?.stdin,
+          ).toContain('[#100]')
+        if (dryRun && !prerelease) expect(testHarness.logs.join('\n')).toContain(`Delete ${path}`)
+        expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+      })
+    }
+  }
+}
