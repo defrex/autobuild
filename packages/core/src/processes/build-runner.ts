@@ -117,6 +117,7 @@ export { publicationPending } from './publication-state'
 
 class AutomaticRewriteDeferred extends Error {}
 class SessionShutdown extends Error {}
+class SessionPaused extends Error {}
 class RecoveryBoundaryChanged extends Error {}
 class FreshSessionRequired extends Error {}
 
@@ -641,7 +642,7 @@ function recoveryMatches(decision: Decision, session: OpenSession): boolean {
 export class BuildRunner {
   private recovery: OpenSession | undefined
   private recoveryBoundaryMs = 0
-  private recoveryCause: 'shutdown' | 'runner-loss' = 'runner-loss'
+  private recoveryCause: 'shutdown' | 'pause' | 'runner-loss' = 'runner-loss'
   private readonly continuationIntents = new Map<
     string,
     NonNullable<EventPayload<'session.started'>['continuation']>
@@ -721,7 +722,9 @@ export class BuildRunner {
             continuation: {
               ...write.payload.continuation!,
               handle: current.nativeHandle,
-              cause: current.suspendedActiveMs !== undefined ? 'shutdown' : 'runner-loss',
+              cause:
+                current.suspensionCause ??
+                (current.suspendedActiveMs !== undefined ? 'shutdown' : 'runner-loss'),
               activeMs:
                 (current.continuation?.activeMs ?? 0) +
                 (current.suspendedActiveMs ??
@@ -905,7 +908,7 @@ export class BuildRunner {
         this.recoveryBoundaryMs = this.deps.clock().getTime()
         this.recovery = candidate
         this.recoveryCause = state.sessions.suspended.some((s) => s.session === candidate.session)
-          ? 'shutdown'
+          ? (candidate.suspensionCause ?? 'shutdown')
           : 'runner-loss'
       }
     }
@@ -1207,7 +1210,14 @@ export class BuildRunner {
           )
             break
         }
-        const decision = await this.step()
+        let decision: Decision
+        try {
+          decision = await this.step()
+        } catch (error) {
+          if (!(error instanceof SessionPaused)) throw error
+          if (await this.settlePauseInterruption()) continue
+          break
+        }
         if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
       }
@@ -1218,6 +1228,22 @@ export class BuildRunner {
     } finally {
       this.stopHeartbeat()
       await this.closeProducerSessions()
+    }
+  }
+
+  /** Cancellation is irreversible, but the latest durable control selects
+   * whether to park or recover the suspended bracket in this same runner. */
+  private async settlePauseInterruption(): Promise<boolean> {
+    for (;;) {
+      const facts = await readBuildFacts(this.deps.store, this.deps.slug)
+      const decision = decideNextFromFacts(facts.value.state, facts.value.log, this.boundaryConfig)
+      if (decision.kind === 'acknowledge') {
+        await this.acknowledge(decision.command)
+        continue
+      }
+      if (decision.kind === 'wait') return false
+      await this.reclaimSessionsAndAttach(facts.value)
+      return true
     }
   }
 
@@ -1260,7 +1286,23 @@ export class BuildRunner {
   private async acknowledge(command: 'pause' | 'resume' | 'abort'): Promise<void> {
     const { store, slug } = this.deps
     if (command === 'pause') {
-      await store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      for (;;) {
+        const facts = await readBuildFacts(store, slug)
+        const decision = decideNextFromFacts(
+          facts.value.state,
+          facts.value.log,
+          this.boundaryConfig,
+        )
+        if (decision.kind !== 'acknowledge' || decision.command !== 'pause') return
+        if (
+          await store.appendIfCurrent(slug, facts.cursor, {
+            actor: KERNEL,
+            type: 'build.paused',
+            payload: {},
+          })
+        )
+          return
+      }
     } else if (command === 'resume') {
       await store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
     } else {
@@ -2617,6 +2659,7 @@ export class BuildRunner {
       void recording.catch(() => {})
       return recording
     }
+    let pauseInterrupted = false
     let abortCause: 'operator' | 'budget' | undefined
     let resolveExpiry!: (settlement: { kind: 'expired' }) => void
     const expiry = new Promise<{ kind: 'expired' }>((resolve) => {
@@ -2640,8 +2683,31 @@ export class BuildRunner {
         (value): { kind: 'value'; value: T } => ({ kind: 'value', value }),
         (error): { kind: 'error'; error: unknown } => ({ kind: 'error', error }),
       )
+    const pauseRetries = new Set<ReturnType<typeof setTimeout>>()
+    const interruptForPause = () => {
+      if (closed || controller.signal.aborted) return
+      void readBuildFacts(store, slug)
+        .then((facts) => {
+          if (closed || controller.signal.aborted) return
+          const next = decideNextFromFacts(facts.value.state, facts.value.log, this.boundaryConfig)
+          if (next.kind !== 'acknowledge' || next.command !== 'pause') return
+          pauseInterrupted = true
+          controller.abort(new Error('build paused by operator'))
+        })
+        .catch(() => {
+          // The subscription has already delivered this request. Retry the
+          // authoritative read so one transient failure cannot lose the stop.
+          if (closed || controller.signal.aborted) return
+          const timer = setTimeout(() => {
+            pauseRetries.delete(timer)
+            interruptForPause()
+          }, 25)
+          pauseRetries.add(timer)
+        })
+    }
     const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
-      if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
+      if (event.type === 'build.pause-requested') interruptForPause()
+      if (event.type === 'build.abort-requested') {
         abortCause = 'operator'
         controller.abort(new Error(`build ${slug} aborted by operator`))
       }
@@ -2664,8 +2730,22 @@ export class BuildRunner {
         started.payload.session,
         Math.max(0, performance.now() - turnStarted),
       )
+      if (pauseInterrupted && abortCause !== 'operator') {
+        await this.suspendTurn(
+          started,
+          settlement,
+          Math.max(0, performance.now() - turnStarted),
+          'pause',
+        )
+        throw new SessionPaused()
+      }
       if (this.deps.shutdownSignal?.aborted && abortCause === undefined) {
-        await this.suspendTurn(started, settlement, Math.max(0, performance.now() - turnStarted))
+        await this.suspendTurn(
+          started,
+          settlement,
+          Math.max(0, performance.now() - turnStarted),
+          'shutdown',
+        )
         throw new SessionShutdown()
       }
       return {
@@ -2675,9 +2755,25 @@ export class BuildRunner {
       }
     } finally {
       closed = true
+      for (const timer of pauseRetries) clearTimeout(timer)
       this.deps.shutdownSignal?.removeEventListener('abort', shutdown)
       cancelTimer()
       unsubscribe()
+    }
+  }
+
+  /** Cleanup cannot delay acknowledgement indefinitely after the adapter stopped. */
+  private async boundedCleanup<T>(cleanup: Promise<T>): Promise<T | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        cleanup,
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), 1000)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
   }
 
@@ -2685,33 +2781,43 @@ export class BuildRunner {
     started: Extract<AbEvent, { type: 'session.started' }>,
     settlement: TurnSettlement<T>,
     activeMs: number,
+    cause: 'shutdown' | 'pause',
   ): Promise<void> {
-    if (this.deps.workspaceProvider !== 'git-worktree' || this.deps.workspaceRemote === true) return
+    if (
+      cause === 'shutdown' &&
+      (this.deps.workspaceProvider !== 'git-worktree' || this.deps.workspaceRemote === true)
+    )
+      return
     const { store, slug } = this.deps
     const session = started.payload.session
     const state = (await readBuildFacts(store, slug)).value.state
     const native = state.sessions.open.find((s) => s.session === session)?.nativeHandle
-    if (!native) return
+    if (!native && cause === 'shutdown') return
+    const producer = [...this.producerSessions.entries()].find(
+      ([phase]) => phase === started.payload.phase,
+    )
+    if (producer) this.producerSessions.delete(producer[0])
     let content: string | undefined
     let usage: { inputTokens: number; outputTokens: number; turns: number } | undefined
-    if (settlement.kind === 'value') {
-      const value = settlement.value as { session?: AgentSessionHandle; result?: AgentTurnResult }
-      if (value.session) {
-        try {
-          const transcript = await this.deps.runtimes[started.payload.runner]!.runner.end(
-            value.session,
-          )
-          content = transcript.content
-          usage = value.result ? value.result.usage : transcript.metadata.usage
-        } catch {
-          /* Preserve the structured stream if provider cleanup fails. */
-        }
+    const value =
+      settlement.kind === 'value'
+        ? (settlement.value as { session?: AgentSessionHandle; result?: AgentTurnResult })
+        : undefined
+    const handle = value?.session ?? producer?.[1].handle
+    if (handle) {
+      try {
+        const owner = producer?.[1].runner ?? this.deps.runtimes[started.payload.runner]!.runner
+        const transcript = await this.boundedCleanup(owner.end(handle))
+        content = transcript?.content
+        usage = value?.result?.usage ?? (producer ? undefined : transcript?.metadata.usage)
+      } catch {
+        /* Preserve the structured stream if provider cleanup fails. */
       }
     }
     await this.bracketStreams.get(session)?.sink.close('aborted')
     if (!content && started.payload.stream)
       content = JSON.stringify(await store.readStream(started.payload.stream))
-    if (content === undefined) return
+    content ??= JSON.stringify({ session, interrupted: true })
     for (;;) {
       const guard = await readTerminalGuardBoundary(
         store,
@@ -2762,7 +2868,7 @@ export class BuildRunner {
             phase: started.payload.phase,
             round: started.payload.round,
             handle: native,
-            cause: 'shutdown',
+            cause,
             activeMs,
             transcript: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
             ...(usage ? { usage } : {}),
@@ -3774,7 +3880,7 @@ export class BuildRunner {
   private async closeProducerSessions(): Promise<void> {
     for (const entry of this.producerSessions.values()) {
       try {
-        await entry.runner.end(entry.handle)
+        await this.boundedCleanup(entry.runner.end(entry.handle))
       } catch {
         // Already dead — nothing to release.
       }
