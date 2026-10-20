@@ -1,3 +1,4 @@
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 /**
  * Last-chance publication settlement at the workspace-release boundary
@@ -16,7 +17,8 @@ import type { BuildStore } from '../store/types'
 export interface PublicationLossDeps {
   store: BuildStore
   /** Trusted publication settlement (dispatcher-injected). A throw means the
-   * request is uncompleted — the guard continues to the loss record. */
+   * request is uncompleted — the guard continues to the loss record,
+   * except forge scheduling deferrals, which abort release until recovery. */
   settlePublication?: (slug: string) => Promise<void>
 }
 
@@ -60,7 +62,8 @@ export async function settlePublicationFactsBeforeRelease(
     ) {
       try {
         await deps.settlePublication?.(slug)
-      } catch {
+      } catch (error) {
+        if (error instanceof ForgeRequestDeferred) throw error
         /* Summary is best effort. */
       }
       return (await readBuildFacts(deps.store, slug)).value
@@ -69,7 +72,8 @@ export async function settlePublicationFactsBeforeRelease(
   }
   try {
     await deps.settlePublication?.(slug)
-  } catch {
+  } catch (error) {
+    if (error instanceof ForgeRequestDeferred) throw error
     /* Record loss before release. */
   }
   const refreshed = (await readBuildFacts(deps.store, slug)).value

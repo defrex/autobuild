@@ -231,6 +231,13 @@ export interface BuildState {
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
   /** Readiness provenance, landing-bound consent and native application receipts. */
+  janitor?: {
+    firstFailureAt: string
+    attempt: number
+    message: string
+    nextAttemptAt: string
+    attention?: true
+  }
   landing?: LandingState
   /** Historical auto-merge controls retained for replay compatibility. */
   autoMerge: AutoMergeProjection
@@ -382,6 +389,13 @@ export interface BuildAcc {
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
   prState?: PrLifecycle
+  janitor?: {
+    firstFailureAt: string
+    attempt: number
+    message: string
+    nextAttemptAt: string
+    attention?: true
+  }
   landing?: LandingState
   autoMerge: AutoMergeProjection
   specRev?: number
@@ -530,6 +544,13 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   let lastEvent = acc.lastEvent
   for (const event of events) {
     acc.landing ??= {}
+    if (event.type === 'build.janitor-attempt-failed')
+      acc.janitor = {
+        ...event.payload,
+        ...(acc.janitor?.attention ? { attention: true as const } : {}),
+      }
+    if (event.type === 'build.janitor-failing' && acc.janitor) acc.janitor.attention = true
+    if (event.type === 'build.janitor-recovered') delete acc.janitor
     advanceLanding(acc.landing, event)
     if (event.type.startsWith('integration.')) {
       acc.integration ??= {}
@@ -1163,6 +1184,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     reviewRoundCeilings: acc.reviewRoundCeilings,
     pr: acc.pr,
     prState: acc.prState,
+    janitor: acc.janitor,
     landing: acc.landing,
     autoMerge: acc.autoMerge,
     finalizeCompletedSeq: acc.finalizeCompletedSeq,

@@ -1,3 +1,4 @@
+import { guardForge } from '../kernel/guarded-forge'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import { readBuildFacts } from '../store/reduced-reads'
 import { hostname } from 'node:os'
@@ -65,12 +66,15 @@ export async function runBuildChild(
       repoRoot: workspace.path ?? workspace.ref,
       env,
     })
-    const forge = await createForge({
-      name: currentConfig.forge,
-      registry: plugins,
-      env,
-      repoRoot: workspace.path ?? workspace.ref,
-    })
+    const forge = guardForge(
+      await createForge({
+        name: currentConfig.forge,
+        registry: plugins,
+        env,
+        repoRoot: workspace.path ?? workspace.ref,
+      }),
+      { store: fullStore, repo: record.repo, name: currentConfig.forge, wait: true },
+    )
     const getConfig = async () => {
       const latest = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
       if (latest === null) return currentConfig

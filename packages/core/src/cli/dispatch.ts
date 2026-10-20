@@ -1,4 +1,7 @@
 import { formatDispatcherError } from '../runtime-identity'
+
+import { isDeepStrictEqual } from 'node:util'
+import { guardForge } from '../kernel/guarded-forge'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { openTicketSource } from './ticket'
 import {
@@ -826,6 +829,12 @@ class DispatchLoop {
         repo: this.repoIdentity,
         resident: opts.once !== true,
       })
+    wiring.forge = guardForge(wiring.forge, {
+      store: this.repoView,
+      repo: this.repoIdentity,
+      name: config.forge,
+      now: wiring.clock,
+    })
     this.dispatcher = new Dispatcher({
       store: this.repoView,
       tickets: wiring.tickets,
@@ -2956,7 +2965,8 @@ class DispatchLoop {
         (finished.outcome === 'completed' &&
           completion.outcome === 'completed' &&
           Object.entries(completion.counters).some(
-            ([key, value]) => finished.counters[key as keyof typeof finished.counters] !== value,
+            ([key, value]) =>
+              !isDeepStrictEqual(finished.counters[key as keyof typeof finished.counters], value),
           ))
       )
         throw error
@@ -2976,14 +2986,21 @@ class DispatchLoop {
       await this.wiring.store.appendRepo(this.repoIdentity, failed)
       return
     }
-    const result = await this.finishTick({ outcome: 'failed', error: failed.payload.error }, [
+    const result = await this.finishTick(
       {
-        actor: DISPATCHER,
-        type: 'dispatcher.tick-started',
-        payload: { run: this.runId, startedAt: this.tickStartedAt },
+        outcome: 'failed',
+        error: failed.payload.error,
+        forgeRequests: this.dispatcher.lastForgeRequests,
       },
-      failed,
-    ])
+      [
+        {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-started',
+          payload: { run: this.runId, startedAt: this.tickStartedAt },
+        },
+        failed,
+      ],
+    )
     if (result === null) {
       this.superseded = true
       return

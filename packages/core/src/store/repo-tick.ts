@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { forgeRequestCountsSchema } from '../ports/forge-telemetry'
 import { EventValidationError } from '../events/catalog'
 import {
   dispatcherStatusEventPayloadSchemas,
@@ -12,7 +13,11 @@ export const repoTickCompletionSchema = z.discriminatedUnion('outcome', [
     outcome: z.literal('completed'),
     counters: dispatcherStatusEventPayloadSchemas['dispatcher.tick-completed'].shape.counters,
   }),
-  z.object({ outcome: z.literal('failed'), error: z.string().min(1) }),
+  z.object({
+    outcome: z.literal('failed'),
+    error: z.string().min(1),
+    forgeRequests: forgeRequestCountsSchema.optional(),
+  }),
 ])
 export const repoTickObservationSchema = z.object({
   run: z.string().min(1),

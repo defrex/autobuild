@@ -511,7 +511,17 @@ export type LandingGateInspection =
   | { kind: 'gated'; reason: string }
   | { kind: 'unproven'; reason: string }
 
+export { ForgeFailure, isForgeFailure } from './forge-failure'
+export type {
+  ForgeFailureDetails,
+  ForgeRequestContext,
+  ForgeRequestObserver,
+} from './forge-failure'
+
 export interface Forge {
+  /** Optional API 1.8 capability. Absence means unavailable counts. */
+  observeRequests?(observer: import('./forge-failure').ForgeRequestObserver): () => void
+
   inspectReadiness?(input: ForgeReadinessInput): Promise<ForgeReadinessCheck[]>
   /** Trusted kernel-only Git execution, with forge credentials scoped to its
    * origin. Never pass this capability or its environment to agent sessions. */

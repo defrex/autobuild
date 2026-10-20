@@ -2988,13 +2988,17 @@ in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
 configuration or unavailable journals fail with recovery guidance. Fresh init
 uses the no-rules fallback.
 
-A native-enable failure after the provider's mutation guard requires confirmed
-cancellation. Its disabled receipt records the candidate, authorization, retry
-attempt and next eligible time. Retries back off from 30 seconds exponentially
-to a five-minute maximum interval, surviving dispatcher restarts. A new
-candidate or land command resets this delay; hold and cancellation never wait
-for it. Quiet polls append no attempt facts. Native application receipts are
-bookkeeping, not pipeline execution progress.
+A classified transient native-enable failure records a candidate-specific
+application failure even before the provider's mutation guard. An uncertain
+enable after that guard requires confirmed cancellation before publication.
+During forge cooldown it stays pending; cancellation makes no further provider
+request until recovery. A confirmed cancellation's disabled receipt can retain
+retry timing. Retries back off from 30 seconds exponentially to a five-minute
+maximum interval, surviving dispatcher restarts, and honor any later repository
+reset. A new candidate or land command resets the application delay; hold wakes
+janitor backoff but provider cancellation still honors repository cooldown.
+Quiet polls append no attempt facts. Native application receipts and janitor
+bookkeeping are not pipeline execution progress.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
 landing state using the native state in the existing PR read, without additional
@@ -3640,3 +3644,28 @@ reports current gate deferrals or unsafe forge outcomes, never a second consent
 or hold wake. Readiness observations and queue entries share the effective
 target shape `{kind, branch, ticket?, build?}`. Tree display labels are owned
 by the shared projection vocabulary and reused by terminal and CLI text.
+
+## Forge failure recovery
+
+Janitor failures are durable per-build episodes. Eligible failures retry after
+30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
+Skipped polls preserve the episode across restart. After
+`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
+notifies default watchers and appears on the build row. A successful attempt
+clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+
+A classified forge rate limit records repository degradation with `resetAt`.
+Forge work waits during cooldown; passing the deadline permits a recovery
+request, and only success clears degradation. A further limit extends cooldown.
+Native landing application failures keep candidate-specific retry eligibility,
+including automatic decisions without a human command. Retries recheck consent,
+holds, verification and the exact candidate. Uncertain enables remain pending
+until cancellation can be confirmed after cooldown. Publication retries reuse
+cancellation receipts only when the forge confirms the same disabled state for
+the same candidate and publication operation.
+
+Tick telemetry counts provider wire requests, including failures. Counts are
+unavailable for uninstrumented adapters. Attribution retains at most ten builds
+ordered by descending count then build name; repository requests are unattributed.
+Repository status names a hotspot only when one build makes at least two requests
+and more than half of attributed requests. Telemetry never controls workflow.

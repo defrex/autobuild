@@ -104,6 +104,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
  * merge stays with the caller's skill.
  */
 export const BUILD_ATTENTION_EVENTS = [
+  'build.janitor-failing',
   'build.compatibility-deferred',
   'escalation.raised',
   'phase.deferral-escalated',
@@ -408,6 +409,12 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'build.janitor-failing':
+      return `Janitor failing: ${singleLine(event.payload.message)}`
+    case 'dispatcher.forge-degraded':
+      return `Forge degraded: ${singleLine(event.payload.message)}; reset ${event.payload.resetAt}`
+    case 'dispatcher.forge-recovered':
+      return `Forge recovered: ${event.payload.forge}`
     case 'phase.deferral-escalated':
     case 'escalation.raised':
       return `${event.payload.id}: ${singleLine(event.payload.question)}`

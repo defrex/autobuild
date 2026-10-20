@@ -44,6 +44,10 @@ export interface EventWrite<T extends EventType = EventType> {
  */
 export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.compatibility-deferred': ['kernel', 'dispatcher'],
+  'build.janitor-attempt-failed': ['dispatcher'],
+  'build.janitor-recovered': ['dispatcher'],
+  'build.janitor-failing': ['dispatcher'],
+  'landing.application-failed': ['dispatcher', 'kernel'],
   'landing.decided': ['dispatcher', 'kernel'],
   'build.hold-requested': ['human'],
   'build.land-requested': ['human'],

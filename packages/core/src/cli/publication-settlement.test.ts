@@ -1007,3 +1007,83 @@ for (const failure of ['different-head', 'read-error'] as const) {
     )
   })
 }
+
+test('finalize publication waits through durable forge cooldown and settles after reset', async () => {
+  const { guardForge, ForgeCooldown } = await import('../kernel/guarded-forge')
+  const now = manualClock()
+  const h = await seed()
+  h.forge.setPrState(1, { state: 'open', mergeable: true })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: BASE } },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'publication.requested',
+    payload: { operation: 'finalize-step', step: 'notes', branch: BRANCH, sha: SHA },
+  })
+  await h.store.ensureRepo('/repo')
+  await h.store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'dispatcher.forge-degraded',
+    payload: {
+      forge: 'github',
+      message: 'limited',
+      firstFailureAt: now().toISOString(),
+      resetAt: new Date(now().getTime() + 60_000).toISOString(),
+    },
+  })
+  h.deps.forge = guardForge(h.forge, { store: h.store, repo: '/repo', name: 'github', now })
+  await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBeInstanceOf(ForgeCooldown)
+  expect(h.published).toHaveLength(0)
+  expect(
+    (await h.store.getEvents(SLUG)).filter(
+      (e) => e.type === 'finalize.step-completed' || e.type === 'observation.recorded',
+    ),
+  ).toEqual([])
+  now.advance(60_000)
+  await settlePendingPublication(h.deps, SLUG)
+  expect(h.published).toHaveLength(1)
+  expect(
+    (await h.store.getEvents(SLUG)).find((e) => e.type === 'finalize.step-completed'),
+  ).toMatchObject({ payload: { ok: true } })
+})
+
+test('release preserves pending publication on forge scheduling deferral and retries settlement', async () => {
+  const { settlePublicationFactsBeforeRelease } = await import('../processes/publication-loss')
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const { ForgeCooldown } = await import('../kernel/guarded-forge')
+  const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+  for (const error of [new ForgeCooldown('cooldown'), new ForgeRequestDeferred('deferred')]) {
+    const h = await seed()
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: { operation: 'finalize-step', step: 'notes', branch: BRANCH, sha: SHA },
+    })
+    const facts = (await readBuildFacts(h.store, SLUG)).value
+    await expect(
+      settlePublicationFactsBeforeRelease(
+        {
+          store: h.store,
+          settlePublication: async () => {
+            throw error
+          },
+        },
+        SLUG,
+        facts,
+        'pause',
+      ),
+    ).rejects.toBe(error)
+    expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'publication.lost')).toBe(false)
+    await settlePublicationFactsBeforeRelease(
+      { store: h.store, settlePublication: () => settlePendingPublication(h.deps, SLUG) },
+      SLUG,
+      facts,
+      'pause',
+    )
+    expect(h.published).toHaveLength(1)
+    expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'publication.lost')).toBe(false)
+  }
+})
