@@ -357,7 +357,7 @@ export interface PhaseFailureTally {
   lastProviderAttempts?: readonly ProviderAttempt[]
 }
 
-export const PHASE_FAILURES_REDUCER_VERSION = 1
+export const PHASE_FAILURES_REDUCER_VERSION = 2
 
 /**
  * phase.failed tally for one phase+round — D5's retry-guard input. A factory
@@ -389,6 +389,14 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
     fold(acc, events) {
       for (const event of events) {
         switch (event.type) {
+          case 'phase.deferral-escalated':
+            acc.raised[event.payload.id] = {
+              phase: event.payload.phase,
+              round: event.payload.round,
+              source: 'policy',
+              deferral: 'own-build-read',
+            }
+            break
           case 'escalation.raised':
             acc.raised[event.payload.id] = {
               phase: event.payload.phase,
@@ -1145,6 +1153,9 @@ export class BuildRunner {
         case 'acknowledge':
           await this.acknowledge(decision.command)
           return decision
+        case 'raise-read-deferral':
+          await this.raiseReadDeferral(decision)
+          return decision
         case 'raise-escalation':
           await this.raiseEscalation(decision)
           return decision
@@ -1188,8 +1199,14 @@ export class BuildRunner {
   async run(): Promise<BuildState> {
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    const initial = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    if (initial.kind === 'node' && !initial.nodeRestack?.conflict && !integrationCurrent(initial))
+    const initialFacts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+    const initial = initialFacts.state
+    if (
+      initial.kind === 'node' &&
+      !initial.nodeRestack?.conflict &&
+      !integrationCurrent(initial) &&
+      initialFacts.log.readDeferrals.length === 0
+    )
       return initial
     if (!this.attached) {
       const attachment = await this.attach()
@@ -2322,6 +2339,10 @@ export class BuildRunner {
           // The failure-tolerant post-step still records its outcome below.
         }
       }
+      if (await this.settleReadDeferral(session)) {
+        this.closeBracketStream(streamBracket, 'aborted')
+        return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
+      }
       if (turn.abortCause === 'operator') {
         this.closeBracketStream(streamBracket, 'aborted')
         return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
@@ -2470,10 +2491,11 @@ export class BuildRunner {
       failureNote === undefined && turn.abortCause !== 'operator' ? 'completed' : 'aborted',
     )
 
+    const deferred = await this.settleReadDeferral(session)
     return {
       actor: agentActor(step, session),
       failureNote,
-      cancelled: turn.abortCause === 'operator',
+      cancelled: deferred || turn.abortCause === 'operator',
     }
   }
 
@@ -3260,6 +3282,8 @@ export class BuildRunner {
       }
       attempts.push(attempt)
 
+      if (await this.settleReadDeferral(session)) return
+
       const eligibleForAlternate =
         turnError !== undefined ||
         (result?.kind === 'failed' && isAlternateEligible(result.failure))
@@ -3570,6 +3594,7 @@ export class BuildRunner {
               mayRetry: !result.failure.permanent,
             }
           : { message: 'no-terminal', mayRetry: true }
+    if (await this.settleReadDeferral(session)) return
     await this.failPhase(
       spec.phase,
       spec.round,
@@ -3750,6 +3775,69 @@ export class BuildRunner {
    * new evidence instead of deadlocking before its recovery session starts.
    */
 
+  private async settleReadDeferral(session: string): Promise<boolean> {
+    const { store, slug } = this.deps
+    const item = (await readBuildFacts(store, slug)).value.log.readDeferrals.find(
+      (item) => item.session === session,
+    )
+    if (!item) return false
+    if (!item.ended) {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session,
+          outcome: 'reclaimed',
+          reclaimedBy: {
+            instance: this.deps.instance,
+            resumedFromSeq: (await readBuildFacts(store, slug)).value.state.lastSeq,
+          },
+        },
+      })
+    }
+    await this.raiseReadDeferral(item)
+    return true
+  }
+
+  private async raiseReadDeferral(
+    item: import('../kernel/read-deferrals').ReadDeferral,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    if (!item.settled)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'phase.deferred',
+        payload: {
+          session: item.session,
+          phase: item.phase,
+          round: item.round,
+          reason: 'own-build-read',
+          diagnostic: item.diagnostic,
+        },
+      })
+    const state = (await readBuildFacts(store, slug)).value.state
+    const ref = `own-build-read:${item.evidenceSeq}`
+    if (
+      [...state.openEscalations, ...state.answeredEscalations].some((raise) =>
+        raise.refs?.includes(ref),
+      )
+    )
+      return
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'phase.deferral-escalated',
+      payload: {
+        id: this.deps.ids('esc'),
+        session: item.session,
+        phase: item.phase,
+        round: item.round,
+        evidenceSeq: item.evidenceSeq,
+        refs: [ref, item.phase, String(item.round)],
+        question: `${item.phase} round ${item.round} could not read its own build: ${item.diagnostic}. Repair CLI/store access, then answer retry or guidance to authorize a fresh session.`,
+      },
+    })
+  }
+
   private async failPhase(
     phase: Phase,
     round: number,
@@ -3762,6 +3850,13 @@ export class BuildRunner {
     // its terminal is refused). Do not turn deferral into a consumed retry.
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       throw new MixedVersionDeferral()
+    const deferred = (
+      await readBuildFacts(this.deps.store, this.deps.slug)
+    ).value.log.readDeferrals.find((item) => item.phase === phase && item.round === round)
+    if (deferred) {
+      await this.settleReadDeferral(deferred.session)
+      return
+    }
     const attempt = priorFailures + 1
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,

@@ -128,6 +128,9 @@ export const buildEventPolicy = {
   'escalation.raised': 'decisive',
   'escalation.answered': 'decisive',
   'phase.failed': 'decisive',
+  'session.build-read-failed': 'decisive',
+  'phase.deferred': 'decisive',
+  'phase.deferral-escalated': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
   'change-presence.observed': 'decisive',

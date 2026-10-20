@@ -4812,3 +4812,57 @@ exports[`reducer registry accumulator shapes 1`] = `
   ],
 }
 `;
+undary": [
+    "$.boundary: number",
+    "$.occurrence: number",
+    "$.sessions.s_a: boolean",
+    "$.sessions.s_b: boolean",
+    "$.sessions: object",
+    "$: object",
+  ],
+  "summaryRequests": [
+    "$.requests: array",
+    "$.requests[].actor.kind: string",
+    "$.requests[].actor: object",
+    "$.requests[].build: string",
+    "$.requests[].payload.boundary: number",
+    "$.requests[].payload.occurrence: number",
+    "$.requests[].payload: object",
+    "$.requests[].seq: number",
+    "$.requests[].ts: string",
+    "$.requests[].type: string",
+    "$.requests[]: object",
+    "$.settled: array",
+    "$.settled[]: number",
+    "$: object",
+  ],
+  "terminalGuard": [
+    "$.completion.diagnostic: string",
+    "$.completion.seq: number",
+    "$.completion: object",
+    "$.reconcileAttempt: number",
+    "$: object",
+  ],
+  "ticketSourceHealth": [
+    "$.active.cause: string",
+    "$.active.message: string",
+    "$.active.operation: string",
+    "$.active.resetAt: string",
+    "$.active.source: string",
+    "$.active: object",
+    "$: object",
+  ],
+  "verifyDiffBase": [
+    "$.pendingReconcileBase: string",
+    "$.promoted: string",
+    "$.provisioned: string",
+    "$: object",
+  ],
+  "verifyDiffBaseValue": [
+    "$.pendingReconcileBase: string",
+    "$.promoted: string",
+    "$.provisioned: string",
+    "$: object",
+  ],
+}
+`;

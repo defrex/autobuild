@@ -719,6 +719,7 @@ const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
  * wake a session. */
 export const defaultOrchestratorWakeGlobs: readonly string[] = [
   'escalation.raised',
+  'phase.deferral-escalated',
   'phase.failed',
   'infrastructure.failed',
   'runner.setup-failed',

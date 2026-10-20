@@ -2020,3 +2020,32 @@ If native auto-merge was armed, or an enable was in flight or indeterminate,
 record a possible stale-enable landing as contrary to policy and raise operator
 attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
+### Failure budgets and own-build read deferrals
+
+`policy.maxVerifyAttempts` counts distinct failed logical verify cycles after
+the latest spec revision. Passing and skipped cycles, including target movement
+through restack or reconcile, consume zero. Cycle identifiers remain monotonic;
+pass, pass, pass, fail at cycle 4 spends one failure. Duplicate completion
+evidence for a failed cycle does not charge it twice.
+
+Classified session deferrals consume no phase failures. Unsupported decisive
+facts retain the mixed-version wait gate and durable compatibility diagnostic.
+When the scoped `ab context` initial own-build read fails, the CLI best-effort
+writes `session.build-read-failed` with exact session, phase, round, operation
+`context`, reason `own-build-read`, and diagnostic. A valid terminal from that
+session wins if the agent recovers. Otherwise settlement records `phase.deferred`
+and `phase.deferral-escalated`, immediately projecting ordinary blocked attention.
+The raise cites `own-build-read:<evidenceSeq>`; replay repairs either settlement
+crash gap before launching another agent. An `escalation.answered` retry or
+guidance authorizes one fresh session without resetting genuine phase failures;
+a new classified failure parks again. There are zero automatic paid retries
+after this deferral. If evidence cannot be written, ordinary recovery applies;
+agent output and `no-terminal` alone never classify a read failure.
+
+Ordinary silence, provider failures and session timeouts retain the runner's
+phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
+an internal runner option, not an accepted `[policy]` TOML key. Reconcile
+execution and unchanged-base progress budgets retain their existing accounting.
+
+Default `ab watch` and `ab wait --for attention` include
+`phase.deferral-escalated`; explicit event filters replace the default set.

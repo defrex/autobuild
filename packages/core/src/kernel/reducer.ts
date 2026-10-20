@@ -47,6 +47,7 @@ export interface OpenEscalation {
   source: EscalationSource
   /** Policy guard identity. Absent only on historical policy raises. */
   policyCause?: PolicyEscalationCause
+  deferral?: 'own-build-read'
   question: string
   refs?: string[]
   /** seq of the `escalation.raised` event — what `spec.revised` cites (§15.3). */
@@ -415,7 +416,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 15
+export const BUILD_REDUCER_VERSION = 16
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1003,6 +1004,18 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
       case 'observation.recorded':
         observations.push(event.payload)
+        break
+      case 'phase.deferral-escalated':
+        openEscalations.set(event.payload.id, {
+          id: event.payload.id,
+          phase: event.payload.phase,
+          round: event.payload.round,
+          source: 'policy',
+          deferral: 'own-build-read',
+          question: event.payload.question,
+          refs: event.payload.refs,
+          seq: event.seq,
+        })
         break
       case 'escalation.raised':
         openEscalations.set(event.payload.id, {
