@@ -2579,6 +2579,16 @@ Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
 `node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
 cascade). It retains the previous contribution boundary, latest parent
 observation, complete replay prefix, active source item and merge proofs.
+`integration.observed` optionally carries display-only `children` entries
+(source/id, optional title and contribution build identity). Open-child and
+contribution arrays remain the membership authorities; resolved tickets without
+contributions do not become landed children. Dashboards list open children first
+with current live phase or `queued`, then contributions as `landed`. They show
+expected verification steps with exact current-cycle/head/parent outcomes and
+landing mode/rule/consent instructions. Optional `files` on `node.item-conflicted`
+and conflicted `restack.replayed` records unmerged paths at replay. Legacy events
+remain readable with explicit unavailable-title/file fallbacks; display metadata
+never authorizes collection or landing.
 A rewrite receipt alone never promotes the boundary; only completed settlement
 does. CLI status exposes pending/active work, reachable build identities and
 node-owned foreign changes. A node stays `collecting` while its narrow reconcile

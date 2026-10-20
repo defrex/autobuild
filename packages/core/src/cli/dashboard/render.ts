@@ -375,23 +375,7 @@ function renderBuild(
   const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
   if (build.integrationRow) {
     const row = build.integrationRow
-    const children = row.children
-    let bar = paint('┄'.repeat(22), 'dim', color)
-    let counts = [paint('children unknown', 'dim', color)]
-    if (children.known) {
-      const cells = integrationBarCells(children.landed, children.building, children.queued)
-      bar =
-        paint('━'.repeat(cells[0]!), 'green', color) +
-        paint('━'.repeat(cells[1]!), 'cyan', color) +
-        paint('─'.repeat(children.total ? cells[2]! : 22), 'dim', color)
-      counts = children.total
-        ? [
-            paint(`${children.landed}/${children.total} landed`, 'green', color),
-            ...(children.building ? [paint(`· ${children.building} building`, 'cyan', color)] : []),
-            ...(children.queued ? [paint(`· ${children.queued} queued`, 'dim', color)] : []),
-          ]
-        : [paint('no children yet', 'dim', color)]
-    }
+    const { bar, counts } = integrationProgress(row, color)
     lines.push(
       ...packLines(
         [
@@ -715,6 +699,27 @@ interface DetailBodyLayout {
 
 export type DetailFocusTarget = 'session' | 'message'
 
+function integrationProgress(row: NonNullable<DashboardBuild['integrationRow']>, color: boolean) {
+  const children = row.children
+  let bar = paint('┄'.repeat(22), 'dim', color)
+  let counts = [paint('children unknown', 'dim', color)]
+  if (children.known) {
+    const cells = integrationBarCells(children.landed, children.building, children.queued)
+    bar =
+      paint('━'.repeat(cells[0]!), 'green', color) +
+      paint('━'.repeat(cells[1]!), 'cyan', color) +
+      paint('─'.repeat(children.total ? cells[2]! : 22), 'dim', color)
+    counts = children.total
+      ? [
+          paint(`${children.landed}/${children.total} landed`, 'green', color),
+          ...(children.building ? [paint(`· ${children.building} building`, 'cyan', color)] : []),
+          ...(children.queued ? [paint(`· ${children.queued} queued`, 'dim', color)] : []),
+        ]
+      : [paint('no children yet', 'dim', color)]
+  }
+  return { bar, counts }
+}
+
 function detailBody(
   build: DashboardBuild,
   view: Extract<NonNullable<DashboardModel['view']>, { kind: 'detail' }>,
@@ -724,11 +729,15 @@ function detailBody(
   const body: string[] = []
   if (dashboardBuildControl(build.status)) body.push(...wrappedText(pauseResumeHelp, width, '  '))
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
-  if (build.target)
+  if (build.target && !build.integrationDetail)
     body.push(
       `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
     )
-  if (build.tree && (build.kind === 'integration' || build.tree.consent)) {
+  if (
+    !build.integrationDetail &&
+    build.tree &&
+    (build.kind === 'integration' || build.tree.consent)
+  ) {
     const tree = build.tree
     body.push(
       `  ${treeVocabulary.branch} ${tree.branch ?? 'unknown'} · ${treeVocabulary.restack} ${tree.restack}`,
@@ -748,6 +757,47 @@ function detailBody(
     body.push(
       `  ${treeVocabulary.landing} ${tree.reason ?? (tree.ready ? treeVocabulary.readyToLand : treeVocabulary.notReady)}`,
     )
+  }
+  if (build.integrationDetail && build.integrationRow) {
+    const detail = build.integrationDetail
+    const field = (label: string, text: string) =>
+      body.push(...wrapDisplay(`${label}  ${text}`, width, '  '))
+    field('Integration', detail.destination)
+    const progress = integrationProgress(build.integrationRow, color)
+    body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
+    field('Branch', `${detail.branch} · restack ${detail.restack}`)
+    for (const path of detail.conflictFiles ?? []) field('Conflict', path)
+    body.push(
+      ...packLines(
+        ['Steps', ...build.integrationRow.steps.map((s) => renderStep(s, color, opts.now))],
+        width,
+        '  ',
+      ),
+    )
+    const open = detail.children.filter((c) => !c.landed).length
+    body.push(
+      '',
+      paint(
+        `Children  ${open} open · ${detail.children.length - open} landed${detail.membershipKnown ? '' : ' · membership unknown'}`,
+        'bold',
+        color,
+      ),
+    )
+    for (const child of detail.children) {
+      const id = displayText(child.id)
+      const state = displayText(child.state)
+      const tone = child.landed ? 'green' : state === 'queued' ? 'dim' : 'cyan'
+      const prefix = `    ${paint(child.landed ? '[x]' : state === 'queued' ? '[ ]' : '[>]', tone, color)} ${paint(id, 'blue', color)}  `
+      const right = paint(state, tone, color)
+      if (visibleLength(prefix) + visibleLength(right) + 2 <= width)
+        body.push(rightPinnedLine(prefix, displayText(child.title), right, width))
+      else body.push(...packLines([id, right], width, '  '))
+    }
+    for (const diagnostic of detail.diagnostics) field('Membership', diagnostic)
+    body.push('')
+    field('Verification', detail.verification)
+    for (const result of detail.verifySteps) field(result.step, result.outcome)
+    field('Landing', detail.landing)
   }
   if (build.kind !== 'integration') body.push(`  landing ${landingPolicyDisplay(build.landing)}`)
   const ceiling = reviewRoundCeilingText(build)
@@ -772,7 +822,7 @@ function detailBody(
     body.push(...wrappedText(build.abortProgress, width, '  '))
   } else if (build.dispatch !== undefined) {
     body.push('', paint('Dispatch', 'bold', color), ...wrappedText(build.dispatch, width, '  '))
-  } else {
+  } else if (!build.integrationDetail) {
     body.push('', paint('Pipeline', 'bold', color))
     body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
   }

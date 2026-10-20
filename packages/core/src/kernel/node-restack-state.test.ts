@@ -46,9 +46,10 @@ test('arbitrary replay prefixes survive serialization and completion alone promo
   state = JSON.parse(JSON.stringify(state))
   state = nodeRestackReducer.advance(state, [
     prepared(1, 'prefix'),
-    event('node.item-conflicted', { id: 'tx', index: 1, base: 'prefix' }),
+    event('node.item-conflicted', { id: 'tx', index: 1, base: 'prefix', files: ['a file.ts'] }),
   ])
   expect(state.conflict?.index).toBe(1)
+  expect(state.conflict?.files).toEqual(['a file.ts'])
   expect(state.contributionBase).toBe('initial')
   state = nodeRestackReducer.advance(state, [
     receipt(1, 'prefix', 'resolved'),
@@ -57,6 +58,7 @@ test('arbitrary replay prefixes survive serialization and completion alone promo
   ])
   expect(state.contributionBase).toBe('initial')
   expect(state.foreignAliases).toBeUndefined()
+  expect(state.conflict).toBeUndefined()
   state = nodeRestackReducer.advance(state, [
     event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
   ])

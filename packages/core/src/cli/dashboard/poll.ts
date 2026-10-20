@@ -58,6 +58,7 @@ interface LiveEntry {
 /** A fully completed build can never become visible again, so its log is discarded. */
 interface TerminalEntry {
   kind: 'terminal'
+  record: BuildRecord
 }
 
 type PollEntry = LiveEntry | TerminalEntry
@@ -242,7 +243,7 @@ export class DashboardBuildPollCache {
       const acc = buildReducer.advance(current?.acc ?? buildReducer.initial(), delta)
       const state = buildReducer.finish(acc)
       if (isTerminal(state)) {
-        next.set(record.slug, { kind: 'terminal' })
+        next.set(record.slug, { kind: 'terminal', record })
         continue
       }
       next.set(record.slug, {
@@ -290,7 +291,10 @@ export class DashboardBuildPollCache {
     builds.sort((a, b) => a.slug.localeCompare(b.slug))
     return {
       revision: this.committedRevision,
-      builds: enrichIntegrationRows(builds),
+      builds: enrichIntegrationRows(
+        builds,
+        [...this.entries.values()].map((e) => e.record),
+      ),
       states,
       capacityBuilds,
     }

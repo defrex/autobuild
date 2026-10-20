@@ -150,7 +150,7 @@ export async function runNodeTransaction(
       await append({
         actor: KERNEL,
         type: 'node.item-conflicted',
-        payload: { id: active.id, index, base },
+        payload: { id: active.id, index, base, files: result.files },
       })
       return 'conflict'
     }

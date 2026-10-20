@@ -6,6 +6,7 @@ import type {
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   capacityExplanation,
+  displayText,
   pauseResumeHelp,
   buildActionAvailability,
   landingPolicyDisplay,
@@ -762,9 +763,13 @@ function BuildDetail({
   }
 
   return (
-    <article className="detail" id={id} aria-label={`${build.slug} detail`}>
+    <article
+      className={build.integrationDetail ? 'detail integration-detail' : 'detail'}
+      id={id}
+      aria-label={`${build.slug} detail`}
+    >
       <div className="kv">
-        {build.target && (
+        {build.target && !build.integrationDetail && (
           <span>
             {build.kind ?? 'work'} · target {build.target}
             {build.integration ? ` · ${build.integration}` : ''}
@@ -776,10 +781,12 @@ function BuildDetail({
             {build.ticketId}
           </span>
         )}
-        <span>
-          <span className="k">landing </span>
-          {landingPolicyDisplay(build.landing)}
-        </span>
+        {!build.integrationDetail && (
+          <span>
+            <span className="k">landing </span>
+            {landingPolicyDisplay(build.landing)}
+          </span>
+        )}
         {ceilingText && <span>{ceilingText}</span>}
         {build.pr && (
           <span>
@@ -902,6 +909,106 @@ function BuildDetail({
         </div>
       </section>
 
+      {build.integrationDetail &&
+        build.integrationRow &&
+        (() => {
+          const detail = build.integrationDetail
+          const counts = build.integrationRow.children
+          const open = detail.children.filter((c) => !c.landed).length
+          return (
+            <>
+              <section className="section">
+                <div className="kv">
+                  <span>
+                    <span className="k">Integration </span>
+                    {displayText(detail.destination)}
+                  </span>
+                </div>
+                <div className="kv">
+                  <span>
+                    <span className="k">Progress </span>
+                    {counts.known
+                      ? `${counts.landed}/${counts.total} landed · ${counts.building} building · ${counts.queued} queued`
+                      : 'children unknown'}
+                  </span>
+                </div>
+                <div className="kv">
+                  <span>
+                    <span className="k">Branch </span>
+                    {displayText(detail.branch)} · restack {displayText(detail.restack)}
+                  </span>
+                </div>
+                {detail.conflictFiles?.map((path) => (
+                  <p className="alert" style={{ overflowWrap: 'anywhere' }} key={displayText(path)}>
+                    {displayText(path)}
+                  </p>
+                ))}
+                <h3>Steps</h3>
+                <StepLine
+                  steps={build.integrationRow.steps}
+                  now={now}
+                  register="detail"
+                  label={`${build.slug} integration steps`}
+                />
+              </section>
+              <section className="section">
+                <h3>
+                  Children · {open} open · {detail.children.length - open} landed
+                  {!detail.membershipKnown && ' · membership unknown'}
+                </h3>
+                {detail.children.map((child) => (
+                  <div
+                    className="kv"
+                    style={{ display: 'flex', flexWrap: 'nowrap', gap: '1ch' }}
+                    key={`${child.source}:${displayText(child.id)}`}
+                  >
+                    <span style={{ flexShrink: 0 }}>{displayText(child.id)}</span>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={displayText(child.title)}
+                    >
+                      {displayText(child.title)}
+                    </span>
+                    <span
+                      style={{ flexShrink: 0 }}
+                      className={child.landed ? 'ok' : child.state === 'queued' ? 'slack' : 'live'}
+                    >
+                      {displayText(child.state)}
+                    </span>
+                  </div>
+                ))}
+                {detail.diagnostics.map((text) => (
+                  <p className="slack" key={displayText(text)}>
+                    {displayText(text)}
+                  </p>
+                ))}
+              </section>
+              <section className="section" style={{ overflowWrap: 'anywhere' }}>
+                <h3>Verification</h3>
+                <p>{displayText(detail.verification)}</p>
+                {detail.verifySteps.map((result) => (
+                  <div className="kv" key={displayText(result.step)}>
+                    <span>
+                      <span className="k">{displayText(result.step)} </span>
+                      {displayText(result.outcome)}
+                    </span>
+                  </div>
+                ))}
+              </section>
+              <section className="section" style={{ overflowWrap: 'anywhere' }}>
+                <h3>Landing</h3>
+                <p>{displayText(detail.landing)}</p>
+              </section>
+            </>
+          )
+        })()}
+
       {build.abortProgress !== undefined ? (
         <section className="section">
           <h3>Abort progress</h3>
@@ -912,7 +1019,7 @@ function BuildDetail({
           <h3>Dispatch</h3>
           <pre className="block">{build.dispatch}</pre>
         </section>
-      ) : (
+      ) : !build.integrationDetail ? (
         <section className="section">
           <h3>Pipeline</h3>
           <StepLine
@@ -922,7 +1029,7 @@ function BuildDetail({
             label={`${build.slug} pipeline detail`}
           />
         </section>
-      )}
+      ) : null}
 
       {build.setupError !== undefined && (
         <section className="section alert">
