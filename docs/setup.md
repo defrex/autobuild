@@ -156,6 +156,27 @@ Vercel team/project credential set; provide separate private-clone credentials;
 use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit
 and push the selected base branch.
 
+## Keep per-build records in separate fragments
+
+When a repository keeps per-build records, such as changelog entries, write a
+separate fragment file for each build and assemble the consolidated record at
+release. For example, use distinct filenames per build (these names are
+illustrative):
+
+```text
+changelog.d/
+  build-alpha.md
+  build-beta.md
+CHANGELOG.md          # assembled from the fragments at release
+```
+
+Shared append-only files are an anti-pattern for finalize steps. Under the
+integration tree, independent builds that append to the same shared lines can
+conflict when their commits are replayed onto a destination that already has
+other entries, including during restacks and node cascades. Each conflicting
+replay costs an agent reconcile session. Separate fragment files remove that
+shared edit surface; the repository owns the release-time assembly tooling.
+
 ## Repository identity is the origin, not a checkout path
 
 Repository identity in the Store, dispatcher, `ab builds`, `ab build status`,
