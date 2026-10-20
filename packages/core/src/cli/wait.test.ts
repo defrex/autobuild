@@ -2024,3 +2024,47 @@ test('attention backlog recognizes a conflicted replay and ignores a clean repla
     matchEvent({ type: 'restack.replayed', payload: { conflicted: false } }, conditions, [], facts),
   ).toBeNull()
 })
+
+test('read deferral attention wakes live and current-state waits and closes on answer', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  let appended = false
+  const h = harness(store, {
+    forValues: ['attention'],
+    onTick: async () => {
+      if (appended) return
+      appended = true
+      await store.append('b1', {
+        actor: KERNEL,
+        type: 'phase.deferral-escalated',
+        payload: {
+          id: 'esc_read',
+          session: 's_read',
+          phase: 'plan',
+          round: 1,
+          evidenceSeq: 1,
+          refs: ['own-build-read:1'],
+          question: 'Repair CLI/store access then retry',
+        },
+      })
+    },
+  })
+  expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '2' })).toBe(0)
+  expect(records(h.out)).toHaveLength(1)
+  expect(records(h.out)[0]).toMatchObject({
+    condition: 'attention',
+    event: { type: 'phase.deferral-escalated', seq: 2 },
+    state: { status: 'blocked' },
+  })
+  const cursor = records(h.out)[0]!.cursor
+  const current = harness(store, { forValues: ['attention'] })
+  expect(await abWait({ ...current.base, slugs: ['b1'], since: cursor, timeout: '1' })).toBe(0)
+  expect(records(current.out)[0]).toMatchObject({ event: { type: 'phase.deferral-escalated' } })
+  await store.append('b1', {
+    actor: humanActor('operator'),
+    type: 'escalation.answered',
+    payload: { id: 'esc_read', answer: 'repaired', resolution: 'retry' },
+  })
+  const answered = harness(store, { forValues: ['attention'] })
+  expect(await abWait({ ...answered.base, slugs: ['b1'], timeout: '1' })).toBe(3)
+})

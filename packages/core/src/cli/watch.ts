@@ -106,6 +106,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 export const BUILD_ATTENTION_EVENTS = [
   'build.compatibility-deferred',
   'escalation.raised',
+  'phase.deferral-escalated',
   'integration.landed',
   'node.item-conflicted',
 ] as const satisfies readonly EventType[]
@@ -407,6 +408,7 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'phase.deferral-escalated':
     case 'escalation.raised':
       return `${event.payload.id}: ${singleLine(event.payload.question)}`
     case 'build.compatibility-deferred':

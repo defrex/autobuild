@@ -306,6 +306,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
           .at(-1)
 
   return {
+    readDeferrals: [],
     restack: leafRestackReducer.reduce(events),
     restartSeq,
     plan,

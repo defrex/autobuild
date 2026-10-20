@@ -9832,3 +9832,28 @@ for (const asynchronous of [false, true]) {
     expect(local.provisions).toHaveLength(1)
   })
 }
+
+for (const expired of [false, true])
+  test(`own-build read attention prevents lease sweeps (${expired ? 'expired' : 'absent'} lease)`, async () => {
+    const h = harness({ opts: { leaseTtlMs: 1000 } })
+    const slug = await seedBuild(h)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'phase.deferral-escalated',
+      payload: {
+        id: 'esc_read',
+        session: 's_read',
+        phase: 'plan',
+        round: 1,
+        evidenceSeq: 2,
+        refs: ['own-build-read:2'],
+        question: 'Repair CLI/store access then retry',
+      },
+    })
+    if (expired) await h.store.claimLease(slug, 'prior-runner', 1000)
+    for (let tick = 0; tick < 4; tick++) {
+      h.clock.advance(2000)
+      expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+      expect(h.launches).toEqual([])
+    }
+  })

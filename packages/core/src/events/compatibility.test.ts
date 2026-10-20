@@ -117,3 +117,106 @@ test('deferral summaries exclude advisory types and releases while retaining all
   expect(compatibilityDiagnostic(resumed)).not.toContain('future.advisory')
   expect(compatibilityDiagnostic(resumed)).not.toContain('advisory-release')
 })
+
+test('pre-deferral reader decodes the complete protocol without new values in known payloads', () => {
+  // Freeze the pre-change known escalation schema, including its closed enum.
+  const oldRaise = z.strictObject({
+    id: z.string().min(1),
+    phase: z.string(),
+    round: z.number().int().positive().optional(),
+    source: z.enum(['agent', 'stall', 'policy']),
+    policyCause: z
+      .enum([
+        'review-round-limit',
+        'verify-failure-limit',
+        'reconcile-no-progress',
+        'dispatch-failure-limit',
+        'execution-no-progress',
+        'setup-failure-limit',
+        'infrastructure-failure-limit',
+        'phase-attempt-limit',
+        'non-retryable-phase-failure',
+      ])
+      .optional(),
+    question: z.string().min(1),
+    refs: z.array(z.string()).optional(),
+  })
+  const oldSchemas = { ...eventPayloadSchemas, 'escalation.raised': oldRaise } as Record<
+    string,
+    z.ZodType
+  >
+  for (const type of ['session.build-read-failed', 'phase.deferred', 'phase.deferral-escalated'])
+    delete oldSchemas[type]
+  const payloads = [
+    [
+      'session.started',
+      { session: 's_read', role: 'plan', runner: 'test', phase: 'plan', round: 1 },
+    ],
+    [
+      'session.build-read-failed',
+      {
+        session: 's_read',
+        phase: 'plan',
+        round: 1,
+        operation: 'context',
+        reason: 'own-build-read',
+        diagnostic: 'unreadable',
+      },
+    ],
+    [
+      'session.ended',
+      {
+        session: 's_read',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
+      },
+    ],
+    [
+      'phase.deferred',
+      {
+        session: 's_read',
+        phase: 'plan',
+        round: 1,
+        reason: 'own-build-read',
+        diagnostic: 'unreadable',
+      },
+    ],
+    [
+      'phase.deferral-escalated',
+      {
+        id: 'esc_read',
+        session: 's_read',
+        phase: 'plan',
+        round: 1,
+        evidenceSeq: 2,
+        question: 'Repair access then retry',
+        refs: ['own-build-read:2'],
+      },
+    ],
+    ['escalation.answered', { id: 'esc_read', answer: 'repaired', resolution: 'guidance' }],
+  ] as const
+  const oldState = initialCompatibility()
+  for (let i = 0; i < payloads.length; i++) {
+    const [type, payload] = payloads[i]!
+    const event = { ...newerFact(i + 1, 'decisive'), type, payload }
+    const schema = oldSchemas[type]
+    if (schema) expect(() => projectPayload(schema, payload)).not.toThrow()
+    else {
+      // The old catalog's unknown branch retains the original envelope as opaque
+      // decisive evidence. Exercise that same branch in the current decoder.
+      expect(event.compatibility).toMatchObject({ classification: 'decisive' })
+      advanceCompatibility(oldState, [{ ...event, type: `pre-reader-unknown.${type}` }])
+    }
+    if (i >= 1) expect(compatibilityDiagnostic(oldState)).toContain('Kernel decisions deferred')
+  }
+  expect(oldState.decisiveFacts).toBe(3)
+  expect(() =>
+    projectPayload(oldRaise, {
+      id: 'bad',
+      phase: 'plan',
+      source: 'policy',
+      policyCause: 'own-build-read',
+      question: 'bad enum',
+    }),
+  ).toThrow()
+})
