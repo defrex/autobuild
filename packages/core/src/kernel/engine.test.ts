@@ -3315,3 +3315,191 @@ describe('decideNextFromFacts', () => {
     }
   })
 })
+
+describe('failure cycle accounting', () => {
+  const report0 = { kind: 'verify-report:types', rev: 0 }
+  test('AUT-841: three passed target cycles followed by failure 4 spend one failure', () => {
+    const writes = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+    ]
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      writes.push(
+        ...verifyRun('types', attempt, true),
+        ...verifyRun('unit', attempt, true),
+        ...verifyRun('e2e', attempt, true),
+      )
+      writes.push(
+        ev('reconcile.completed', {
+          mergeCommit: `target-${attempt}`,
+          artifact: { kind: 'reconcile-notes', rev: attempt - 1 },
+        }),
+      )
+    }
+    writes.push(...verifyRun('types', 4, false, report0))
+    const events = toLog(writes)
+    const decision = decideNext(events, config)
+    expect(decision).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      feedback: { verify: { step: 'types', report: report0 } },
+    })
+    checkIncremental(logIndexReducer, events)
+  })
+  test('duplicate failure records for one logical cycle cannot exhaust the budget', () => {
+    const writes = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, false, report0),
+      ...verifyRun('types', 1, false, report0),
+      ...verifyRun('types', 1, false, report0),
+    ]
+    expect(decide(writes)).toMatchObject({ kind: 'run-phase', phase: 'implement' })
+  })
+})
+
+test('read deferral projection is exact-session, terminal-first and incremental across answer', () => {
+  const start = ev('session.started', {
+    session: 's_read',
+    phase: 'plan',
+    round: 1,
+    role: 'plan',
+    runner: 'scripted',
+  })
+  const marker = ev('session.build-read-failed', {
+    session: 's_read',
+    phase: 'plan',
+    round: 1,
+    operation: 'context',
+    reason: 'own-build-read',
+    diagnostic: 'cannot decode',
+  })
+  const ended = ev('session.ended', {
+    session: 's_read',
+    outcome: 'reclaimed',
+    reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
+  })
+  const log = toLog([...prelude(), start, marker, ended])
+  expect(decideNext(log, config)).toMatchObject({
+    kind: 'raise-read-deferral',
+    session: 's_read',
+    settled: false,
+  })
+  checkIncremental(logIndexReducer, log)
+  const settled = ev('phase.deferred', {
+    session: 's_read',
+    phase: 'plan',
+    round: 1,
+    reason: 'own-build-read',
+    diagnostic: 'cannot decode',
+  })
+  const raise = ev('phase.deferral-escalated', {
+    id: 'esc_read',
+    session: 's_read',
+    phase: 'plan',
+    round: 1,
+    evidenceSeq: log.length - 1,
+    question: 'Repair access then retry',
+    refs: [`own-build-read:${log.length - 1}`],
+  })
+  const raised = toLog([...prelude(), start, marker, ended, settled, raise])
+  expect(decideNext(raised, config)).toEqual({ kind: 'wait', reason: 'blocked' })
+  checkIncremental(logIndexReducer, raised)
+  checkIncremental(buildReducer, raised)
+  const answered = toLog([
+    ...prelude(),
+    start,
+    marker,
+    ended,
+    settled,
+    raise,
+    ev('escalation.answered', { id: 'esc_read', answer: 'repaired', resolution: 'retry' }),
+  ])
+  expect(decideNext(answered, config)).toMatchObject({ kind: 'run-phase', phase: 'plan', round: 1 })
+  checkIncremental(logIndexReducer, answered)
+  const recovered = toLog([
+    ...prelude(),
+    start,
+    marker,
+    ev(
+      'plan.completed',
+      { round: 1, artifact: { kind: 'plan', rev: 0 } },
+      { kind: 'agent', role: 'plan', session: 's_read' },
+    ),
+    ended,
+  ])
+  expect(decideNext(recovered, config)).toMatchObject({ kind: 'run-phase', phase: 'plan-review' })
+  expect(decideNext(toLog([...prelude(), marker, ended]), config)).toMatchObject({
+    kind: 'run-phase',
+    phase: 'plan',
+  })
+})
+
+test('interleaved target passes never erase failures and the third distinct failed cycle escalates once', () => {
+  const writes = [...prelude(), ...planApproved()]
+  let round = 0
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    if (attempt === 1 || attempt === 2 || attempt === 4) {
+      round++
+      writes.push(...implementRound(round, `head-${attempt}`), ...codeReview(round, 'approve'))
+    }
+    const baseSha = String(attempt).repeat(40)
+    const headSha = (attempt + 5).toString(16).repeat(40)
+    writes.push(ev('target.moved', { branch: 'main', sha: baseSha }))
+    writes.push(
+      ev('restack.completed', {
+        ...leafTransaction,
+        id: `restack-${attempt}`,
+        targetBase: baseSha,
+        headSha,
+        cycle: writes.length,
+      }),
+    )
+    const outcome = attempt % 2 ? 'fail' : 'pass'
+    for (const step of outcome === 'fail' ? ['types'] : ['types', 'unit', 'e2e']) {
+      writes.push(
+        ev('verify.started', { step, attempt, baseSha, headSha, restackId: `restack-${attempt}` }),
+      )
+      writes.push(
+        ev('verify.completed', {
+          step,
+          attempt,
+          baseSha,
+          headSha,
+          restackId: `restack-${attempt}`,
+          outcome,
+          ...(outcome === 'fail' ? { report: { kind: 'verify-report:types', rev: attempt } } : {}),
+        }),
+      )
+    }
+    if (attempt < 5)
+      writes.push(
+        ev('reconcile.completed', {
+          mergeCommit: headSha,
+          artifact: { kind: 'reconcile-notes', rev: attempt },
+        }),
+      )
+  }
+  expect(decide(writes)).toMatchObject({
+    kind: 'raise-escalation',
+    policyCause: 'verify-failure-limit',
+  })
+  writes.push(
+    ev('escalation.raised', {
+      id: 'esc_failures',
+      source: 'policy',
+      phase: 'verify:types',
+      policyCause: 'verify-failure-limit',
+      question: 'three failures',
+    }),
+  )
+  expect(decide(writes)).toEqual({ kind: 'wait', reason: 'blocked' })
+  writes.push(
+    ev('escalation.answered', { id: 'esc_failures', answer: 'retry', resolution: 'retry' }),
+  )
+  expect(decide(writes)).toMatchObject({ kind: 'run-phase', phase: 'implement' })
+})

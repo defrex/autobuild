@@ -1232,3 +1232,49 @@ skill = "verify-second"
     }
   },
 )
+
+describe('own-build read evidence', () => {
+  test('only the initial read failure is classified, and a transient read can recover', async () => {
+    const original = store.getReducerValue.bind(store)
+    const error = new Error('cannot decode own build')
+    store.getReducerValue = async () => {
+      throw error
+    }
+    await expect(
+      buildContext({ store, env: makeEnv({ phase: 'plan' }), workspacePath: workspace }),
+    ).rejects.toBe(error)
+    store.getReducerValue = original
+    const evidence = (await store.getEvents(BUILD)).filter(
+      (event) => event.type === 'session.build-read-failed',
+    )
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]!.payload).toMatchObject({
+      operation: 'context',
+      reason: 'own-build-read',
+      diagnostic: error.message,
+    })
+    await buildContext({ store, env: makeEnv({ phase: 'plan' }), workspacePath: workspace })
+    expect(
+      (await store.getEvents(BUILD)).filter((event) => event.type === 'session.build-read-failed'),
+    ).toHaveLength(1)
+  })
+  test('an evidence write outage preserves the original read error', async () => {
+    const read = store.getReducerValue.bind(store)
+    const append = store.append.bind(store)
+    const error = new Error('original read failed')
+    store.getReducerValue = async () => {
+      throw error
+    }
+    store.append = async () => {
+      throw new Error('write also failed')
+    }
+    await expect(
+      buildContext({ store, env: makeEnv({ phase: 'plan' }), workspacePath: workspace }),
+    ).rejects.toBe(error)
+    store.getReducerValue = read
+    store.append = append
+    expect(
+      (await store.getEvents(BUILD)).some((event) => event.type === 'session.build-read-failed'),
+    ).toBe(false)
+  })
+})

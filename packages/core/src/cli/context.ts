@@ -163,7 +163,29 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   const { build, phase, round } = env
   const spec = phaseSpecFor(phase)
   const inputs = spec.inputs
-  const events = (await readBuildFacts(store, build)).value
+  let events: CurrentBuildFacts
+  try {
+    events = (await readBuildFacts(store, build)).value
+  } catch (error) {
+    try {
+      await store.append(build, {
+        actor: KERNEL,
+        type: 'session.build-read-failed',
+        payload: {
+          session: env.session,
+          phase,
+          round,
+          operation: 'context',
+          reason: 'own-build-read',
+          diagnostic:
+            (error instanceof Error ? error.message : String(error)).trim() || 'build read failed',
+        },
+      })
+    } catch {
+      /* Preserve the original read error when evidence cannot be written. */
+    }
+    throw error
+  }
   const state = events.state
 
   // Preserve legacy tracked scratch exactly while replacing disposable files.
@@ -401,6 +423,27 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       await writeDerived(
         'guidance.json',
         `${JSON.stringify({ escalation: latest.id, answer: latest.answer }, null, 2)}\n`,
+      )
+    }
+  }
+
+  // Read-deferral guidance repairs access for this same execution occurrence,
+  // including reviewers, which have no producer-feedback carrier.
+  if (manifest.feedback === undefined && (phase === 'plan-review' || phase === 'code-review')) {
+    const latest = state.answeredEscalations
+      .filter(
+        (item) =>
+          item.deferral === 'own-build-read' &&
+          item.resolution === 'guidance' &&
+          item.phase === phase &&
+          item.round === round,
+      )
+      .at(-1)
+    if (latest) {
+      manifest.feedback = { guidance: { escalation: latest.id, answer: latest.answer } }
+      await writeDerived(
+        'guidance.json',
+        `${JSON.stringify(manifest.feedback.guidance, null, 2)}\n`,
       )
     }
   }
