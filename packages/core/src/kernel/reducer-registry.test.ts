@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import { describe, expect, test } from 'bun:test'
@@ -141,11 +142,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 15,
+        "build": 16,
         "buildDelegation": 1,
         "buildDigest": 9,
-        "buildReadFacts": 52,
-        "buildStreamSeed": 23,
+        "buildReadFacts": 54,
+        "buildStreamSeed": 24,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 2,
@@ -164,7 +165,7 @@ describe('reducer registry', () => {
         "journalView": 4,
         "lastExecutionOutcome": 1,
         "leafRestack": 3,
-        "logIndex": 4,
+        "logIndex": 5,
         "nodeRestack": 5,
         "openBuildWorkspace": 1,
         "openExecution": 1,
@@ -172,7 +173,7 @@ describe('reducer registry', () => {
         "openTick": 1,
         "openWorkspace": 1,
         "pendingPrAttachmentReclaims": 1,
-        "phaseFailures": 1,
+        "phaseFailures": 2,
         "pinnedAssets": 2,
         "provisionMarker": 1,
         "publicationState": 5,
@@ -204,7 +205,15 @@ describe('reducer registry', () => {
     const shapes = Object.fromEntries(
       Object.entries(REDUCERS).map(([name, r]) => [name, unionFingerprint(name, r.reducer)]),
     )
-    expect(shapes).toMatchSnapshot()
+    // Direct JSON equality preserves the complete shape guard. Bun's external
+    // snapshot assertion fails after module mocks load, even for identical shapes.
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./__snapshots__/reducer-accumulator-shapes.json', import.meta.url),
+        'utf8',
+      ),
+    )
+    expect(shapes).toEqual(expected)
   }, 120_000)
 
   test('every reducer is populated by the corpora (its fingerprint is not just the empty accumulator)', () => {

@@ -605,8 +605,30 @@ skip reason is required and
 must be non-blank; no failure report is required. Either kind of skip satisfies
 that step for the current cycle and advances, but it is not a pass and never
 masks another step's failure. Only failures return the build to `implement` and
-consume `[policy].maxVerifyAttempts`; skips retain the cycle's attempt number
+consume `[policy].maxVerifyAttempts` once per distinct failed cycle since the
+latest spec revision. Passing target-movement cycles cost zero; cycle identifiers
+remain monotonic across restacks and reconciles. Skips retain the cycle's attempt number
 without consuming that budget.
+
+
+Classified session deferrals consume no phase failures. Unsupported decisive
+facts retain the mixed-version wait gate and durable compatibility diagnostic.
+When the scoped `ab context` initial own-build read fails, the CLI best-effort
+writes `session.build-read-failed` with exact session, phase, round, operation
+`context`, reason `own-build-read`, and diagnostic. A valid terminal from that
+session wins if the agent recovers. Otherwise settlement records `phase.deferred`
+and `phase.deferral-escalated`, immediately projecting ordinary blocked attention.
+The raise cites `own-build-read:<evidenceSeq>`; replay repairs either settlement
+crash gap before launching another agent. An `escalation.answered` retry or
+guidance authorizes one fresh session without resetting genuine phase failures;
+a new classified failure parks again. There are zero automatic paid retries
+after this deferral. If evidence cannot be written, ordinary recovery applies;
+agent output and `no-terminal` alone never classify a read failure.
+
+Ordinary silence, provider failures and session timeouts retain the runner's
+phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
+an internal runner option, not an accepted `[policy]` TOML key. Reconcile
+execution and unchanged-base progress budgets retain their existing accounting.
 
 ### `[finalize]`
 
@@ -792,7 +814,7 @@ nonnegative integer so zero can disable that trigger.
 |---|---|---|---|
 | `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it; native continuation retains accumulated time and excludes suspension. |
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
-| `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
+| `maxVerifyAttempts` | `3` | positive integer | Caps distinct failed verify cycles since the latest spec revision; passed and skipped cycles cost zero. |
 | `maxDispatchAttempts` | `3` | positive integer | Caps consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
 | `maxInfrastructureAttempts` | `3` | positive integer | Caps consecutive remote provider lifecycle failures before a setup-targeted human escalation; a `retry` answer re-arms the budget. |
@@ -825,8 +847,9 @@ For each repeat conflict, Autobuild compares the target base of the latest
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
-escalates when the budget is exhausted. Every current policy escalation carries
-a closed `policyCause`; reconcile no-progress uses `reconcile-no-progress`,
+escalates when the budget is exhausted. Ordinary current policy escalations carry
+a closed `policyCause`; `phase.deferral-escalated` instead identifies an
+own-build-read deferral and its answer resets no phase failures; reconcile no-progress uses `reconcile-no-progress`,
 while `round` remains occurrence scope. Answering a runner-failure cause re-arms
 only its matching phase and round. The phase-level `verify-failure-limit` cause
 explicitly re-arms all rounds for its verify target, while
@@ -839,7 +862,7 @@ matching cause separately before another reconcile. Cause-less historical
 raises retain their former round-shaped reset behavior, and roundless
 policy/reconcile raises retain their former no-progress meaning, on replay
 without migration. Post-reconcile verification follows the captured policy and remains
-independently bounded by `maxVerifyAttempts`.
+independently bounded by the distinct failed-cycle count in `maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect
@@ -1835,7 +1858,9 @@ With no slugs the repository journal is included; named watches add it with
 
 The default watch reports actionable conditions only:
 
-- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
+- Build `escalation.raised` or `phase.deferral-escalated`: an operator answer
+  is required. A read deferral asks for CLI/store repair before retry or guidance.
+- Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
   authorized landings awaiting application are silent. One merge decision is reported per build/PR.
@@ -1993,6 +2018,11 @@ merge decision returns immediately, including with `--since`. Merge matches
 use the same observation as watch. During replay, only new escalation events
 or undelivered eligible merge decisions satisfy attention. `--event` conditions
 fire only on new events or a cursor-resumed backlog.
+
+Default `ab watch` and `ab wait --for attention` also deliver
+`phase.deferral-escalated`, preserving its original event type, id and sequence.
+Its question asks for CLI/store repair and an explicit retry or guidance answer.
+Explicit event globs continue to replace the default filter.
 
 The record is the `ab watch` record plus a `condition` field naming the
 satisfied `--for` value or `--event` glob. Unlike `ab watch`, there is no

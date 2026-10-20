@@ -2657,3 +2657,68 @@ test.each(['consent', 'held', 'stale', 'auto'] as const)(
     }
   },
 )
+
+test('read deferral attention wakes the default watch once, keeps its real event, and resumes by cursor', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  let appended = false
+  const h = harness(store, {
+    onTick: async () => {
+      if (appended) return
+      appended = true
+      await store.append('b1', {
+        actor: KERNEL,
+        type: 'phase.deferral-escalated',
+        payload: {
+          id: 'esc_read',
+          session: 's_read',
+          phase: 'plan',
+          round: 1,
+          evidenceSeq: 2,
+          refs: ['own-build-read:2'],
+          question: 'Repair CLI/store access\nthen retry',
+        },
+      })
+    },
+  })
+  await abWatch({ ...h.base, slugs: ['b1'], timeout: '2' })
+  const records = h.out.map((line) => JSON.parse(line)).filter((record) => record.event)
+  expect(records).toHaveLength(1)
+  expect(records[0]).toMatchObject({
+    event: { type: 'phase.deferral-escalated', seq: 2, payload: { id: 'esc_read' } },
+    state: { status: 'blocked' },
+  })
+  const text = harness(store, {
+    json: false,
+    onTick: async () => {
+      await store.append('b1', {
+        actor: KERNEL,
+        type: 'phase.deferral-escalated',
+        payload: {
+          id: 'esc_read',
+          session: 's_text',
+          phase: 'plan',
+          round: 1,
+          evidenceSeq: 3,
+          refs: ['own-build-read:3'],
+          question: 'Repair CLI/store access then retry',
+        },
+      })
+    },
+  })
+  await abWatch({ ...text.base, slugs: ['b1'], timeout: '2' })
+  expect(text.out.join('\n')).toContain('esc_read: Repair CLI/store access')
+  const tail = harness(store)
+  await abWatch({ ...tail.base, slugs: ['b1'], timeout: '1' })
+  const cursor = JSON.parse(tail.out.at(-1)!).cursor
+  const resumed = harness(store)
+  await abWatch({ ...resumed.base, slugs: ['b1'], since: cursor, timeout: '1' })
+  expect(resumed.out.map((line) => JSON.parse(line)).filter((record) => record.event)).toHaveLength(
+    0,
+  )
+  const explicit = harness(store)
+  await abWatch({ ...explicit.base, slugs: ['b1'], events: ['escalation.raised'], timeout: '1' })
+  expect(
+    explicit.out.map((line) => JSON.parse(line)).filter((record) => record.event),
+  ).toHaveLength(0)
+})

@@ -449,10 +449,17 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const finish = (condition: string | null, event: AbEvent, state: BuildState): number => {
         const seed = streams.get(event.build)!.seed
         const consent =
-          condition === 'consent' || condition === 'attention' ? consentReady(seed, now()) : null
+          condition === 'consent' ||
+          (condition === 'attention' &&
+            event.type !== 'phase.deferral-escalated' &&
+            event.type !== 'escalation.raised')
+            ? consentReady(seed, now())
+            : null
         const observation =
           consent ??
-          (condition === 'attention' && event.type !== 'escalation.raised'
+          (condition === 'attention' &&
+          event.type !== 'escalation.raised' &&
+          event.type !== 'phase.deferral-escalated'
             ? mergeDecisionFromFacts(state, seed.deferral, now())
             : null)
         if (consent) deliveredAttention.add(consentIdentity(event.build, consent.position))
@@ -491,6 +498,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const eventConditions = (event: AbEvent, seed: BuildStreamSeed): readonly WaitCondition[] => {
         if (
           event.type === 'escalation.raised' ||
+          event.type === 'phase.deferral-escalated' ||
           event.type === 'integration.landed' ||
           event.type === 'node.item-conflicted' ||
           (event.type === 'restack.replayed' && event.payload.conflicted)
