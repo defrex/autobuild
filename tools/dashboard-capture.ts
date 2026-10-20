@@ -182,12 +182,22 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'consent queue',
       'held',
       'conflicted',
-      'incomplete',
-      'integration',
-      'target',
-      'empty',
+      'collect',
+      'integration →',
+      'landed',
+      'children unknown',
+      'unit failed',
+      'ready to land into',
       'NODE-3',
     ],
+  },
+
+  {
+    id: 'integration-narrow',
+    scenario: 'integration',
+    columns: 70,
+    rows: 110,
+    requires: ['landed', 'building', 'queued', 'unit failed', 'repair child', 'ready to land into'],
   },
 
   {
@@ -454,13 +464,18 @@ async function prepareIntegrationScenario(
 ): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: happyHandlers(),
-    configToml: CAPTURE_CONFIG_TOML,
+    configToml: `${CAPTURE_CONFIG_TOML}
+[[landing]]
+from = "node"
+into = "node"
+mode = "auto"
+`,
     tickets: [],
   })
   await harness.store.ensureRepo(harness.origin)
   harness.forge.remoteBranches.set('main', 'opening-sha')
   harness.forge.setPrState(91, { state: 'open', mergeable: null })
-  for (const [index, label] of ['empty', 'with-pr', 'nested', 'aborted'].entries()) {
+  for (const [index, label] of ['empty', 'with-pr', 'nested', 'aborted', 'unknown'].entries()) {
     const slug = `integration-${label}`
     harness.forge.remoteBranches.set(
       `ab-node/${slug}`,
@@ -513,6 +528,23 @@ async function prepareIntegrationScenario(
         ahead: label === 'with-pr' ? 1 : 0,
       },
     })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: {
+        openChildren:
+          label === 'with-pr'
+            ? ['NODE-3', ...(consentQueueFixtures ? ['queue-active'] : []), 'QUEUED-CHILD']
+            : [],
+        contributions:
+          label === 'with-pr'
+            ? Array.from({ length: 8 }, (_, i) => `landed-${i}`)
+            : label === 'nested'
+              ? ['nested-landed']
+              : [],
+        diagnostics: label === 'unknown' ? ['ticket enumeration unavailable'] : [],
+      },
+    })
     if (label === 'with-pr')
       await harness.store.append(slug, {
         actor: DISPATCHER,
@@ -531,11 +563,12 @@ async function prepareIntegrationScenario(
     'active',
     'conflict',
     'stale',
+    'failed',
   ].entries()) {
     const slug = `queue-${label}`
     const node = label !== 'ready-leaf'
     const parent = 'a'.repeat(40)
-    const head = `head-${label}`
+    const head = label === 'failed' ? 'f'.repeat(40) : `head-${label}`
     await harness.store.createBuild({
       slug,
       repo: harness.origin,
@@ -596,9 +629,34 @@ async function prepareIntegrationScenario(
         id: `cycle-${label}`,
         head,
         parent,
-        config: JSON.stringify({ verify: { steps: [] } }),
+        config: JSON.stringify({ verify: { steps: label === 'failed' ? ['unit'] : [] } }),
       },
     })
+    if (label === 'failed') {
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: {
+          step: 'unit',
+          attempt: 1,
+          restackId: `cycle-${label}`,
+          headSha: head,
+          baseSha: parent,
+        },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: {
+          step: 'unit',
+          attempt: 1,
+          restackId: `cycle-${label}`,
+          headSha: head,
+          baseSha: parent,
+          outcome: 'fail',
+        },
+      })
+    }
     if (!node)
       await harness.store.append(slug, {
         actor: KERNEL,
@@ -1296,7 +1354,7 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   const text = plain.join('\n')
   const commonEvidence =
     spec.scenario === 'integration' || spec.scenario === 'capacity'
-      ? ['integration', 'target', 'empty']
+      ? ['integration', 'collect', 'children unknown']
       : spec.scenario === 'happy'
         ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
         : spec.transcript !== undefined
@@ -1545,7 +1603,7 @@ export async function captureDashboardFrames(
               ...frameSpec,
               selection: undefined,
               rows: 44,
-              requires: ['integration', 'target', 'empty', 'NODE-3'],
+              requires: ['integration', 'collect', 'children unknown', 'NODE-3'],
             }
           : frameSpec
       const harness =
