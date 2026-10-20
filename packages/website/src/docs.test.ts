@@ -38,6 +38,11 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     expect(html).toContain(`content="${SITE_URL}/og.png"`)
     expect(html).toContain('<script type="module" src="/site.js"></script>')
     expect(html.match(/<h1[ >]/g)).toHaveLength(1)
+    expect(html.match(/data-docs-copy/g)).toHaveLength(1)
+    expect(html).toContain(
+      'type="button" class="docs-copy" data-docs-copy data-markdown-exclude>Copy as Markdown</button>',
+    )
+    expect(html).toContain('role="status" aria-live="polite" aria-atomic="true"></span>')
     expect(html.match(/aria-current="page"/g)).toHaveLength(3)
     for (const label of ['Site', 'Documentation']) {
       const nav = html.match(new RegExp(`<nav[^>]*aria-label="${label}"[^>]*>[\\s\\S]*?</nav>`))![0]
@@ -120,7 +125,7 @@ test('layout preserves every article byte except injected heading IDs', () => {
       baseline[page.path]!,
     )
     const html = renderDocsPage(page)
-    const article = html.split('</h1>')[1]!.split('</article>')[0]!
+    const article = html.split('aria-atomic="true"></span>')[1]!.split('</article>')[0]!
     expect(article.replace(/<h2 id="[^"]+">/g, '<h2>')).toBe(page.content)
     expect(html).toContain(`${page.group} · ${page.label.toLowerCase()}`)
     expect(html).toContain(`${REPO_URL}/blob/main/packages/website/src/docs.ts`)

@@ -476,9 +476,15 @@ test('docs probes reject disclosure, section, sticky, code and width regressions
     rightTop: 24,
     scrollY: 600,
     codeContained: true,
+    copyPresent: true,
+    copyHeight: 40,
+    copyPlaced: true,
   }
   expect(probeProblems(frame, probe({ docs }))).toEqual([])
   for (const bad of [
+    { copyPresent: false },
+    { copyHeight: 39 },
+    { copyPlaced: false },
     { menuExpanded: true },
     { tocExpanded: true },
     { active: ['first', 'first'] },

@@ -330,7 +330,7 @@ ${renderSiteHeader('docs', nav)}
 <div class="docs-inline-toc"><button type="button" data-toc-toggle aria-expanded="true" aria-controls="docs-sections">On this page <span aria-hidden="true">▾</span></button><div id="docs-sections">${toc}</div>${docsRule()}</div>
 <div class="docs-shell">
 <nav class="docs-nav docs-sidebar" aria-label="Documentation">${nav}</nav>
-<main id="content" tabindex="-1"><article><div class="docs-eyebrow">${page.group} · ${escapeHtml(page.label.toLowerCase())}</div><h1 class="headline">${escapeHtml(page.title)}</h1>${prepared.html}</article>${docsRule()}${renderPager(page)}</main>
+<main id="content" tabindex="-1"><article><div class="docs-eyebrow">${page.group} · ${escapeHtml(page.label.toLowerCase())}</div><div class="docs-title-row"><h1 class="headline">${escapeHtml(page.title)}</h1><button type="button" class="docs-copy" data-docs-copy data-markdown-exclude>Copy as Markdown</button></div><span class="docs-copy-status" data-copy-status data-markdown-exclude role="status" aria-live="polite" aria-atomic="true"></span>${prepared.html}</article>${docsRule()}${renderPager(page)}</main>
 <aside class="docs-toc docs-sidebar" aria-label="Page sections"><b>On this page</b>${toc}${docsRule()}<a href="${REPO_URL}/blob/main/${DOCS_SOURCE}">Edit this page ↗</a><a href="#top">Back to top ↑</a></aside>
 </div>
 <footer class="docs-footer">${docsRule()}<div><span>Autobuild · Apache-2.0</span><span><a href="/">Home</a> <a href="${REPO_URL}">GitHub ↗</a></span></div></footer>
