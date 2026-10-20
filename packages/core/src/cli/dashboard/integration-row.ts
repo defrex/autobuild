@@ -11,7 +11,7 @@ import type { BuildRecord } from '../../store/types'
 import type { DashboardBuild, PipelineStep } from './model'
 import { nodeLandingPolicyDisplay } from './landing-display'
 
-/** List-only facts. Details deliberately keep their original tree and pipeline. */
+/** Shared list progress and five integration steps. */
 export interface IntegrationRow {
   destination: string
   children:
@@ -118,34 +118,96 @@ export function projectIntegrationRow(
 
 /** Recomputed from the whole already-read repository, even on an empty parent delta.
  * Never mutate cached rows or snapshots; leaf identity is preserved. */
-export function enrichIntegrationRows(rows: readonly DashboardBuild[]): DashboardBuild[] {
+export function enrichIntegrationRows(
+  rows: readonly DashboardBuild[],
+  records: readonly BuildRecord[] = [],
+): DashboardBuild[] {
   return rows.map((row) => {
     const list = row.integrationRow
     const identity = row.collectionIdentity
-    if (!list?.children.known || !identity) return row
-    const building = list.openChildren.filter((id) =>
-      rows.some((child) => {
-        const match = child.collectionIdentity
-        return (
-          match &&
-          match.repo === identity.repo &&
-          match.targetBuild === row.slug &&
-          match.targetSource === identity.source &&
-          match.targetId === identity.id &&
-          (match.id ? match.source === identity.source && match.id === id : child.slug === id) &&
-          match.status !== 'queued' &&
-          match.status !== 'done' &&
-          match.status !== 'aborted'
+    if (!list || !identity) return row
+    const live = (id: string, source: string) =>
+      rows
+        .filter((child) => {
+          const match = child.collectionIdentity
+          return (
+            match &&
+            match.repo === identity.repo &&
+            match.targetBuild === row.slug &&
+            match.targetSource === identity.source &&
+            match.targetId === identity.id &&
+            (match.id ? match.source === source && match.id === id : child.slug === id) &&
+            match.status !== 'queued' &&
+            match.status !== 'done' &&
+            match.status !== 'aborted'
+          )
+        })
+        .sort(
+          (a, b) =>
+            (b.collectionIdentity?.createdAt ?? '').localeCompare(
+              a.collectionIdentity?.createdAt ?? '',
+            ) || b.slug.localeCompare(a.slug),
+        )[0]
+    const building = list.openChildren.filter((id) => live(id, identity.source ?? '')).length
+    const detail = row.integrationDetail
+    const projected = detail?.children.map((child) => {
+      const active = child.landed ? undefined : live(child.id, child.source)
+      const historical = child.builds?.length
+        ? records.find((r) => r.repo === identity.repo && child.builds?.includes(r.slug))
+        : undefined
+      return {
+        ...child,
+        id: historical?.ticket?.id ?? child.id,
+        source: historical?.ticket?.source ?? child.source,
+        title:
+          child.title === 'title unavailable'
+            ? (active?.collectionIdentity?.title ?? historical?.ticket?.title ?? child.title)
+            : child.title,
+        state: child.landed ? 'landed' : (active?.collectionIdentity?.phase ?? 'queued'),
+      }
+    })
+    // Historical contribution records can resolve several build slugs to the
+    // same ticket, including a reopened ticket that is also currently open.
+    const byTicket = new Map<string, import('./integration-detail').IntegrationChild>()
+    for (const child of projected ?? []) {
+      const key = JSON.stringify([child.source, child.id])
+      const previous = byTicket.get(key)
+      const preferred = previous && !previous.landed ? previous : child
+      byTicket.set(
+        key,
+        previous
+          ? {
+              ...preferred,
+              title:
+                preferred.title === 'title unavailable'
+                  ? previous.title === 'title unavailable'
+                    ? child.title
+                    : previous.title
+                  : preferred.title,
+              builds: [...new Set([...(previous.builds ?? []), ...(child.builds ?? [])])].sort(),
+            }
+          : child,
+      )
+    }
+    const children = detail
+      ? [...byTicket.values()].sort(
+          (a, b) =>
+            Number(a.landed) - Number(b.landed) ||
+            a.source.localeCompare(b.source) ||
+            a.id.localeCompare(b.id),
         )
-      }),
-    ).length
-    if (list.children.building === building) return row
+      : undefined
+    const changed = children && JSON.stringify(children) !== JSON.stringify(detail?.children)
+    if ((!list.children.known || list.children.building === building) && !changed) return row
     return {
       ...row,
-      integrationRow: {
-        ...list,
-        children: { ...list.children, building, queued: list.openChildren.length - building },
-      },
+      integrationRow: list.children.known
+        ? {
+            ...list,
+            children: { ...list.children, building, queued: list.openChildren.length - building },
+          }
+        : list,
+      ...(detail && children ? { integrationDetail: { ...detail, children } } : {}),
     }
   })
 }

@@ -1156,15 +1156,25 @@ test('operator integration counts agree with terminal polling without completed 
     payload: { openChildren: ['CHILD'], contributions: ['landed'], diagnostics: [] },
   })
   await store.createBuild({
+    slug: 'landed',
+    repo: REPO,
+    ticket: { source: 'file', id: 'LANDED', title: 'Completed contribution' },
+  })
+  await store.append('landed', {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+  await store.createBuild({
     slug: 'child',
     repo: REPO,
-    ticket: { source: 'file', id: 'CHILD' },
+    ticket: { source: 'file', id: 'CHILD', title: 'Child title' },
     created: {
       actor: DISPATCHER,
       type: 'build.created',
       payload: {
         repo: REPO,
-        ticket: { source: 'file', id: 'CHILD' },
+        ticket: { source: 'file', id: 'CHILD', title: 'Child title' },
         kind: 'work',
         baseBranch: 'ab-node/node',
         target: { ticket, build: 'node' },
@@ -1183,6 +1193,23 @@ test('operator integration counts agree with terminal polling without completed 
     const operator = await getOperatorDashboard({ store, repo: REPO, clock })
     const expected = terminal.builds.find((b) => b.slug === 'node')!.integrationRow!
     expect(operator.model.builds.find((b) => b.slug === 'node')!.integrationRow).toEqual(expected)
+    expect(operator.model.builds.find((b) => b.slug === 'node')!.integrationDetail).toEqual(
+      terminal.builds.find((b) => b.slug === 'node')!.integrationDetail,
+    )
+    expect(
+      terminal.builds
+        .find((b) => b.slug === 'node')!
+        .integrationDetail?.children.find((c) => c.landed),
+    ).toMatchObject({ id: 'LANDED', title: 'Completed contribution', state: 'landed' })
+    const expanded = await getOperatorBuild({ store, repo: REPO, slug: 'node', now: clock() })
+    expect(expanded.dashboardRow?.integrationDetail).toEqual(
+      operator.model.builds.find((b) => b.slug === 'node')?.integrationDetail,
+    )
+    expect(expanded.dashboardRow?.integrationRow).toEqual(expected)
+    if (started)
+      expect(
+        expanded.dashboardRow?.integrationDetail?.children.find((c) => c.id === 'CHILD')?.title,
+      ).toBe('Child title')
     expect(expected.children).toMatchObject({
       known: true,
       building: started ? 1 : 0,

@@ -270,6 +270,7 @@ test('a later conflict resumes from the completed prefix without replaying it tw
   expect(await replayNodeChange(deps, input, 1, prefix.head)).toEqual({
     kind: 'conflict',
     base: prefix.head,
+    files: ['initial'],
   })
   await git('cherry-pick', '--abort')
   // The receipt's replay prefix is sufficient to reconstruct a lost workspace.
@@ -277,6 +278,7 @@ test('a later conflict resumes from the completed prefix without replaying it tw
   expect(await replayNodeChange(deps, input, 1, prefix.head)).toEqual({
     kind: 'conflict',
     base: prefix.head,
+    files: ['initial'],
   })
   expect(await git('rev-list', '--count', `${parent}..HEAD`)).toBe('1')
   expect(await git('rev-parse', 'ab-node/a')).toBe(oldHead)
@@ -633,4 +635,44 @@ test('transported nested build identity drops a source whose old SHA is absent f
     head: parent,
     reason: 'upstream-identity',
   })
+})
+
+test('a real conflicted transaction records NUL-delimited filenames including spaces and Unicode', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { runNodeTransaction } = await import('./node-restack-transaction')
+  const { sampleBuildInput } = await import('../store/contract')
+  const { deps, git } = await fixture()
+  const files = ['a file.ts', '日本語.ts']
+  for (const path of files) await Bun.write(join(deps.workspacePath, path), 'base\n')
+  await git('add', '.')
+  await git('commit', '-m', 'shared files')
+  const base = await git('rev-parse', 'HEAD')
+  await git('checkout', '-b', 'ab-node/a')
+  for (const path of files) await Bun.write(join(deps.workspacePath, path), 'node\n')
+  await git('add', '.')
+  await git('commit', '-m', 'node edit')
+  await git('checkout', 'main')
+  for (const path of files) await Bun.write(join(deps.workspacePath, path), 'parent\n')
+  await git('add', '.')
+  await git('commit', '-m', 'parent edit')
+  const parent = await git('rev-parse', 'HEAD')
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('a'))
+  await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.claimNodeWriter('a', 'holder', 60_000)
+  const forge: import('../ports/types').Forge = new FakeForge()
+  const { gitRewrite } = await import('../ports/forge/git-rewrite')
+  Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
+  forge.snapshotBase = async () => parent
+  expect(
+    await runNodeTransaction(
+      { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true },
+      { branch: 'ab-node/a', parentBranch: 'main', id: 'conflict' },
+    ),
+  ).toBe('conflict')
+  expect(
+    (await store.getEvents('a')).findLast((e) => e.type === 'node.item-conflicted')?.payload,
+  ).toMatchObject({ files })
 })

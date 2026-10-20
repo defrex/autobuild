@@ -786,6 +786,11 @@ input.short {
   margin-top: var(--row);
   padding-left: 2ch;
 }
+.integration-detail {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
 .detail h3 {
   color: var(--ink);
 }
