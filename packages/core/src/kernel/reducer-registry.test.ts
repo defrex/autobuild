@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import { describe, expect, test } from 'bun:test'
@@ -204,7 +205,15 @@ describe('reducer registry', () => {
     const shapes = Object.fromEntries(
       Object.entries(REDUCERS).map(([name, r]) => [name, unionFingerprint(name, r.reducer)]),
     )
-    expect(shapes).toMatchSnapshot()
+    // Direct JSON equality preserves the complete shape guard. Bun's external
+    // snapshot assertion fails after module mocks load, even for identical shapes.
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./__snapshots__/reducer-accumulator-shapes.json', import.meta.url),
+        'utf8',
+      ),
+    )
+    expect(shapes).toEqual(expected)
   }, 120_000)
 
   test('every reducer is populated by the corpora (its fingerprint is not just the empty accumulator)', () => {
