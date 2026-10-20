@@ -140,10 +140,14 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Allow squash merging')
       expect(frame.text).toContain('Allow rebase merging')
     } else if (frame.id === 'integration-wide') {
+      expect(frame.text).toContain('active 2/4')
+      expect(frame.text).not.toContain('QUEUE-5')
       expect(frame.text).toContain('integration')
       expect(frame.text).toContain('target')
       expect(frame.text).toContain('empty')
     } else if (frame.id === 'post-reconcile-policy') {
+      // Capacity clock reads must not move established policy-frame timings.
+      expect(frame.text).toContain('merge (waiting, 8m06s)')
       expect(frame.text).toContain('skipped by post-reconcile policy')
       expect(frame.text).toContain('verify.afterReconcile = false')
     } else if (frame.id.startsWith('mixed-')) {

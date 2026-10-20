@@ -448,7 +448,10 @@ function captureHandlers(): SkillHandlers {
   return handlers
 }
 
-async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promise<E2eHarness> {
+async function prepareIntegrationScenario(
+  consentQueueFixtures: boolean,
+  capacityIdentities = false,
+): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: happyHandlers(),
     configToml: CAPTURE_CONFIG_TOML,
@@ -537,7 +540,8 @@ async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promis
       slug,
       repo: harness.origin,
       branch: `preview/${label}`,
-      ticket: { source: 'fake', id: `QUEUE-${index}` },
+      // Only borrowed-slot evidence needs source-qualified record identities.
+      ...(capacityIdentities ? { ticket: { source: 'fake', id: `QUEUE-${index}` } } : {}),
       created: {
         actor: DISPATCHER,
         type: 'build.created',
@@ -752,6 +756,11 @@ export async function prepareScenario(): Promise<E2eHarness> {
       }
       await launched.runner.run()
     }
+
+    // Capacity admission samples the stepping clock twice during the initial
+    // tick. Preserve the established reconcile/landing evidence timestamps;
+    // these frames exercise policy and layout rather than admission timing.
+    harness.clock.advance(-2000)
 
     // Seed a completed reconcile cycle with explicit policy evidence on the open PR.
     const slug = 'complete-dashboard-evidence'
@@ -1512,7 +1521,7 @@ export async function captureDashboardFrames(
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
   const mixedHarness = await prepareScenario()
-  const capacityHarness = await prepareIntegrationScenario(true)
+  const capacityHarness = await prepareIntegrationScenario(true, true)
   await prepareBorrowedCapacity(capacityHarness)
   const integrationHarness = await prepareIntegrationScenario(
     options.consentQueueFixtures !== false,
