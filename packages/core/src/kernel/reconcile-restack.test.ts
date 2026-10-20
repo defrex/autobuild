@@ -134,6 +134,9 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
         await git(['rev-parse', `${oldHead}^{tree}`]),
       )
       if (mode === 'conflict') {
+        expect(
+          (await store.getEvents(BUILD)).findLast((e) => e.type === 'reconcile.replayed')?.payload,
+        ).toMatchObject({ conflicted: true, files: ['shared'] })
         expect(await git(['ls-files', '-u'])).not.toBe('')
         await writeFile(join(cwd, 'shared'), 'build and upstream\n')
         await git(['add', 'shared'])

@@ -81,6 +81,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
     'capacity-wide',
+    'integration-detail-wide',
+    'integration-detail-narrow',
+    'integration-detail-conflict',
+    'integration-detail-failed',
+    'integration-detail-ready-node',
     'integration-wide',
     'integration-narrow',
     'post-reconcile-policy',
@@ -140,8 +145,17 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Forge rebase')
       expect(frame.text).toContain('Allow squash merging')
       expect(frame.text).toContain('Allow rebase merging')
+    } else if (frame.id.startsWith('integration-detail-')) {
+      expect(frame.text).toContain('Verification')
+      expect(frame.text).toContain('Landing')
+      if (frame.id.endsWith('wide') || frame.id.endsWith('narrow')) {
+        expect(frame.text).toContain('3 open · 8 landed')
+        expect(frame.text).toContain('implement')
+        expect(frame.text).toContain('code-review')
+        expect(frame.text).toContain('Queued documentation work')
+      }
     } else if (frame.id.startsWith('integration-')) {
-      expect(frame.text).toContain('active 2/4')
+      expect(frame.text).toContain('active 4/4')
       expect(frame.text).not.toContain('QUEUE-5')
       expect(frame.text).toContain('integration')
       expect(frame.text).toContain('8/11 landed')
@@ -197,7 +211,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&
       frame.id !== 'website-hero' &&
-      !frame.id.startsWith('session-')
+      !frame.id.startsWith('session-') &&
+      !frame.id.startsWith('integration-detail-')
     ) {
       expect(frame.text).toContain('BLOCKED')
     }

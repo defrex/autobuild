@@ -118,3 +118,56 @@ test('integration list uses shared words and qualifiers, accessible states and f
   expect(unknown).toContain('integration-alert alert')
   expect(unknown).toContain('verify(failed)')
 })
+
+test('integration detail uses the shared facts and text progress within the existing grammar', () => {
+  const build = pinnedBuild({})
+  build.kind = 'integration'
+  build.integrationRow = {
+    destination: 'main',
+    openChildren: ['A'],
+    children: { known: true, landed: 1, building: 1, queued: 0, total: 2 },
+    verified: false,
+    steps: [{ label: 'collect', state: 'current' }],
+  }
+  build.integrationDetail = {
+    destination: 'main (the configured base branch)',
+    branch: 'ab-node/demo',
+    restack: 'conflicted',
+    conflictFiles: ['src/a file.ts'],
+    membershipKnown: true,
+    diagnostics: [],
+    children: [
+      {
+        source: 'fake',
+        id: 'A',
+        title: 'A very long title '.repeat(20),
+        state: 'implement',
+        landed: false,
+      },
+      { source: 'fake', id: 'B', title: 'Completed work', state: 'landed', landed: true },
+    ],
+    verification: 'unit failed — file a repair child targeting NODE',
+    verifySteps: [{ step: 'unit', outcome: 'fail' }],
+    landing: 'consent — press l, or ab land demo',
+  }
+  const html = renderBuildsView(build)
+  for (const fact of [
+    'Integration',
+    'Progress',
+    'Branch',
+    'Steps',
+    'Children',
+    'implement',
+    'Completed work',
+    'Verification',
+    'Landing',
+    'repair child',
+    'ab land demo',
+    'src/a file.ts',
+    '1/2 landed',
+  ])
+    expect(html).toContain(fact)
+  expect(html).toContain('text-overflow:ellipsis')
+  expect(html).not.toContain('<h3>Pipeline</h3>')
+  expect(html).not.toContain('role="progressbar"')
+})
