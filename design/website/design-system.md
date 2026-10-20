@@ -120,6 +120,18 @@ visible. The pager follows the single page registry, with slack 14px direction
 labels and bold ink page names in well boxes. Article and footer separators
 are clipped rows of `─`, never hairlines. The footer reads Autobuild ·
 Apache-2.0 with Home and GitHub ↗. No new face, border, shadow, gradient,
-search, version picker, callout, or Copy as Markdown is introduced.
+search, version picker, or callout is introduced by the layout change.
 
 This register leaves the landing page and its reference images unchanged.
+
+### Copy as Markdown (2026-10-20)
+
+Every docs title shares a row with a native Copy as Markdown button: ink 2px
+outline, ground fill, square corners, bold 14/20 label, minimum 40px height.
+Below 720px it sits beneath the title with a 16px gap and minimum 44px height.
+The title group retains 24px before the lead paragraph. Hover uses live and
+pressed uses reverse video; the shared focus outline applies. Success reads
+Copied for two seconds; failure reads Copy failed until the next attempt.
+A separate visually hidden polite atomic status announces both outcomes.
+Only the article is serialized, preserving formatting and canonical links;
+existing external resource links retain their authored destinations.
