@@ -161,6 +161,12 @@ export {
   checkTicketRevision,
 } from '../ports/tickets/revision'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
+export { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
+export type {
+  ForgeFailureDetails,
+  ForgeRequestContext,
+  ForgeRequestObserver,
+} from '../ports/forge-failure'
 export { FakeForge } from '../ports/forge/fake'
 // ScriptContext + defaultTurnResult are the scripted fake's own API: the
 // script callback's context type and its default turn result (needed by the

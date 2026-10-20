@@ -86,7 +86,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.7.0')
+    expect(PLUGIN_API_VERSION).toBe('1.8.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -293,11 +293,18 @@ describe('plugin SDK package surface', () => {
       `
         import {
           FakeTicketSource,
+          ForgeFailure, isForgeFailure,
+          type ForgeFailureDetails, type ForgeRequestObserver, type ForgeRequestContext,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
         } from '@defrex/autobuild/plugin-sdk'
 
-        if (PLUGIN_API_VERSION !== '1.7.0') {
+        const details: ForgeFailureDetails = { kind: 'rate-limited', resetAt: '2026-10-20T00:00:00.000Z' }
+        const context: ForgeRequestContext = { build: 'fixture' }
+        const observer: ForgeRequestObserver = (request) => { if (request.build !== context.build) throw new Error('context') }
+        observer(context)
+        if (!isForgeFailure(new ForgeFailure('limit', details))) throw new Error('missing runtime failure export')
+        if (PLUGIN_API_VERSION !== '1.8.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
@@ -308,6 +315,30 @@ describe('plugin SDK package surface', () => {
         }
       `,
     )
+    await mkdir(join(consumer, 'node_modules', '@types'), { recursive: true })
+    await symlink(
+      join(root, 'node_modules', '@types', 'bun'),
+      join(consumer, 'node_modules', '@types', 'bun'),
+      'dir',
+    )
+    const consumerTypes = await spawnExec(
+      [
+        join(root, 'node_modules', '.bin', 'tsc'),
+        '--noEmit',
+        '--target',
+        'ESNext',
+        '--module',
+        'ESNext',
+        '--moduleResolution',
+        'bundler',
+        '--skipLibCheck',
+        '--types',
+        'bun',
+        'verify.ts',
+      ],
+      { cwd: consumer },
+    )
+    expect(consumerTypes.exitCode, consumerTypes.stdout + consumerTypes.stderr).toBe(0)
     const consumerImport = Bun.spawn(['bun', 'verify.ts'], {
       cwd: consumer,
       stdout: 'pipe',

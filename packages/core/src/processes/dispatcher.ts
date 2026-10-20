@@ -3,6 +3,10 @@ import {
   mixedVersionDeferred,
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
+import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
+import { recordJanitorFailure } from '../kernel/janitor-failure'
+import { isForgeFailure } from '../ports/forge-failure'
+import { withForgeRequestContext, forgeRequestContext } from '../ports/forge-request-context'
 import { dispatchCapacity, nodeCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
@@ -42,7 +46,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runNodeTransaction } from '../kernel/node-restack-transaction'
 import { hasBuildTrailer } from '../kernel/build-identity'
-import { readBuildDigests } from '../store/reduced-reads'
+import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
@@ -335,6 +339,7 @@ export function validateSlugCandidate(candidate: string | null | undefined): str
  * action. They repeat between scans and refresh on completed scans, because that is the only
  * place the source problems are visible without provider inspection. */
 export interface TickReport {
+  forgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
   /** Janitor (§15.7): builds completed as merged. */
   merged: number
   /** Janitor: builds completed as closed-unmerged. */
@@ -750,7 +755,7 @@ export class Dispatcher {
       return decideNextFromFacts(state, log, composeBuildConfig(pinned, this.deps.config))
     } catch (error) {
       report.blockedDiagnostics.push(
-        `build ${slug} pipeline${revision === undefined ? '' : ` revision ${revision}`} unavailable: pipeline decisions withheld; next tick retries. Restore readable build-branch configuration or use a compatible dispatcher version. ${error instanceof Error ? error.message : String(error)}`,
+        `build ${slug} pipeline${revision === undefined ? '' : ` revision ${revision}`} unavailable: pipeline decisions withheld; next tick retries. Restore readable build-branch configuration or use a compatible dispatcher version. ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
       )
       return undefined
     }
@@ -813,6 +818,12 @@ export class Dispatcher {
       deps.store instanceof RepoViewStore
         ? deps.store
         : new RepoViewStore(deps.store, { repo: deps.repo })
+    deps.forge = guardForge(deps.forge, {
+      store: this.store,
+      repo: deps.repo,
+      name: deps.config.forge,
+      now: deps.clock,
+    })
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
     this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
     this.maxHarvestRecoveryAttempts =
@@ -834,8 +845,35 @@ export class Dispatcher {
     return opts.deadlineAt !== undefined && this.deps.clock().getTime() >= opts.deadlineAt
   }
 
+  lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
   async tick(opts: TickOpts = {}): Promise<TickReport> {
-    return this.runTick(opts)
+    const builds = new Map<string, number>()
+    let total = 0
+    let unattributed = 0
+    const stop = this.deps.forge.observeRequests?.((request) => {
+      const build = request.build ?? forgeRequestContext().build
+      total++
+      if (build) builds.set(build, (builds.get(build) ?? 0) + 1)
+      else unattributed++
+    })
+    const counts = () => ({
+      total,
+      unattributed,
+      builds: [...builds]
+        .map(([build, requests]) => ({ build, requests }))
+        .sort((a, b) => b.requests - a.requests || a.build.localeCompare(b.build))
+        .slice(0, 10),
+      complete: true,
+    })
+    this.lastForgeRequests = undefined
+    try {
+      const report = await this.runTick(opts)
+      if (stop || this.deps.config.forge === 'local-git') report.forgeRequests = counts()
+      return report
+    } finally {
+      if (stop || this.deps.config.forge === 'local-git') this.lastForgeRequests = counts()
+      stop?.()
+    }
   }
 
   private async runTick(opts: TickOpts): Promise<TickReport> {
@@ -1060,7 +1098,7 @@ export class Dispatcher {
     error: unknown,
     operation: 'ready-scan' | 'dependency-check',
   ): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = error instanceof Error || isForgeFailure(error) ? error.message : String(error)
     await this.sourceCondition(
       error instanceof TicketSourceRateLimitError
         ? {
@@ -1234,11 +1272,17 @@ export class Dispatcher {
     }
   }
 
+  private async forgeCoolingDown(): Promise<boolean> {
+    const active = await readForgeHealth(this.store, this.deps.repo)
+    return !!active && Date.parse(active.resetAt) > this.deps.clock().getTime()
+  }
+
   private async launch(
     slug: string,
     launched: Set<string>,
     report: TickReport = emptyTickReport(),
   ): Promise<LaunchRunnerResult> {
+    if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
     const launchState = (await this.store.buildFacts(slug)).state
     if (
@@ -1510,7 +1554,7 @@ export class Dispatcher {
         // Contained: the next tick retries this environment.
         report.sandboxSettleFailures += 1
         report.janitorDiagnostics.push(
-          `operator sandbox ${environment.environmentId}: idle settlement failed — ${error instanceof Error ? error.message : String(error)}`,
+          `operator sandbox ${environment.environmentId}: idle settlement failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
         )
       }
     }
@@ -1732,7 +1776,9 @@ export class Dispatcher {
         })
       }
       const attempt = events.dispatchFailureCount + 1
-      const message = (error instanceof Error ? error.message : String(error)).trim()
+      const message = (
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      ).trim()
       await store.append(slug, {
         actor: DISPATCHER,
         type: 'dispatch.failed',
@@ -1826,37 +1872,202 @@ export class Dispatcher {
       // stop starting new ones. The remaining builds stay janitor due — the
       // next invocation re-runs them (§3.3 idempotency).
       if (this.outOfBudget(opts)) break
-      try {
-        // Once a record is known, contain its complete janitor path: loading
-        // and reducing facts, cleanup, forge/ticket calls, and store writes.
-        // Existing partial facts leave the same work due on the next tick.
-        let { state, workspace, log } = await this.store.buildFacts(record.slug)
-        if (mixedVersionDeferred(state)) {
-          await deferMixedVersion(this.store, record.slug)
-          continue
-        }
-        const executionLeaseLive = this.hasLiveExecutionLease(record)
-        // Raw history, read at most once and only by a branch that acts on it:
-        // the facts above answer every quiet-path question without it.
-        let loaded: CurrentBuildFacts | undefined
-        const history = async (): Promise<CurrentBuildFacts> => {
-          loaded ??= (await readBuildFacts(this.store, record.slug)).value
-          return loaded
-        }
-        let observedPr: Awaited<ReturnType<Forge['getPrState']>> | undefined
-        // A replacement head is followed first by a forge read and cancellation,
-        // ahead of node cascade, controls, or any other action for this build.
-        if (
-          state.status !== 'done' &&
-          state.status !== 'aborted' &&
-          state.prState === 'open' &&
-          state.pr &&
-          state.landing?.native?.operation
-        ) {
-          const path = this.forgeWorkspacePathOf(workspace)
-          const observed = await this.deps.forge.getPrState(path, state.pr.number)
-          observedPr = observed
-          if (observed.state !== 'open') {
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        let previous: BuildState['janitor']
+        let attempted = false
+        let failed = false
+        try {
+          // Once a record is known, contain its complete janitor path: loading
+          // and reducing facts, cleanup, forge/ticket calls, and store writes.
+          // Existing partial facts leave the same work due on the next tick.
+          let { state, workspace, log } = await this.store.buildFacts(record.slug)
+          previous = state.janitor
+          const controlDue =
+            state.pendingCommands.length > 0 ||
+            state.discardRequest !== undefined ||
+            (state.landing?.command && state.landing.command.seq !== state.landing.acknowledgedSeq)
+          if (
+            !controlDue &&
+            previous &&
+            Date.parse(previous.nextAttemptAt) > this.deps.clock().getTime()
+          )
+            return
+          if (mixedVersionDeferred(state)) {
+            await deferMixedVersion(this.store, record.slug)
+            return
+          }
+          const executionLeaseLive = this.hasLiveExecutionLease(record)
+          attempted = !executionLeaseLive
+          // Raw history, read at most once and only by a branch that acts on it:
+          // the facts above answer every quiet-path question without it.
+          let loaded: CurrentBuildFacts | undefined
+          const history = async (): Promise<CurrentBuildFacts> => {
+            loaded ??= (await readBuildFacts(this.store, record.slug)).value
+            return loaded
+          }
+          let observedPr: Awaited<ReturnType<Forge['getPrState']>> | undefined
+          // A replacement head is followed first by a forge read and cancellation,
+          // ahead of node cascade, controls, or any other action for this build.
+          if (
+            state.status !== 'done' &&
+            state.status !== 'aborted' &&
+            state.prState === 'open' &&
+            state.pr &&
+            state.landing?.native?.operation
+          ) {
+            const path = this.forgeWorkspacePathOf(workspace)
+            const observed = await this.deps.forge.getPrState(path, state.pr.number)
+            observedPr = observed
+            if (observed.state !== 'open') {
+              await this.checkPr(
+                record,
+                { history, workspace },
+                state,
+                report,
+                launched,
+                executionLeaseLive,
+                observedPr,
+              )
+              return
+            }
+            const result =
+              observed.nativeAutoMerge === false
+                ? { kind: 'applied' as const }
+                : await this.deps.forge.setAutoMerge(path, state.pr.number, false)
+            if (result.kind !== 'applied')
+              throw new Error('Replacement-head native cancellation unconfirmed')
+            observedPr = { ...observed, nativeAutoMerge: false }
+          }
+          // Pipeline/ticket/workspace state is settled, but release-asset cleanup
+          // has its own crash window after build.completed. Revisit only pending
+          // hosted handles; this never relaunches a runner or consumes capacity.
+          if (
+            state.kind === 'node' &&
+            state.integration?.landing?.operation &&
+            !state.integration.audit
+          ) {
+            await this.withKernelRepository((path) =>
+              auditIntegrationLanding({
+                store: this.store,
+                forge: this.kernelForge(),
+                exec: this.kernelForge().kernelExec ?? this.deps.exec,
+                workspacePath: path,
+                slug: record.slug,
+                id: this.deps.ids('esc'),
+              }),
+            )
+          }
+          if (state.status === 'done') {
+            if (digest.reclaimPending === true) {
+              await this.reclaimPrAttachments(record.slug, await history())
+            }
+            return
+          }
+          if (state.kind === 'node' && state.status !== 'aborted') {
+            const command =
+              state.pendingCommands.find((c) => c.command === 'abort') ??
+              state.pendingCommands.at(0)
+            if (command !== undefined && !executionLeaseLive) {
+              await this.store.append(record.slug, {
+                actor: DISPATCHER,
+                type:
+                  command.command === 'abort'
+                    ? 'build.aborted'
+                    : command.command === 'pause'
+                      ? 'build.paused'
+                      : 'build.resumed',
+                payload: {},
+              })
+              if (command.command === 'abort')
+                await this.cleanupAborted(record, await history(), report)
+              return
+            }
+            if (state.nodeOpened) {
+              await this.observeTicketTarget(record, state, report)
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+            if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) return
+            if (state.nodeOpened && state.baseBranch) {
+              if (
+                await this.observeTarget(
+                  record.slug,
+                  state.baseBranch,
+                  log.restack.target?.sha,
+                  report,
+                )
+              ) {
+                loaded = undefined
+                ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+              }
+            }
+            if (
+              state.nodeOpened &&
+              state.status !== 'paused' &&
+              (state.status !== 'blocked' || integrationFailed(state)) &&
+              state.prState !== 'merged' &&
+              state.prState !== 'closed' &&
+              !executionLeaseLive
+            ) {
+              await this.cascadeNode(record, state, report, launched, opts)
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+            if (state.nodeOpened && !executionLeaseLive) {
+              await this.prepareIntegration(record, state, report, launched)
+              loaded = undefined
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+            }
+            if (state.nodeOpened !== undefined && state.pr === undefined) {
+              await this.pollEmptyNode(record, state)
+              return
+            }
+          }
+          // Abort is destructive human judgment and therefore outranks a queued
+          // discard when both requests raced into the same stream.
+          if (
+            !executionLeaseLive &&
+            state.status === 'queued' &&
+            state.pendingCommands.some((command) => command.command === 'abort')
+          ) {
+            const acknowledged = await this.store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'build.aborted',
+              payload: {},
+            } satisfies EventWrite<'build.aborted'>)
+            void acknowledged
+            // The view folded the acknowledgement it just appended.
+            loaded = undefined
+            await this.cleanupAborted(record, await history(), report)
+            return
+          }
+          // Discard is a queued-only recovery control. A request that raced with
+          // runner attachment is deliberately inert: it must never tear a live
+          // runner's workspace down or return its ticket for a duplicate build.
+          if (
+            !executionLeaseLive &&
+            state.status === 'queued' &&
+            state.discardRequest !== undefined
+          ) {
+            await this.cleanupDiscarded(record, await history(), report)
+            return
+          }
+          if (!executionLeaseLive && state.status === 'aborted') {
+            await this.cleanupAborted(record, await history(), report)
+            return
+          }
+          if (state.kind !== 'node' && state.status !== 'aborted')
+            await this.observeTicketTarget(record, state, report)
+          if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
+            const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
+            if (branch !== undefined) {
+              if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
+                loaded = undefined
+                ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+              }
+            }
+          }
+          if (state.pr) {
             await this.checkPr(
               record,
               { history, workspace },
@@ -1866,161 +2077,38 @@ export class Dispatcher {
               executionLeaseLive,
               observedPr,
             )
-            continue
           }
-          const result =
-            observed.nativeAutoMerge === false
-              ? { kind: 'applied' as const }
-              : await this.deps.forge.setAutoMerge(path, state.pr.number, false)
-          if (result.kind !== 'applied')
-            throw new Error('Replacement-head native cancellation unconfirmed')
-          observedPr = { ...observed, nativeAutoMerge: false }
-        }
-        // Pipeline/ticket/workspace state is settled, but release-asset cleanup
-        // has its own crash window after build.completed. Revisit only pending
-        // hosted handles; this never relaunches a runner or consumes capacity.
-        if (
-          state.kind === 'node' &&
-          state.integration?.landing?.operation &&
-          !state.integration.audit
-        ) {
-          await this.withKernelRepository((path) =>
-            auditIntegrationLanding({
-              store: this.store,
-              forge: this.kernelForge(),
-              exec: this.kernelForge().kernelExec ?? this.deps.exec,
-              workspacePath: path,
-              slug: record.slug,
-              id: this.deps.ids('esc'),
-            }),
+        } catch (error) {
+          if (error instanceof ForgeCooldown) {
+            attempted = false
+            return
+          }
+          if (error instanceof MixedVersionDeferral) {
+            attempted = false
+            return
+          }
+          failed = true
+          const message =
+            error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+          await recordJanitorFailure(
+            this.store,
+            record.slug,
+            previous,
+            message,
+            this.deps.clock(),
+            this.deps.config.policy,
           )
-        }
-        if (state.status === 'done') {
-          if (digest.reclaimPending === true) {
-            await this.reclaimPrAttachments(record.slug, await history())
-          }
-          continue
-        }
-        if (state.kind === 'node' && state.status !== 'aborted') {
-          const command =
-            state.pendingCommands.find((c) => c.command === 'abort') ?? state.pendingCommands.at(0)
-          if (command !== undefined && !executionLeaseLive) {
+          report.janitorFailed += 1
+          report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
+        } finally {
+          if (attempted && !failed && previous)
             await this.store.append(record.slug, {
               actor: DISPATCHER,
-              type:
-                command.command === 'abort'
-                  ? 'build.aborted'
-                  : command.command === 'pause'
-                    ? 'build.paused'
-                    : 'build.resumed',
+              type: 'build.janitor-recovered',
               payload: {},
             })
-            if (command.command === 'abort')
-              await this.cleanupAborted(record, await history(), report)
-            continue
-          }
-          if (state.nodeOpened) {
-            await this.observeTicketTarget(record, state, report)
-            loaded = undefined
-            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
-          }
-          if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) continue
-          if (state.nodeOpened && state.baseBranch) {
-            if (
-              await this.observeTarget(
-                record.slug,
-                state.baseBranch,
-                log.restack.target?.sha,
-                report,
-              )
-            ) {
-              loaded = undefined
-              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
-            }
-          }
-          if (
-            state.nodeOpened &&
-            state.status !== 'paused' &&
-            (state.status !== 'blocked' || integrationFailed(state)) &&
-            state.prState !== 'merged' &&
-            state.prState !== 'closed' &&
-            !executionLeaseLive
-          ) {
-            await this.cascadeNode(record, state, report, launched, opts)
-            loaded = undefined
-            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
-          }
-          if (state.nodeOpened && !executionLeaseLive) {
-            await this.prepareIntegration(record, state, report, launched)
-            loaded = undefined
-            ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
-          }
-          if (state.nodeOpened !== undefined && state.pr === undefined) {
-            await this.pollEmptyNode(record, state)
-            continue
-          }
         }
-        // Abort is destructive human judgment and therefore outranks a queued
-        // discard when both requests raced into the same stream.
-        if (
-          !executionLeaseLive &&
-          state.status === 'queued' &&
-          state.pendingCommands.some((command) => command.command === 'abort')
-        ) {
-          const acknowledged = await this.store.append(record.slug, {
-            actor: DISPATCHER,
-            type: 'build.aborted',
-            payload: {},
-          } satisfies EventWrite<'build.aborted'>)
-          void acknowledged
-          // The view folded the acknowledgement it just appended.
-          loaded = undefined
-          await this.cleanupAborted(record, await history(), report)
-          continue
-        }
-        // Discard is a queued-only recovery control. A request that raced with
-        // runner attachment is deliberately inert: it must never tear a live
-        // runner's workspace down or return its ticket for a duplicate build.
-        if (
-          !executionLeaseLive &&
-          state.status === 'queued' &&
-          state.discardRequest !== undefined
-        ) {
-          await this.cleanupDiscarded(record, await history(), report)
-          continue
-        }
-        if (!executionLeaseLive && state.status === 'aborted') {
-          await this.cleanupAborted(record, await history(), report)
-          continue
-        }
-        if (state.kind !== 'node' && state.status !== 'aborted')
-          await this.observeTicketTarget(record, state, report)
-        if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
-          const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
-          if (branch !== undefined) {
-            if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
-              loaded = undefined
-              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
-            }
-          }
-        }
-        if (state.pr) {
-          await this.checkPr(
-            record,
-            { history, workspace },
-            state,
-            report,
-            launched,
-            executionLeaseLive,
-            observedPr,
-          )
-        }
-      } catch (error) {
-        if (error instanceof MixedVersionDeferral) continue
-        const message = error instanceof Error ? error.message : String(error)
-        report.janitorFailed += 1
-        report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
-      }
+      })
     }
   }
 
@@ -2044,7 +2132,7 @@ export class Dispatcher {
       else await this.observeWorkTarget(record, state, report)
     } catch (error) {
       report.janitorDiagnostics.push(
-        `build ${record.slug}: ticket target observation failed — ${error instanceof Error ? error.message : String(error)}`,
+        `build ${record.slug}: ticket target observation failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
       )
     }
   }
@@ -2199,7 +2287,7 @@ export class Dispatcher {
         await this.rejectParent(
           record,
           ticket,
-          error instanceof Error ? error.message : String(error),
+          error instanceof Error || isForgeFailure(error) ? error.message : String(error),
           report,
         )
         return
@@ -2239,7 +2327,8 @@ export class Dispatcher {
     try {
       sha = await this.baseSha(branch)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       report.janitorDiagnostics.push(`build ${slug}: target observation failed — ${message}`)
       return false
     }
@@ -2365,7 +2454,8 @@ export class Dispatcher {
       Object.assign(events, (await readBuildFacts(store, record.slug)).value)
     }
     const fail = (operation: string, identity: string, error: unknown): never => {
-      const detail = error instanceof Error ? error.message : String(error)
+      if (error instanceof ForgeCooldown || isForgeFailure(error)) throw error
+      const detail = error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       throw new Error(
         `abort cleanup ${operation} failed for ${identity}; remaining cleanup will retry on next dispatcher tick — ${detail}`,
       )
@@ -2561,7 +2651,7 @@ export class Dispatcher {
         payload: {
           id: this.deps.ids('obs'),
           kind: 'followup',
-          summary: `Merged commit ${sha} identity inspection failed; inspect its Autobuild-Build trailer manually: ${error instanceof Error ? error.message : String(error)}`,
+          summary: `Merged commit ${sha} identity inspection failed; inspect its Autobuild-Build trailer manually: ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
           refs: [sha],
         },
       })
@@ -2938,13 +3028,22 @@ export class Dispatcher {
       }
     }
     const native = state.landing?.native
+    const failure = state.landing?.applicationFailure
+    const failureRetry =
+      failure &&
+      failure.decisionSeq === state.landing?.decision?.seq &&
+      failure.commandSeq === state.landing?.command?.seq &&
+      sameLandingCandidate(failure.candidate, state.landing?.decision?.candidate)
+        ? failure
+        : undefined
     const retry =
-      native?.retry &&
+      failureRetry ??
+      (native?.retry &&
       native.decisionSeq === state.landing?.decision?.seq &&
       native.commandSeq === state.landing?.command?.seq &&
       sameLandingCandidate(native.candidate, state.landing?.decision?.candidate)
         ? native.retry
-        : undefined
+        : undefined)
     if (
       !integration &&
       !nodeTarget &&
@@ -3007,6 +3106,31 @@ export class Dispatcher {
                 },
               })
               .catch(async (error: unknown) => {
+                if (isForgeFailure(error)) {
+                  const attempt = (retry?.attempt ?? 0) + 1
+                  await store.append(record.slug, {
+                    actor: DISPATCHER,
+                    type: 'landing.application-failed',
+                    payload: {
+                      candidate: decision.candidate,
+                      decisionSeq: decision.seq,
+                      ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
+                      message: error.message,
+                      attempt,
+                      after: new Date(
+                        Math.max(
+                          this.deps.clock().getTime() +
+                            Math.min(300_000, 30_000 * 2 ** Math.min(attempt - 1, 4)),
+                          error.details.kind === 'rate-limited'
+                            ? Date.parse(error.details.resetAt)
+                            : 0,
+                        ),
+                      ).toISOString(),
+                    },
+                  })
+                  // An uncertain enable stays pending. Never spend another request during a limit.
+                  throw error
+                }
                 await settleFailedEnable()
                 throw error
               })
@@ -3247,6 +3371,7 @@ export class Dispatcher {
           payload: { hostedSeq: hosted.seq },
         })
       } catch (error) {
+        if (error instanceof ForgeCooldown) throw error
         try {
           await this.store.append(slug, {
             actor: DISPATCHER,
@@ -3255,8 +3380,10 @@ export class Dispatcher {
               hostedSeq: hosted.seq,
               attempt: priorAttempts + 1,
               error:
-                (error instanceof Error ? error.message : String(error)).trim() ||
-                'PR attachment reclamation failed without an error message',
+                (error instanceof Error || isForgeFailure(error)
+                  ? error.message
+                  : String(error)
+                ).trim() || 'PR attachment reclamation failed without an error message',
             },
           })
         } catch {
@@ -3366,7 +3493,8 @@ export class Dispatcher {
       Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       return true
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       const _failed = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'infrastructure.cleanup-attempted',
@@ -3439,7 +3567,8 @@ export class Dispatcher {
         })
         Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message =
+          error instanceof Error || isForgeFailure(error) ? error.message : String(error)
         const _failed = await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'infrastructure.cleanup-attempted',
@@ -3678,7 +3807,9 @@ export class Dispatcher {
         })
       }
       const attempt = events.dispatchFailureCount + 1
-      const message = (error instanceof Error ? error.message : String(error)).trim()
+      const message = (
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      ).trim()
       await store.append(record.slug, {
         actor: DISPATCHER,
         type: 'dispatch.failed',
@@ -3813,7 +3944,9 @@ export class Dispatcher {
     } catch (error) {
       const events = (await readBuildFacts(store, record.slug)).value
       const attempt = events.dispatchFailureCount + 1
-      const message = (error instanceof Error ? error.message : String(error)).trim()
+      const message = (
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      ).trim()
       await store.append(record.slug, {
         actor: DISPATCHER,
         type: 'dispatch.failed',
@@ -4110,6 +4243,8 @@ export class Dispatcher {
     opts: TickOpts = {},
     autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
+    const health = this.store.repositoryFacts().forgeHealth
+    if (health && Date.parse(health.resetAt) > this.deps.clock().getTime()) return
     const store = this.store
     const { tickets, config } = this.deps
     const checkpoint = await this.scanCheckpoint('admission')
@@ -4283,7 +4418,7 @@ export class Dispatcher {
         failed.add(ticket.ref.id)
         report.dependencyCheckFailed += 1
         report.dependencyDiagnostics.push(
-          `ticket ${ticket.ref.id}: dependency check failed — ${error instanceof Error ? error.message : String(error)}`,
+          `ticket ${ticket.ref.id}: dependency check failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
         )
         continue
       }
@@ -4785,7 +4920,8 @@ export class Dispatcher {
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       // Safety refusals require human judgment. Infrastructure failures remain
       // retryable dispatch failures and retain their active reservation.
       if (
@@ -5270,7 +5406,7 @@ export class Dispatcher {
       for (const id of required.keys()) {
         unresolved.push(id)
         diagnostics.push(
-          `ticket ${ticket.ref.id}: blocker ${id} presence unavailable in ${destination} (${branch}): ${error instanceof Error ? error.message : String(error)}`,
+          `ticket ${ticket.ref.id}: blocker ${id} presence unavailable in ${destination} (${branch}): ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
         )
       }
     }

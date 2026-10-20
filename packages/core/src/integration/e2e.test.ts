@@ -962,8 +962,13 @@ test('local-git defers for missing identity, then lands under repository identit
     'rate-limit.txt',
   )
 
+  const noRequests = {
+    ...emptyTickReport(),
+    forgeRequests: { total: 0, unattributed: 0, builds: [], complete: true },
+  }
+
   // No consent: polling is observation-only and leaves main untouched.
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await h.dispatcher.tick()).toEqual({ ...noRequests })
   expect(await git(['rev-parse', 'main'], h.origin)).toBe(initialBase)
   expect(typesOf(await h.events(SLUG))).not.toContain('pr.merged')
 
@@ -974,7 +979,7 @@ test('local-git defers for missing identity, then lands under repository identit
   })
 
   // Missing repository identity is a durable, deduplicated landing blocker.
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await h.dispatcher.tick()).toEqual({ ...noRequests })
   expect(await git(['rev-parse', 'main'], h.origin)).toBe(initialBase)
   events = await h.events(SLUG)
   const identityObservations = ofType(events, 'observation.recorded').filter((event) =>
@@ -985,7 +990,7 @@ test('local-git defers for missing identity, then lands under repository identit
   expect(identityObservations[0]!.payload.summary).toContain('git config user.name')
   expect(typesOf(events)).not.toContain('pr.merged')
 
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await h.dispatcher.tick()).toEqual({ ...noRequests })
   expect(
     ofType(await h.events(SLUG), 'observation.recorded').filter((event) =>
       event.payload.refs?.includes(autoMergeDeferralRef(1, command.seq)),
@@ -996,14 +1001,14 @@ test('local-git defers for missing identity, then lands under repository identit
   await git(['config', 'user.email', 'lifecycle@example.test'], h.origin)
 
   // The next boundary retries consent and performs only the guarded squash.
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await h.dispatcher.tick()).toEqual({ ...noRequests })
   const landed = await git(['rev-parse', 'main'], h.origin)
   expect(landed).not.toBe(initialBase)
   events = await h.events(SLUG)
   expect(typesOf(events)).not.toContain('pr.merged')
 
   // A later independent state read observes the pending landing and completes.
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+  expect(await h.dispatcher.tick()).toEqual({ ...noRequests, merged: 1 })
   const final = await h.events(SLUG)
   expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
   expect(ofType(final, 'pr.merged')[0]!.payload.sha).toBe(landed)

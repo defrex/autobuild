@@ -12,7 +12,9 @@ export function shouldPublishTick(
   if (
     Object.entries(report).some(
       ([key, value]) =>
-        key !== 'queued' && (typeof value === 'number' ? value !== 0 : value.length > 0),
+        key !== 'queued' &&
+        key !== 'forgeRequests' &&
+        (typeof value === 'number' ? value !== 0 : value.length > 0),
     )
   )
     return true
@@ -85,7 +87,9 @@ export function shouldPublishTickFromFacts(
   if (
     Object.entries(report).some(
       ([key, value]) =>
-        key !== 'queued' && (typeof value === 'number' ? value !== 0 : value.length > 0),
+        key !== 'queued' &&
+        key !== 'forgeRequests' &&
+        (typeof value === 'number' ? value !== 0 : value.length > 0),
     )
   )
     return true

@@ -148,3 +148,8 @@ compatibility does not grant forge tree capabilities. Upgrade adapters before
 admitting nodes or requesting unsupported retargeting or landing operations.
 For the lifecycle see [integration trees](integration-tree.md); for old controls
 and upgrade conversion see [migration](migration-1.0.md).
+
+Native cancellation receipts are candidate- and operation-specific. Publication
+retries confirm forge state before reusing a receipt; external re-enables require
+another confirmed cancellation. Classified transient landing failures retain
+retry eligibility and recheck authorization after repository forge cooldown.
