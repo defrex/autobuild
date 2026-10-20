@@ -124,6 +124,50 @@ There is no orchestrator setup step, and no human has to start it. The embedded
 hosted turn runner (AUT-342) is an abandoned direction, removed by AUT-658;
 do not extend it, and do not cite SPEC §7.1.2 as current design.
 
+## Self-hosting dispatcher updates
+
+This repository's long-lived dispatcher keeps the code it started with, while
+fresh runners and agents load the repository-root checkout. Restart promptly
+after merges that change the kernel, event catalog, or reducers. Inspect the
+actual changed files to decide whether a merge needs a restart.
+
+**Maintainers only:** stop the foreground dispatcher with Ctrl-C, or send
+SIGTERM to its known process, and wait for graceful shutdown and drain to
+finish. Then run `git pull` at the canonical main repository root and start
+again with `bun tools/dispatcher-start.ts`, retaining your usual dispatch flags.
+Never pull the repository-root checkout while the older dispatcher is still
+running. Do not substitute a force-kill for a clean stop. Since AUT-855, a clean
+stop suspends live sessions; restarting resumes durable work without manually
+resetting or requeuing builds.
+
+**Agent-safe read-only diagnosis:** run
+`bun bin/ab.ts repository status --json` and `bun tools/dispatcher-check.ts`.
+The check uses the authoritative held dispatcher run, correlating its local
+PID (including an interactive launcher's private child) through Linux process
+ancestry with a launch record under ignored `.autobuild/dispatcher-starts/`.
+It prints the dispatcher starting SHA beside checkout HEAD and local main.
+`equal` means the captured clean starting revision equals HEAD; `different`
+distinguishes a dispatcher behind HEAD from divergent/ahead history. Use the
+printed `git diff --name-only` and `git log` commands to inspect kernel, event,
+and reducer changes against HEAD or local main. Local main is not necessarily
+fresh remote main: checking remote freshness requires a fetch.
+
+`unknown` means the evidence cannot establish an exact running revision:
+pre-adoption launches have no record, dirty launches show only their captured
+base, and missing records/objects, foreign hosts, inaccessible process data,
+changed process identity, or an absent/lost/stopped holder cannot establish a
+current revision. After the next maintainer launch through the entry above,
+clean local starts can be compared. Launch records are local diagnostic
+evidence, not product lifecycle state.
+
+Orchestrating agents diagnose and report the need to restart, then wait for
+the maintainer to perform it, following the installed `ab-operate` Boundaries
+section. They never run the start entry, `ab dispatch`, dispatcher stop/start/
+restart commands, or dispatcher signals themselves. An agent may read or fetch
+as authorized; it must never pull the live root checkout or manage its process.
+Implementation and verification of this tooling must not restart the live
+dispatcher.
+
 ## Development conventions
 
 - Keep tests colocated as `*.test.ts`; integration scenarios are in `packages/core/src/integration/`.
