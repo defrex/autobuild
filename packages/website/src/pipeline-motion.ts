@@ -1,4 +1,4 @@
-import { createMotion } from './motion'
+import { bindFigureMotion } from './motion-binding'
 
 export const DURATION = 4800
 const BEATS = [
@@ -40,51 +40,5 @@ export function pipelineRenderer(root: ParentNode): (time: number) => void {
 }
 
 export function bindPipelineMotion(): void {
-  const root = document.querySelector<HTMLElement>('[data-capture-figure="pipeline"]')
-  const control = root?.querySelector<HTMLButtonElement>('[data-motion-replay]')
-  if (!root || !control) return
-  const render = pipelineRenderer(root)
-  const fallback = {
-    duration: DURATION,
-    seek(timeMs: number, { still }: { still: boolean }) {
-      render(DURATION)
-      return { timeMs, still, complete: timeMs >= DURATION }
-    },
-  }
-  // Register synchronously even when progressive enhancement is unavailable.
-  window.__websiteCapture ??= {}
-  const registry = window.__websiteCapture
-  registry.pipeline = fallback
-  if (!window.IntersectionObserver || !window.requestAnimationFrame || !window.matchMedia) return
-  try {
-    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
-    registry.pipeline = createMotion(DURATION, render, control, {
-      requestFrame: (callback) => window.requestAnimationFrame(callback),
-      cancelFrame: (id) => window.cancelAnimationFrame(id),
-      reduced: () => media.matches,
-      hidden: () => document.hidden,
-      observe(enter) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.15))
-              enter()
-          },
-          { threshold: 0.15 },
-        )
-        observer.observe(root)
-        return () => observer.disconnect()
-      },
-      onReducedChange(callback) {
-        media.addEventListener('change', callback)
-        return () => media.removeEventListener('change', callback)
-      },
-      onVisibilityChange(callback) {
-        document.addEventListener('visibilitychange', callback)
-        return () => document.removeEventListener('visibilitychange', callback)
-      },
-    })
-  } catch {
-    render(DURATION)
-    control.hidden = true
-  }
+  bindFigureMotion('pipeline', DURATION, pipelineRenderer)
 }
