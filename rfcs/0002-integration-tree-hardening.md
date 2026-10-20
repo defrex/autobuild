@@ -67,6 +67,15 @@ Observed, in order of cost:
    adopter hits the same failure when the store is shared during an upgrade,
    or when a hosted service runs a minor version ahead of its clients.
 
+**Decided addition — integration-capacity-priority (2026-10-20).** At capacity
+5, two unrelated runners and three blocked website-node children starved the
+node's answered reconcile from 14:36:22 through at least 14:51 UTC. Node reconcile
+and verification now take admission priority over new claims and exclude their
+own blocked or paused descendants from candidate occupancy. Unrelated load
+continues to limit admission. Effective capacity displays explain borrowed
+slots; ordinary ticket admission never uses the expanded display limit. This
+addition does not decide or ship the other proposals in this RFC.
+
 ## 2. Summary of the proposal
 
 Five changes:
@@ -345,7 +354,10 @@ Ordered so each step ships on its own, and so the riskiest behavior change
 5. **Lazy cascade** (§3, §8's `ab restack`), with SPEC, `docs/restacking.md`,
    `docs/integration-tree.md` and the migration reference updated. RFC 0001's
    question 4 disposition is amended.
-6. **Guide recommendation** for per-build changelog fragments in the `ab-guide`
+6. **Integration capacity priority** (decided addition in §1): shared capacity
+   projection, descendant-sensitive node admission, priority and effective-slot
+   reporting, with starvation regression coverage.
+7. **Guide recommendation** for per-build changelog fragments in the `ab-guide`
    setup reference (§3.4).
 
 ## 12. Not in this RFC: this repository's own setup

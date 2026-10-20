@@ -1,3 +1,4 @@
+import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
@@ -390,6 +391,11 @@ export class DispatchFrontend {
           (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: config.capacity,
+        capacityProjection: dispatchCapacity(
+          snapshot.capacityBuilds ?? [],
+          config.capacity,
+          this.clock(),
+        ),
         observationCount: this.observationCount,
         observationLimit: config.policy.harvestThreshold,
         ...(status.availableUpgrade !== undefined

@@ -1,3 +1,5 @@
+import { dispatchCapacity, type DispatchCapacity } from '../../kernel/dispatch-capacity'
+import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 export { treeVocabulary, consentQueue } from './tree'
 import { landingAuthorized } from '../../kernel/landing-state'
@@ -6,7 +8,6 @@ import {
   integrationFailed,
   integrationCurrent,
   integrationCycleVerified,
-  integrationNeedsRunner,
 } from '../../kernel/integration-state'
 import type { RepositoryReadFacts } from '../../store/reduced-reads'
 /**
@@ -279,8 +280,9 @@ export interface DashboardModel {
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
-  /** Every nonterminal build consumes one configured dispatch capacity slot. */
+  /** Shared occupied/effective slot counter; idle integration nodes are free. */
   active: DashboardCounter
+  capacity?: DispatchCapacity
   /** Recorded observation occurrences not claimed by a Harvest snapshot,
    * against the configured count-pressure trigger. */
   observations: DashboardCounter
@@ -1164,6 +1166,7 @@ export function projectHarvest(
 }
 
 interface DashboardFrameHeader {
+  capacityProjection?: DispatchCapacity
   repo: string
   queued: number
   observationCount: number
@@ -1199,7 +1202,11 @@ export function buildDashboardFromProjected(
   return {
     repo: header.repo,
     queued: header.queued,
-    active: { current: header.activeCount, limit: header.capacity },
+    active: {
+      current: header.capacityProjection?.occupied ?? header.activeCount,
+      limit: header.capacityProjection?.effective ?? header.capacity,
+    },
+    ...(header.capacityProjection ? { capacity: header.capacityProjection } : {}),
     observations: { current: header.observationCount, limit: header.observationLimit },
     drained: !settings.intake,
     repositoryPaused: settings.paused,
@@ -1227,17 +1234,22 @@ export function buildDashboard(
   const builds = entries
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
-  const activeCount = entries.filter(
-    ({ state }) =>
-      (state.kind !== 'node' ||
-        (integrationNeedsRunner(state) && state.phase?.startsWith('verify:'))) &&
-      state.status !== 'done' &&
-      state.status !== 'aborted',
-  ).length
+  const capacityProjection = dispatchCapacity(
+    entries.map(({ record, state, events }) => ({
+      record,
+      state,
+      workspace: openBuildWorkspace(events) !== null,
+      provisioning: provisionMarkerReducer.reduce(events) !== undefined,
+    })),
+    config.capacity,
+    new Date(),
+  )
+  const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(
     builds,
     {
       ...header,
+      capacityProjection,
       activeCount,
       capacity: config.capacity,
       observationLimit: config.policy.harvestThreshold,
