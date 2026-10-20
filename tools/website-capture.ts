@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { buildFiles, type SiteFiles } from '../packages/website/src/build'
@@ -19,6 +19,8 @@ export type CaptureFiles = Record<string, string | Uint8Array<ArrayBuffer>> & {
 }
 
 export interface WebsiteFrame {
+  docsState?: 'menu' | 'toc' | 'scrolled'
+  viewportHeight?: number
   page?: string
   kind?: 'landing' | 'docs'
   motion?: 'reduce' | 'normal'
@@ -65,6 +67,26 @@ export function discoverFrames(files: CaptureFiles): WebsiteFrame[] {
       kind: 'landing' as const,
       motion: 'reduce' as const,
     })),
+    ...(Object.hasOwn(files, 'docs/builds/index.html')
+      ? [
+          { id: 'docs-builds-menu', width: 390, docsState: 'menu' as const },
+          { id: 'docs-builds-toc', width: 390, docsState: 'toc' as const },
+          { id: 'docs-builds-720', width: 720 },
+          { id: 'docs-builds-intermediate', width: 1000 },
+          {
+            id: 'docs-builds-scrolled',
+            width: 1440,
+            docsState: 'scrolled' as const,
+            viewportHeight: 900,
+          },
+        ].map((frame) => ({
+          ...frame,
+          page: 'docs/builds/index.html',
+          kind: 'docs' as const,
+          motion: 'reduce' as const,
+          remote: false,
+        }))
+      : []),
     ...Object.keys(files)
       .filter((p) => p.startsWith('docs/') && p.endsWith('.html'))
       .sort()
@@ -123,6 +145,18 @@ export function motionFrames(frame: WebsiteFrame, figures: FigureProbe[]): Websi
 }
 
 export interface Probe {
+  docs?: {
+    menuExpanded: boolean
+    tocExpanded: boolean
+    active: string[]
+    expectedActive: string | null
+    leftVisible: boolean
+    rightVisible: boolean
+    leftTop: number
+    rightTop: number
+    scrollY: number
+    codeContained: boolean
+  }
   error?: string
   reducedMotion: boolean
   still: boolean
@@ -178,8 +212,12 @@ function probeScript(frame: WebsiteFrame): string {
   const remote = frame.remote
   return `<script>
 addEventListener('DOMContentLoaded', () => setTimeout(async () => {
+  ${frame.docsState === 'menu' ? `document.querySelector('[data-site-menu]')?.click()` : ''}
+  ${frame.docsState === 'toc' ? `document.querySelector('[data-toc-toggle]')?.click()` : ''}
+  ${frame.docsState === 'scrolled' ? `window.scrollTo(0, document.querySelectorAll('article h2')[2]?.offsetTop - 24 || 600)` : ''}
   ${remote ? `document.querySelector('[data-set="remote"]')?.click()` : ''}
   setTimeout(async () => {
+    ${frame.docsState === 'scrolled' ? `await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))` : ''}
     const knob = document.querySelector('.knob')
     // Chromium's virtual-time budget freezes the animation clock, so the glide never advances on
     // its own; finish it so the shot shows the settled knob, then check it sits at the rail's end.
@@ -225,7 +263,23 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
     const terminal = closing?.querySelector('.terminal')
     const actions = closing?.querySelector('.actions')
     const ctaGap = terminal && actions ? Math.round(actions.getBoundingClientRect().top - terminal.getBoundingClientRect().bottom) : -1
-    const probe = {
+    const docsRoot = document.querySelector('[data-docs]')
+    const left = document.querySelector('.docs-nav')
+    const right = document.querySelector('.docs-toc')
+    const visible = (node) => Boolean(node && getComputedStyle(node).display !== 'none')
+    const headings = [...document.querySelectorAll('article h2')]
+    const expectedHeading = scrollY > 0 && scrollY + innerHeight >= root.scrollHeight - 2 ? headings.at(-1) : headings.filter(h => h.getBoundingClientRect().top <= 24).at(-1) || headings[0]
+    const docs = docsRoot ? {
+      menuExpanded: document.querySelector('[data-site-menu]')?.getAttribute('aria-expanded') === 'true',
+      tocExpanded: document.querySelector('[data-toc-toggle]')?.getAttribute('aria-expanded') === 'true',
+      active: [...document.querySelectorAll('[data-section][aria-current="location"]')].map(a => a.dataset.section),
+      expectedActive: expectedHeading?.id || null,
+      leftVisible: visible(left), rightVisible: visible(right),
+      leftTop: left?.getBoundingClientRect().top || 0, rightTop: right?.getBoundingClientRect().top || 0,
+      scrollY,
+      codeContained: [...document.querySelectorAll('article pre')].every(pre => pre.getBoundingClientRect().right <= innerWidth && pre.getBoundingClientRect().left >= 0 && getComputedStyle(pre).overflowX === 'auto'),
+    } : undefined
+    const probe = { docs,
       error, figures, still,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       sectionGaps,
@@ -354,7 +408,27 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
       problems.push(`terminal-to-button gap is ${probe.ctaGap}px, expected ${EXPECTED_CTA_GAP}px`)
     }
   }
-  if (frame.width <= 390 && probe.scrollWidth > probe.innerWidth) {
+  if (frame.kind === 'docs' && probe.docs) {
+    const docs = probe.docs
+    if (docs.menuExpanded !== (frame.docsState === 'menu'))
+      problems.push('incorrect docs menu state')
+    if (docs.tocExpanded !== (frame.docsState === 'toc')) problems.push('incorrect docs TOC state')
+    if (docs.leftVisible !== frame.width >= 720) problems.push('incorrect left column visibility')
+    if (docs.rightVisible !== frame.width >= 1200)
+      problems.push('incorrect right column visibility')
+    if (!docs.codeContained) problems.push('code overflow escapes its well')
+    if (
+      docs.expectedActive &&
+      (docs.active.length !== 2 || docs.active.some((id) => id !== docs.expectedActive))
+    )
+      problems.push('section markers are not synchronized with scroll position')
+    if (
+      frame.docsState === 'scrolled' &&
+      (docs.scrollY <= 0 || Math.abs(docs.leftTop - 24) > 1 || Math.abs(docs.rightTop - 24) > 1)
+    )
+      problems.push('sidebars did not remain sticky while scrolling')
+  }
+  if ((frame.kind === 'docs' || frame.width <= 390) && probe.scrollWidth > probe.innerWidth) {
     problems.push(`page scrolls sideways (${probe.scrollWidth} > ${probe.innerWidth})`)
   }
   return problems
@@ -372,6 +446,7 @@ export function renderReport(
       `  - URL: /${frame.page ?? 'index.html'}; duration: ${frame.duration ?? 'none'}ms; page: ${frame.page ?? 'index.html'}; kind: ${frame.kind ?? 'landing'}; motion: ${frame.motion ?? 'reduce'}; figure: ${frame.figure ?? 'none'}; sample: ${frame.sample ?? 'still'}`,
       `  - reduced-motion: ${probe.reducedMotion}; still: ${probe.still}; figures (${probe.figures.length}): ${JSON.stringify(probe.figures)}`,
       `  - reference: ${frame.reference ? `\`${frame.reference}\`` : 'none (design-system and spec review)'}`,
+      ...(probe.docs ? [`  - docs: ${JSON.stringify(probe.docs)}`] : []),
       `  - measured: scrollWidth ${probe.scrollWidth}, innerWidth ${probe.innerWidth}, scrollHeight ${probe.scrollHeight}`,
       ...(frame.kind === 'docs'
         ? []
@@ -453,6 +528,121 @@ export function serveSite(
   return { url: `http://127.0.0.1:${server.port}`, stop: () => void server.stop(true) }
 }
 
+/** Scroll evidence uses a real compositor clock: CLI virtual time suspends animation frames. */
+interface BrowserReply {
+  result?: { value?: string }
+  data?: string
+}
+
+export async function runRealtimeChromium(
+  chromium: string,
+  profileDir: string,
+  width: number,
+  height: number,
+  mode: { dumpDom: true } | { screenshot: string },
+  url: string,
+): Promise<string> {
+  const proc = Bun.spawn(
+    [
+      chromium,
+      '--headless=new',
+      '--no-sandbox',
+      '--disable-gpu',
+      '--hide-scrollbars',
+      '--force-prefers-reduced-motion',
+      '--remote-debugging-port=0',
+      `--user-data-dir=${profileDir}`,
+      'about:blank',
+    ],
+    { stdout: 'ignore', stderr: 'ignore' },
+  )
+  let socket: WebSocket | undefined
+  try {
+    let port: string | undefined
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        port = (await readFile(join(profileDir, 'DevToolsActivePort'), 'utf8')).split('\n')[0]
+        break
+      } catch {
+        await Bun.sleep(50)
+      }
+    }
+    if (!port) throw Error('Chromium debugging port did not become ready')
+    const target = (await (
+      await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })
+    ).json()) as { webSocketDebuggerUrl: string }
+    const ws = new WebSocket(target.webSocketDebuggerUrl)
+    socket = ws
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve()
+      ws.onerror = () => reject(Error('Chromium debugger failed'))
+    })
+    let sequence = 0
+    const pending = new Map<
+      number,
+      { resolve: (value: BrowserReply) => void; reject: (error: Error) => void }
+    >()
+    ws.onmessage = (event) => {
+      const reply = JSON.parse(String(event.data))
+      const request = pending.get(reply.id)
+      if (!request) return
+      pending.delete(reply.id)
+      if (reply.error) request.reject(Error(JSON.stringify(reply.error)))
+      else request.resolve(reply.result)
+    }
+    const send = (method: string, params: Record<string, unknown> = {}): Promise<BrowserReply> =>
+      new Promise((resolve, reject) => {
+        const id = ++sequence
+        const timeout = setTimeout(() => {
+          pending.delete(id)
+          reject(Error(`Chromium ${method} timed out`))
+        }, 10000)
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timeout)
+            resolve(value)
+          },
+          reject: (error) => {
+            clearTimeout(timeout)
+            reject(error)
+          },
+        })
+        ws.send(JSON.stringify({ id, method, params }))
+      })
+    await send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await send('Page.navigate', { url })
+    let dom = ''
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const result = await send('Runtime.evaluate', {
+        expression:
+          'document.querySelector(\'meta[name="capture-probe"]\') ? document.documentElement.outerHTML : ""',
+        returnByValue: true,
+      })
+      dom = result.result?.value || ''
+      if (dom) break
+      await Bun.sleep(50)
+    }
+    if (!dom) throw Error('real-time capture produced no probe')
+    if ('screenshot' in mode) {
+      const shot = await send('Page.captureScreenshot', {
+        format: 'png',
+        captureBeyondViewport: false,
+      })
+      await writeFile(mode.screenshot, Buffer.from(shot.data ?? '', 'base64'))
+    }
+    return dom
+  } finally {
+    socket?.close()
+    proc.kill()
+    await proc.exited
+  }
+}
+
 async function runChromium(
   chromium: string,
   profileDir: string,
@@ -461,7 +651,9 @@ async function runChromium(
   mode: { dumpDom: true } | { screenshot: string },
   url: string,
   motion: 'reduce' | 'normal' = 'reduce',
+  realTime = false,
 ): Promise<string> {
+  if (realTime) return runRealtimeChromium(chromium, profileDir, width, height, mode, url)
   const proc = Bun.spawn(
     [
       chromium,
@@ -555,6 +747,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
             { dumpDom: true },
             frameUrl(900),
             frame.motion,
+            frame.docsState === 'scrolled',
           ),
         ),
       )
@@ -565,7 +758,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
       if (problems.length > 0) {
         throw new Error(`website capture ${frame.id}: ${problems.join('; ')}`)
       }
-      const height = Math.min(probe.scrollHeight, MAX_PAGE_HEIGHT)
+      const height = frame.viewportHeight ?? Math.min(probe.scrollHeight, MAX_PAGE_HEIGHT)
       const png = join(outputDir, `${frame.id}.png`)
       await attempt(`${frame.id} screenshot`, async (n) => {
         await rm(png, { force: true })
@@ -577,6 +770,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
           { screenshot: png },
           frameUrl(height),
           frame.motion,
+          frame.docsState === 'scrolled',
         )
         const shotProbe = parseProbe(shotDom)
         const shotProblems = probeProblems(frame, shotProbe)
