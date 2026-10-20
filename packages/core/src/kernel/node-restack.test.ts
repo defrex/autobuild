@@ -358,7 +358,7 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'hand-push' }),
   ).toBe('idle')
-  expect(historyReads).toBe(2)
+  expect(historyReads).toBe(3)
   expect(
     (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state
       .nodeRestack?.inventory?.foreign,
@@ -366,11 +366,15 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'unchanged' }),
   ).toBe('idle')
-  expect(historyReads).toBe(2)
+  expect(historyReads).toBe(3)
 })
 
-for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
-  test(`node recovery resumes frozen inputs after effect-before-receipt at ${boundary}`, async () => {
+for (const [boundary, local] of [
+  ['node.item-replayed', true],
+  ['node.rewritten', true],
+  ['node.rewritten', false],
+] as const) {
+  test(`node recovery resumes frozen inputs after effect-before-receipt at ${boundary} (${local ? 'local-git' : 'remote with recreated cache'})`, async () => {
     const { MemoryBuildStore } = await import('../store/memory')
     const { DISPATCHER } = await import('../events/envelope')
     const { readBuildFacts } = await import('../store/reduced-reads')
@@ -385,12 +389,19 @@ for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
     const oldHead = await git('rev-parse', 'HEAD')
     await git('checkout', 'main')
     const parent = await commit('parent')
+    if (!local) {
+      const remote = `${deps.workspacePath}-origin.git`
+      roots.push(remote)
+      await git('init', '--bare', remote)
+      await git('remote', 'add', 'origin', remote)
+      await git('push', 'origin', 'ab-node/a')
+    }
     const store = new MemoryBuildStore()
     await store.createBuild(sampleBuildInput('a'))
     await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
     await store.claimNodeWriter('a', 'first', 60_000)
     const forge: import('../ports/types').Forge = new FakeForge()
-    Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
+    Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, local) })
     forge.snapshotBase = async () => parent
     const tx = { ...deps, store, slug: 'a', forge, holder: 'first', canWrite: async () => true }
     const append = store.appendIfCurrent.bind(store)
@@ -406,6 +417,10 @@ for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
       runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'frozen' }),
     ).rejects.toThrow('simulated crash')
     expect((await readBuildFacts(store, 'a')).value.state.nodeRestack?.contributionBase).toBe(base)
+    if (!local) {
+      await git('update-ref', '-d', 'refs/heads/ab-node/a')
+      await git('branch', 'ab-node/a', parent)
+    }
     await store.releaseNodeWriter('a', 'first')
     await store.claimNodeWriter('a', 'replacement', 60_000)
     // A later observation does not change the transaction already in flight.
@@ -419,10 +434,17 @@ for (const boundary of ['node.item-replayed', 'node.rewritten'] as const) {
       ),
     ).toBe('completed')
     const state = (await readBuildFacts(store, 'a')).value.state.nodeRestack!
+    const writes = await store.getEvents('a')
+    expect(writes.filter((e) => e.type === 'node.writer-reserved')).toHaveLength(1)
+    expect(writes.filter((e) => e.type === 'node.writer-settled')).toHaveLength(1)
     expect(state.contributionBase).toBe(parent)
     expect(state.inventory?.builds).toEqual(['one'])
     expect(state.inventory?.foreign).toHaveLength(1)
-    expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+    if (local) expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+    else
+      expect(await git('ls-remote', 'origin', `refs/autobuild/archive/a/${oldHead}`)).toContain(
+        oldHead,
+      )
     expect(await git('rev-list', '--count', `${parent}..ab-node/a`)).toBe('2')
   })
 }
@@ -562,3 +584,53 @@ for (const race of ['lease-takeover', 'revision-change'] as const) {
     ).toHaveLength(race === 'lease-takeover' ? 1 : 0)
   })
 }
+
+test('foreign replay aliases drop only the same identity across a parent rewrite, retaining distinct empty changes', async () => {
+  const { deps, git, commit, base } = await fixture()
+  await git('checkout', '-b', 'ab-node/source')
+  const foreign = await commit('foreign')
+  await git('commit', '--allow-empty', '-m', 'distinct empty foreign')
+  const empty = await git('rev-parse', 'HEAD')
+  await git('checkout', 'main')
+  await commit('sibling')
+  await git('cherry-pick', foreign)
+  const alias = await git('rev-parse', 'HEAD')
+  expect(alias).not.toBe(foreign)
+  const evidence = { aliases: new Map([[alias, foreign]]), landings: [] }
+  const input = await prepareNodeReplay(
+    deps,
+    { oldBase: base, oldHead: empty, parent: alias },
+    evidence,
+  )
+  expect(await replayNodeChange(deps, input, 0, alias, evidence)).toEqual({
+    kind: 'dropped',
+    head: alias,
+    reason: 'upstream-commit',
+  })
+  const result = await replayNodeChange(deps, input, 1, alias, evidence)
+  expect(result.kind).toBe('replayed')
+  if (result.kind !== 'replayed') throw new Error('missing distinct empty change')
+  expect(await git('show', '-s', '--format=%s', result.head)).toBe('distinct empty foreign')
+})
+
+test('transported nested build identity drops a source whose old SHA is absent from the rewritten parent', async () => {
+  const { deps, git, commit, base } = await fixture()
+  await git('checkout', '-b', 'ab-node/source')
+  const source = await commit('leaf', 'leaf')
+  await git('checkout', 'main')
+  const parent = await commit('transport', 'outer-node')
+  const evidence = {
+    aliases: new Map<string, string>(),
+    landings: [
+      { slug: 'inner-node', sha: source, contribution: ['build:leaf' as const] },
+      { slug: 'outer-node', sha: parent, contribution: ['build:inner-node' as const] },
+    ],
+  }
+  const input = await prepareNodeReplay(deps, { oldBase: base, oldHead: source, parent }, evidence)
+  expect(input.upstreamBuilds).toContain('leaf')
+  expect(await replayNodeChange(deps, input, 0, parent, evidence)).toEqual({
+    kind: 'dropped',
+    head: parent,
+    reason: 'upstream-identity',
+  })
+})

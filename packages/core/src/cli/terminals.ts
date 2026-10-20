@@ -1,3 +1,4 @@
+import { publishExact } from '../kernel/publication'
 import { compatibilityDiagnostic, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
@@ -199,7 +200,6 @@ async function implementationReviewBoundary(
   const diagnostic = 'cannot establish implementation review boundary'
   try {
     requireImplementationProvisioning(events)
-    const baseBranch = baseBranchOf(events)
     const branch = await buildBranch(deps)
     const headCommand = 'git rev-parse --verify HEAD^{commit}'
     const head = singleGitObjectId(
@@ -224,59 +224,7 @@ async function implementationReviewBoundary(
     if (!(await ancestor(effectiveBase, head)))
       throw new Error(`effective contribution base ${effectiveBase} is not an ancestor of HEAD`)
 
-    const targetRef = `refs/autobuild/review/${branch}/base`
-    const target =
-      deps.forge.snapshotBase !== undefined
-        ? singleGitObjectId(
-            `${await deps.forge.snapshotBase({
-              workspacePath: deps.workspacePath,
-              base: baseBranch,
-              destinationRef: targetRef,
-            })}\n`,
-            `${deps.forge.name} base snapshot`,
-          )
-        : await (async () => {
-            await git(deps, [
-              'fetch',
-              '--no-tags',
-              '--no-write-fetch-head',
-              '--refmap=',
-              'origin',
-              `+refs/heads/${baseBranch}:${targetRef}`,
-            ])
-            const targetCommand = `git rev-parse --verify ${targetRef}^{commit}`
-            return singleGitObjectId(
-              await git(deps, ['rev-parse', '--verify', `${targetRef}^{commit}`]),
-              targetCommand,
-            )
-          })()
-
-    const mergeBaseArgs = ['merge-base', '--all', target, head]
-    const mergeBaseCommand = `git ${mergeBaseArgs.join(' ')}`
-    const merged = await deps.exec(['git', ...mergeBaseArgs], {
-      cwd: deps.workspacePath,
-    })
-    if (merged.exitCode === 1) {
-      throw new Error(`${mergeBaseCommand} found no common ancestor`)
-    }
-    if (merged.exitCode !== 0) {
-      throw new Error(
-        `${mergeBaseCommand} exited ${merged.exitCode}: ` +
-          `${merged.stderr.trim() || merged.stdout.trim() || '(no output)'}`,
-      )
-    }
-    const mergeBases = gitObjectIds(merged.stdout, mergeBaseCommand)
-    if (mergeBases.length !== 1) {
-      throw new Error(
-        `${mergeBaseCommand} expected exactly one merge-base, found ` +
-          `${mergeBases.length}${mergeBases.length > 0 ? `: ${mergeBases.join(', ')}` : ''}`,
-      )
-    }
-    return {
-      branch,
-      base: (await ancestor(effectiveBase, mergeBases[0]!)) ? mergeBases[0]! : effectiveBase,
-      head,
-    }
+    return { branch, base: effectiveBase, head }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`${diagnostic}: ${detail}`)
@@ -450,7 +398,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       }
       // Local publication remains immediate and push-before-fact.
       await suspendNativeLanding({ ...deps, slug: env.build }, `implement:${env.round}`)
-      await deps.forge.pushBranch(deps.workspacePath, branch)
+      await publishExact(deps.forge, deps.workspacePath, branch, head)
       const { event } = await terminalDeposit(
         deps,
         [{ kind: 'implement-notes', content: notes }],

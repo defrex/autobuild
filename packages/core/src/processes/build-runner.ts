@@ -1,3 +1,4 @@
+import { publishExact } from '../kernel/publication'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { hostname } from 'node:os'
 import { resumeAgent } from '../ports/runner/native-session'
@@ -2186,7 +2187,7 @@ export class BuildRunner {
             return
           }
           await suspendNativeLanding(this.deps, `finalize-step:${step}`)
-          await this.deps.forge.pushBranch(this.deps.workspacePath, this.deps.branch)
+          await publishExact(this.deps.forge, this.deps.workspacePath, this.deps.branch, head)
           pushedHead = head
         }
       } catch (error) {

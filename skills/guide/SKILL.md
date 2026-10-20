@@ -105,7 +105,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **`finalize`** — the agent writes the PR description; the kernel opens the
   PR. `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
-  the runner regular-pushes a descendant head to extend the open PR branch.
+  the runner pushes the exact descendant SHA and confirms forge readback before recording success.
 - **Restacking and epilogue.** The kernel replays one net leaf change at verify
   entry and when its destination moves while awaiting landing. Clean replay
   starts no agent; conflicts enter `reconcile`, then verification. The leaf
@@ -226,7 +226,10 @@ The distinctions that change an administrator's answer:
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
-  locally and never push, never touch a remote, never open the PR. A push
+  locally and never push, never touch a remote, never open the PR. The forge
+  acknowledges the exact intended SHA; local refs are caches refreshed after
+  confirmation. Local implementation publication failures write no completion or
+  pending request and leave the same session retryable. A push
   happens at the implement terminal boundary or after the runner validates a
   successful content-producing finalize post-step. Reconcile alone uses an exact expected-head guarded rewrite after archiving every recorded Git tip under `refs/autobuild/archive/<slug>/<sha>`.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
@@ -676,7 +679,8 @@ field outside the selected strict variant. Diagnostics name the logical step.
 
 A post-step that produces repository content must select and commit its files
 locally and leave a clean worktree. The runner proves the last published head
-is an ancestor and performs the regular, non-force push through the Forge port;
+is an ancestor and performs the regular, non-force push through the Forge port
+of the frozen SHA, confirming exact authoritative readback;
 the agent never pushes. An unchanged `HEAD` creates and pushes no commit. Dirty
 output, rewritten history, Git errors, and publication failures record the
 step as failed and file an observation while the green build continues.

@@ -1,6 +1,6 @@
 import { inspectGitHubReadiness } from './github-readiness'
 import type { ForgeReadinessInput } from './readiness'
-import { gitRewrite } from './git-rewrite'
+import { gitRewrite, publishBranch, remoteBranchHead, refreshBranchCache } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
 import { NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
@@ -774,16 +774,14 @@ export class GitHubForge implements Forge {
 
   /** Ordinary phase publication extends history; reconcile uses the separate guarded rewrite capability.
    * Only ever called from worktree-side terminals and contract fixtures. */
-  async pushBranch(workspacePath: string, branch: string): Promise<void> {
-    const result = await this.exec(['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`], {
-      cwd: workspacePath,
-      signal: undefined,
-    })
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `forge command failed (exit ${result.exitCode}): git push -u origin HEAD:refs/heads/${branch}\n${result.stderr.trim()}`,
-      )
-    }
+  async confirmPublication(workspacePath: string, branch: string, sha: string): Promise<boolean> {
+    if ((await remoteBranchHead(this.exec, workspacePath, branch)) !== sha) return false
+    await refreshBranchCache(this.exec, workspacePath, branch, sha)
+    return true
+  }
+
+  async pushBranch(workspacePath: string, branch: string, sha?: string): Promise<void> {
+    await publishBranch(this.exec, workspacePath, branch, sha)
   }
 
   async openPr(opts: {

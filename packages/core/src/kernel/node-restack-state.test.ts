@@ -56,7 +56,7 @@ test('arbitrary replay prefixes survive serialization and completion alone promo
     event('node.rewritten', { id: 'tx', previous: 'old-head', head: 'resolved' }),
   ])
   expect(state.contributionBase).toBe('initial')
-  expect(state.foreignAliases).toBeUndefined()
+  expect(state.foreignAliases).toEqual({ resolved: 'foreign' })
   state = nodeRestackReducer.advance(state, [
     event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
   ])

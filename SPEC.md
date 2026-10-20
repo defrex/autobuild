@@ -893,20 +893,15 @@ The base-selection invariants make this safe with Git:
   loops use that restacked contribution base. Plan, implementation and
   code-review never rewrite the branch. Previously recorded review ranges
   remain immutable, including between rounds.
-- **Each implementation completion records effective target divergence.**
-  `ab done` snapshots the authoritative frozen target branch in a build-private
-  ref and requires exactly one merge-base with implementation HEAD. The effective
-  starting base is the current projected contribution base,
-  falling back to the latest fresh-cut provisioning base (`remote` or `local`,
-  never an `existing` resume). It must be an ancestor of HEAD. Use the unique
-  merge-base only if it descends from that effective base; otherwise retain
-  the effective base, excluding sibling history when the destination was rewritten.
-  The focused `implement.completed {commits}` range excludes target history
-  already absorbed by the branch. This interrogation never moves the build
-  branch. The original
-  cut remains provenance, and successful restacks establish the contribution
-  baseline for later loops and collapses. Historical event ranges stay immutable;
-  the current `implement.commits` projection advances to `targetBase..headSha`
+- **Each implementation completion records its proven contribution boundary.**
+  `ab done` uses the current projected contribution base, falling back to the
+  latest fresh-cut provisioning base (`remote` or `local`, never an `existing`
+  resume). It validates that immutable base against HEAD and records it verbatim.
+  A moving or rewritten destination never changes the review range, and review
+  requires no target fetch or merge-base calculation. Missing provenance fails
+  before publication. Successful restacks establish the baseline for later loops
+  and collapses. Historical event ranges stay immutable; the current
+  `implement.commits` projection advances to `targetBase..headSha`
   on successful leaf `restack.rewritten`, `restack.completed`, and
   `reconcile.rewritten` facts. `ab context` supplies that current range unchanged
   to code review and every agent verify step. Node integration cycles retain
@@ -1306,13 +1301,22 @@ not build failures.
 
 ### 8.6 Agents never touch the remote [D7]
 
+The forge is authoritative for every publication: after writing or on recovery,
+its branch head must equal the frozen intended SHA. Local branch refs are caches
+and are refreshed unconditionally after confirmation, without changing checkout
+contents. Explicit remote expected-head leases and durable writer reservations
+still fence concurrent writers. In local-git the shared ref database is itself
+the forge, so its authoritative writes retain compare-and-swap guards.
+
 All `git push`, PR creation, and forge API calls happen kernel-side. `ab done`
-in `implement` first establishes the focused target merge-base, then pushes
-and records `{base, head}`; `ab done` in `finalize` has the kernel open the PR
+in `implement` validates the recorded effective base, freezes HEAD, pushes that
+exact SHA, and confirms the authoritative branch head before recording
+`{base, head}`. A local push or readback failure writes no completion or publication
+request and leaves `ab done` retryable in the same session; `ab done` in `finalize` has the kernel open the PR
 using the deposited `pr-description` artifact. After a successful
 content-producing `finalize:*` step, the runner
 requires a clean worktree and a descendant local `HEAD`, then regular-pushes
-the configured build branch and records that head before completing the step.
+the exact validated SHA and confirms forge readback before recording that head and completing the step.
 A no-op step has no push. Agents only ever commit locally. Consequences: forge
 credentials **never enter the sandbox** (load-bearing once builds run on
 remote sandboxes), ordinary implementation history is extended and reconcile
@@ -2146,7 +2150,10 @@ boundary, immutable archives, ordered changes, and merge proofs. Expiry permits
 recovery of that reservation, never an incompatible operation. Each change has
 prepared, conflicted, or replayed receipts. Resolved objects are retained in the
 BuildStore before their receipts. `node.publish-intended`, `node.rewritten`, and
-`node.writer-settled` distinguish intent, proven effect, and completion. Exact
+`node.writer-settled` distinguish intent, proven effect, and completion. The forge
+is authoritative: exact intended-head readback confirms publication, while local
+refs are caches refreshed without CAS. An unconfirmed descendant is contention;
+a durable confirmed receipt can preserve a historical write. Exact
 expected-head replacement and immutable archive refs preserve displaced history;
 contention retains the previous contribution boundary and retries the complete
 observed contribution. An untagged commit, including an empty commit, is foreign.
@@ -2872,10 +2879,9 @@ session to end and remote kernels wait for guest teardown before replacement;
 conflict outcome and archive refs after confirmed publication. A successful CAS
 that is overtaken before readback still records its receipt, with `observedHead`
 naming the later head (or null for deletion). That observed head informs recovery;
-it does not complete reconcile or promote the verification base. Intent recovery
-can recognize an overtaken candidate newly introduced into the observed branch
-history, while a candidate already present in the expected old history is not
-evidence of a new write. New completion is
+it does not complete reconcile or promote the verification base. Recovery may
+consume a durable confirmed write receipt; candidate ancestry alone never proves
+an unconfirmed write. New completion is
 `{headSha, rewriteId, artifact}`; historical `{mergeCommit, artifact}` remains
 valid. Remote requests carry identical transaction inputs and use the provider's
 trusted rewrite/archive capability only after execution teardown. Contention is

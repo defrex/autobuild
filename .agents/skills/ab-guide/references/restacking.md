@@ -34,8 +34,16 @@ Before replacement the kernel publishes retained tips, displaced heads and the
 temporary change under immutable exact archive refs. `restack.*` facts record
 preparation, replay, intent, archived replacement, contention and completion.
 Unpublished request/loss records alone cannot preserve objects from a released
-sandbox. Publication uses exact expected-head CAS; contention retains evidence
-and retries without overwriting another writer. Remote guests park for trusted
+sandbox. The forge is authoritative for publication: after a push or on recovery,
+its branch head must equal the intended SHA before completion. Local refs are
+caches refreshed without an expected-old guard after confirmation; checkout files
+are untouched. Local-git's shared database is the forge and retains authoritative
+CAS. Remote publication uses exact expected-head leases and durable reservations; contention retains evidence
+and retries without overwriting another writer. An overtaken successful guarded
+write can retain its factual receipt, but unconfirmed candidate ancestry cannot
+prove a write or promote a base. Contribution ownership uses recorded boundaries,
+stable build identities and confirmed foreign rewrite aliases, never a merge-base
+against the current destination. Remote guests park for trusted
 publication after teardown. Historical merge reconciliations keep their original
 interpretation and supply a promoted contribution base for later replay.
 
