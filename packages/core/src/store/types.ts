@@ -142,7 +142,11 @@ export type RepoTickCompletion =
       outcome: 'completed'
       counters: RepositoryEventEnvelope<'dispatcher.tick-completed'>['payload']['counters']
     }
-  | { outcome: 'failed'; error: string }
+  | {
+      outcome: 'failed'
+      error: string
+      forgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
+    }
 
 /** Bounded operational telemetry; never workflow or queue authority. */
 export interface RepoTickObservation {

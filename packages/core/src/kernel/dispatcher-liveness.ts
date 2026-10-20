@@ -38,7 +38,11 @@ export function projectDispatcherLiveness(
       lastTick: useSample
         ? finished.outcome === 'completed'
           ? { outcome: 'completed' as const, counters: finished.counters }
-          : { outcome: 'failed' as const, error: finished.error }
+          : {
+              outcome: 'failed' as const,
+              error: finished.error,
+              forgeRequests: finished.forgeRequests,
+            }
         : tick?.type === 'dispatcher.tick-completed'
           ? { outcome: 'completed' as const, counters: tick.payload.counters }
           : tick?.type === 'dispatcher.tick-failed'

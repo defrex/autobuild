@@ -77,3 +77,8 @@ never preserves merge topology or decomposes an unsafe merge automatically.
 
 See [integration trees](integration-tree.md), [landing](landing-policy.md), and
 [migration](migration-1.0.md).
+
+Native cancellation receipts are candidate- and operation-specific. Publication
+retries confirm forge state before reusing a receipt; external re-enables require
+another confirmed cancellation. Classified transient landing failures retain
+retry eligibility and recheck authorization after repository forge cooldown.

@@ -10917,6 +10917,14 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
     let lostResponses = 0
     let ticks = 0
     fx.store.finishRepoTick = async (...args) => {
+      // Simulate remote JSON decoding, including object-valued wire telemetry.
+      if (args[2].outcome === 'completed')
+        args[2].counters.forgeRequests = {
+          total: 3,
+          unattributed: 0,
+          builds: [{ build: 'hot', requests: 3 }],
+          complete: true,
+        }
       const result = await finish(...args)
       finishes++
       if (finishes === (lost === 'idle' ? 2 : 1)) {
@@ -10925,6 +10933,11 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
         throw new Error('injected response loss after commit')
       }
       return result
+    }
+    const getRepo = fx.store.getRepo.bind(fx.store)
+    fx.store.getRepo = async (...args) => {
+      const record = await getRepo(...args)
+      return record === null ? null : structuredClone(record)
     }
     if (lost === 'failed') {
       const listReady = fx.tickets.listReady.bind(fx.tickets)

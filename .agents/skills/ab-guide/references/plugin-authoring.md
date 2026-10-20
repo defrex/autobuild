@@ -20,7 +20,7 @@ paths are not API.
 | `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, stable external creation-key projection, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
 | `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
 | `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. |
-| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
+| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. Optional API 1.8 failure classification and request observers are described below. |
 
 Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
 actual build branch into a build-private ref, publish immutable exact-SHA refs
@@ -58,6 +58,37 @@ copy is directly reachable by the dispatcher. Workspace-owned executors receive
 the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID
 supervision remains host-owned. A workspace plugin relying on these fields
 should declare an API range containing `^1.5.0`.
+
+Plugin API 1.8 adds optional forge failure classification and request accounting.
+Import the runtime `ForgeFailure` constructor and `isForgeFailure`, plus types
+`ForgeFailureDetails`, `ForgeRequestObserver`, and `ForgeRequestContext` from
+`@defrex/autobuild/plugin-sdk`. Throw
+`new ForgeFailure(message, { kind: 'rate-limited', resetAt })` with a valid ISO
+reset timestamp, or `{ kind: 'transient', retry: 'retryable' }` for retryable
+transport errors. Ordinary policy/permission refusals remain deferrals. Never
+include credentials. The `forgeFailure: 'autobuild.forge-failure.v1'` discriminant
+and validated details work across separately loaded SDK copies.
+
+Optionally implement `Forge.observeRequests(observer): () => void`; return a
+disposer and call registered observers once per wire request, including failed
+requests and pagination. Pass `ForgeRequestContext` with the build slug when
+known, or `{}` when unknown. The host fills missing build attribution from its
+current build-scoped operation; otherwise the request is repository/unattributed.
+Credential discovery and skipped calls are not provider requests. For example:
+
+```ts
+observeRequests(observer: ForgeRequestObserver) {
+  this.observers.add(observer)
+  return () => { this.observers.delete(observer) }
+}
+// At the actual transport boundary:
+for (const observer of this.observers) observer({ build: context.build })
+return transport(method, path, options)
+```
+
+Declare `apiVersion: '^1.8.0'` when using these capabilities. Compatible legacy
+1.x plugins still load without observers and show unavailable counts. Arbitrary
+legacy errors are not classified automatically.
 
 Plugin API 1.7 extends the workspace-provider factory context with the
 host-derived seams a store-requiring remote provider needs. Workspace-provider

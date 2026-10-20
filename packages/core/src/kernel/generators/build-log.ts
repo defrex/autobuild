@@ -41,6 +41,23 @@ function randomWrite(rand: () => number): EventWrite {
   const step = pick(rand, ['types', 'unit'])
   const templates: Array<() => EventWrite> = [
     () =>
+      w('build.janitor-attempt-failed', {
+        firstFailureAt: '2026-01-01T00:00:00.000Z',
+        attempt,
+        message: 'forge unavailable',
+        nextAttemptAt: '2026-01-01T00:01:00.000Z',
+      }),
+    () => w('build.janitor-failing', { message: 'forge unavailable' }),
+    () => w('build.janitor-recovered', {}),
+    () =>
+      w('landing.application-failed', {
+        candidate: { head: SHA, parent: 'b'.repeat(40), cycle: 'cycle' },
+        decisionSeq: 1,
+        attempt,
+        message: 'rate limited',
+        after: '2026-01-01T00:01:00.000Z',
+      }),
+    () =>
       w('landing.decided', {
         candidate: { head: SHA, parent: 'b'.repeat(40), cycle: 'cycle' },
         from: pick(rand, ['leaf', 'node']),
@@ -62,6 +79,7 @@ function randomWrite(rand: () => number): EventWrite {
         decisionSeq: 1,
         commandSeq: 2,
         operation: 'rewrite-1',
+        publicationHead: SHA,
       }),
     () => w('runner.attached', { instance: 'runner-1', host: 'local' }),
     () => w('spec.imported', { artifact: ART('spec', 0), ticket: { source: 'linear', id: 'E-1' } }),
