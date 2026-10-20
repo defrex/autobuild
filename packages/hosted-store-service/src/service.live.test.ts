@@ -67,6 +67,9 @@ if (!testUrl) {
       ...(options?.retention ? { retention: options.retention } : {}),
     })
     const secret = crypto.randomUUID()
+    // The service caches its registry pool; give this per-test service an
+    // explicitly owned registry so contract cleanup releases that pool too.
+    const projects = await openPostgresProjectRegistryFromEnv({ AB_POSTGRES_URL: database.url })
     const service = createHostedStoreService({
       env: {
         AB_STORE_SECRET: secret,
@@ -79,6 +82,7 @@ if (!testUrl) {
       },
       clock,
       openStore: async () => backing,
+      openProjectRegistry: async () => projects,
     })
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
     const token = mintToken(secret, {
@@ -95,6 +99,7 @@ if (!testUrl) {
       cleanup: async () => {
         await server.stop(true)
         await backing.close()
+        await projects.close()
         await database.cleanup()
       },
     }
