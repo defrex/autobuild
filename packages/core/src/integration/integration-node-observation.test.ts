@@ -46,11 +46,15 @@ test('collecting nodes share bounded exhaustive scans, discover external changes
     expect(reduceBuild(await h.events(a.slug)).integration?.observation?.openChildren).toEqual([
       'OPEN',
     ])
+    expect(reduceBuild(await h.events(a.slug)).integration?.observation?.children).toEqual([
+      { source: 'fake', id: 'OPEN', title: 'External backlog child' },
+    ])
     await h.tickets.transition('OPEN', 'Done')
     h.clock.advance(300_000)
     await h.dispatcher.tick()
     expect(scans).toBe(2)
     expect(reduceBuild(await h.events(a.slug)).integration?.observation?.openChildren).toEqual([])
+    expect(reduceBuild(await h.events(a.slug)).integration?.observation?.children).toEqual([])
     for (const node of nodes)
       await controlBuild({
         store: h.store,
@@ -65,4 +69,97 @@ test('collecting nodes share bounded exhaustive scans, discover external changes
   } finally {
     await h.cleanup()
   }
+})
+
+test('display metadata follows membership authorities, survives failed scans, and publishes idempotently', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { FakeTicketSource } = await import('../ports/tickets/fake')
+  const { observeIntegration } = await import('../kernel/integration-completeness')
+  const { integrationComplete } = await import('../kernel/integration-state')
+  const store = new MemoryBuildStore()
+  const ticket = { source: 'fake', id: 'NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: 'repo',
+    ticket,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { repo: 'repo', ticket, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  const source = new FakeTicketSource([])
+  const records = ['landed', 'frozen'].map((slug) => ({
+    record: {
+      slug,
+      repo: 'repo',
+      ticket: { source: 'fake', id: slug.toUpperCase(), title: `Frozen ${slug}` },
+      createdAt: '',
+      updatedAt: '',
+    },
+    state: {
+      ...reduceBuild([]),
+      status: slug === 'landed' ? ('done' as const) : ('running' as const),
+      prState: slug === 'landed' ? ('merged' as const) : undefined,
+      target: { ticket, build: 'node' },
+    },
+  }))
+  const listed = (id: string, title: string, resolved = false) => ({
+    ...readyTicket(id, { title }),
+    target: 'NODE',
+    resolved,
+  })
+  let listing = {
+    tickets: [
+      listed('QUEUED', 'Queued title'),
+      listed('CANCELLED', 'Cancelled', true),
+      listed('LANDED', 'Renamed landed', true),
+    ],
+    diagnostics: [] as string[],
+  }
+  const inputs = async () => ({ listing, builds: records })
+  const first = await observeIntegration(store, source, 'node', inputs)
+  expect(first.openChildren).toEqual(['FROZEN', 'QUEUED'])
+  expect(first.contributions).toEqual(['landed'])
+  expect(first.children).toEqual([
+    { source: 'fake', id: 'FROZEN', title: 'Frozen frozen' },
+    { source: 'fake', id: 'LANDED', title: 'Renamed landed', builds: ['landed'] },
+    { source: 'fake', id: 'QUEUED', title: 'Queued title' },
+  ])
+  const count = (await store.getEvents('node')).length
+  await observeIntegration(store, source, 'node', inputs)
+  expect((await store.getEvents('node')).length).toBe(count)
+  expect(integrationComplete(reduceBuild(await store.getEvents('node')))).toBe(false)
+  listing = { tickets: [listed('LANDED', 'Reopened title')], diagnostics: [] }
+  const reopened = await observeIntegration(store, source, 'node', inputs)
+  expect(reopened.children?.filter((c) => c.id === 'LANDED')).toEqual([
+    { source: 'fake', id: 'LANDED', title: 'Reopened title', builds: ['landed'] },
+  ])
+  expect(reopened.openChildren).toContain('LANDED')
+  const failed = await observeIntegration(store, source, 'node', async () => {
+    throw new Error('offline')
+  })
+  expect(failed.children).toEqual(reopened.children)
+  expect(failed.diagnostics).toEqual(['offline'])
+  expect(integrationComplete(reduceBuild(await store.getEvents('node')))).toBe(false)
+  listing = { tickets: [], diagnostics: [] }
+  const recovered = await observeIntegration(store, source, 'node', inputs)
+  expect(recovered.children?.find((c) => c.id === 'LANDED')?.title).toBe('Reopened title')
+  records.push({ ...records[0]!, record: { ...records[0]!.record, slug: 'landed-again' } })
+  const repeated = await observeIntegration(store, source, 'node', inputs)
+  expect(repeated.children?.filter((c) => c.id === 'LANDED')).toHaveLength(1)
+  expect(repeated.children?.find((c) => c.id === 'LANDED')?.builds).toEqual([
+    'landed',
+    'landed-again',
+  ])
+  const membership = { openChildren: repeated.openChildren, contributions: repeated.contributions }
+  listing = { tickets: [listed('FROZEN', 'New source title')], diagnostics: [] }
+  const renamed = await observeIntegration(store, source, 'node', inputs)
+  expect({ openChildren: renamed.openChildren, contributions: renamed.contributions }).toEqual(
+    membership,
+  )
+  expect(renamed.children?.find((c) => c.id === 'FROZEN')?.title).toBe('New source title')
+  listing = { tickets: [], diagnostics: ['partial scan'] }
+  const partial = await observeIntegration(store, source, 'node', inputs)
+  expect(partial.children?.find((c) => c.id === 'FROZEN')?.title).toBe('New source title')
 })

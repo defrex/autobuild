@@ -594,3 +594,43 @@ test('integration split follows child transitions with no parent delta and immut
     'auto',
   )
 })
+
+test('completed contribution metadata refreshes without rereading terminal history', async () => {
+  const store = new MemoryBuildStore()
+  const ticket = { source: 'file', id: 'NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    ticket,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { repo: REPO, ticket, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  await store.append('node', {
+    actor: { kind: 'dispatcher' },
+    type: 'integration.observed',
+    payload: { openChildren: [], contributions: ['landed'], diagnostics: [] },
+  })
+  await addTerminal(store, 'landed', 'done')
+  const reader = new CountingReader(store)
+  const list = reader.listBuildsForRepo.bind(reader)
+  let title = 'Original title'
+  reader.listBuildsForRepo = async (repo) =>
+    (await list(repo)).map((record) =>
+      record.slug === 'landed'
+        ? { ...record, ticket: { source: 'file', id: 'LANDED', title } }
+        : record,
+    )
+  const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+  const initial = await cache.refresh()
+  const child = (snapshot: typeof initial) => snapshot.builds[0]!.integrationDetail!.children[0]!
+  expect(child(initial).title).toBe('Original title')
+  title = 'Current title'
+  reader.resetCalls()
+  const refreshed = await cache.refresh()
+  expect(child(refreshed)).toMatchObject({ id: 'LANDED', title: 'Current title', state: 'landed' })
+  expect(child(initial).title).toBe('Original title')
+  expect(reader.eventCalls.some((call) => call.slug === 'landed')).toBe(false)
+})
