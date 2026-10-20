@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { snapshotParent } from './snapshot-parent'
 import { buildTrailers } from './build-identity'
 import { KERNEL, DISPATCHER } from '../events/envelope'
@@ -29,9 +30,11 @@ export interface IntegrationLandingDeps {
 /** The source-owned reservation protects root publication across lease loss. */
 export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise<void> {
   const { store, forge, slug, workspacePath, exec } = deps
+  if (await deferMixedVersion(store, slug, KERNEL)) return
   if (!forge.rewrite || !forge.inspectLandingPr) return
   if (!(await store.claimNodeWriter(slug, deps.holder, 60_000))) return
   const authority = async () => {
+    if (await deferMixedVersion(store, slug, KERNEL)) throw new MixedVersionDeferral()
     if (!(await store.renewNodeWriter(slug, deps.holder)))
       throw new Error('integration writer lease lost')
   }
@@ -201,6 +204,7 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
 export async function auditIntegrationLanding(
   deps: Pick<IntegrationLandingDeps, 'store' | 'forge' | 'exec' | 'workspacePath' | 'slug' | 'id'>,
 ): Promise<void> {
+  if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) return
   const state = (await readBuildFacts(deps.store, deps.slug)).value.state
   const landing = state.integration?.landing
   if (!landing?.operation || state.integration?.audit || !deps.forge.rewrite) return

@@ -1,3 +1,4 @@
+import { filterKnownEvents } from '../events/compatibility'
 /**
  * The incremental reducer contract: every projection of an event array is a
  * fold plus a final derivation, so its state can be advanced from a previously
@@ -31,6 +32,7 @@ export function cloneAcc<T>(acc: T): T {
  * `fold`. */
 export function defineReducer<Acc, Event, State>(def: {
   version: number
+  rawEvents?: boolean
   initial: () => Acc
   fold: (acc: Acc, events: readonly Event[]) => void
   finish: (acc: Acc) => State
@@ -40,13 +42,13 @@ export function defineReducer<Acc, Event, State>(def: {
     initial: def.initial,
     advance(acc, events) {
       const next = cloneAcc(acc)
-      def.fold(next, events)
+      def.fold(next, def.rawEvents ? events : filterKnownEvents(events))
       return next
     },
     finish: def.finish,
     reduce(events) {
       const acc = def.initial()
-      def.fold(acc, events)
+      def.fold(acc, def.rawEvents ? events : filterKnownEvents(events))
       return def.finish(acc)
     },
   }

@@ -49,7 +49,9 @@ function fullLog(log: ReturnType<typeof event>[]): AbEvent[] {
         ? { outcome: 'merged' }
         : item.type === 'observation.recorded'
           ? { id: `o_${item.seq}`, kind: 'followup', summary: 's' }
-          : {}
+          : item.type === 'runner.attached'
+            ? { instance: 'digest-fixture', host: 'test' }
+            : {}
     return {
       build: 'b',
       seq: item.seq,

@@ -1,3 +1,4 @@
+import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
 import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
@@ -57,7 +58,9 @@ test('persisted projection advances past discarded events and restarts with only
   })
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
-  const snapshot = await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2)
+  const snapshot = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+    version: 2,
+  })
   expect(snapshot?.cursor).toBe(3)
   expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
   await setting(store, true)
@@ -78,7 +81,7 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
     await setting(store)
     await start(store, 'old')
     if (bad !== 'missing')
-      await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
+      await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
         version: bad === 'version' ? 1 : 2,
         cursor: bad === 'ahead' ? 999 : 1,
         state: { retained: bad === 'malformed' ? [{}] : [], incompleteIdentities: true },
@@ -263,7 +266,7 @@ test('foreign repository cache facts are rejected and missing repositories are n
   expect(await store.getRepo(repo)).toBeNull()
   await store.ensureRepo(repo)
   const fact = await setting(store)
-  await store.putReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', {
+  await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
     version: 2,
     cursor: 1,
     state: { retained: [{ ...fact, repo: '/other' }], incompleteIdentities: true },
@@ -286,7 +289,8 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
   await current.save(true)
   await stale.save(true)
   expect(
-    (await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.cursor,
+    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 2 }))
+      ?.cursor,
   ).toBe(2)
 })
 

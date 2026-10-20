@@ -1,3 +1,4 @@
+import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { readPersistedBuildDigests } from './reduced-reads'
 import { assertPublicSnapshotReducer } from './snapshots'
 import {
@@ -14,14 +15,14 @@ import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from './
  * every other adapter (SQLite, remote HTTP) must match it.
  */
 import {
-  validateEventWrite,
+  prepareEventWrite as validateEventWrite,
   type AbEvent,
   type EventEnvelope,
   type EventWrite,
 } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import {
-  validateRepositoryEventWrite,
+  prepareRepositoryEventWrite as validateRepositoryEventWrite,
   type RepositoryEvent,
   type RepositoryEventEnvelope,
   type RepositoryEventType,
@@ -173,6 +174,7 @@ interface SessionState {
 }
 
 export class MemoryBuildStore implements BuildStore {
+  readonly catalogIdentity = READ_CATALOG_IDENTITY
   private readonly builds = new Map<string, BuildState>()
   private readonly repos = new Map<string, RepoState>()
   private readonly streams = new Map<string, StreamState>()
@@ -310,6 +312,7 @@ export class MemoryBuildStore implements BuildStore {
           actor: created.actor,
           type: created.type,
           payload: created.payload,
+          compatibility: created.compatibility,
         }) as AbEvent,
       )
     }
@@ -360,6 +363,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
     this.advanceRepo(state.record.repo)
@@ -387,6 +391,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
     this.advanceRepo(state.record.repo)
@@ -456,6 +461,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
     this.advanceRepo(state.record.repo)
@@ -528,6 +534,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
     this.advanceRepo(state.record.repo)
@@ -723,6 +730,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as RepositoryEventEnvelope<T>
     state.events.push(structuredClone(envelope) as RepositoryEvent)
     this.advanceRepo(repo)
@@ -788,6 +796,7 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     } as RepositoryEventEnvelope<T>
     state.events.push(structuredClone(envelope) as RepositoryEvent)
     this.advanceRepo(repo)

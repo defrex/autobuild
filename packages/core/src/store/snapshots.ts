@@ -1,3 +1,4 @@
+import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 /**
  * Reducer snapshots: a cache beside the event log, never an authority.
  *
@@ -51,13 +52,14 @@ export function snapshotScopeKey(scope: SnapshotScope): string {
 }
 
 /** Whether a put replaces the stored row. The stored cursor never decreases:
- * a higher cursor wins whatever the versions, and an upgraded reducer replaces
- * an older shape at an unchanged cursor. */
+ * an advancing cursor never downgrades the stored reducer version, and an
+ * upgraded reducer may replace an older shape at an unchanged cursor. */
 export function snapshotSupersedes(
   next: Pick<ReducerSnapshot, 'version' | 'cursor'>,
   stored: Pick<ReducerSnapshot, 'version' | 'cursor'> | undefined,
 ): boolean {
   if (stored === undefined) return true
+  if (next.version < stored.version) return false
   if (next.cursor !== stored.cursor) return next.cursor > stored.cursor
   return next.version > stored.version
 }
@@ -73,10 +75,13 @@ export async function loadReducerSnapshot(
 ): Promise<ReducerSnapshot | null> {
   if (store.getReducerSnapshot === undefined) return null
   try {
-    const found = await store.getReducerSnapshot(scope, name, reducer.version)
+    const found = await store.getReducerSnapshot(scope, catalogSnapshotName(name), reducer.version)
     if (found === null || found.version !== reducer.version) return null
     if (!Number.isInteger(found.cursor) || found.cursor < 0) return null
-    return found
+    const state = found.state as { catalogIdentity?: unknown; acc?: unknown } | null
+    if (!state || state.catalogIdentity !== READ_CATALOG_IDENTITY || !Object.hasOwn(state, 'acc'))
+      return null
+    return { ...found, state: state.acc }
   } catch {
     return null
   }
@@ -91,8 +96,19 @@ export async function persistReducerSnapshot(
 ): Promise<boolean> {
   if (store.putReducerSnapshot === undefined) return false
   try {
-    return await store.putReducerSnapshot(scope, name, snapshot)
+    return await store.putReducerSnapshot(scope, catalogSnapshotName(name), {
+      ...snapshot,
+      state: { catalogIdentity: READ_CATALOG_IDENTITY, acc: snapshot.state },
+    })
   } catch {
     return false
   }
+}
+
+/** Fixed-size names isolate checkpoints even when reducer integers match. */
+export function catalogSnapshotName(name: string, catalogIdentity = READ_CATALOG_IDENTITY): string {
+  return `catalog.${new Bun.CryptoHasher('sha256')
+    .update(JSON.stringify([name, catalogIdentity]))
+    .digest('hex')
+    .slice(0, 56)}`
 }

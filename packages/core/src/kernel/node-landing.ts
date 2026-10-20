@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { inspectIntegrationStack } from './integration-stack'
 import { integrationFailed } from './integration-state'
 import type { BuildStore } from '../store/types'
@@ -64,8 +65,18 @@ export async function landIntoNode(
     return defer(
       `Node landing requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
     )
+  if (
+    (await deferMixedVersion(store, deps.slug, KERNEL)) ||
+    (await deferMixedVersion(store, node, KERNEL))
+  )
+    return undefined
   if (!(await store.claimNodeWriter(node, deps.holder, 60_000))) return undefined
   const authority = async () => {
+    if (
+      (await deferMixedVersion(store, deps.slug, KERNEL)) ||
+      (await deferMixedVersion(store, node, KERNEL))
+    )
+      throw new MixedVersionDeferral()
     const state = (await readBuildFacts(store, node)).value.state
     if (
       state.status === 'aborted' ||
@@ -380,6 +391,7 @@ export async function settleClosedNode(deps: {
   holder: string
 }): Promise<boolean> {
   const { store, slug, forge, workspacePath } = deps
+  if (await deferMixedVersion(store, slug, KERNEL)) return false
   if (!(await store.claimNodeWriter(slug, deps.holder, 60_000))) return false
   const append = async (write: EventWrite) => {
     if (!(await store.renewNodeWriter(slug, deps.holder)))

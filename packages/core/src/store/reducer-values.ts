@@ -1,3 +1,4 @@
+import { READ_CATALOG_IDENTITY, projectStoredEvents } from '../events/compatibility'
 /** Named JSON answers over persisted incremental state. The event log remains authoritative. */
 import { z } from 'zod'
 import type { AbEvent } from '../events/catalog'
@@ -19,6 +20,7 @@ export const reducerValueRequestSchema = z
 export type ReducerValueRequest = z.infer<typeof reducerValueRequestSchema>
 export type JsonValue = z.infer<ReturnType<typeof z.json>>
 export interface ReducerValue {
+  catalogIdentity?: string
   version: number
   cursor: number
   value: JsonValue
@@ -51,7 +53,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 
-export function resolveReducerValue(scope: SnapshotScope, input: ReducerValueRequest) {
+export function resolveReducerValue(
+  scope: SnapshotScope,
+  input: ReducerValueRequest,
+  catalogIdentity = READ_CATALOG_IDENTITY,
+) {
   const request = reducerValueRequestSchema.parse(input)
   const registration = Object.hasOwn(REDUCERS, request.reducer)
     ? REDUCERS[request.reducer]
@@ -63,7 +69,13 @@ export function resolveReducerValue(scope: SnapshotScope, input: ReducerValueReq
   if (entry.scope !== scope.kind) throw new Error(`wrong scope for reducer "${request.reducer}"`)
   const args = entry.args.parse(request.args ?? {})
   const reducer = entry.create(args)
-  const identity = canonical({ scope, reducer: request.reducer, version: reducer.version, args })
+  const identity = canonical({
+    scope,
+    reducer: request.reducer,
+    version: reducer.version,
+    catalogIdentity,
+    args,
+  })
   // v2 ignores checkpoints from the former client-writable key format.
   const key = `${REDUCER_VALUE_SNAPSHOT_PREFIX}v2.${new Bun.CryptoHasher('sha256').update(identity).digest('hex').slice(0, 54)}`
   return { name: request.reducer, reducer, identity, key, entry }
@@ -130,16 +142,19 @@ export async function readReducerValue(
     cursor = event.seq
   }
   if (cursor !== boundary) throw new Error('incomplete reducer log')
-  acc = reducer.advance(acc, entry.adapt(delta))
+  acc = reducer.advance(acc, entry.adapt(projectStoredEvents(delta)))
   const value = entry.value(reducer.finish(acc))
   if (!valid || delta.length > 0) {
     const next = { version: reducer.version, cursor, state: { identity, acc } }
     try {
-      if (row && !valid) await storage.repair(key, row, next)
-      else await storage.put(key, next)
+      if (row && !valid && row.snapshot.version === reducer.version)
+        await storage.repair(key, row, next)
+      else if (row && !valid && row.snapshot.version !== reducer.version) {
+        /* foreign cache is read-only */
+      } else await storage.put(key, next)
     } catch {
       /* best-effort cache; log and reduction errors propagate */
     }
   }
-  return { version: reducer.version, cursor, value }
+  return { version: reducer.version, cursor, value, catalogIdentity: READ_CATALOG_IDENTITY }
 }

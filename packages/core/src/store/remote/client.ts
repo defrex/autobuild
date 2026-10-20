@@ -1,3 +1,9 @@
+import { stampCompatibility, buildEventPolicy, repositoryEventPolicy } from '../../events/policy'
+import { READ_CATALOG_IDENTITY, projectStoredEvents } from '../../events/compatibility'
+import { CATALOG_IDENTITY_HEADER } from './version'
+import { validateReducerValue } from '../reducer-value-validation'
+import { prepareEventWrite as validateEventWrite } from '../../events/catalog'
+import { prepareRepositoryEventWrite as validateRepositoryEventWrite } from '../../events/repository'
 import {
   resolveReducerValue,
   reducerValueSchema,
@@ -108,6 +114,7 @@ import {
   reducerSnapshotPutResponseSchema,
   reducerSnapshotResponseSchema,
   placeholderRev,
+  substitutePlaceholderRefs,
   repoDepositsResponseSchema,
   repositoryArtifactGetResponseSchema,
   repositoryArtifactMetaListSchema,
@@ -170,6 +177,7 @@ export interface RemoteBuildStoreOptions {
 }
 
 export class RemoteBuildStore implements BuildStore {
+  readonly catalogIdentity = READ_CATALOG_IDENTITY
   readonly networkReads = true
   private readonly base: string
   private readonly token: string | undefined
@@ -276,7 +284,10 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
-    return this.requestJson('POST', '/builds', buildRecordWireSchema, input)
+    return this.requestJson('POST', '/builds', buildRecordWireSchema, {
+      ...input,
+      ...(input.created ? { created: validateEventWrite(input.created) } : {}),
+    })
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
@@ -295,12 +306,13 @@ export class RemoteBuildStore implements BuildStore {
     // count. The route answers from build records, so an unknown repo or a
     // repo without a journal record answers 200 with an empty array rather
     // than 404 — the server composes it before the repository-existence gate.
-    const digests = await this.requestJson(
-      'GET',
-      `${this.repoPath(repo)}/build-digests`,
-      buildDigestListSchema,
-    )
-    return new Map(digests.map((digest) => [digest.slug, digest]))
+    const response = await this.raw('GET', `${this.repoPath(repo)}/build-digests`)
+    if (!response.ok) throw await this.toError(response)
+    const digests = buildDigestListSchema.parse(await response.json())
+    if (response.headers.get(CATALOG_IDENTITY_HEADER) === READ_CATALOG_IDENTITY)
+      return new Map(digests.map((digest) => [digest.slug, digest]))
+    const { readPersistedBuildDigests } = await import('../reduced-reads')
+    return readPersistedBuildDigests(this, repo)
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
@@ -308,7 +320,7 @@ export class RemoteBuildStore implements BuildStore {
       'POST',
       `${this.buildPath(slug)}/events`,
       eventEnvelopeWireSchema,
-      { actor: event.actor, type: event.type, payload: event.payload },
+      validateEventWrite(event),
     )
     return envelope as unknown as EventEnvelope<T>
   }
@@ -324,7 +336,7 @@ export class RemoteBuildStore implements BuildStore {
       conditionalEventResponseSchema,
       {
         expectedSeq,
-        event: { actor: event.actor, type: event.type, payload: event.payload },
+        event: validateEventWrite(event),
       },
     )
     return envelope as EventEnvelope<T> | null
@@ -354,6 +366,13 @@ export class RemoteBuildStore implements BuildStore {
       createdAt: '',
     }))
     const write = makeEvent(sentinels)
+    validateEventWrite({
+      ...write,
+      payload: substitutePlaceholderRefs(
+        write.payload,
+        sentinels.map((meta) => ({ ...meta, revision: 0 })),
+      ),
+    })
     const result = await this.requestJson(
       'POST',
       `${this.buildPath(slug)}/deposits`,
@@ -364,7 +383,13 @@ export class RemoteBuildStore implements BuildStore {
           contentBase64: encodeBase64(toBytes(artifact.content)),
           ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         })),
-        event: { actor: write.actor, type: write.type, payload: write.payload },
+        event: {
+          ...write,
+          compatibility: stampCompatibility(
+            buildEventPolicy[write.type as keyof typeof buildEventPolicy],
+            write.compatibility,
+          ),
+        },
       },
     )
     return {
@@ -388,6 +413,13 @@ export class RemoteBuildStore implements BuildStore {
       createdAt: '',
     }))
     const write = makeEvent(sentinels)
+    validateEventWrite({
+      ...write,
+      payload: substitutePlaceholderRefs(
+        write.payload,
+        sentinels.map((meta) => ({ ...meta, revision: 0 })),
+      ),
+    })
     const result = await this.requestJson(
       'POST',
       `${this.buildPath(slug)}/deposits/conditional`,
@@ -399,7 +431,13 @@ export class RemoteBuildStore implements BuildStore {
           contentBase64: encodeBase64(toBytes(artifact.content)),
           ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         })),
-        event: { actor: write.actor, type: write.type, payload: write.payload },
+        event: {
+          ...write,
+          compatibility: stampCompatibility(
+            buildEventPolicy[write.type as keyof typeof buildEventPolicy],
+            write.compatibility,
+          ),
+        },
       },
     )
     if (result === null) return null
@@ -554,7 +592,7 @@ export class RemoteBuildStore implements BuildStore {
       'POST',
       `${this.repoPath(repo)}/events`,
       repositoryEventEnvelopeWireSchema,
-      { actor: event.actor, type: event.type, payload: event.payload },
+      validateRepositoryEventWrite(event),
     )
     return envelope as unknown as RepositoryEventEnvelope<T>
   }
@@ -576,6 +614,13 @@ export class RemoteBuildStore implements BuildStore {
       createdAt: '',
     }))
     const write = makeEvent(sentinels)
+    validateRepositoryEventWrite({
+      ...write,
+      payload: substitutePlaceholderRefs(
+        write.payload,
+        sentinels.map((meta) => ({ ...meta, revision: 0 })),
+      ),
+    })
     const result = await this.requestJson(
       'POST',
       `${this.repoPath(repo)}/deposits`,
@@ -586,7 +631,13 @@ export class RemoteBuildStore implements BuildStore {
           contentBase64: encodeBase64(toBytes(artifact.content)),
           ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         })),
-        event: { actor: write.actor, type: write.type, payload: write.payload },
+        event: {
+          ...write,
+          compatibility: stampCompatibility(
+            repositoryEventPolicy[write.type as keyof typeof repositoryEventPolicy],
+            write.compatibility,
+          ),
+        },
       },
     )
     return {
@@ -617,14 +668,38 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
-    resolveReducerValue(scope, request)
+    const { reducer, entry } = resolveReducerValue(scope, request)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
-    return this.requestJson(
-      'POST',
-      `${root}/reducer-values`,
-      reducerValueSchema,
-      request,
-    ) as Promise<ReducerValue>
+    const response = await this.raw('POST', `${root}/reducer-values`, request)
+    if (!response.ok) throw await this.toError(response)
+    const result = reducerValueSchema.parse(await response.json())
+    const identity = response.headers.get(CATALOG_IDENTITY_HEADER)
+    if (
+      identity === READ_CATALOG_IDENTITY &&
+      result.version === reducer.version &&
+      validateReducerValue(request.reducer, result.value)
+    )
+      return {
+        version: result.version,
+        cursor: result.cursor,
+        value: result.value as ReducerValue['value'],
+        catalogIdentity: identity,
+      }
+    // The response cursor freezes this replay even if another writer appends.
+    const events =
+      scope.kind === 'build'
+        ? await this.getEvents(scope.slug)
+        : await this.getRepoEvents(scope.repo)
+    const bounded = events.filter((event) => event.seq <= result.cursor)
+    let cursor = 0
+    for (const event of bounded) {
+      if (event.seq !== ++cursor) throw new Error('noncontiguous reducer log')
+    }
+    if (cursor !== result.cursor) throw new Error('incomplete reducer log')
+    const value = entry.value(
+      reducer.finish(reducer.advance(reducer.initial(), entry.adapt(projectStoredEvents(bounded)))),
+    )
+    return { version: reducer.version, cursor, value, catalogIdentity: READ_CATALOG_IDENTITY }
   }
 
   private snapshotPath(scope: SnapshotScope, reducer: string): string {
@@ -940,7 +1015,7 @@ export class RemoteBuildStore implements BuildStore {
       'POST',
       `${this.repoPath(repo)}/tick/finish`,
       finishRepoTickResponseSchema,
-      { holder, completion, events },
+      { holder, completion, events: events.map((event) => validateRepositoryEventWrite(event)) },
     )) as RepoTickFinish | null
   }
 

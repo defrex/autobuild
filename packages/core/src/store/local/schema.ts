@@ -46,6 +46,9 @@ export const events = sqliteTable(
     actor: text('actor', { mode: 'json' }).notNull().$type<Actor>(),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull(),
+    compatibility: text('compatibility', { mode: 'json' }).$type<
+      import('../../events/policy').CompatibilityMetadata
+    >(),
   },
   // Mirrors the BOOTSTRAP_DDL digest-scan index (AUT-487), type-leading so the
   // digest query's cost grows with digest-relevant events, not total history.
@@ -75,6 +78,9 @@ export const repoEvents = sqliteTable(
     actor: text('actor', { mode: 'json' }).notNull().$type<Actor>(),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull(),
+    compatibility: text('compatibility', { mode: 'json' }).$type<
+      import('../../events/policy').CompatibilityMetadata
+    >(),
   },
   (t) => [primaryKey({ columns: [t.repo, t.seq] })],
 )

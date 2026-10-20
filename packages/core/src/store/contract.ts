@@ -1,3 +1,5 @@
+import { READ_CATALOG_IDENTITY } from '../events/compatibility'
+import { AUTOBUILD_VERSION } from './remote/version'
 import { sameParentRejection } from '../kernel/node-restack-state'
 import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
@@ -1720,6 +1722,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               const expected = JSON.parse(JSON.stringify(resolved.reducer.reduce(events)))
               const answer = await store.getReducerValue(scope, request)
               expect(answer).toEqual({
+                catalogIdentity: READ_CATALOG_IDENTITY,
                 version: resolved.reducer.version,
                 cursor: events.at(-1)?.seq ?? 0,
                 value: expected,
@@ -1898,17 +1901,17 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           ).toBe(true)
           expect(await store.getReducerSnapshot(scope, 'build', 1)).toBeNull()
           expect((await store.getReducerSnapshot(scope, 'build', 2))?.state).toBe('v2')
-          // A lower version replaces once the cursor advances past the stored one.
+          // A lower version cannot replace a newer cache, even at a later cursor.
           expect(
             await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 4, state: 'v1b' }),
-          ).toBe(true)
-          expect(await store.getReducerSnapshot(scope, 'build', 2)).toBeNull()
-          expect((await store.getReducerSnapshot(scope, 'build', 1))?.cursor).toBe(4)
+          ).toBe(false)
+          expect((await store.getReducerSnapshot(scope, 'build', 2))?.state).toBe('v2')
+          expect(await store.getReducerSnapshot(scope, 'build', 1)).toBeNull()
           // But never at a lower cursor, whatever its version.
           expect(
             await store.putReducerSnapshot(scope, 'build', { version: 9, cursor: 2, state: 'old' }),
           ).toBe(false)
-          expect((await store.getReducerSnapshot(scope, 'build', 1))?.state).toBe('v1b')
+          expect((await store.getReducerSnapshot(scope, 'build', 2))?.state).toBe('v2')
         })
       })
 
@@ -2298,6 +2301,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.createBuild(sampleBuildInput('envelope'))
           const envelope = await store.append('envelope', buildCreatedWrite())
           expect(envelope).toEqual({
+            compatibility: { writerVersion: AUTOBUILD_VERSION, classification: 'decisive' },
             build: 'envelope',
             seq: 1,
             ts: CONTRACT_T0,
@@ -4889,17 +4893,20 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
                   payload: {},
                 } as unknown as EventWrite)
                 .catch((e: unknown) => e)
-              // All six fixtures ride human actors, so under a token posture
-              // `enforceVia` rejects each before the catalog ever sees the
-              // shape — a malformed via under a via-less token is the same 403
-              // authority failure as a valid one (SPEC §15.1).
+              // A current client can reject malformed actors before transport.
+              // If transported, enforceVia still rejects unauthorized attribution
+              // before the server catalog sees the shape (SPEC §15.1).
               if (viaAuthority !== undefined) {
-                expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(AuthError)
-                expect((err as Error).message).toBe(
-                  viaAuthority.via === undefined
-                    ? NO_VIA_MESSAGE
-                    : `token carries via ${JSON.stringify(viaAuthority.via)}; it may not write events claiming via ${JSON.stringify(via)}`,
-                )
+                expect(
+                  err instanceof AuthError || err instanceof EventValidationError,
+                  `via ${JSON.stringify(via)} must reject before writing`,
+                ).toBe(true)
+                if (err instanceof AuthError)
+                  expect(err.message).toBe(
+                    viaAuthority.via === undefined
+                      ? NO_VIA_MESSAGE
+                      : `token carries via ${JSON.stringify(viaAuthority.via)}; it may not write events claiming via ${JSON.stringify(via)}`,
+                  )
               } else {
                 expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(
                   EventValidationError,

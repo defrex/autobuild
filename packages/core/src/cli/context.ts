@@ -1,3 +1,4 @@
+import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The `ab context` materializer (SPEC §8.3): a phase-scoped hydration of the
@@ -66,6 +67,8 @@ export type MaterializedEntry = ArtifactRef | 'derived'
  * commands validate with, so skills are self-checking.
  */
 export interface ContextManifest {
+  compatibility?: import('../events/compatibility').CompatibilityState
+  compatibilityDiagnostic?: string
   build: string
   phase: Phase
   round: number
@@ -224,6 +227,12 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   const manifest: ContextManifest = {
+    ...(state.compatibility.unknownFacts
+      ? {
+          compatibility: state.compatibility,
+          compatibilityDiagnostic: compatibilityDiagnostic(state.compatibility),
+        }
+      : {}),
     build,
     phase,
     round,

@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
@@ -22,6 +23,7 @@ async function current(store: BuildStore, slug: string) {
   return (await readBuildFacts(store, slug)).value.state
 }
 async function authority(deps: NodeTransactionDeps) {
+  if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) throw new MixedVersionDeferral()
   if (!(await deps.canWrite()) || !(await deps.store.renewNodeWriter(deps.slug, deps.holder)))
     throw new Error('node writer authority lost')
 }

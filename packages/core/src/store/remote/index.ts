@@ -1,3 +1,4 @@
+export type { StoredEvent } from '../../events/compatibility'
 // Client half + shared wire vocabulary for the remote BuildStore (SPEC §7.2).
 // The HTTP server half ships in `@defrex/autobuild-hosted-store-service`;
 // this barrel is what a local CLI and the hosted package both build against.
@@ -12,6 +13,7 @@ export type {
   DelegatedTokenScope,
 } from './token'
 export {
+  CATALOG_IDENTITY_HEADER,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,

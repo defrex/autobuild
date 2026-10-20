@@ -1,3 +1,4 @@
+import { READ_CATALOG_IDENTITY } from '@defrex/autobuild/store-adapter'
 import {
   repositoryRead,
   hasRepositoryReadContext,
@@ -31,9 +32,9 @@ import {
   toBytes,
   resolvePinnedAsset,
   validateCreatedEvent,
-  validateEventWrite,
+  prepareEventWrite as validateEventWrite,
   validateExpectedSeq,
-  validateRepositoryEventWrite,
+  prepareRepositoryEventWrite as validateRepositoryEventWrite,
   validateSessionEventWrite,
   type AbEvent,
   type Artifact,
@@ -165,6 +166,7 @@ export interface PostgresBuildStoreOptions {
 }
 
 export class PostgresBuildStore implements BuildStore {
+  readonly catalogIdentity = READ_CATALOG_IDENTITY
   readonly networkReads = true
   readonly blobs: BlobStore
   private readonly clock: Clock
@@ -362,10 +364,18 @@ export class PostgresBuildStore implements BuildStore {
       await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
     const seq = num(tails[0]?.seq) + 1
     const ts = this.now()
-    await q`INSERT INTO events (build, seq, ts, actor, type, payload)
-      VALUES (${slug}, ${seq}, ${ts}, ${event.actor}, ${event.type}, ${event.payload})`
+    await q`INSERT INTO events (build, seq, ts, actor, type, payload, compatibility)
+      VALUES (${slug}, ${seq}, ${ts}, ${event.actor}, ${event.type}, ${event.payload}, ${event.compatibility ?? null})`
     await q`UPDATE builds SET updated_at = ${ts} WHERE slug = ${slug}`
-    return { build: slug, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
+    return {
+      build: slug,
+      seq,
+      ts,
+      actor: event.actor,
+      type: event.type,
+      payload: event.payload,
+      compatibility: event.compatibility,
+    }
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
@@ -551,6 +561,7 @@ export class PostgresBuildStore implements BuildStore {
         actor: json(row.actor),
         type: String(row.type),
         payload: json(row.payload),
+        ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
       })) as AbEvent[]
     }
     return readEventsWithWait({
@@ -1055,9 +1066,17 @@ export class PostgresBuildStore implements BuildStore {
     const tails: Row[] =
       await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`
     const seq = num(tails[0]?.seq) + 1
-    await q`INSERT INTO repo_events (repo, seq, ts, actor, type, payload) VALUES (${repo},${seq},${ts},${event.actor},${event.type},${event.payload})`
+    await q`INSERT INTO repo_events (repo, seq, ts, actor, type, payload, compatibility) VALUES (${repo},${seq},${ts},${event.actor},${event.type},${event.payload},${event.compatibility ?? null})`
     await q`UPDATE repo_streams SET updated_at=${ts} WHERE repo=${repo}`
-    return { repo, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
+    return {
+      repo,
+      seq,
+      ts,
+      actor: event.actor,
+      type: event.type,
+      payload: event.payload,
+      compatibility: event.compatibility,
+    }
   }
 
   async appendRepo<T extends RepositoryEventType>(
@@ -1146,6 +1165,7 @@ export class PostgresBuildStore implements BuildStore {
         actor: json(row.actor),
         type: String(row.type),
         payload: json(row.payload),
+        ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
       })) as RepositoryEvent[]
     }
     return readEventsWithWait({
@@ -1201,6 +1221,7 @@ export class PostgresBuildStore implements BuildStore {
           actor: json(row.actor),
           type: String(row.type),
           payload: json(row.payload),
+          ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
         })) as (AbEvent | RepositoryEvent)[]
       },
       put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
@@ -1342,9 +1363,9 @@ export class PostgresBuildStore implements BuildStore {
           ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
             version = EXCLUDED.version, cursor = EXCLUDED.cursor,
             state = EXCLUDED.state, updated_at = EXCLUDED.updated_at
-          WHERE EXCLUDED.cursor > reducer_snapshots.cursor
+          WHERE EXCLUDED.version >= reducer_snapshots.version AND (EXCLUDED.cursor > reducer_snapshots.cursor
             OR (EXCLUDED.cursor = reducer_snapshots.cursor
-              AND EXCLUDED.version > reducer_snapshots.version)
+              AND EXCLUDED.version > reducer_snapshots.version))
           RETURNING 1 AS written`,
       )
       return rows.length > 0
@@ -1424,6 +1445,7 @@ export class PostgresBuildStore implements BuildStore {
           actor: json(row.actor),
           type: String(row.type),
           payload: json(row.payload),
+          ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
         })) as RepositoryEvent[]
       },
     )
