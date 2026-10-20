@@ -10,7 +10,12 @@ import { chromiumBinary, parseProbe, runRealtimeChromium, serveSite } from './we
 const fixture =
   '<div class="docs-eyebrow">exclude me</div><h1>A &amp; B</h1><p>Words <strong>bold</strong> and <em>emphasis</em>, <a href="../builds/?a=1&amp;b=2#part">a [link]</a> with <code>`tick`</code>.</p><ol start="3"><li>Third<ul><li>Nested <b>bold</b></li></ul></li><li value="7">Seventh</li></ol><p><a href="#here">Fragment</a> <a href="/docs/">Root</a> <a href="https://github.com/defrex/autobuild">Repo</a> &lt;tag&gt; *literal*</p><pre><code class="language-ts">const x = `a`;\n```\n&lt;tag&gt;\n</code></pre><button data-markdown-exclude>exclude me</button>'
 const expected =
-  '# A & B\n\nWords **bold** and *emphasis*, [a \\[link\\]](<https://www.autobuild.run/docs/builds/?a=1&b=2#part>) with `` `tick` ``\\.\n\n3. Third\n   \n   - Nested **bold**\n7. Seventh\n\n[Fragment](<https://www.autobuild.run/docs/example/#here>) [Root](<https://www.autobuild.run/docs/>) [Repo](<https://github.com/defrex/autobuild>) \\<tag\\> \\*literal\\*\n\n````ts\nconst x = `a`;\n```\n<tag>\n````\n'
+  '# A & B\n\nWords **bold** and *emphasis*, [a \\[link\\]](<https://www.autobuild.run/docs/builds/?a=1&b=2#part>) with `` `tick` ``.\n\n3. Third\n   \n   - Nested **bold**\n7. Seventh\n\n[Fragment](<https://www.autobuild.run/docs/example/#here>) [Root](<https://www.autobuild.run/docs/>) [Repo](<https://github.com/defrex/autobuild>) \\<tag\\> \\*literal\\*\n\n````ts\nconst x = `a`;\n```\n<tag>\n````\n'
+
+const punctuationFixture =
+  '<h1>Clean prose.</h1><h2>1. Install in the repository</h2><p>Use local-git, stack-neutral, append-only (safe)! C++ #tag {value} a | b. <strong>Spec.</strong> ![literal] wow!</p><p># heading text</p><p>- bullet text</p><p>+ bullet text</p><p>* literal bullet</p><p>1. ordered text</p><p>2) ordered text</p><p><span>3</span>. split marker</p><p>--- </p><p>word # heading - plus + 1. 2) stay readable.</p>'
+const punctuationExpected =
+  '# Clean prose.\n\n## 1. Install in the repository\n\nUse local-git, stack-neutral, append-only (safe)! C++ #tag {value} a | b. **Spec.** \\!\\[literal\\] wow!\n\n\\# heading text\n\n\\- bullet text\n\n\\+ bullet text\n\n\\* literal bullet\n\n1\\. ordered text\n\n2\\) ordered text\n\n3\\. split marker\n\n\\---\n\nword # heading - plus + 1. 2) stay readable.\n'
 
 test('production copy covers every article, responsive geometry, formatting and clipboard outcomes', async () => {
   const chromium = chromiumBinary()
@@ -44,6 +49,9 @@ test('production copy covers every article, responsive geometry, formatting and 
     const actual = articleMarkdown(article, '${SITE_URL}/docs/example/')
     check(actual === ${JSON.stringify(expected)}, 'fixture: ' + JSON.stringify(actual))
     check(article.innerHTML === before, 'serializer mutated DOM')
+    article.innerHTML = ${JSON.stringify(punctuationFixture)}
+    const punctuation = articleMarkdown(article, '${SITE_URL}/docs/example/')
+    check(punctuation === ${JSON.stringify(punctuationExpected)}, 'punctuation: ' + JSON.stringify(punctuation))
     const frame = document.querySelector('iframe')
     for (const width of [1440, 720, 390]) {
       frame.style.width = width + 'px'
@@ -59,11 +67,10 @@ test('production copy covers every article, responsive geometry, formatting and 
         button.click(); await sleep(20)
         check(Math.abs(button.getBoundingClientRect().width - initialWidth) < 1, path + ' stable outcome width')
         const title = doc.querySelector('h1')
-        const plain = text => text.replace(/\\\\(.)/g, '$1')
-        check(plain(copied.split('\\n')[0]) === '# ' + title.textContent, path + ' title')
+        check(copied.split('\\n')[0] === '# ' + title.textContent, path + ' title')
         let index = 0
         for (const h2 of doc.querySelectorAll('article h2')) {
-          const next = plain(copied).indexOf('## ' + h2.textContent, index)
+          const next = copied.indexOf('## ' + h2.textContent, index)
           check(next >= index, path + ' heading ' + h2.textContent); index = next + 1
         }
         const fences = [...copied.matchAll(/^(\\x60{3,})([^\\n]*)\\n([\\s\\S]*?)^\\1$/gm)]

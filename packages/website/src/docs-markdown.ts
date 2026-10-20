@@ -1,6 +1,13 @@
 /** Serialize only the authored article, using its rendered, entity-decoded DOM. */
 export function articleMarkdown(article: Element, canonicalPageUrl: string): string {
-  const escapeText = (text: string): string => text.replace(/([\\`*_{}[\]()<>#+.!|~-])/g, '\\$1')
+  // Inline punctuation stays readable unless Markdown can interpret it as markup.
+  const escapeText = (text: string): string => text.replace(/[\\`*_[\]<>]|!(?=\[)/g, '\\$&')
+  // Paragraphs and bare container text can otherwise become headings or lists.
+  // Heading text already follows our emitted heading marker and needs no such escape.
+  const escapeBlockStart = (text: string): string =>
+    text
+      .replace(/^(#{1,6}(?=\s|$)|[-+](?=\s|$)|-(?=--[-\s]*$))/, '\\$&')
+      .replace(/^(\d+)([.)])(?=\s|$)/, '$1\\$2')
   const run = (text: string): number =>
     Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length))
   const children = (node: Node): string => [...node.childNodes].map(inline).join('')
@@ -53,7 +60,7 @@ export function articleMarkdown(article: Element, canonicalPageUrl: string): str
     const output: string[] = []
     let pending = ''
     const flush = (): void => {
-      if (pending.trim()) output.push(pending.trim())
+      if (pending.trim()) output.push(escapeBlockStart(pending.trim()))
       pending = ''
     }
     for (const node of nodes) {
@@ -79,7 +86,7 @@ export function articleMarkdown(article: Element, canonicalPageUrl: string): str
         output.push(list(node))
       } else if (tag === 'P') {
         flush()
-        output.push(children(node).trim())
+        output.push(escapeBlockStart(children(node).trim()))
       } else if (['DIV', 'SECTION', 'ARTICLE'].includes(tag)) {
         flush()
         output.push(blocks([...node.childNodes]))
