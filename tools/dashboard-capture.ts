@@ -41,7 +41,7 @@ import {
 
 export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 
-type CaptureScenario = 'mixed' | 'happy' | 'integration'
+type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 
 export interface FrameSpec {
   selection?: DashboardModel['selection']
@@ -165,6 +165,13 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  {
+    id: 'capacity-wide',
+    scenario: 'capacity',
+    columns: 180,
+    rows: 44,
+    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+  },
   {
     id: 'integration-wide',
     selection: { kind: 'build', slug: 'queue-held' },
@@ -441,7 +448,10 @@ function captureHandlers(): SkillHandlers {
   return handlers
 }
 
-async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promise<E2eHarness> {
+async function prepareIntegrationScenario(
+  consentQueueFixtures: boolean,
+  capacityIdentities = false,
+): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: happyHandlers(),
     configToml: CAPTURE_CONFIG_TOML,
@@ -530,6 +540,8 @@ async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promis
       slug,
       repo: harness.origin,
       branch: `preview/${label}`,
+      // Only borrowed-slot evidence needs source-qualified record identities.
+      ...(capacityIdentities ? { ticket: { source: 'fake', id: `QUEUE-${index}` } } : {}),
       created: {
         actor: DISPATCHER,
         type: 'build.created',
@@ -663,6 +675,39 @@ async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promis
   return harness
 }
 
+async function prepareBorrowedCapacity(harness: E2eHarness): Promise<void> {
+  await harness.store.append('queue-conflict', {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'local',
+      ref: 'capture-conflict',
+      branch: 'preview/conflict',
+      base: { source: 'local', sha: 'a'.repeat(40), remoteError: 'capture' },
+    },
+  })
+  for (let index = 0; index < 3; index++) {
+    const slug = `waiting-child-${index}`
+    await harness.store.createBuild({
+      slug,
+      repo: harness.origin,
+      ticket: { source: 'fake', id: slug },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: harness.origin,
+          ticket: { source: 'fake', id: slug },
+          baseBranch: 'preview/conflict',
+          target: { build: 'queue-conflict', ticket: { source: 'fake', id: 'QUEUE-5' } },
+        },
+      },
+    })
+    await harness.store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
+  }
+}
+
 export async function prepareScenario(): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: captureHandlers(),
@@ -711,6 +756,11 @@ export async function prepareScenario(): Promise<E2eHarness> {
       }
       await launched.runner.run()
     }
+
+    // Capacity admission samples the stepping clock twice during the initial
+    // tick. Preserve the established reconcile/landing evidence timestamps;
+    // these frames exercise policy and layout rather than admission timing.
+    harness.clock.advance(-2000)
 
     // Seed a completed reconcile cycle with explicit policy evidence on the open PR.
     const slug = 'complete-dashboard-evidence'
@@ -1245,7 +1295,7 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   }
   const text = plain.join('\n')
   const commonEvidence =
-    spec.scenario === 'integration'
+    spec.scenario === 'integration' || spec.scenario === 'capacity'
       ? ['integration', 'target', 'empty']
       : spec.scenario === 'happy'
         ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
@@ -1471,6 +1521,8 @@ export async function captureDashboardFrames(
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
   const mixedHarness = await prepareScenario()
+  const capacityHarness = await prepareIntegrationScenario(true, true)
+  await prepareBorrowedCapacity(capacityHarness)
   const integrationHarness = await prepareIntegrationScenario(
     options.consentQueueFixtures !== false,
   )
@@ -1478,6 +1530,7 @@ export async function captureDashboardFrames(
   try {
     happy = await prepareHappyScenario()
   } catch (error) {
+    await capacityHarness.cleanup()
     await integrationHarness.cleanup()
     await mixedHarness.cleanup()
     throw error
@@ -1498,9 +1551,11 @@ export async function captureDashboardFrames(
       const harness =
         spec.scenario === 'happy'
           ? happy.harness
-          : spec.scenario === 'integration'
-            ? integrationHarness
-            : mixedHarness
+          : spec.scenario === 'capacity'
+            ? capacityHarness
+            : spec.scenario === 'integration'
+              ? integrationHarness
+              : mixedHarness
       const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,
@@ -1635,6 +1690,7 @@ export async function captureDashboardFrames(
     }
   } finally {
     await Promise.all([
+      capacityHarness.cleanup(),
       integrationHarness.cleanup(),
       mixedHarness.cleanup(),
       happy.harness.cleanup(),

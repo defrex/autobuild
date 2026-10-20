@@ -1,3 +1,8 @@
+import type { CapacityBuild } from '../../kernel/dispatch-capacity'
+import {
+  openBuildWorkspaceReducer,
+  provisionMarkerReducer,
+} from '../../processes/dispatcher-selectors'
 import type { Config } from '../../config/schema'
 import { composeBuildConfig } from '../../config/live'
 import type { PipelineSourceMeta } from '../../config/pipeline-source'
@@ -27,6 +32,7 @@ export interface DashboardBuildReader {
 export interface DashboardPollSnapshot {
   /** Monotonic process-local cache revision. */
   revision: number
+  capacityBuilds?: CapacityBuild[]
   /** Every dashboard-visible row, including acknowledged abort cleanup. Objects
    * are reused while their streams are unchanged. */
   builds: DashboardBuild[]
@@ -37,6 +43,9 @@ export interface DashboardPollSnapshot {
 
 interface LiveEntry {
   kind: 'live'
+  record: BuildRecord
+  workspace: ReturnType<typeof openBuildWorkspaceReducer.initial>
+  provisionMarker: ReturnType<typeof provisionMarkerReducer.initial>
   events: AbEvent[]
   /** The reducer accumulator `state` was derived from; the next delta is
    * folded into a copy of it instead of re-reducing the whole log. */
@@ -220,9 +229,10 @@ export class DashboardBuildPollCache {
           fullEnrichment || configChanged || current.build?.ticketId !== record.ticket?.id
             ? {
                 ...current,
+                record,
                 build: await this.projectRow(record, current.state, current.events, config),
               }
-            : current,
+            : { ...current, record },
         )
         continue
       }
@@ -236,6 +246,15 @@ export class DashboardBuildPollCache {
       }
       next.set(record.slug, {
         kind: 'live',
+        record,
+        workspace: openBuildWorkspaceReducer.advance(
+          current?.workspace ?? openBuildWorkspaceReducer.initial(),
+          delta,
+        ),
+        provisionMarker: provisionMarkerReducer.advance(
+          current?.provisionMarker ?? provisionMarkerReducer.initial(),
+          delta,
+        ),
         events,
         acc,
         state,
@@ -255,12 +274,19 @@ export class DashboardBuildPollCache {
   private snapshot(): DashboardPollSnapshot {
     const builds: DashboardBuild[] = []
     const states = new Map<string, BuildState>()
+    const capacityBuilds: CapacityBuild[] = []
     for (const [slug, entry] of this.entries) {
       if (entry.kind === 'terminal') continue
+      capacityBuilds.push({
+        record: entry.record,
+        state: entry.state,
+        workspace: entry.workspace.open !== null,
+        provisioning: entry.provisionMarker.marker !== null,
+      })
       states.set(slug, entry.state)
       if (entry.build !== null) builds.push(entry.build)
     }
     builds.sort((a, b) => a.slug.localeCompare(b.slug))
-    return { revision: this.committedRevision, builds, states }
+    return { revision: this.committedRevision, builds, states, capacityBuilds }
   }
 }

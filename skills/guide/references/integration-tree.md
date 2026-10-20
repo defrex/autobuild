@@ -40,6 +40,17 @@ no placeholder commit or PR. Idle nodes need no provisioned workspace, runner,
 execution lease or dispatch capacity. A PR opens or is adopted when the node
 has commits its current parent lacks; parent-only advancement remains empty.
 
+
+A node requesting reconcile or verification is admitted before new ticket
+claims. Its candidate occupancy excludes itself and capacity-bearing blocked or
+paused descendants, following accepted source-qualified build target ancestry.
+Running descendants and unrelated builds still count; ordinary blocked and
+paused work retains its slot for every other admission. Provisioning reserves
+node occupancy before the runner starts. This exception never raises the budget
+for new claims. Status and both dashboards report actual occupancy, configured
+capacity, effective display capacity and the nodes using descendant-held slots.
+Idle collecting nodes remain free.
+
 Claims freeze the destination build generation and branch. Missing, unopened,
 landed, closed or aborted targets leave work queued with diagnostics. The newest
 generation wins; a closed generation never falls back to an older open one.

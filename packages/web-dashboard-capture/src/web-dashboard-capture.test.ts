@@ -134,6 +134,11 @@ function models(): WebFixtureModels {
         'Forge rebase: merging disabled. Allow rebase merging.',
       ],
     },
+    capacity: {
+      ...happy,
+      active: { current: 5, limit: 5 },
+      capacity: { configured: 4, occupied: 5, effective: 5, borrowingNodes: ['queue-conflict'] },
+    },
     integration: {
       ...happy,
       builds: [

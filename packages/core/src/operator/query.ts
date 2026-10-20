@@ -1,3 +1,4 @@
+import { dispatchCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
 import {
@@ -22,7 +23,11 @@ import {
   type BuildDetail,
   type BuildSummary,
 } from '../cli/status'
-import { repositoryStatusFromFacts, type RepositoryStatus } from '../cli/repository-status'
+import {
+  repositoryStatusFromFacts,
+  readRepositoryCapacity,
+  type RepositoryStatus,
+} from '../cli/repository-status'
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
 import {
   buildDashboardFromProjected,
@@ -293,11 +298,10 @@ export async function getRepositoryStatus(
 ): Promise<RepositoryStatus> {
   return withOperatorView(store, repo, 'journal', async (view) => {
     const { dispatcher } = await readDispatcherLiveness(store, repo, now)
-    return repositoryStatusFromFacts(
-      repo,
-      (await readRepositoryFacts(view, repo)).value,
-      dispatcher,
-    )
+    const facts = (await readRepositoryFacts(view, repo)).value
+    const status = repositoryStatusFromFacts(repo, facts, dispatcher)
+    const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, now)
+    return { ...status, ...(capacity ? { capacity } : {}) }
   })
 }
 
@@ -347,7 +351,7 @@ async function dashboardFromView(
   // the event log regenerates, so the response equals a full replay's.
   const digests = await readBuildDigests(view, opts.repo)
   const projected: DashboardBuild[] = []
-  let activeCount = 0
+  const capacityBuilds: CapacityBuild[] = []
   for (const record of records) {
     if (record.repo !== opts.repo) continue
     const digest = digests.get(record.slug)
@@ -360,7 +364,7 @@ async function dashboardFromView(
     // Reduced status is `done`/`aborted` exactly when a terminal fact exists,
     // so `terminal === undefined` is exactly the old active test — no history
     // read needed for the count.
-    if (digest.terminal === undefined && digest.kind !== 'node') activeCount += 1
+
     if (digest.terminal === 'done') continue
     // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
     // snapshot, AUT-496 detail query): a build that projects no row —
@@ -371,6 +375,14 @@ async function dashboardFromView(
     // digest and the reducer cannot silently diverge. Every row-rendering
     // build still gets its facts and pinned pipeline.
     const facts = await view.buildFacts(record.slug)
+    capacityBuilds.push({
+      record,
+      state: facts.state,
+      workspace: facts.workspace !== null,
+      provisioning:
+        facts.state.kind === 'node' &&
+        (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+    })
     if (projectsNoDashboardRow(facts.state)) continue
     const pinned = await readPinnedConfig(view, record.slug, config)
     const row = projectBuildFromFacts(
@@ -396,12 +408,14 @@ async function dashboardFromView(
     ...forgeReadinessWarnings(status),
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
   ]
+  const capacityProjection = dispatchCapacity(capacityBuilds, config.capacity, opts.clock())
   const model = buildDashboardFromProjected(
     projected,
     {
       repo: opts.repo,
       queued: status.queued ?? 0,
-      activeCount,
+      activeCount: capacityProjection.occupied,
+      capacityProjection,
       capacity: config.capacity,
       observationCount,
       observationLimit: config.policy.harvestThreshold,
