@@ -359,3 +359,125 @@ test('producer release metadata survives direct, conditional and atomic hosted w
   ).rejects.toThrow('classification disagrees')
   expect(await client.getEvents('mixed')).toHaveLength(3)
 })
+
+for (const scope of [
+  { kind: 'build', slug: 'mixed' },
+  { kind: 'repo', repo: 'repo' },
+] as const) {
+  test(`mismatched ${scope.kind} reads transfer only the delta and isolate returned values`, async () => {
+    const store = await fixture()
+    const server = createStoreServer({ store, secret })
+    const transfers: { since: number; count: number }[] = []
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(url, init)
+      const response = await server.fetch(request)
+      response.headers.set(CATALOG_IDENTITY_HEADER, 'f'.repeat(64))
+      if (request.url.includes('/events?')) {
+        transfers.push({
+          since: Number(new URL(request.url).searchParams.get('since')),
+          count: (await response.clone().json()).length,
+        })
+      }
+      return response
+    }) as typeof fetch
+    const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+    const request = { reducer: scope.kind === 'build' ? 'buildReadFacts' : 'repositoryReadFacts' }
+    const first = await client.getReducerValue(scope, request)
+    const pristine = structuredClone(first)
+    const exposed = first.value as unknown as {
+      state?: { compatibility: { unknownFacts: number } }
+      compatibility?: { unknownFacts: number }
+    }
+    ;(exposed.state?.compatibility ?? exposed.compatibility!).unknownFacts = 999
+    for (let i = 0; i < 5; i++)
+      expect(await client.getReducerValue(scope, request)).toEqual(pristine)
+    const nextSeq = first.cursor + 1
+    seedNewerMemoryFact(
+      store,
+      scope.kind === 'build'
+        ? newerFact(nextSeq)
+        : { ...newerFact(nextSeq), build: undefined, repo: 'repo' },
+    )
+    const next = await client.getReducerValue(scope, request)
+    expect(next).toEqual(await store.getReducerValue(scope, request))
+    expect(transfers).toEqual([
+      { since: 0, count: first.cursor },
+      { since: first.cursor, count: 1 },
+    ])
+    expect(await client.getReducerValue(scope, request)).toEqual(next)
+    expect(transfers).toHaveLength(2)
+    // A caller's alias cannot poison the retained incremental accumulator.
+    expect(next.cursor).toBe(nextSeq)
+  })
+}
+
+test('mismatched parameterized reads retain independent argument accumulators', async () => {
+  const store = await fixture()
+  const server = createStoreServer({ store, secret })
+  const cursors: number[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init)
+    if (request.url.includes('/events?'))
+      cursors.push(Number(new URL(request.url).searchParams.get('since')))
+    const response = await server.fetch(request)
+    response.headers.delete(CATALOG_IDENTITY_HEADER)
+    return response
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  const scope = { kind: 'build', slug: 'mixed' } as const
+  for (const round of [1, 2, 1, 2]) {
+    const request = { reducer: 'phaseFailures', args: { phase: 'plan', round } }
+    expect(await client.getReducerValue(scope, request)).toEqual(
+      await store.getReducerValue(scope, request),
+    )
+  }
+  expect(cursors).toEqual([0, 0])
+})
+
+test('concurrent mismatched reads keep their response cursors without regressing the accumulator', async () => {
+  const store = await fixture()
+  const server = createStoreServer({ store, secret })
+  let release!: () => void
+  let captured!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const ready = new Promise<void>((resolve) => {
+    captured = resolve
+  })
+  let hold = false
+  const cursors: number[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init)
+    const response = await server.fetch(request)
+    response.headers.delete(CATALOG_IDENTITY_HEADER)
+    if (request.url.includes('/events?'))
+      cursors.push(Number(new URL(request.url).searchParams.get('since')))
+    if (hold && request.url.endsWith('/reducer-values')) {
+      hold = false
+      captured()
+      await held
+    }
+    return response
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  const scope = { kind: 'build', slug: 'mixed' } as const
+  const request = { reducer: 'buildReadFacts' }
+  await client.getReducerValue(scope, request)
+  seedNewerMemoryFact(store, newerFact(3))
+  hold = true
+  const older = client.getReducerValue(scope, request)
+  await ready
+  seedNewerMemoryFact(store, newerFact(4))
+  const newer = await client.getReducerValue(scope, request)
+  expect(newer.cursor).toBe(4)
+  release()
+  const late = await older
+  expect(late.cursor).toBe(3)
+  expect(
+    (late.value as unknown as { state: { compatibility: { unknownFacts: number } } }).state
+      .compatibility.unknownFacts,
+  ).toBe(2)
+  expect(await client.getReducerValue(scope, request)).toEqual(newer)
+  expect(cursors).toEqual([0, 2, 0])
+})

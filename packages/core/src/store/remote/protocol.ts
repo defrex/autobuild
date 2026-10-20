@@ -296,6 +296,9 @@ export const buildDigestWireSchema = z.object({
       types: z.array(z.string()),
       writerVersions: z.array(z.string()),
       legacyVersionUnavailable: z.boolean(),
+      decisiveTypes: z.array(z.string()).default([]),
+      decisiveWriterVersions: z.array(z.string()).default([]),
+      decisiveLegacyVersionUnavailable: z.boolean().default(false),
     })
     .optional(),
   integrationAuditPending: z.literal(true).optional(),

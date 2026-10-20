@@ -469,6 +469,10 @@ for (const order of ['older-first', 'newer-first'])
           types: [type],
           writerVersions: [event.compatibility!.writerVersion],
           legacyVersionUnavailable: false,
+          decisiveTypes: classification === 'decisive' ? [type] : [],
+          decisiveWriterVersions:
+            classification === 'decisive' ? [event.compatibility!.writerVersion] : [],
+          decisiveLegacyVersionUnavailable: false,
         }
         expect(older.entry.validate(olderAcc)).toBe(true)
         const installOlder = () =>
@@ -548,6 +552,36 @@ test('deferring a claimed build preserves its capacity reservation', async () =>
     await dispatcher.tick()
     expect((await store.listBuilds()).map((record) => record.slug)).toEqual(['mixed'])
     expect(launches).toEqual([])
+  } finally {
+    await store.close()
+  }
+})
+
+test('durable deferral attention names only decisive unknown types and releases', async () => {
+  const { store, db, seed } = fixture()
+  try {
+    await store.createBuild(sampleBuildInput('mixed'))
+    await store.append('mixed', buildCreatedWrite())
+    seed(2, 'advisory')
+    db.query('UPDATE events SET type=?, compatibility=? WHERE build=? AND seq=2').run(
+      'future.advisory',
+      JSON.stringify({ classification: 'advisory', writerVersion: 'advisory-release' }),
+      'mixed',
+    )
+    await readBuildFacts(store, 'mixed') // Persist before the decisive delta.
+    seed(3)
+    expect(await deferMixedVersion(store, 'mixed')).toBe(true)
+    const events = await store.getEvents('mixed')
+    const attention = events.find((event) => event.type === 'build.compatibility-deferred')!
+    expect(attention.payload).toMatchObject({
+      types: [newerFact(3).type],
+      writerVersions: [newerFact(3).compatibility!.writerVersion],
+      legacyVersionUnavailable: false,
+      boundary: 3,
+    })
+    expect(JSON.stringify(attention.payload)).not.toContain('future.advisory')
+    expect(JSON.stringify(attention.payload)).not.toContain('advisory-release')
+    expect((await readBuildFacts(store, 'mixed')).value.state.compatibility.unknownFacts).toBe(2)
   } finally {
     await store.close()
   }

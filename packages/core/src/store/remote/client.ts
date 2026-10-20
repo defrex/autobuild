@@ -179,6 +179,9 @@ export interface RemoteBuildStoreOptions {
 export class RemoteBuildStore implements BuildStore {
   readonly catalogIdentity = READ_CATALOG_IDENTITY
   readonly networkReads = true
+  // Reader-local accumulators for this client instance. Never publish these into the service's
+  // cache: its catalog may interpret the same journal differently.
+  private readonly replayStates = new Map<string, { cursor: number; acc: unknown }>()
   private readonly base: string
   private readonly token: string | undefined
   private readonly fetchFn: typeof fetch
@@ -668,7 +671,7 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
-    const { reducer, entry } = resolveReducerValue(scope, request)
+    const { reducer, entry, identity: replayIdentity } = resolveReducerValue(scope, request)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
     const response = await this.raw('POST', `${root}/reducer-values`, request)
     if (!response.ok) throw await this.toError(response)
@@ -685,20 +688,31 @@ export class RemoteBuildStore implements BuildStore {
         value: result.value as ReducerValue['value'],
         catalogIdentity: identity,
       }
-    // The response cursor freezes this replay even if another writer appends.
-    const events =
-      scope.kind === 'build'
-        ? await this.getEvents(scope.slug)
-        : await this.getRepoEvents(scope.repo)
-    const bounded = events.filter((event) => event.seq <= result.cursor)
-    let cursor = 0
-    for (const event of bounded) {
-      if (event.seq !== ++cursor) throw new Error('noncontiguous reducer log')
+    // Freeze at this response's cursor, including when concurrent reads finish
+    // out of order. Clone before folding: reducers may mutate their accumulator.
+    const cached = this.replayStates.get(replayIdentity)
+    const reusable = cached !== undefined && cached.cursor <= result.cursor ? cached : undefined
+    let cursor = reusable?.cursor ?? 0
+    let acc = reusable === undefined ? reducer.initial() : structuredClone(reusable.acc)
+    if (cursor < result.cursor) {
+      const events =
+        scope.kind === 'build'
+          ? await this.getEvents(scope.slug, cursor)
+          : await this.getRepoEvents(scope.repo, cursor)
+      const bounded = events.filter((event) => event.seq <= result.cursor)
+      for (const event of bounded) {
+        if (event.seq !== cursor + 1) throw new Error('noncontiguous reducer log')
+        cursor = event.seq
+      }
+      if (cursor !== result.cursor) throw new Error('incomplete reducer log')
+      acc = reducer.advance(acc, entry.adapt(projectStoredEvents(bounded)))
     }
-    if (cursor !== result.cursor) throw new Error('incomplete reducer log')
-    const value = entry.value(
-      reducer.finish(reducer.advance(reducer.initial(), entry.adapt(projectStoredEvents(bounded)))),
-    )
+    const value = entry.value(reducer.finish(structuredClone(acc)))
+    // Commit only successful folds, and never regress a concurrent accumulator.
+    if ((this.replayStates.get(replayIdentity)?.cursor ?? -1) <= cursor) {
+      this.replayStates.delete(replayIdentity)
+      this.replayStates.set(replayIdentity, { cursor, acc })
+    }
     return { version: reducer.version, cursor, value, catalogIdentity: READ_CATALOG_IDENTITY }
   }
 

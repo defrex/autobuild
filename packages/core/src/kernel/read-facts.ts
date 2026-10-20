@@ -505,7 +505,7 @@ export interface RepositoryReadAcc {
 export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
   version:
-    3 +
+    4 +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     repositoryAttentionReducer.version +

@@ -3758,6 +3758,10 @@ export class BuildRunner {
     mayRetry = true,
     providerAttempts?: readonly ProviderAttempt[],
   ): Promise<void> {
+    // A decisive fact may arrive while the agent is live (including while
+    // its terminal is refused). Do not turn deferral into a consumed retry.
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
+      throw new MixedVersionDeferral()
     const attempt = priorFailures + 1
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,

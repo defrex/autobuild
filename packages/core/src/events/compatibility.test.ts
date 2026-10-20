@@ -91,3 +91,29 @@ describe('mixed-version read catalog', () => {
     expect(compatibilityDiagnostic(state)).toContain('writer version unavailable')
   })
 })
+
+test('deferral summaries exclude advisory types and releases while retaining all unknown counts', () => {
+  const state = initialCompatibility()
+  const advisory = {
+    ...newerFact(1, 'advisory'),
+    type: 'future.advisory',
+    compatibility: { classification: 'advisory' as const, writerVersion: 'advisory-release' },
+  }
+  const decisive = {
+    ...newerFact(2),
+    type: 'future.decisive',
+    compatibility: { classification: 'decisive' as const, writerVersion: 'decisive-release' },
+  }
+  advanceCompatibility(state, [advisory])
+  const resumed = structuredClone(state)
+  advanceCompatibility(resumed, [decisive])
+  expect(resumed.unknownFacts).toBe(2)
+  expect(resumed.types).toEqual([advisory.type, decisive.type])
+  expect(resumed.writerVersions).toEqual(['advisory-release', 'decisive-release'])
+  expect(resumed.decisiveTypes).toEqual([decisive.type])
+  expect(resumed.decisiveWriterVersions).toEqual(['decisive-release'])
+  expect(compatibilityDiagnostic(resumed)).toContain('future.decisive')
+  expect(compatibilityDiagnostic(resumed)).toContain('decisive-release')
+  expect(compatibilityDiagnostic(resumed)).not.toContain('future.advisory')
+  expect(compatibilityDiagnostic(resumed)).not.toContain('advisory-release')
+})

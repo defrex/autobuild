@@ -23,7 +23,7 @@ export interface StoredEvent {
 }
 
 /** Change this revision whenever projection semantics change without new types. */
-export const READ_DECODER_REVISION = 1
+export const READ_DECODER_REVISION = 2
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,
@@ -115,6 +115,9 @@ export interface CompatibilityState {
   types: string[]
   writerVersions: string[]
   legacyVersionUnavailable: boolean
+  decisiveTypes: string[]
+  decisiveWriterVersions: string[]
+  decisiveLegacyVersionUnavailable: boolean
 }
 export function initialCompatibility(): CompatibilityState {
   return {
@@ -125,6 +128,9 @@ export function initialCompatibility(): CompatibilityState {
     types: [],
     writerVersions: [],
     legacyVersionUnavailable: false,
+    decisiveTypes: [],
+    decisiveWriterVersions: [],
+    decisiveLegacyVersionUnavailable: false,
   }
 }
 export function advanceCompatibility(
@@ -144,6 +150,10 @@ export function advanceCompatibility(
       state.writerVersions.push(metadata.writerVersion)
     if (!metadata) state.legacyVersionUnavailable = true
     if (metadata?.classification !== 'advisory') {
+      if (!state.decisiveTypes.includes(event.type)) state.decisiveTypes.push(event.type)
+      if (metadata && !state.decisiveWriterVersions.includes(metadata.writerVersion))
+        state.decisiveWriterVersions.push(metadata.writerVersion)
+      if (!metadata) state.decisiveLegacyVersionUnavailable = true
       state.decisiveFacts++
       state.decisiveBoundary = event.seq
     }

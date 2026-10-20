@@ -6,11 +6,13 @@ import { readBuildFacts } from '../store/reduced-reads'
 
 export function compatibilityDiagnostic(facts: CompatibilityState): string | undefined {
   if (facts.decisiveFacts === 0) return undefined
-  const versions = facts.writerVersions.length
-    ? `written by version ${facts.writerVersions.join(', ')}`
+  const versions = facts.decisiveWriterVersions.length
+    ? `written by version ${facts.decisiveWriterVersions.join(', ')}`
     : ''
-  const legacy = facts.legacyVersionUnavailable ? 'writer version unavailable for legacy facts' : ''
-  return `Kernel decisions deferred: restart with a build that understands ${facts.types.join(', ')} (${[versions, legacy].filter(Boolean).join('; ')}).`
+  const legacy = facts.decisiveLegacyVersionUnavailable
+    ? 'writer version unavailable for legacy facts'
+    : ''
+  return `Kernel decisions deferred: restart with a build that understands ${facts.decisiveTypes.join(', ')} (${[versions, legacy].filter(Boolean).join('; ')}).`
 }
 export function mixedVersionDeferred(state: Pick<BuildState, 'compatibility'>): boolean {
   return (state.compatibility?.decisiveFacts ?? 0) > 0
@@ -33,9 +35,9 @@ export async function deferMixedVersion(
       type: 'build.compatibility-deferred',
       payload: {
         boundary: facts.decisiveBoundary,
-        types: facts.types,
-        writerVersions: facts.writerVersions,
-        legacyVersionUnavailable: facts.legacyVersionUnavailable,
+        types: facts.decisiveTypes,
+        writerVersions: facts.decisiveWriterVersions,
+        legacyVersionUnavailable: facts.decisiveLegacyVersionUnavailable,
         diagnostic,
       },
     })

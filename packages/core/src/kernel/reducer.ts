@@ -415,7 +415,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 14
+export const BUILD_REDUCER_VERSION = 15
 
 function initialBuildAcc(): BuildAcc {
   return {

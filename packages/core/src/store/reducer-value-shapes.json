@@ -5493,6 +5493,18 @@
         "legacyVersionUnavailable": {
           "type": "37",
           "optional": false
+        },
+        "decisiveTypes": {
+          "type": "17",
+          "optional": false
+        },
+        "decisiveWriterVersions": {
+          "type": "17",
+          "optional": false
+        },
+        "decisiveLegacyVersionUnavailable": {
+          "type": "37",
+          "optional": false
         }
       }
     },
