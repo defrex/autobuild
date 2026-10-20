@@ -367,7 +367,7 @@ test('website applicability includes all website inputs and capture tooling', as
 
 test('real built docs are discovered at desktop and phone widths', async () => {
   const frames = discoverFrames({ ...(await buildFiles()) }).filter(
-    (frame) => frame.kind === 'docs',
+    (frame) => frame.kind === 'docs' && !frame.id.startsWith('docs-builds-'),
   )
   expect(frames.map((frame) => [frame.page, frame.width])).toEqual([
     ['docs/builds/index.html', 1440],
@@ -429,5 +429,66 @@ test('full discovery expands every animated figure at both widths in sample orde
   })
   expect(new Set([...baselines, ...expanded].map((frame) => frame.id)).size).toBe(
     baselines.length + expanded.length,
+  )
+})
+
+test('docs discovery adds real disclosure, boundary and bounded scrolling frames', () => {
+  const frames = discoverFrames({
+    'index.html': '',
+    'site.css': '',
+    'site.js': '',
+    'docs/builds/index.html': '',
+  })
+  const states = frames.filter((frame) => frame.id.startsWith('docs-builds-'))
+  expect(states.map((frame) => [frame.id, frame.width])).toEqual([
+    ['docs-builds-menu', 390],
+    ['docs-builds-toc', 390],
+    ['docs-builds-720', 720],
+    ['docs-builds-intermediate', 1000],
+    ['docs-builds-scrolled', 1440],
+  ])
+  expect(states.at(-1)?.viewportHeight).toBe(900)
+  expect(injectProbe('<head></head><body></body>', states[0]!)).toContain(
+    "querySelector('[data-site-menu]')?.click()",
+  )
+  expect(injectProbe('<head></head><body></body>', states[1]!)).toContain(
+    "querySelector('[data-toc-toggle]')?.click()",
+  )
+  expect(injectProbe('<head></head><body></body>', states[4]!)).toContain('window.scrollTo(')
+})
+
+test('docs probes reject disclosure, section, sticky, code and width regressions', () => {
+  const frame: WebsiteFrame = {
+    id: 'scroll',
+    width: 1440,
+    remote: false,
+    kind: 'docs',
+    docsState: 'scrolled',
+  }
+  const docs: NonNullable<Probe['docs']> = {
+    menuExpanded: false,
+    tocExpanded: false,
+    active: ['third', 'third'],
+    expectedActive: 'third',
+    leftVisible: true,
+    rightVisible: true,
+    leftTop: 24,
+    rightTop: 24,
+    scrollY: 600,
+    codeContained: true,
+  }
+  expect(probeProblems(frame, probe({ docs }))).toEqual([])
+  for (const bad of [
+    { menuExpanded: true },
+    { tocExpanded: true },
+    { active: ['first', 'first'] },
+    { leftTop: -20 },
+    { codeContained: false },
+    { rightVisible: false },
+  ]) {
+    expect(probeProblems(frame, probe({ docs: { ...docs, ...bad } })).length).toBeGreaterThan(0)
+  }
+  expect(probeProblems(frame, probe({ docs, scrollWidth: 1500, innerWidth: 1440 }))).toContain(
+    'page scrolls sideways (1500 > 1440)',
   )
 })
