@@ -1455,7 +1455,18 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             },
           })
           const state = (await readBuildFacts(store, slug)).value.state
-          expect(state.sessions).toEqual({ open: [], nativeHandles: { s_native: handle } })
+          expect(state.sessions).toMatchObject({
+            suspended: [],
+            open: [],
+            nativeHandles: { s_native: handle },
+            totals: {
+              s_native: {
+                activeMs: expect.any(Number),
+                usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+                transcripts: [{ kind: 'transcript', rev: 0 }],
+              },
+            },
+          })
           expect(state).toEqual(reduceBuild(await store.getEvents(slug)))
           expect((await readBuildFacts(store, slug)).value.state.sessions).toEqual(state.sessions)
         })
@@ -2959,6 +2970,79 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           )
           expect(new TextDecoder().decode(survivor!.content)).toBe('pre-existing')
           expect(await store.getEvents('vbp-invalid')).toEqual([])
+        })
+      })
+    })
+
+    describe('conditional artifact deposits', () => {
+      test('invalid conditional bundles roll back deposits and retention pruning', async () => {
+        await withStore(factory, { retention: { maxRevisions: 1 } }, async (store) => {
+          const slug = 'conditional-rollback'
+          await store.createBuild(sampleBuildInput(slug))
+          const kind = 'build-runner-effective-config'
+          await store.putArtifact(slug, { kind, content: 'retained' })
+          const before = await store.getBuild(slug)
+          await expect(
+            store.appendWithArtifactsIfCurrent(
+              slug,
+              0,
+              [
+                { kind, content: 'new' },
+                { kind, content: 'newer' },
+              ],
+              (deposited) => ({
+                ...planCompletedWrite(deposited[0]!.revision),
+                payload: {
+                  round: 0,
+                  artifact: { kind: 'plan', rev: deposited[0]!.revision },
+                  verifySteps: [],
+                },
+              }),
+            ),
+          ).rejects.toThrow()
+          expect(await store.getBuild(slug)).toEqual(before)
+          expect(await store.getEvents(slug)).toEqual([])
+          const artifacts = await store.listArtifacts(slug, kind)
+          expect(artifacts.map((a) => a.revision)).toEqual([0])
+          const retained = await store.getArtifact(slug, kind, 0)
+          expect(new TextDecoder().decode(retained!.content)).toBe('retained')
+        })
+      })
+      test('one concurrent writer wins; stale deposits allocate no revision or timestamp', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('conditional-bundle'))
+          const before = await store.getBuild('conditional-bundle')
+          const results = await Promise.all(
+            [1, 2].map((n) =>
+              store.appendWithArtifactsIfCurrent(
+                'conditional-bundle',
+                0,
+                [{ kind: 'plan', content: `plan ${n}` }],
+                (deposited) => planCompletedWrite(deposited[0]!.revision),
+              ),
+            ),
+          )
+          expect(results.filter(Boolean)).toHaveLength(1)
+          expect(await store.listArtifacts('conditional-bundle', 'plan')).toHaveLength(1)
+          const winner = await store.getBuild('conditional-bundle')
+          expect(winner?.createdAt).toBe(before?.createdAt)
+          expect(
+            await store.appendWithArtifactsIfCurrent(
+              'conditional-bundle',
+              0,
+              [{ kind: 'plan', content: 'stale' }],
+              () => planCompletedWrite(99),
+            ),
+          ).toBeNull()
+          expect(await store.getBuild('conditional-bundle')).toEqual(winner)
+          expect(await store.listArtifacts('conditional-bundle', 'plan')).toHaveLength(1)
+          const next = await store.appendWithArtifactsIfCurrent(
+            'conditional-bundle',
+            1,
+            [{ kind: 'plan', content: 'next' }],
+            (deposited) => planCompletedWrite(deposited[0]!.revision),
+          )
+          expect(next?.artifacts[0]?.revision).toBe(1)
         })
       })
     })

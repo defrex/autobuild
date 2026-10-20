@@ -1,3 +1,4 @@
+import { nativeSessionCapture } from '../../../tools/native-session-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
 /**
@@ -80,6 +81,18 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+  {
+    id: 'builds-native-sessions-wide',
+    width: 1440,
+    height: 2200,
+    requires: ['suspended', 'resumed'],
+  },
+  {
+    id: 'builds-native-sessions-narrow',
+    width: 390,
+    height: 2600,
+    requires: ['suspended', 'resumed'],
+  },
   {
     id: 'builds-forge-readiness-wide',
     width: 1440,
@@ -649,6 +662,14 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
         }),
         { model: models.mixed },
       )
+    case 'builds-native-sessions-wide':
+    case 'builds-native-sessions-narrow': {
+      const selection = blockedSelection(models.mixed)
+      const model = selectedBuildModel(models.mixed, selection, {
+        sessions: nativeSessionCapture(),
+      })
+      return shell(builds(model, { selection, detailOpen: true }), { model })
+    }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
       return shell(

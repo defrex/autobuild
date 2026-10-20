@@ -1,3 +1,5 @@
+import { readBuildFacts } from '../store/reduced-reads'
+import { done } from '../cli/terminals'
 import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-publication'
 /**
  * Build-runner process tests (SPEC §3.3, §8, §9, §10, §15.6, D5): memory
@@ -342,6 +344,7 @@ interface HarnessOptions {
   seedPrelude?: boolean
   /** Provider recorded on the seeded provisioned fact; defaults to the
    * harness fake. */
+  shutdownSignal?: AbortSignal
   workspaceProvider?: string
   /** Remote publication marker recorded on the seeded provisioned fact;
    * defaults to absent (legacy journal, local under the fallback). */
@@ -629,6 +632,9 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       },
     },
     workspacePath: handle.path,
+    workspaceProvider: options.workspaceProvider,
+    workspaceRemote: options.workspaceRemote,
+    shutdownSignal: options.shutdownSignal,
     branch: BRANCH,
     slug: SLUG,
     exec,
@@ -5839,4 +5845,715 @@ test('restart still reclaims and reruns a phase even when a durable native handl
   expect(fresh.messages).toEqual([])
   expect(fresh.turns).toHaveLength(1)
   expect(reduceBuild(events).sessions.nativeHandles.s_dead?.nativeId).toBe('dead-native')
+})
+
+describe('native suspension and continuation', () => {
+  function successor(h: Harness, runner: AgentRunner = h.runner) {
+    let id = 100
+    return new BuildRunner({
+      store: h.store.scopeBuild(SLUG),
+      config,
+      runtimes: {
+        scripted: { runner, servesModels: ['m-'] },
+        pi: { runner, servesModels: ['kimi-'] },
+        claude: { runner, servesModels: ['claude-'] },
+      },
+      workspacePath: h.workspacePath,
+      workspaceProvider: 'git-worktree',
+      branch: BRANCH,
+      slug: SLUG,
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      forge: h.forge,
+      ids: (prefix) => `${prefix}_${++id}`,
+      clock: () => new Date(),
+      instance: 'runner-1',
+      host: 'sandbox-a',
+    })
+  }
+
+  test('shutdown deposits partial evidence; restart resumes the same native handle and phase round', async () => {
+    const shutdown = new AbortController()
+    let observed!: () => void
+    const ready = new Promise<void>((r) => {
+      observed = r
+    })
+    let resumed = false
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            if (!ctx.message) {
+              observed()
+              await new Promise(() => {})
+            }
+            resumed = true
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    const running = h.br.run()
+    await ready
+    shutdown.abort()
+    await running
+    const before = await h.store.getEvents(SLUG)
+    const suspended = ofType(before, 'session.suspended')[0]!
+    expect(suspended.payload.cause).toBe('shutdown')
+    expect(
+      await h.store.getArtifact(
+        SLUG,
+        suspended.payload.transcript.kind,
+        suspended.payload.transcript.rev,
+      ),
+    ).not.toBeNull()
+    const resumedRunner = successor(h)
+    await resumedRunner.attach()
+    await resumedRunner.step()
+    expect(resumed).toBe(true)
+    const log = await h.store.getEvents(SLUG)
+    const acceptance = ofType(log, 'session.resumed')[0]!
+    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle.nativeId)
+    expect(ofType(log, 'plan.started')).toHaveLength(1)
+    const continuation = ofType(log, 'session.started').at(-1)!
+    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
+    expect(continuation.payload.round).toBe(1)
+    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
+    expect(journal.messages[0]).toContain('interrupted (shutdown)')
+    expect(journal.messages[0]).toContain('Re-check the worktree')
+  })
+
+  test('an attempt without acceptance is retried with inherited identity; terminal before acceptance is valid', async () => {
+    const { nativeHandle } = await import('../ports/runner/native-session')
+    let starts = 0
+    let resumes = 0
+    const handle = nativeHandle('scripted', 'durable-native', '/placeholder')
+    let h!: Harness
+    const runner: AgentRunner = {
+      name: 'scripted',
+      async start() {
+        starts++
+        throw new Error('must resume')
+      },
+      async continue() {
+        throw new Error('unexpected continue')
+      },
+      async resume(native, message, opts) {
+        resumes++
+        expect(native.nativeId).toBe('durable-native')
+        expect(message).toContain('interrupted')
+        const env = opts.env!
+        // Simulate a phase terminal issued before the adapter reports native acceptance.
+        const deps = {
+          store: h.store,
+          env: {
+            build: SLUG,
+            store: 'local',
+            phase: 'plan' as const,
+            round: 1,
+            session: env.AB_SESSION!,
+          },
+          workspacePath: h.workspacePath,
+          forge: h.forge,
+          ids: sequentialIds(),
+          exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+        }
+        await h.store.putArtifact(SLUG, { kind: 'plan', content: '# Plan' })
+        await done(deps)
+        expect(env.AB_SESSION).not.toBe('attempt-before-crash')
+        await opts.onNativeSession?.(native)
+        return {
+          kind: 'resumed',
+          session: { id: 'continued', runner: 'scripted' },
+          result: defaultTurnResult(),
+        }
+      },
+      async end() {
+        return {
+          content: 'continued turn',
+          metadata: { runner: 'scripted', usage: { inputTokens: 2, outputTokens: 3, turns: 1 } },
+        }
+      },
+    }
+    h = await makeHarness({
+      workspaceProvider: 'git-worktree',
+      runtimeRunner: runner,
+      clock: () => new Date(),
+    })
+    await mkdir(h.workspacePath, { recursive: true })
+    await writeFile(join(h.workspacePath, 'autobuild.toml'), CONFIG_TOML)
+    handle.workspacePath = h.workspacePath
+    await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 'attempt-before-crash',
+        role: 'plan',
+        runner: 'scripted',
+        phase: 'plan',
+        round: 1,
+        budgetMs: 3600000,
+        continuation: {
+          predecessor: 'original',
+          root: 'original',
+          handle,
+          cause: 'runner-loss',
+          activeMs: 10,
+          budgetMs: 3600000,
+        },
+      },
+    })
+    const br = successor(h, runner)
+    await br.attach()
+    await br.step()
+    expect(starts).toBe(0)
+    expect(resumes).toBe(1)
+    expect(ofType(await h.store.getEvents(SLUG), 'plan.completed')).toHaveLength(1)
+  })
+})
+
+describe('native recovery fallback boundaries', () => {
+  for (const scenario of [
+    'missing-handle',
+    'wrong-host',
+    'wrong-workspace',
+    'remote',
+    'missing-state',
+    'unsupported',
+  ] as const) {
+    test(`${scenario} records why native recovery was unavailable and executes one fresh turn`, async () => {
+      const { nativeHandle } = await import('../ports/runner/native-session')
+      let h!: Harness
+      let starts = 0
+      let resumes = 0
+      const timers = new ManualSessionBudgetScheduler()
+      const delegate: AgentRunner = {
+        name: 'scripted',
+        start: (opts) => {
+          starts++
+          return h.runner.start(opts)
+        },
+        continue: (handle, message, opts) => h.runner.continue(handle, message, opts),
+        end: (handle) => h.runner.end(handle),
+        ...(scenario === 'unsupported'
+          ? {}
+          : {
+              resume: async (...args: Parameters<NonNullable<AgentRunner['resume']>>) => {
+                resumes++
+                return h.runner.resume(...args)
+              },
+            }),
+      }
+      h = await makeHarness({
+        workspaceProvider: 'git-worktree',
+        configToml: `${CONFIG_TOML}\n[policy]\nsessionBudgetSeconds = 1\n`,
+        runnerOpts: { scheduleSessionBudget: timers.schedule },
+        workspaceRemote: scenario === 'remote',
+        runtimeRunner: delegate,
+        clock: () => new Date(),
+      })
+      await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 'lost',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 1,
+          budgetMs: 1000,
+        },
+      })
+      if (scenario !== 'missing-handle') {
+        const handle = nativeHandle('scripted', 'unavailable-native', h.workspacePath)
+        if (scenario === 'wrong-host') handle.host = 'other-machine'
+        if (scenario === 'wrong-workspace') handle.workspacePath = '/other/workspace'
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.native-handle-recorded',
+          payload: {
+            session: 'lost',
+            phase: 'plan',
+            round: 1,
+            handle,
+          },
+        })
+      }
+      if (scenario === 'missing-state') {
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.suspended',
+          payload: {
+            session: 'lost',
+            phase: 'plan',
+            round: 1,
+            handle: nativeHandle('scripted', 'unavailable-native', h.workspacePath),
+            cause: 'shutdown',
+            activeMs: 900,
+            transcript: { kind: 'transcript', rev: 0 },
+            usage: { inputTokens: 17, outputTokens: 19, turns: 1 },
+          },
+        })
+      }
+      await h.br.attach()
+      await h.br.step()
+      expect(starts).toBe(1)
+      expect(resumes).toBe(scenario === 'missing-state' ? 1 : 0)
+      const events = await h.store.getEvents(SLUG)
+      const fallback = ofType(events, 'session.resume-fallback')
+      expect(fallback).toHaveLength(1)
+      expect(fallback[0]!.payload.reason).toContain(
+        scenario === 'remote'
+          ? 'workspace-not-local'
+          : scenario === 'unsupported'
+            ? 'unsupported-runtime'
+            : scenario,
+      )
+      if (scenario === 'missing-state') {
+        expect(timers.delays).toEqual([100, 1000])
+        const brackets = ofType(events, 'session.started')
+        expect(brackets).toHaveLength(3)
+        const fresh = brackets.at(-1)!.payload
+        expect(fresh.continuation).toBeUndefined()
+        expect(fresh.session).not.toBe(brackets[1]!.payload.session)
+        const totals = reduceBuild(events).sessions.totals
+        expect(totals.lost?.usage).toEqual({ inputTokens: 17, outputTokens: 19, turns: 1 })
+        expect(totals[fresh.session]).toBeDefined()
+        const transcript = (await h.store.listArtifacts(SLUG, 'transcript')).find(
+          (artifact) => artifact.metadata.session === fresh.session,
+        )
+        expect(transcript).toBeDefined()
+        expect(transcript!.metadata.interruptionPrompt).toBeUndefined()
+        expect(ofType(events, 'phase.failed')).toHaveLength(0)
+      }
+      expect(ofType(events, 'plan.completed')).toHaveLength(1)
+      expect((await readBuildFacts(h.store, SLUG)).value.state.sessions.open).toEqual([])
+    })
+  }
+
+  test('a real provider failure during resume follows failure policy without a fresh rerun', async () => {
+    const { nativeHandle } = await import('../ports/runner/native-session')
+    let starts = 0
+    const runner: AgentRunner = {
+      name: 'scripted',
+      async start() {
+        starts++
+        throw new Error('unexpected fresh launch')
+      },
+      async continue() {
+        throw new Error('unexpected continuation')
+      },
+      async resume() {
+        return {
+          kind: 'resumed',
+          session: { id: 'failed', runner: 'scripted' },
+          result: failedTurnResult('provider unavailable', false, '', 'availability'),
+        }
+      },
+      async end() {
+        return {
+          content: 'provider unavailable',
+          metadata: { runner: 'scripted', usage: { inputTokens: 0, outputTokens: 0, turns: 1 } },
+        }
+      },
+    }
+    const h = await makeHarness({
+      workspaceProvider: 'git-worktree',
+      runtimeRunner: runner,
+      clock: () => new Date(),
+    })
+    await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 'lost',
+        role: 'plan',
+        runner: 'scripted',
+        phase: 'plan',
+        round: 1,
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.native-handle-recorded',
+      payload: {
+        session: 'lost',
+        phase: 'plan',
+        round: 1,
+        handle: nativeHandle('scripted', 'native', h.workspacePath),
+      },
+    })
+    await h.br.attach()
+    await h.br.step()
+    expect(starts).toBe(0)
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.resume-fallback')).toHaveLength(0)
+    expect(ofType(events, 'phase.failed')[0]?.payload.error).toBe('provider unavailable')
+  })
+})
+
+describe('native continuation budget and stale acceptance', () => {
+  for (const activeMs of [400, 1000])
+    test(`a ${activeMs}ms segment retains its budget across a day suspended`, async () => {
+      const { nativeHandle } = await import('../ports/runner/native-session')
+      const clock = manualClock()
+      const timers = new ManualSessionBudgetScheduler()
+      let resumes = 0
+      let starts = 0
+      let observe: import('../ports/types').NativeSessionObserver | undefined
+      const runner: AgentRunner = {
+        name: 'scripted',
+        async start() {
+          starts++
+          throw new Error('unexpected fresh start')
+        },
+        async continue() {
+          throw new Error('unexpected continue')
+        },
+        async resume(_handle, _message, opts) {
+          resumes++
+          observe = opts.onNativeSession
+          return {
+            kind: 'resumed',
+            session: { id: 'native', runner: 'scripted' },
+            result: {
+              kind: 'completed',
+              text: 'partial resumed work',
+              usage: { inputTokens: 2, outputTokens: 4, turns: 1 },
+            },
+          }
+        },
+        async end() {
+          return {
+            content: 'partial resumed work',
+            metadata: { runner: 'scripted', usage: { inputTokens: 2, outputTokens: 4, turns: 1 } },
+          }
+        },
+      }
+      const h = await makeHarness({
+        clock,
+        workspaceProvider: 'git-worktree',
+        runtimeRunner: runner,
+        runnerOpts: { scheduleSessionBudget: timers.schedule },
+      })
+      const handle = nativeHandle('scripted', 'native', h.workspacePath)
+      await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 'old',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 1,
+          budgetMs: 1000,
+        },
+      })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.suspended',
+        payload: {
+          session: 'old',
+          phase: 'plan',
+          round: 1,
+          handle,
+          cause: 'shutdown',
+          activeMs,
+          transcript: { kind: 'transcript', rev: 0 },
+          usage: { inputTokens: 1, outputTokens: 2, turns: 1 },
+        },
+      })
+      clock.advance(86400000)
+      await h.br.attach()
+      await h.br.step()
+      expect(timers.delays).toEqual([1000 - activeMs])
+      expect(starts).toBe(0)
+      expect(resumes).toBe(activeMs < 1000 ? 1 : 0)
+      if (activeMs < 1000) {
+        const before = reduceBuild(await h.store.getEvents(SLUG)).sessions
+        expect(before.totals.old?.usage).toEqual({ inputTokens: 3, outputTokens: 6, turns: 2 })
+        // The old callback arrives after the segment has closed and a new bracket
+        // supersedes it; the accepted native identity must not become current.
+        const predecessor = ofType(await h.store.getEvents(SLUG), 'session.started').at(-1)!.payload
+          .session
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.started',
+          payload: {
+            session: 'replacement',
+            role: 'plan',
+            runner: 'scripted',
+            phase: 'plan',
+            round: 1,
+            continuation: {
+              predecessor,
+              root: 'old',
+              handle,
+              cause: 'runner-loss',
+              activeMs,
+              budgetMs: 1000,
+            },
+          },
+        })
+        const superseded = reduceBuild(await h.store.getEvents(SLUG)).sessions
+        await observe?.(handle)
+        const events = await h.store.getEvents(SLUG)
+        expect(ofType(events, 'session.resumed').at(-1)?.payload.stale).toBe(true)
+        expect(reduceBuild(events).sessions).toEqual(superseded)
+      } else {
+        expect(ofType(await h.store.getEvents(SLUG), 'phase.failed')[0]?.payload.error).toContain(
+          'budget expired',
+        )
+      }
+    })
+})
+
+test('a phase terminal landing after attachment settles the old bracket before starting the next phase', async () => {
+  const { nativeHandle } = await import('../ports/runner/native-session')
+  const h = await makeHarness({ workspaceProvider: 'git-worktree', clock: () => new Date() })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'lost',
+      role: 'plan',
+      runner: 'scripted',
+      phase: 'plan',
+      round: 1,
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.native-handle-recorded',
+    payload: {
+      session: 'lost',
+      phase: 'plan',
+      round: 1,
+      handle: nativeHandle('scripted', 'native', h.workspacePath),
+    },
+  })
+  await h.br.attach()
+  await h.store.appendWithArtifacts(
+    SLUG,
+    [{ kind: 'plan', content: '# Finished plan' }],
+    (deposited) => ({
+      actor: agentActor('plan', 'lost'),
+      type: 'plan.completed',
+      payload: {
+        round: 1,
+        artifact: refOf(deposited),
+        verifySteps: ['types', 'unit', 'e2e'],
+      },
+    }),
+  )
+  await h.br.step()
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'plan-review.started')).toHaveLength(1)
+  expect(ofType(events, 'session.resumed')).toHaveLength(0)
+  expect(ofType(events, 'session.resume-fallback')).toHaveLength(0)
+  expect(
+    ofType(events, 'session.ended').find((e) => e.payload.session === 'lost')?.payload,
+  ).toMatchObject({ outcome: 'reclaimed' })
+})
+
+test('a pending resume control is acknowledged before selecting suspended native work', async () => {
+  const { nativeHandle } = await import('../ports/runner/native-session')
+  let resumes = 0
+  const runner: AgentRunner = {
+    name: 'scripted',
+    async start() {
+      throw new Error('unexpected fresh turn')
+    },
+    async continue() {
+      throw new Error('unexpected continue')
+    },
+    async resume() {
+      resumes++
+      return {
+        kind: 'resumed',
+        session: { id: 'native', runner: 'scripted' },
+        result: failedTurnResult('provider unavailable', false, '', 'availability'),
+      }
+    },
+    async end() {
+      return {
+        content: 'partial',
+        metadata: { runner: 'scripted', usage: { inputTokens: 0, outputTokens: 0, turns: 1 } },
+      }
+    },
+  }
+  const h = await makeHarness({ workspaceProvider: 'git-worktree', runtimeRunner: runner })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'old',
+      role: 'plan',
+      runner: 'scripted',
+      phase: 'plan',
+      round: 1,
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.suspended',
+    payload: {
+      session: 'old',
+      phase: 'plan',
+      round: 1,
+      handle: nativeHandle('scripted', 'native', h.workspacePath),
+      cause: 'shutdown',
+      activeMs: 10,
+      transcript: { kind: 'transcript', rev: 0 },
+    },
+  })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'build.paused', payload: {} })
+  await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'build.resume-requested',
+    payload: {},
+  })
+  await h.br.attach()
+  await h.br.step()
+  expect(resumes).toBe(1)
+  expect(ofType(await h.store.getEvents(SLUG), 'build.resumed')).toHaveLength(1)
+})
+
+test('a budget that expires during credential delegation cannot launch a late native or fresh process', async () => {
+  const { nativeHandle } = await import('../ports/runner/native-session')
+  const timers = new ManualSessionBudgetScheduler()
+  let unblock!: () => void
+  let ready!: () => void
+  const gate = new Promise<void>((r) => {
+    unblock = r
+  })
+  const delegating = new Promise<void>((r) => {
+    ready = r
+  })
+  let launches = 0
+  const runner: AgentRunner = {
+    name: 'scripted',
+    async start() {
+      launches++
+      throw new Error('unexpected start')
+    },
+    async resume() {
+      launches++
+      throw new Error('unexpected resume')
+    },
+    async continue() {
+      throw new Error('unexpected continue')
+    },
+    async end() {
+      throw new Error('unexpected end')
+    },
+  }
+  const h = await makeHarness({
+    workspaceProvider: 'git-worktree',
+    runtimeRunner: runner,
+    clock: () => new Date(),
+    runnerOpts: { scheduleSessionBudget: timers.schedule },
+    sessionEnv: { AB_STORE: 'https://store.example', AB_TOKEN: 'parent' },
+    delegateCredential: async () => {
+      ready()
+      await gate
+      return 'delegated'
+    },
+  })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'old',
+      role: 'plan',
+      runner: 'scripted',
+      phase: 'plan',
+      round: 1,
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.native-handle-recorded',
+    payload: {
+      session: 'old',
+      phase: 'plan',
+      round: 1,
+      handle: nativeHandle('scripted', 'native', h.workspacePath),
+    },
+  })
+  await h.br.attach()
+  const turning = h.br.step()
+  await delegating
+  await timers.expireNext()
+  await turning
+  unblock()
+  await Bun.sleep(0)
+  expect(launches).toBe(0)
+})
+
+test('a terminal winning while the continuation stream opens prevents native launch', async () => {
+  const { nativeHandle } = await import('../ports/runner/native-session')
+  let h!: Harness
+  let complete = true
+  h = await makeHarness({
+    workspaceProvider: 'git-worktree',
+    clock: () => new Date(),
+    registrationExtras: {
+      openSessionStream: async (_sink, info) => {
+        if (info.role === 'plan' && complete) {
+          complete = false
+          await h.store.append(SLUG, {
+            actor: agentActor('plan', 'old'),
+            type: 'plan.completed',
+            payload: {
+              round: 1,
+              artifact: { kind: 'plan', rev: 0 },
+              verifySteps: ['types', 'unit', 'e2e'],
+            },
+          })
+        }
+        return undefined
+      },
+    },
+  })
+  await h.store.putArtifact(SLUG, { kind: 'plan', content: '# Finished plan' })
+  await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'old',
+      role: 'plan',
+      runner: 'scripted',
+      phase: 'plan',
+      round: 1,
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.native-handle-recorded',
+    payload: {
+      session: 'old',
+      phase: 'plan',
+      round: 1,
+      handle: nativeHandle('scripted', 'native', h.workspacePath),
+    },
+  })
+  await h.br.attach()
+  await h.br.step()
+  expect(h.runner.sessions.size).toBe(0)
+  expect(ofType(await h.store.getEvents(SLUG), 'session.started')).toHaveLength(1)
+  await h.br.step()
+  expect(ofType(await h.store.getEvents(SLUG), 'plan-review.started')).toHaveLength(1)
 })

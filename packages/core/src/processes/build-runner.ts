@@ -1,4 +1,8 @@
 import { hostname } from 'node:os'
+import { resumeAgent } from '../ports/runner/native-session'
+import type { AgentStartOpts } from '../ports/types'
+import { readTerminalGuardBoundary } from '../store/reduced-reads'
+import type { OpenSession } from '../kernel/reducer'
 import { nativeSessionHandleSchema } from '../ports/runner/native-session'
 import type { NativeSessionObserver } from '../ports/types'
 import { suspendNativeLanding } from '../kernel/landing-publication'
@@ -26,8 +30,8 @@ import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
  * All judgment lives in the skills behind the AgentRunner; everything here is
  * deterministic plumbing (constitution §2.1). That split makes the runner
  * crash-safe by construction: killed mid-phase, a re-attached runner re-reads
- * the log and `decideNext` re-decides the same started-but-unterminated phase
- * from its start (§15.6-C) — resumability is not a feature (§2.2).
+ * the log and continues an eligible local native session, or re-decides the
+ * same started-but-unterminated phase from durable inputs (§15.6-C).
  *
  * Ownership: `attach` claims or renews the build's execution lease (§7.4) so a
  * second sandbox can never execute the same build. The local supervising kernel
@@ -65,7 +69,7 @@ import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
  *   as every phase.
  */
 import type { Config } from '../config/schema'
-import type { AbEvent, EventWrite } from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import type { IdSource } from '../ids'
@@ -112,6 +116,9 @@ export { publicationPending } from './publication-state'
 // ── Seams ────────────────────────────────────────────────────────────────────
 
 class AutomaticRewriteDeferred extends Error {}
+class SessionShutdown extends Error {}
+class RecoveryBoundaryChanged extends Error {}
+class FreshSessionRequired extends Error {}
 
 /** Another sandbox owns the build (§7.4): its lease is live, so this runner
  * must not execute. The dispatcher retries once the lease expires. */
@@ -176,6 +183,10 @@ export interface BuildRunnerDeps {
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
   workspacePath: string
+  /** Explicit provider eligibility; never inferred from a matching path. */
+  workspaceProvider?: string
+  workspaceRemote?: boolean
+  shutdownSignal?: AbortSignal
   branch: string
   slug: string
   /** Shell seam for deterministic checks and finalize Git guards (§8.2, D7). */
@@ -617,7 +628,171 @@ function isPublicationBoundary(event: AbEvent, spec: SessionSpec, session: strin
   return false
 }
 
+function recoveryMatches(decision: Decision, session: OpenSession): boolean {
+  return decision.kind === 'run-phase'
+    ? session.phase === decision.phase && session.round === decision.round
+    : decision.kind === 'run-agent-verify'
+      ? session.phase === verifyPhase(decision.step) && session.round === decision.attempt
+      : decision.kind === 'run-finalize-step'
+        ? session.phase === 'finalize' && session.role === decision.step
+        : false
+}
+
 export class BuildRunner {
+  private recovery: OpenSession | undefined
+  private recoveryBoundaryMs = 0
+  private recoveryCause: 'shutdown' | 'runner-loss' = 'runner-loss'
+  private readonly continuationIntents = new Map<
+    string,
+    NonNullable<EventPayload<'session.started'>['continuation']>
+  >()
+  private readonly interruptionPrompts = new Map<string, string>()
+  private readonly bracketStreams = new Map<string, SessionBracketStream>()
+  private readonly activeDurations = new Map<string, number>()
+
+  private resolveSessionRole(role: string, ...aliases: string[]): ResolvedRole {
+    const resolved = this.boundaryResolver.resolve(role, ...aliases)
+    const old = this.recovery
+    if (!old || old.role !== role) return resolved
+    const registration = this.deps.runtimes[old.runner]
+    if (!registration) return resolved
+    return {
+      ...resolved,
+      ...registration,
+      runner: registration.runner,
+      runtime: old.runner,
+      model: old.model,
+      args: old.args ?? [],
+      sessionBudgetSeconds: (old.budgetMs ?? resolved.sessionBudgetSeconds * 1000) / 1000,
+    }
+  }
+
+  private async startBracket(write: EventWrite<'session.started'>) {
+    const { store, slug } = this.deps
+    const old = this.recovery
+    const budgetMs = this.resolveSessionRole(write.payload.role).sessionBudgetSeconds * 1000
+    if (
+      old &&
+      old.phase === write.payload.phase &&
+      old.round === write.payload.round &&
+      old.role === write.payload.role &&
+      old.nativeHandle
+    ) {
+      const activeMs =
+        (old.continuation?.activeMs ?? 0) +
+        (old.suspendedActiveMs ?? Math.max(0, this.recoveryBoundaryMs - Date.parse(old.startedAt)))
+      write = {
+        ...write,
+        payload: {
+          ...write.payload,
+          budgetMs,
+          continuation: {
+            predecessor: old.session,
+            root: old.continuation?.root ?? old.session,
+            handle: old.nativeHandle,
+            cause: this.recoveryCause,
+            activeMs,
+            budgetMs,
+          },
+        },
+      }
+    } else write = { ...write, payload: { ...write.payload, budgetMs } }
+    let started: EventEnvelope<'session.started'> | null = null
+    if (write.payload.continuation) {
+      for (;;) {
+        const facts = await readBuildFacts(store, slug)
+        const decision = decideNextFromFacts(
+          facts.value.state,
+          facts.value.log,
+          this.boundaryConfig,
+        )
+        const current = [
+          ...facts.value.state.sessions.open,
+          ...facts.value.state.sessions.suspended,
+        ].find((session) => session.session === old!.session)
+        if (!current?.nativeHandle || !recoveryMatches(decision, current)) {
+          await this.bracketStreams.get(write.payload.session)?.sink.close('aborted')
+          throw new RecoveryBoundaryChanged()
+        }
+        write = {
+          ...write,
+          payload: {
+            ...write.payload,
+            continuation: {
+              ...write.payload.continuation!,
+              handle: current.nativeHandle,
+              cause: current.suspendedActiveMs !== undefined ? 'shutdown' : 'runner-loss',
+              activeMs:
+                (current.continuation?.activeMs ?? 0) +
+                (current.suspendedActiveMs ??
+                  Math.max(0, this.recoveryBoundaryMs - Date.parse(current.startedAt))),
+            },
+          },
+        }
+        started = await store.appendIfCurrent(slug, facts.cursor, write)
+        if (started) break
+      }
+    } else started = await store.append(slug, write)
+    if (write.payload.continuation)
+      this.continuationIntents.set(write.payload.session, write.payload.continuation)
+    this.recovery = undefined
+    return started
+  }
+
+  private async startAgent(runner: AgentRunner, opts: AgentStartOpts) {
+    if (opts.signal?.aborted) throw opts.signal.reason
+    const continuation = this.continuationIntents.get(opts.env.AB_SESSION!)
+    this.continuationIntents.delete(opts.env.AB_SESSION!)
+    if (!continuation) return runner.start(opts)
+    const message = `This session was interrupted (${continuation.cause}). Re-check the worktree and re-run anything that was in flight. Continue the current phase and round; run ab context for its durable inputs.`
+    this.interruptionPrompts.set(opts.env.AB_SESSION!, message)
+    if (opts.stream)
+      opts.stream.append([
+        { type: 'text-start', id: 'interruption' },
+        { type: 'text-delta', id: 'interruption', delta: message },
+        { type: 'text-end', id: 'interruption' },
+      ])
+    const result = await resumeAgent(runner, continuation.handle, message, opts)
+    if (result.kind === 'resumed') return { session: result.session, result: result.result }
+    const session = opts.env.AB_SESSION!
+    for (;;) {
+      const facts = await readBuildFacts(this.deps.store, this.deps.slug)
+      const stale =
+        opts.signal?.aborted === true ||
+        !facts.value.state.sessions.open.some((s) => s.session === session)
+      const event = await this.deps.store.appendIfCurrent(this.deps.slug, facts.cursor, {
+        actor: KERNEL,
+        type: 'session.resume-fallback',
+        payload: {
+          session,
+          reason: `${result.reason}: ${result.message}`,
+          ...(stale ? { stale: true } : {}),
+        },
+      })
+      if (!event) continue
+      if (stale) throw new Error('Native resume attempt is no longer current')
+      break
+    }
+    // The unavailable native attempt has no fresh turn to account for. Close
+    // its evidence and credentials before re-deciding the ordinary phase path.
+    // That path resolves today's policy and opens an independent budget/root.
+    await this.bracketStreams.get(session)?.sink.close('aborted')
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session,
+        outcome: 'reclaimed',
+        reclaimedBy: {
+          instance: this.deps.instance,
+          resumedFromSeq: (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+            .lastSeq,
+        },
+      },
+    })
+    throw new FreshSessionRequired()
+  }
+
   private readonly maxPhaseAttempts: number
   private readonly heartbeatMs: number
   private readonly leaseTtlMs: number
@@ -695,10 +870,47 @@ export class BuildRunner {
    * announce takeover against that same boundary. If a write is interrupted,
    * no attachment lands; the next runner reduces the newer prefix and closes
    * only sessions that remain open. */
-  private async reclaimSessionsAndAttach(state: BuildState): Promise<void> {
+  private async reclaimSessionsAndAttach(
+    facts: Awaited<ReturnType<typeof readBuildFacts>>['value'],
+  ): Promise<void> {
     const { store, slug, instance, host } = this.deps
+    const state = facts.state
     const resumedFromSeq = state.lastSeq
-    for (const session of state.sessions.open) {
+    const decision = decideNextFromFacts(state, facts.log, this.boundaryConfig)
+    const candidates = [...state.sessions.suspended, ...state.sessions.open]
+      .filter((session) => recoveryMatches(decision, session))
+      .sort((a, b) => b.seq - a.seq)
+    const candidate = candidates[0]
+    if (candidate) {
+      const handle = candidate.nativeHandle
+      const reason =
+        this.deps.workspaceProvider !== 'git-worktree' || this.deps.workspaceRemote === true
+          ? 'workspace-not-local-git-worktree'
+          : !handle
+            ? 'missing-handle'
+            : handle.host !== hostname()
+              ? 'wrong-host'
+              : handle.workspacePath !== this.deps.workspacePath
+                ? 'wrong-workspace'
+                : !this.deps.runtimes[candidate.runner]?.runner.resume
+                  ? 'unsupported-runtime'
+                  : undefined
+      if (reason)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'session.resume-fallback',
+          payload: { session: candidate.session, reason },
+        })
+      else {
+        this.recoveryBoundaryMs = this.deps.clock().getTime()
+        this.recovery = candidate
+        this.recoveryCause = state.sessions.suspended.some((s) => s.session === candidate.session)
+          ? 'shutdown'
+          : 'runner-loss'
+      }
+    }
+    for (const session of [...state.sessions.open, ...state.sessions.suspended]) {
+      if (session.session === this.recovery?.session) continue
       await store.append(slug, {
         actor: KERNEL,
         type: 'session.ended',
@@ -750,6 +962,11 @@ export class BuildRunner {
       return { kind: 'control-acknowledged', command: decision.command }
     }
 
+    if (decision.kind === 'acknowledge' && decision.command === 'resume') {
+      await this.acknowledge('resume')
+      facts = (await readBuildFacts(store, slug)).value
+    }
+
     const state = facts.state
     if (state.kind === 'node' && state.integration?.cycle && !state.nodeRestack?.conflict) {
       // Local worktree provisioning may create a new branch at its parent;
@@ -779,7 +996,7 @@ export class BuildRunner {
     }
 
     const recovering = currentFailure !== undefined
-    if (!recovering) await this.reclaimSessionsAndAttach(facts.state)
+    if (!recovering) await this.reclaimSessionsAndAttach(facts)
 
     // First beat immediately (liveness visible without waiting an interval),
     // then keep-alive. Setup runs under this heartbeat so a slow install cannot
@@ -842,7 +1059,7 @@ export class BuildRunner {
     if (recovering) {
       try {
         facts = (await readBuildFacts(store, slug)).value
-        await this.reclaimSessionsAndAttach(facts.state)
+        await this.reclaimSessionsAndAttach(facts)
       } catch (error) {
         this.stopHeartbeat()
         this.attached = false
@@ -864,59 +1081,88 @@ export class BuildRunner {
     await completeAutomaticReconcile(store, slug)
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
-    switch (decision.kind) {
-      case 'restack':
-        await this.restack(decision)
-        return decision
-      case 'capture-reconcile-policy':
-        await store.append(slug, {
-          actor: KERNEL,
-          type: 'verify.reconcile-policy-captured',
-          payload: {
-            reconcileSeq: decision.reconcileSeq,
-            steps: config.verify.steps.map((step) => {
-              const override = config.verify.stepConfigs[step]?.afterReconcile
-              return {
-                step,
-                enabled: override ?? config.verify.afterReconcile,
-                source:
-                  override === undefined
-                    ? 'verify.afterReconcile'
-                    : `verify.${step}.afterReconcile`,
-              }
-            }),
-          },
-        })
-        return decision
-      case 'wait':
-        return decision
-      case 'acknowledge':
-        await this.acknowledge(decision.command)
-        return decision
-      case 'raise-escalation':
-        await this.raiseEscalation(decision)
-        return decision
-      case 'run-phase':
-        await this.runPhase(decision)
-        return decision
-      case 'run-check':
-        await this.runCheck(decision)
-        return decision
-      case 'run-agent-verify':
-        await this.runAgentVerify(decision)
-        return decision
-      case 'evaluate-verify':
-        await this.evaluateVerify(decision)
-        return decision
-      case 'skip-verify':
-        await this.skipVerify(decision)
-        return decision
-      case 'run-finalize-step':
-        await this.runFinalizeStep(decision)
-        return decision
-      case 'check-reconcile-progress':
-        await this.checkReconcileProgress(decision)
-        return decision
+    if (this.recovery) {
+      const current = [...facts.state.sessions.open, ...facts.state.sessions.suspended].find(
+        (session) => session.session === this.recovery!.session,
+      )
+      if (
+        !current?.nativeHandle ||
+        (decision.kind !== 'wait' &&
+          decision.kind !== 'acknowledge' &&
+          !recoveryMatches(decision, current))
+      ) {
+        this.recovery = undefined
+        if (current)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'session.ended',
+            payload: {
+              session: current.session,
+              outcome: 'reclaimed',
+              reclaimedBy: { instance: this.deps.instance, resumedFromSeq: facts.state.lastSeq },
+            },
+          })
+      } else this.recovery = current
+    }
+    try {
+      switch (decision.kind) {
+        case 'restack':
+          await this.restack(decision)
+          return decision
+        case 'capture-reconcile-policy':
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'verify.reconcile-policy-captured',
+            payload: {
+              reconcileSeq: decision.reconcileSeq,
+              steps: config.verify.steps.map((step) => {
+                const override = config.verify.stepConfigs[step]?.afterReconcile
+                return {
+                  step,
+                  enabled: override ?? config.verify.afterReconcile,
+                  source:
+                    override === undefined
+                      ? 'verify.afterReconcile'
+                      : `verify.${step}.afterReconcile`,
+                }
+              }),
+            },
+          })
+          return decision
+        case 'wait':
+          return decision
+        case 'acknowledge':
+          await this.acknowledge(decision.command)
+          return decision
+        case 'raise-escalation':
+          await this.raiseEscalation(decision)
+          return decision
+        case 'run-phase':
+          await this.runPhase(decision)
+          return decision
+        case 'run-check':
+          await this.runCheck(decision)
+          return decision
+        case 'run-agent-verify':
+          await this.runAgentVerify(decision)
+          return decision
+        case 'evaluate-verify':
+          await this.evaluateVerify(decision)
+          return decision
+        case 'skip-verify':
+          await this.skipVerify(decision)
+          return decision
+        case 'run-finalize-step':
+          await this.runFinalizeStep(decision)
+          return decision
+        case 'check-reconcile-progress':
+          await this.checkReconcileProgress(decision)
+          return decision
+      }
+    } catch (error) {
+      if (error instanceof FreshSessionRequired) return this.step()
+      if (error instanceof RecoveryBoundaryChanged) return decision
+      throw error
     }
   }
 
@@ -942,6 +1188,7 @@ export class BuildRunner {
       if (await this.refreshSummary())
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       for (;;) {
+        if (this.deps.shutdownSignal?.aborted) break
         await this.ensureLease()
         await this.settleLocalReconcile()
         const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
@@ -964,6 +1211,9 @@ export class BuildRunner {
         if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
       }
+      return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    } catch (error) {
+      if (!(error instanceof SessionShutdown)) throw error
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } finally {
       this.stopHeartbeat()
@@ -1114,7 +1364,7 @@ export class BuildRunner {
     // after the retry guard but before reconcile.started/the agent session.
     // A crash re-enters this path at the same attempt and refreshes again.
     let reconcileBaseSha: string | undefined
-    if (phase === 'reconcile') {
+    if (phase === 'reconcile' && !this.recovery) {
       try {
         requireRewrite(this.deps.forge)
         const facts = (await readBuildFacts(store, slug)).value
@@ -1134,7 +1384,7 @@ export class BuildRunner {
       }
     }
 
-    if (phase === 'reconcile') {
+    if (phase === 'reconcile' && !this.recovery) {
       const facts = (await readBuildFacts(store, slug)).value
       const active = facts.log.restack.active
       if (active !== undefined && facts.reconcileTransaction?.restackId !== active.id) {
@@ -1163,11 +1413,12 @@ export class BuildRunner {
       }
     }
     if (
-      phase !== 'reconcile' ||
-      (await readBuildFacts(store, slug)).value.reconcileTransaction?.attempt !== round
+      !this.recovery &&
+      (phase !== 'reconcile' ||
+        (await readBuildFacts(store, slug)).value.reconcileTransaction?.attempt !== round)
     )
       await store.append(slug, this.startedWrite(decision, reconcileBaseSha))
-    if (phase === 'reconcile') {
+    if (phase === 'reconcile' && !this.recovery) {
       try {
         const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
         if (oldBase === undefined || reconcileBaseSha === undefined)
@@ -1216,77 +1467,79 @@ export class BuildRunner {
     const active = node.active!
     const conflict = node.conflict!
     const change = active.changes[conflict.index]!
-    try {
-      for (const sha of [active.expected, active.parent]) {
-        const exists = await this.deps.exec(['git', 'cat-file', '-e', `${sha}^{commit}`], {
+    if (!this.recovery) {
+      try {
+        for (const sha of [active.expected, active.parent]) {
+          const exists = await this.deps.exec(['git', 'cat-file', '-e', `${sha}^{commit}`], {
+            cwd: this.deps.workspacePath,
+          })
+          if (exists.exitCode !== 0) {
+            const fetched = await this.deps.exec(
+              ['git', 'fetch', '--no-tags', 'origin', `refs/autobuild/archive/${slug}/${sha}`],
+              { cwd: this.deps.workspacePath },
+            )
+            if (fetched.exitCode !== 0) throw new Error(`missing archived node input ${sha}`)
+          }
+        }
+        if (change.build) {
+          for (const kind of ['spec', 'plan', 'implement-notes']) {
+            if (
+              !(await store.getArtifact(slug, `node-source-${active.id}-${conflict.index}-${kind}`))
+            )
+              throw new Error(`missing ${kind} for source build ${change.build}`)
+          }
+        } else {
+          const result = await this.deps.exec(
+            [
+              'git',
+              'show',
+              '--format=fuller',
+              ...(change.mainline ? ['-m', '--first-parent'] : []),
+              change.sha,
+            ],
+            {
+              cwd: this.deps.workspacePath,
+            },
+          )
+          if (result.exitCode !== 0) throw new Error(`missing foreign commit ${change.sha}`)
+          await store.putArtifact(slug, {
+            kind: `node-source-${active.id}-${conflict.index}-foreign`,
+            content: result.stdout,
+          })
+        }
+        for (const item of node.items) if (!item.dropped) await restoreReplay(this.deps, item.head)
+        await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
+        const reset = await this.deps.exec(['git', 'checkout', '--detach', conflict.base], {
           cwd: this.deps.workspacePath,
         })
-        if (exists.exitCode !== 0) {
-          const fetched = await this.deps.exec(
-            ['git', 'fetch', '--no-tags', 'origin', `refs/autobuild/archive/${slug}/${sha}`],
-            { cwd: this.deps.workspacePath },
-          )
-          if (fetched.exitCode !== 0) throw new Error(`missing archived node input ${sha}`)
-        }
-      }
-      if (change.build) {
-        for (const kind of ['spec', 'plan', 'implement-notes']) {
-          if (
-            !(await store.getArtifact(slug, `node-source-${active.id}-${conflict.index}-${kind}`))
-          )
-            throw new Error(`missing ${kind} for source build ${change.build}`)
-        }
-      } else {
-        const result = await this.deps.exec(
-          [
-            'git',
-            'show',
-            '--format=fuller',
-            ...(change.mainline ? ['-m', '--first-parent'] : []),
-            change.sha,
-          ],
-          {
-            cwd: this.deps.workspacePath,
-          },
+        if (reset.exitCode !== 0) throw new Error(reset.stderr)
+        const result = await replayNodeChange(
+          this.deps,
+          { ...active, oldHead: active.expected },
+          conflict.index,
+          conflict.base,
         )
-        if (result.exitCode !== 0) throw new Error(`missing foreign commit ${change.sha}`)
-        await store.putArtifact(slug, {
-          kind: `node-source-${active.id}-${conflict.index}-foreign`,
-          content: result.stdout,
+        if (result.kind !== 'conflict')
+          throw new Error('reserved conflict no longer reproduces from frozen inputs')
+      } catch (error) {
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: {
+            id: this.deps.ids('esc'),
+            phase: 'reconcile',
+            source: 'agent',
+            question: `Cannot prepare node change ${change.sha}: ${errorMessage(error)}`,
+          },
         })
+        return
       }
-      for (const item of node.items) if (!item.dropped) await restoreReplay(this.deps, item.head)
-      await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
-      const reset = await this.deps.exec(['git', 'checkout', '--detach', conflict.base], {
-        cwd: this.deps.workspacePath,
-      })
-      if (reset.exitCode !== 0) throw new Error(reset.stderr)
-      const result = await replayNodeChange(
-        this.deps,
-        { ...active, oldHead: active.expected },
-        conflict.index,
-        conflict.base,
-      )
-      if (result.kind !== 'conflict')
-        throw new Error('reserved conflict no longer reproduces from frozen inputs')
-    } catch (error) {
       await store.append(slug, {
         actor: KERNEL,
-        type: 'escalation.raised',
-        payload: {
-          id: this.deps.ids('esc'),
-          phase: 'reconcile',
-          source: 'agent',
-          question: `Cannot prepare node change ${change.sha}: ${errorMessage(error)}`,
-        },
+        type: 'reconcile.started',
+        payload: { attempt: round, baseSha: conflict.base },
       })
-      return
     }
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: round, baseSha: conflict.base },
-    })
     const failures = await readPhaseFailures(store, slug, 'reconcile', round)
     if (failures.count >= this.maxPhaseAttempts) {
       await this.raisePolicyExhausted('reconcile', round, failures)
@@ -1708,11 +1961,12 @@ export class BuildRunner {
     const { store, slug, exec, workspacePath } = this.deps
     const { step, command, attempt } = decision
     const evidence = await this.verifyEvidence()
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.started',
-      payload: { ...evidence, step, attempt },
-    } satisfies EventWrite<'verify.started'>)
+    if (!this.recovery)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { ...evidence, step, attempt },
+      } satisfies EventWrite<'verify.started'>)
 
     const result = await exec(['sh', '-c', command], { cwd: workspacePath })
     if (result.exitCode === 0) {
@@ -1806,17 +2060,18 @@ export class BuildRunner {
    */
   private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
     const { step, action } = decision
-    await this.deps.store.append(this.deps.slug, {
-      actor: KERNEL,
-      type: 'finalize.step-started',
-      payload: { step },
-    })
+    if (!this.recovery)
+      await this.deps.store.append(this.deps.slug, {
+        actor: KERNEL,
+        type: 'finalize.step-started',
+        payload: { step },
+      })
     let actor: Actor = KERNEL
     let durableHead: string | undefined
     let failureNote: string | undefined
 
     try {
-      await this.requireFinalizeWorktreeClean('before the post-step starts')
+      if (!this.recovery) await this.requireFinalizeWorktreeClean('before the post-step starts')
       durableHead = await readBuildSelector(this.deps.store, this.deps.slug, 'publishedBranchHead')
       if (durableHead === undefined)
         throw new Error(
@@ -1898,10 +2153,10 @@ export class BuildRunner {
     step: string,
     skill: string,
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
-    const resolved = this.boundaryResolver.resolve(step)
+    const resolved = this.resolveSessionRole(step)
     if (resolved.alternates.length === 0) return this.runFinalizeAgentSingle(step, skill)
 
-    const { store, slug, ids, workspacePath } = this.deps
+    const { slug, ids, workspacePath } = this.deps
     const targets: readonly ResolvedRuntime[] = [resolved, ...resolved.alternates]
     let substitution: ProviderAttempt | undefined
     for (let index = 0; index < targets.length; index += 1) {
@@ -1922,7 +2177,7 @@ export class BuildRunner {
         round: 1,
       })
       const stream = streamBracket?.sink
-      const started = await store.append(slug, {
+      const started = await this.startBracket({
         actor: KERNEL,
         type: 'session.started',
         payload: {
@@ -1946,7 +2201,7 @@ export class BuildRunner {
         started,
         resolved.sessionBudgetSeconds,
         async (signal, onNativeSession) =>
-          target.runner.start({
+          this.startAgent(target.runner, {
             onNativeSession,
             skill,
             invocation: slug,
@@ -2049,9 +2304,9 @@ export class BuildRunner {
     step: string,
     skill: string,
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
-    const { store, slug, ids, workspacePath } = this.deps
+    const { slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const resolved = this.boundaryResolver.resolve(step)
+    const resolved = this.resolveSessionRole(step)
     const { runner, runtime: runnerName, model, args, sessionBudgetSeconds } = resolved
     const finalizeBracket = {
       phase: 'finalize' as const,
@@ -2069,7 +2324,7 @@ export class BuildRunner {
     })
     const stream = streamBracket?.sink
 
-    const started = await store.append(slug, {
+    const started = await this.startBracket({
       actor: KERNEL,
       type: 'session.started',
       payload: {
@@ -2090,7 +2345,7 @@ export class BuildRunner {
       started,
       sessionBudgetSeconds,
       async (signal, onNativeSession) =>
-        runner.start({
+        this.startAgent(runner, {
           onNativeSession,
           skill,
           invocation: slug,
@@ -2303,13 +2558,20 @@ export class BuildRunner {
     const preSeq = started.seq
     if (started.type !== 'session.started')
       throw new Error('Native observation requires an open session bracket')
+    if (this.deps.shutdownSignal?.aborted) throw new SessionShutdown()
+    const turnStarted = performance.now()
+    const continuation = started.payload.continuation
+    const remainingMs = Math.max(
+      0,
+      (started.payload.budgetMs ?? budgetSeconds * 1000) - (continuation?.activeMs ?? 0),
+    )
     let closed = false
     let recorded: string | undefined
     let recording = Promise.resolve()
     const onNativeSession: NativeSessionObserver = (handle) => {
-      if (closed || controller.signal.aborted) return Promise.resolve()
+      if ((closed || controller.signal.aborted) && !continuation) return Promise.resolve()
       recording = recording.then(async () => {
-        if (closed || controller.signal.aborted) return
+        if ((closed || controller.signal.aborted) && !continuation) return
         const validated = nativeSessionHandleSchema.parse(handle)
         if (validated.host !== hostname() || validated.workspacePath !== this.deps.workspacePath)
           throw new Error('Native identity execution location mismatch')
@@ -2317,6 +2579,27 @@ export class BuildRunner {
         if (recorded === bytes) return
         if (recorded !== undefined)
           throw new Error('Conflicting native identities in session bracket')
+        if (continuation) {
+          for (;;) {
+            const facts = await readBuildFacts(store, slug)
+            const current = facts.value.state.sessions.open.some(
+              (s) => s.session === started.payload.session,
+            )
+            const accepted = await store.appendIfCurrent(slug, facts.cursor, {
+              actor: KERNEL,
+              type: 'session.resumed',
+              payload: {
+                session: started.payload.session,
+                predecessor: continuation.predecessor,
+                root: continuation.root,
+                cause: continuation.cause,
+                handle: validated,
+                stale: !current,
+              },
+            })
+            if (accepted) break
+          }
+        }
         await store.append(slug, {
           actor: KERNEL,
           type: 'session.native-handle-recorded',
@@ -2339,8 +2622,20 @@ export class BuildRunner {
     const expiry = new Promise<{ kind: 'expired' }>((resolve) => {
       resolveExpiry = resolve
     })
+    const shutdown = () => {
+      if (!controller.signal.aborted) controller.abort(new Error('dispatcher shutdown'))
+    }
+    this.deps.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
+    if (this.deps.shutdownSignal?.aborted) shutdown()
+    if (remainingMs <= 0) {
+      abortCause = 'budget'
+      controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+    }
     const pending = Promise.resolve()
-      .then(() => run(controller.signal, onNativeSession))
+      .then(() => {
+        if (remainingMs <= 0) throw new Error(sessionBudgetError(budgetSeconds))
+        return run(controller.signal, onNativeSession)
+      })
       .then(
         (value): { kind: 'value'; value: T } => ({ kind: 'value', value }),
         (error): { kind: 'error'; error: unknown } => ({ kind: 'error', error }),
@@ -2358,11 +2653,21 @@ export class BuildRunner {
         controller.abort(new Error(sessionBudgetError(budgetSeconds)))
       }
       queueMicrotask(() => resolveExpiry({ kind: 'expired' }))
-    }, budgetSeconds * 1000)
+    }, remainingMs)
 
     try {
       const settlement = await Promise.race([pending, expiry])
       await recording
+      if (settlement.kind === 'error' && settlement.error instanceof FreshSessionRequired)
+        throw settlement.error
+      this.activeDurations.set(
+        started.payload.session,
+        Math.max(0, performance.now() - turnStarted),
+      )
+      if (this.deps.shutdownSignal?.aborted && abortCause === undefined) {
+        await this.suspendTurn(started, settlement, Math.max(0, performance.now() - turnStarted))
+        throw new SessionShutdown()
+      }
       return {
         settlement,
         ...(abortCause !== undefined ? { abortCause } : {}),
@@ -2370,8 +2675,104 @@ export class BuildRunner {
       }
     } finally {
       closed = true
+      this.deps.shutdownSignal?.removeEventListener('abort', shutdown)
       cancelTimer()
       unsubscribe()
+    }
+  }
+
+  private async suspendTurn<T>(
+    started: Extract<AbEvent, { type: 'session.started' }>,
+    settlement: TurnSettlement<T>,
+    activeMs: number,
+  ): Promise<void> {
+    if (this.deps.workspaceProvider !== 'git-worktree' || this.deps.workspaceRemote === true) return
+    const { store, slug } = this.deps
+    const session = started.payload.session
+    const state = (await readBuildFacts(store, slug)).value.state
+    const native = state.sessions.open.find((s) => s.session === session)?.nativeHandle
+    if (!native) return
+    let content: string | undefined
+    let usage: { inputTokens: number; outputTokens: number; turns: number } | undefined
+    if (settlement.kind === 'value') {
+      const value = settlement.value as { session?: AgentSessionHandle; result?: AgentTurnResult }
+      if (value.session) {
+        try {
+          const transcript = await this.deps.runtimes[started.payload.runner]!.runner.end(
+            value.session,
+          )
+          content = transcript.content
+          usage = value.result ? value.result.usage : transcript.metadata.usage
+        } catch {
+          /* Preserve the structured stream if provider cleanup fails. */
+        }
+      }
+    }
+    await this.bracketStreams.get(session)?.sink.close('aborted')
+    if (!content && started.payload.stream)
+      content = JSON.stringify(await store.readStream(started.payload.stream))
+    if (content === undefined) return
+    for (;;) {
+      const guard = await readTerminalGuardBoundary(
+        store,
+        slug,
+        started.payload.phase,
+        started.payload.round ?? 1,
+        session,
+      )
+      const facts = await readBuildFacts(store, slug)
+      if (facts.cursor !== guard.cursor) continue
+      const postStep = started.payload.phase === 'finalize' && started.payload.role !== 'finalize'
+      if (
+        postStep
+          ? facts.value.log.finalizeStepsDone.has(started.payload.role)
+          : guard.value.diagnostic !== undefined
+      ) {
+        if (usage)
+          await this.depositTranscriptAndEnd(
+            session,
+            {
+              phase: started.payload.phase,
+              round: started.payload.round ?? 1,
+              role: started.payload.role,
+              runnerName: started.payload.runner,
+            },
+            content,
+            usage,
+            started.payload.model,
+          )
+        return
+      }
+      if (!facts.value.state.sessions.open.some((s) => s.session === session)) return
+      const suspended = await store.appendWithArtifactsIfCurrent(
+        slug,
+        guard.cursor,
+        [
+          {
+            kind: 'transcript',
+            content,
+            metadata: { ...started.payload, usage, activeMs, interrupted: true },
+          },
+        ],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'session.suspended',
+          payload: {
+            session,
+            phase: started.payload.phase,
+            round: started.payload.round,
+            handle: native,
+            cause: 'shutdown',
+            activeMs,
+            transcript: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+            ...(usage ? { usage } : {}),
+          },
+        }),
+      )
+      if (suspended) {
+        if (started.payload.stream) await store.closeStream(started.payload.stream, 'aborted')
+        return
+      }
     }
   }
 
@@ -2434,7 +2835,7 @@ export class BuildRunner {
    * start fresh (fresh skeptic).
    */
   private async executeSession(spec: SessionSpec): Promise<void> {
-    const resolved = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const resolved = this.resolveSessionRole(spec.role, ...(spec.roleAliases ?? []))
     // Preserve the historical single-target path byte-for-byte when no chain
     // is configured. Besides compatibility, this keeps its crash-gap and
     // producer-continuation behavior independently well exercised.
@@ -2487,7 +2888,7 @@ export class BuildRunner {
         round: spec.round,
       })
       const stream = streamBracket?.sink
-      const startedEnvelope = await store.append(slug, {
+      const startedEnvelope = await this.startBracket({
         actor: KERNEL,
         type: 'session.started',
         payload: {
@@ -2523,7 +2924,7 @@ export class BuildRunner {
                   ...(stream !== undefined ? { stream } : {}),
                 })
                 .then((continued) => ({ session: live.handle, result: continued }))
-            : target.runner.start({
+            : this.startAgent(target.runner, {
                 onNativeSession,
                 skill: spec.skill,
                 invocation: slug,
@@ -2614,7 +3015,11 @@ export class BuildRunner {
               phase: spec.phase,
               round: spec.round,
               note: 'producer session kept live for §10 continuation; per-round turn transcript',
-              turn: { text: result.text, usage: result.usage },
+              turn: {
+                text: result.text,
+                usage: result.usage,
+                prompt: this.interruptionPrompts.get(session),
+              },
             },
             null,
             2,
@@ -2752,7 +3157,7 @@ export class BuildRunner {
     // `session.started.role` records the LOGICAL name the pipeline dispatched
     // in every case, including when a deprecated alias answered the lookup —
     // the runtime/model on the same payload say what was resolved.
-    const resolved = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const resolved = this.resolveSessionRole(spec.role, ...(spec.roleAliases ?? []))
     const { runner, runtime: runnerName, model, args, sessionBudgetSeconds } = resolved
     const route = JSON.stringify({ runtime: runnerName, model, args })
     // SPEC §9: the stream opens before the bracket's first turn — its id is
@@ -2780,7 +3185,7 @@ export class BuildRunner {
       live = undefined
     }
 
-    const startedEnvelope = await store.append(slug, {
+    const startedEnvelope = await this.startBracket({
       actor: KERNEL,
       type: 'session.started',
       payload: {
@@ -2820,7 +3225,7 @@ export class BuildRunner {
             })
             .then((continued) => ({ session: live.handle, result: continued }))
         }
-        return runner.start({
+        return this.startAgent(runner, {
           onNativeSession,
           skill: spec.skill,
           invocation: slug,
@@ -2924,7 +3329,11 @@ export class BuildRunner {
             phase: spec.phase,
             round: spec.round,
             note: 'producer session kept live for §10 continuation; ' + 'per-round turn transcript',
-            turn: { text: result.text, usage: result.usage },
+            turn: {
+              text: result.text,
+              usage: result.usage,
+              prompt: this.interruptionPrompts.get(session),
+            },
           },
           null,
           2,
@@ -3071,6 +3480,7 @@ export class BuildRunner {
             runner: bracket.runnerName,
             ...(model !== undefined ? { model } : {}),
             session,
+            interruptionPrompt: this.interruptionPrompts.get(session),
             usage,
           },
         },
@@ -3083,6 +3493,7 @@ export class BuildRunner {
           type: 'session.ended',
           payload: {
             session,
+            activeMs: this.activeDurations.get(session),
             transcript: { kind: meta.kind, rev: meta.revision },
             usage,
           },
@@ -3153,7 +3564,9 @@ export class BuildRunner {
       const streamId = await open(sink, info)
       if (streamId === undefined) return undefined
       sink.append([sessionPart(info)])
-      return { sink, streamId, info }
+      const bracket = { sink, streamId, info }
+      this.bracketStreams.set(info.session, bracket)
+      return bracket
     } catch (error) {
       this.onDiagnostic(
         `session stream for "${info.session}" failed to open: ${errorMessage(error)}`,

@@ -1271,7 +1271,7 @@ Each failed target's transcript is deposited. Only a stopped or exhausted chain
 emits one `phase.failed` with the final provider message verbatim; that final
 failure controls retry policy. Provider exhaustion skips the retry budget and
 raises a policy escalation, while availability uses the existing bounded
-budget. Every build-agent session also has a kernel-owned wall-clock budget,
+budget. Every build-agent session also has a kernel-owned active-time budget,
 resolved from its logical role and then `[policy].sessionBudgetSeconds`. Expiry
 aborts the turn, ends any available handle, drops producer continuation state,
 and emits retryable `phase.failed` with `phase session budget expired after
@@ -1498,6 +1498,39 @@ state path; they contain no credentials or transcript. Requested/generated ids
 are not proof of a native session. No reported identity means no handle.
 The reducer exposes `sessions.nativeHandles` (retained after session end) and
 `nativeHandle` on matching open sessions. Legacy logs retain an empty map.
+
+Local git-worktree runners suspend an interrupted agent turn on dispatcher
+SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
+with cause `shutdown`, the native handle, active milliseconds, partial transcript
+and any known incremental usage. A terminal fact that lands first prevents
+suspension; suspension fences the old session's terminal credentials permanently.
+The process supervisor retains its existing bounded force-stop path if provider
+cleanup or persistence cannot complete.
+
+On attachment the runner retains an eligible current phase/round session and
+records takeover. Matching host, workspace and runtime permit native resume;
+remote workspaces, missing handles, unsupported runtimes and unavailable native
+state produce a reasoned `session.resume-fallback` and fresh execution. Provider
+failures retain ordinary retry/alternate policy. Native state is an optimization;
+the Store remains authoritative for durable resumption.
+
+A continuation is a new Autobuild bracket with fresh credentials and a new
+stream. `session.started.continuation` durably records its predecessor, logical
+root, inherited handle, interruption cause and accumulated budget before launch.
+This is write-ahead resume intent, not a handshake: the prompt may execute and
+its terminal may land before the adapter reports native acceptance through
+`session.resumed`. Recovery retries an unaccepted attempt using the inherited
+handle; a superseded attempt's late acceptance is marked stale and changes no
+lifecycle state. The interruption prompt names shutdown or runner loss and asks
+the agent to re-check the worktree and re-run anything in flight. Phase and round
+are retained, including uncommitted local work.
+
+The original budget ceiling persists across interruptions. Monotonic elapsed
+milliseconds charge each live segment; suspended intervals are excluded. An
+abruptly lost segment is conservatively charged from its recorded start to
+recovery. Interrupted and continuation transcripts remain separate artifacts;
+logical totals sum known segment usage once and preserve every transcript ref.
+Unknown crash usage is not fabricated. Pause does not interrupt a live turn.
 
 The optional `resume` capability continues native state in a fresh process,
 using explicit new execution options and environment. Success returns
@@ -2413,7 +2446,7 @@ with illustrative members:
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
-| Sessions | `session.started`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
+| Sessions | `session.started` (including optional write-ahead continuation intent and budget ceiling); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
@@ -2504,9 +2537,9 @@ Runner state retains ordered `runner.setup-failed {command,attempt,exitStatus,
 output}` facts and projects the latest one until a later `runner.attached`
 proves successful setup recovery. A legacy `session.started` with no ending
 continues to project as open. On takeover, the recovering runner explicitly
-appends a reclaimed `session.ended` for every session open at its captured
-resume boundary before it appends `runner.attached`; only a subsequently
-started rerun session can then be open.
+retains the eligible current native session and reclaims unrelated open
+brackets at its captured resume boundary before `runner.attached`. Without a
+usable native candidate, only a subsequently started fresh session can be open.
 
 Every projection — operator UI, CLI status, dispatcher decisions — is a
 reduction of the logs. `ab builds` and `ab build status` additionally present
@@ -2611,7 +2644,11 @@ executes no setup, appends no `runner.attached`, and starts no phase or session.
 Resume and all decisions that use the workspace still require successful setup.
 The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
-**D — sandbox death:** log ends at `session.started {session: old}` after
+**D — runner loss and sandbox death:** local git-worktrees first attempt the
+native continuation described in §9. The following remote-sandbox recovery
+retains its fresh-session fallback.
+
+**Remote sandbox death:** log ends at `session.started {session: old}` after
 `implement.started {round: 2}`; heartbeat goes stale → dispatcher expires the
 lease, records the old execution identity, stops/deletes its exact deterministic
 sandbox name, and confirms absence before recording `workspace.released` → it

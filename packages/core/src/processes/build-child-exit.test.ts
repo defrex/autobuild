@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { signalProcessGroup } from './process-group'
-import { BuildChildExitCoordinator } from './build-child-exit'
+import { BuildChildExitCoordinator, BuildChildShutdown } from './build-child-exit'
 
 function alive(pid: number): boolean {
   try {
@@ -235,4 +235,38 @@ await handle.completion
     if (helperPid !== undefined && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
     await rm(tmp, { recursive: true, force: true })
   }
+})
+
+test('shutdown allows persistence, retains the first signal, and shares the original group deadline', () => {
+  let now = 1000
+  let force!: () => void
+  const launches: Array<{ stopTimeoutMs: number }> = []
+  const exits: number[] = []
+  const terminal = new BuildChildExitCoordinator({
+    groupId: 123,
+    launchReaper: (opts) => {
+      launches.push(opts)
+      return 1
+    },
+    exit: (code) => exits.push(code),
+  })
+  const shutdown = new BuildChildShutdown(
+    terminal,
+    () => now,
+    (callback, delay) => {
+      expect(delay).toBe(4000)
+      force = callback
+      return () => {}
+    },
+  )
+  shutdown.request(130)
+  shutdown.request(143)
+  expect(shutdown.signal.aborted).toBe(true)
+  expect(exits).toEqual([])
+  now += 4000
+  force()
+  expect(exits).toEqual([130])
+  expect(launches[0]?.stopTimeoutMs).toBe(1000)
+  shutdown.finish(0)
+  expect(launches).toHaveLength(1)
 })

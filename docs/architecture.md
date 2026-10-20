@@ -421,10 +421,10 @@ Timeout escalation is held while the matching repository tick observation is ope
 (with historical `tick-started` journal fallback when no observation exists),
 because force-killing the ticket claim before build creation would not be
 recoverable. After a build child claims a takeover lease, it reduces one
-captured event prefix and appends transcriptless reclaimed `session.ended`
-facts for every session open there before `runner.attached` cites that same
-boundary. Partial closure is retry-safe and an observed attachment therefore
-proves all pre-boundary sessions closed; historical orphan-only logs keep their
+captured event prefix, retains an eligible local native recovery candidate, and
+appends transcriptless reclaimed `session.ended` facts for unrelated open
+sessions before `runner.attached` cites that same boundary. Partial closure is
+retry-safe; historical orphan-only logs keep their
 old projection until an actual takeover records those facts. The supervisor
 rechecks kernel-child liveness at the force boundary
 and projects the same normal, forced, or abnormal result (with available
@@ -1260,5 +1260,37 @@ Node landings retain the existing writer serialization and gate proof.
 Build native session handles are kernel-authored `session.native-handle-recorded`
 facts. The build reducer retains them by bracket session id after session end;
 absence means no harness identity was reported. Adapters guard host/workspace
-and resume only native persisted state with fresh execution options. This does
-not change pause or §15.6 reclaim-and-rerun recovery behavior.
+and resume only native persisted state with fresh execution options.
+
+Local git-worktree runners suspend an interrupted agent turn on dispatcher
+SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
+with cause `shutdown`, the native handle, active milliseconds, partial transcript
+and any known incremental usage. A terminal fact that lands first prevents
+suspension; suspension fences the old session's terminal credentials permanently.
+The process supervisor retains its existing bounded force-stop path if provider
+cleanup or persistence cannot complete.
+
+On attachment the runner retains an eligible current phase/round session and
+records takeover. Matching host, workspace and runtime permit native resume;
+remote workspaces, missing handles, unsupported runtimes and unavailable native
+state produce a reasoned `session.resume-fallback` and fresh execution. Provider
+failures retain ordinary retry/alternate policy. Native state is an optimization;
+the Store remains authoritative for durable resumption.
+
+A continuation is a new Autobuild bracket with fresh credentials and a new
+stream. `session.started.continuation` durably records its predecessor, logical
+root, inherited handle, interruption cause and accumulated budget before launch.
+This is write-ahead resume intent, not a handshake: the prompt may execute and
+its terminal may land before the adapter reports native acceptance through
+`session.resumed`. Recovery retries an unaccepted attempt using the inherited
+handle; a superseded attempt's late acceptance is marked stale and changes no
+lifecycle state. The interruption prompt names shutdown or runner loss and asks
+the agent to re-check the worktree and re-run anything in flight. Phase and round
+are retained, including uncommitted local work.
+
+The original budget ceiling persists across interruptions. Monotonic elapsed
+milliseconds charge each live segment; suspended intervals are excluded. An
+abruptly lost segment is conservatively charged from its recorded start to
+recovery. Interrupted and continuation transcripts remain separate artifacts;
+logical totals sum known segment usage once and preserve every transcript ref.
+Unknown crash usage is not fabricated. Pause does not interrupt a live turn.

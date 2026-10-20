@@ -365,6 +365,28 @@ export class RepoViewStore implements BuildStore {
       return result
     })
   }
+  appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    return this.build(slug, async () => {
+      const result = await this.backing.appendWithArtifactsIfCurrent(
+        slug,
+        expectedSeq,
+        artifacts,
+        makeEvent,
+      )
+      if (result) this.foldBuildAppend(slug, result.event as AbEvent)
+      else {
+        const window = this.windows.get(slug)
+        if (window) window.dirty = true
+      }
+      this.invalidate(slug)
+      return result
+    })
+  }
   private async foldJournalAppend(event: RepositoryEvent): Promise<void> {
     const window = this.journalWindow
     if (window && event.seq > window.cursor) {

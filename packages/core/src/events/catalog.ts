@@ -121,6 +121,9 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'spec.authored': ['agent'],
   'spec.revised': ['kernel'],
 
+  'session.suspended': ['kernel'],
+  'session.resumed': ['kernel'],
+  'session.resume-fallback': ['kernel'],
   'session.started': ['kernel'],
   'session.native-handle-recorded': ['kernel'],
   'session.ended': ['kernel'],
