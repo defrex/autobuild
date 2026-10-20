@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#664](https://github.com/defrex/autobuild/pull/664) — Suspend live sessions on runner stop and resume them natively
+- [#663](https://github.com/defrex/autobuild/pull/663) — Show the integration tree on the landing page
 - [#661](https://github.com/defrex/autobuild/pull/661) — Keep review ranges scoped to each build after restacks
 - [#662](https://github.com/defrex/autobuild/pull/662) — Record native agent session handles for cross-process continuation
 - [#660](https://github.com/defrex/autobuild/pull/660) — Document operating, seams and configuration on the website
