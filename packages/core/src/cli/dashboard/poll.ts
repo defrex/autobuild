@@ -215,7 +215,7 @@ export class DashboardBuildPollCache {
     for (const record of records) {
       const current = this.entries.get(record.slug)
       if (current?.kind === 'terminal') {
-        next.set(record.slug, current)
+        next.set(record.slug, { ...current, record })
         continue
       }
 
