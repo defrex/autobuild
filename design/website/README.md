@@ -172,3 +172,44 @@ figures. Pipeline progression, completion, and replay remain unchanged.
 The eight landing references now match the combined capture byte for byte,
 including all four authorized text links. Section and footer gaps remain
 288px desktop and 192px phone; terminal-to-action spacing remains 48px.
+## Dispatcher and intake motion (2026-10-19)
+
+The dispatcher and intake now share the pipeline's one-shot viewport controller,
+400ms beat, native Replay animation control, and static fallback. The dispatcher
+uses four beats per ready ticket: claim, route, runner start, and state writes
+through the CLI and phase-event paths. Earlier runners remain active as later
+ones start. The phone drawing emphasizes its existing three stack layers and
+common write paths for those same three starts. The intake uses three beats
+per source: source filing, routing through the PM agent, and ticket delivery
+along the existing route into the dispatcher. The human and escalation branch
+remain unchanged. Both sequences finish at 4,800ms by removing every transient
+attribute; labels stay selectable throughout.
+
+Only the four `reference-*-motion-final.png` files were refreshed, with all
+three production capture adapters sought to completion and all Replay controls
+visible. The four reduced-motion landing references remain unchanged and match
+the new capture pixel for pixel. Disabled JavaScript keeps the same complete
+figures with hidden controls. `reference.html` remains the historical export.
+
+`bun run capture:website` produced 44 reviewed PNGs: four reduced-motion landing
+states, four docs frames, and 36 motion samples (three figures, three sample
+times, two widths, local and remote seams). All stylesheets loaded, reduced-motion
+frames were still, section spacing remained unchanged, and all 390px probes
+reported scrollWidth and innerWidth of 390. Separate Chromium checks exercised
+actual viewport entry, completion, no repeat on return, keyboard and rapid replay,
+breakpoint changes, preference changes, and disabled JavaScript. Controller tests
+also cover hidden-tab settling. No external runtime dependency was added.
+
+## Combined documentation, dispatcher, and intake evidence
+
+Reconciliation preserves all nine docs routes, the three core-workflow landing
+links, and the infrastructure-seams link alongside all three animated figures.
+The four normal-motion final references were regenerated from the combined page
+with every production adapter sought to 4,800ms and all Replay controls visible.
+The four reduced-motion captures match the upstream references pixel for pixel;
+those baseline files remain unchanged. Both final phone probes report
+scrollWidth and innerWidth of 390. Section and footer gaps remain 288px desktop
+and 192px phone, with 48px terminal-to-action spacing. The full capture retains
+separate start, midpoint, and final evidence for each figure and responsive
+layout. The maintainer reviews the integrated reference set before the website
+node lands.
