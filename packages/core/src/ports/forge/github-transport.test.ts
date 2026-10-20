@@ -448,3 +448,44 @@ test('fetch errors retain lowercased cooldown headers', async () => {
     stub.restore()
   }
 })
+
+test('classification preserves GraphQL limits, secondary deadlines and transient versus permission failures', async () => {
+  const { classifyGitHubFailure } = await import('./github-transport')
+  const { isForgeFailure } = await import('../forge-failure')
+  const now = Date.parse('2026-10-20T00:00:00Z')
+  const primary = classifyGitHubFailure(
+    new GitHubApiError(
+      200,
+      'API rate limit exceeded',
+      { errors: [{ type: 'RATE_LIMITED' }] },
+      { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String((now + 120_000) / 1000) },
+    ),
+    now,
+  )
+  expect(isForgeFailure(primary) && primary.details).toEqual({
+    kind: 'rate-limited',
+    resetAt: '2026-10-20T00:02:00.000Z',
+  })
+  const secondary = classifyGitHubFailure(new GitHubApiError(200, 'secondary rate limit'), now)
+  expect(isForgeFailure(secondary) && secondary.details).toEqual({
+    kind: 'rate-limited',
+    resetAt: '2026-10-20T00:01:00.000Z',
+  })
+  for (const error of [new GitHubApiError(503, 'unavailable'), new TypeError('fetch failed')]) {
+    const failure = classifyGitHubFailure(error, now)
+    expect(isForgeFailure(failure) && failure.details.kind).toBe('transient')
+  }
+  const permission = new GitHubApiError(403, 'Resource not accessible by integration')
+  expect(classifyGitHubFailure(permission, now)).toBe(permission)
+})
+
+test('GraphQL RATE_LIMITED discriminants do not depend on the error prose', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-20T00:00:00.000Z')
+  expect(
+    githubRateLimitUntil(
+      new GitHubApiError(200, 'request refused', { errors: [{ type: 'RATE_LIMITED' }] }),
+      now,
+    ),
+  ).toBe('2026-10-20T00:01:00.000Z')
+})

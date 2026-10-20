@@ -3,6 +3,7 @@ import type { EventPayload } from '../events/payloads'
 import { landingCandidateId, type LandingCandidate } from './landing-policy'
 
 export interface LandingState {
+  applicationFailure?: EventPayload<'landing.application-failed'>
   nativeEnablePending?: number
   forgeMerge?: EventPayload<'landing.forge-merged'>
   decision?: EventPayload<'landing.decided'> & { seq: number }
@@ -24,9 +25,11 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       delete state.native
       break
     case 'landing.decided':
+      delete state.applicationFailure
       state.decision = { ...event.payload, seq: event.seq }
       break
     case 'build.hold-requested':
+      delete state.applicationFailure
       state.command = { kind: 'hold', seq: event.seq }
       break
     case 'build.land-requested':
@@ -52,7 +55,11 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
     case 'landing.forge-merged':
       state.forgeMerge = event.payload
       break
+    case 'landing.application-failed':
+      state.applicationFailure = event.payload
+      break
     case 'landing.native-applied':
+      delete state.applicationFailure
       if (event.payload.enableSeq === state.nativeEnablePending) delete state.nativeEnablePending
       state.native = { ...event.payload, seq: event.seq }
       break

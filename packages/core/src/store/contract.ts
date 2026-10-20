@@ -1083,8 +1083,23 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             const result = await store.finishRepoTick(
               repo,
               'owner',
-              { outcome: 'completed', counters },
+              {
+                outcome: 'completed',
+                counters: {
+                  ...counters,
+                  forgeRequests: {
+                    total: i,
+                    unattributed: 0,
+                    builds: i ? [{ build: 'active', requests: i }] : [],
+                    complete: true,
+                  },
+                },
+              },
               [],
+            )
+            const finished = (await store.getRepo(repo))!.tick!.finished!
+            expect(finished.outcome === 'completed' && finished.counters.forgeRequests?.total).toBe(
+              i,
             )
             expect(result!.events).toEqual([])
             expect((await store.getRepo(repo))!.tick!.finished!.completedAt).toBe(

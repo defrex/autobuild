@@ -1,3 +1,4 @@
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { stat } from 'node:fs/promises'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
@@ -292,6 +293,7 @@ export async function settlePendingPublication(
         throw new Error(`publication readback did not confirm ${request.payload.sha}`)
     }
   } catch (error) {
+    if (error instanceof ForgeRequestDeferred) throw error
     if (error instanceof MixedVersionDeferral) return
     if (request.payload.operation !== 'finalize-step') throw error
     const detail = error instanceof Error ? error.message : String(error)

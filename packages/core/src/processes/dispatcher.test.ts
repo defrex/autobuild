@@ -1,3 +1,5 @@
+import { GitHubForge } from '../ports/forge/github'
+import { GitHubApiError } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
 import { publicationPending } from './publication-state'
@@ -3369,8 +3371,8 @@ describe('Dispatcher janitor', () => {
     expect((await h.store.listBuilds()).some((record) => record.ticket?.id === 'T-ready')).toBe(
       true,
     )
-    expect(await h.store.getEvents(failedA)).toEqual(failedABefore)
-    expect(await h.store.getEvents(failedB)).toEqual(failedBBefore)
+    expect((await h.store.getEvents(failedA)).slice(0, -1)).toEqual(failedABefore)
+    expect((await h.store.getEvents(failedB)).slice(0, -1)).toEqual(failedBBefore)
     expect(reduceBuild(await h.store.getEvents(failedA)).status).not.toBe('done')
 
     // Materialize the fake launch boundary and keep both launched runners out
@@ -3380,8 +3382,9 @@ describe('Dispatcher janitor', () => {
       type: 'runner.attached',
       payload: { instance: 'new-runner', host: 'local' },
     })
-    await h.store.claimLease(stale, 'stale-live', 60_000)
-    await h.store.claimLease('add-rate-limiting', 'new-live', 60_000)
+    await h.store.claimLease(stale, 'stale-live', 300_000)
+    await h.store.claimLease('add-rate-limiting', 'new-live', 300_000)
+    h.clock.advance(30_000)
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       janitorFailed: 2,
@@ -3393,6 +3396,7 @@ describe('Dispatcher janitor', () => {
     expect(pollCounts.get(91)).toBe(2)
     expect(pollCounts.get(92)).toBe(2)
 
+    h.clock.advance(60_000)
     failedPolls.clear()
     await h.store.releaseLease(failedA, 'poll-a-live')
     await h.store.releaseLease(failedB, 'poll-b-live')
@@ -3443,6 +3447,7 @@ describe('Dispatcher janitor', () => {
       { id: 'T-bad', state: 'Done' },
     ])
 
+    h.clock.advance(30_000)
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     expect(reduceBuild(await h.store.getEvents(failed)).status).toBe('done')
     expect(h.tickets.transitions.filter((entry) => entry.id === 'T-bad')).toHaveLength(2)
@@ -3629,10 +3634,13 @@ describe('Dispatcher janitor', () => {
       ),
     ).toBe(false)
 
+    h.clock.advance(30_000)
     await h.dispatcher.tick()
     // Native readback repairs the receipt without another provider write.
     expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
-    const applied = (await h.store.getEvents(slug)).at(-1)
+    const applied = (await h.store.getEvents(slug)).findLast(
+      (e) => e.type === 'landing.native-applied',
+    )
     expect(applied?.type).toBe('landing.native-applied')
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
   })
@@ -4439,6 +4447,7 @@ describe('Dispatcher janitor', () => {
     ).toMatchObject({ operation: 'delete', outcome: 'unknown', attempt: 1 })
     expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
 
+    h.clock.advance(30_000)
     fail = false
     await h.dispatcher.tick({ acceptNewWork: false })
     events = await h.store.getEvents(slug)
@@ -4776,6 +4785,7 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.closePrCalls).toHaveLength(1)
     expect(h.workspaces.releases).toHaveLength(1)
 
+    h.clock.advance(30_000)
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       recovered: 1,
@@ -4788,7 +4798,7 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.updates).toEqual([
       { id: 'T-checkpoint', patch: { labels: ['keep-me', 'autobuild:aborted'] } },
     ])
-    expect(events.at(-1)?.type).toBe('build.completed')
+    expect(events.at(-1)?.type).toBe('build.janitor-recovered')
   })
 
   // AUT-527 audit: the parameterized dimension here is how many abort-cleanup
@@ -4931,6 +4941,7 @@ describe('Dispatcher janitor', () => {
     expect(types).not.toContain('build.completed')
     expect(h.tickets.transitions).toEqual([])
 
+    h.clock.advance(30_000)
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
     // The first tick already applied the idempotent label union before the
@@ -4938,8 +4949,10 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.updates).toEqual([{ id: 'T-1', patch: { labels: ['autobuild:aborted'] } }])
     expect(h.tickets.comments).toEqual([])
     const events = await h.store.getEvents(slug)
-    expect(events.at(-1)?.type).toBe('build.completed')
-    expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
+    expect(events.at(-1)?.type).toBe('build.janitor-recovered')
+    expect(events.findLast((e) => e.type === 'build.completed')?.payload).toEqual({
+      outcome: 'abandoned',
+    })
     expect(h.workspaces.releases).toHaveLength(1) // released once, tick 1
   })
 
@@ -5020,6 +5033,43 @@ describe('Dispatcher janitor', () => {
     },
   )
 
+  test('pending attachment reclamation waits through cooldown without failure receipts', async () => {
+    const h = harness({ prAttachments: true })
+    const slug = await seedBuild(h, { slug: 'cleanup-cooldown', workspace: false })
+    await seedHostedPrAttachment(h, slug)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.forge-degraded',
+      payload: {
+        forge: h.forge.name,
+        message: 'limit',
+        resetAt: new Date(h.clock().getTime() + 60_000).toISOString(),
+        firstFailureAt: h.clock().toISOString(),
+      },
+    })
+    for (let tick = 0; tick < 3; tick++) await h.dispatcher.tick()
+    expect(h.forge.prAttachmentReclaims).toHaveLength(0)
+    const events = await h.store.getEvents(slug)
+    expect(
+      events.filter(
+        (e) =>
+          e.type === 'pr-attachment.reclaim-failed' || e.type === 'build.janitor-attempt-failed',
+      ),
+    ).toEqual([])
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.forge.prAttachmentReclaims).toHaveLength(1)
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'pr-attachment.reclaimed'),
+    ).toHaveLength(1)
+  })
+
   test('a done build retries transient reclamation, records attempts, and becomes idempotent', async () => {
     const h = harness({ prAttachments: true })
     const slug = await seedBuild(h, {
@@ -5055,6 +5105,80 @@ describe('Dispatcher janitor', () => {
 })
 
 // ── Dispatch-command startup resume (§2.2, §15.6-C) ─────────────────────────
+
+describe('durable forge failure scheduling', () => {
+  test('janitor backoff and attention survive dispatcher reconstruction and quiet polls', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    let calls = 0
+    let failing = true
+    const poll = h.forge.getPrState.bind(h.forge)
+    h.forge.setPrState(1, { state: 'open', mergeable: null })
+    h.forge.getPrState = async (...args) => {
+      calls++
+      if (failing) throw new Error(`provider unavailable ${calls}`)
+      return poll(...args)
+    }
+    let dispatcher = h.dispatcher
+    for (const delay of [30, 60, 120, 240, 300, 300]) {
+      expect((await dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      const state = reduceBuild(await h.store.getEvents(slug))
+      expect(Date.parse(state.janitor!.nextAttemptAt) - h.clock().getTime()).toBe(delay * 1000)
+      const events = await h.store.getEvents(slug)
+      const count = calls
+      await dispatcher.tick({ acceptNewWork: false })
+      expect(calls).toBe(count)
+      expect(await h.store.getEvents(slug)).toEqual(events)
+      const restarted = harness({ store: h.store, forge: h.forge, wrapTickets: () => h.tickets })
+      restarted.clock.set(h.clock().toISOString())
+      await restarted.dispatcher.tick({ acceptNewWork: false })
+      expect(calls).toBe(count)
+      h.clock.advance(delay * 1000)
+      restarted.clock.set(h.clock().toISOString())
+      dispatcher = restarted.dispatcher
+    }
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.janitor-failing'),
+    ).toHaveLength(1)
+    failing = false
+    await dispatcher.tick({ acceptNewWork: false })
+    expect(reduceBuild(await h.store.getEvents(slug)).janitor).toBeUndefined()
+  })
+
+  test('a limit prevents sibling forge calls and survives restart while cleanup without forge continues', async () => {
+    const h = harness()
+    const first = await seedAwaitingPr(h, 'a-first')
+    const second = await seedAwaitingPr(h, 'b-second')
+    await h.tickets.create(
+      { title: 'cleanup', body: CONFORMING_BODY, labels: [] },
+      { requestedId: 'T-z-cleanup' },
+    )
+    const cleanup = await seedBuild(h, { slug: 'z-cleanup', ticketId: 'T-z-cleanup' })
+    await h.store.append(cleanup, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    let calls = 0
+    const resetAt = new Date(h.clock().getTime() + 60_000).toISOString()
+    h.forge.getPrState = async () => {
+      calls++
+      throw {
+        forgeFailure: 'autobuild.forge-failure.v1',
+        message: 'secondary limit',
+        details: { kind: 'rate-limited', resetAt },
+      }
+    }
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
+    expect(report.janitorFailed, report.janitorDiagnostics.join('\n')).toBe(1)
+    expect(reduceBuild(await h.store.getEvents(first)).janitor?.attempt).toBe(1)
+    expect(reduceBuild(await h.store.getEvents(second)).janitor).toBeUndefined()
+    expect((await h.store.getEvents(cleanup)).some((e) => e.type === 'workspace.released')).toBe(
+      true,
+    )
+    const restarted = harness({ store: h.store, forge: h.forge, wrapTickets: () => h.tickets })
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
+    expect(reduceBuild(await h.store.getEvents(second)).janitor).toBeUndefined()
+  })
+})
 
 describe('Dispatcher startup resume', () => {
   test('attempts every actionable current build even while its old lease is healthy', async () => {
@@ -6465,6 +6589,48 @@ describe('publication loss before workspace release', () => {
     })
     return { h, slug, requestSeq, reapCalls, settleCalls }
   }
+
+  test('forge scheduling deferrals park a reap without failing the tick or blocking sibling supervision', async () => {
+    const { ForgeCooldown } = await import('../kernel/guarded-forge')
+    const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+    for (const signal of [new ForgeCooldown('cooldown'), new ForgeRequestDeferred('deferred')]) {
+      let coolingDown = true
+      const fixture = await seedLostGuest({
+        settlePublication: async (slug) => {
+          fixture.settleCalls.push(slug)
+          if (coolingDown) throw signal
+          await fixture.h.store.append(slug, {
+            actor: DISPATCHER,
+            type: 'implement.completed',
+            payload: {
+              round: 1,
+              commits: { base: BASE, head: SHA },
+              artifact: { kind: 'implement-notes', rev: 0 },
+            },
+          })
+        },
+      })
+      const sibling = await seedBuild(fixture.h, { slug: 'sibling', attached: false })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await fixture.h.dispatcher.tick({ acceptNewWork: false })
+        expect(fixture.reapCalls).toEqual([])
+        const events = await fixture.h.store.getEvents(fixture.slug)
+        expect(
+          events.some((e) => e.type === 'publication.lost' || e.type === 'workspace.released'),
+        ).toBe(false)
+        expect(publicationPending(events)).toBe(true)
+      }
+      expect(fixture.h.launches).toContain(sibling)
+      expect(fixture.h.launches).not.toContain(fixture.slug)
+      coolingDown = false
+      await fixture.h.dispatcher.tick({ acceptNewWork: false })
+      await fixture.h.dispatcher.drainProvisioning()
+      expect(fixture.reapCalls).toEqual(['sandbox-g0'])
+      const events = await fixture.h.store.getEvents(fixture.slug)
+      expect(events.some((e) => e.type === 'publication.lost')).toBe(false)
+      expect(events.some((e) => e.type === 'implement.completed')).toBe(true)
+    }
+  })
 
   test('the loss shape (spec AC2): the reaped stale workspace records publication.lost first', async () => {
     const fixture = await seedLostGuest({
@@ -8390,6 +8556,7 @@ describe('durable ticket scan cadence', () => {
     await h.dispatcher.tick()
     expect(h.scans()).toBe(1)
     h.forge.setPrState(PR.number, { state: 'merged', sha: 'squash-1' })
+    h.clock.advance(30_000)
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(h.scans()).toBe(2)
   })
@@ -9267,6 +9434,7 @@ describe('integration crash boundaries', () => {
     await h.dispatcher.tick()
     expect(h.forge.opened).toHaveLength(1)
     expect(reduceBuild(await h.store.getEvents(node.slug)).pr).toBeUndefined()
+    h.clock.advance(30_000)
     await h.dispatcher.tick()
     expect(h.forge.opened).toHaveLength(1)
     expect(reduceBuild(await h.store.getEvents(node.slug)).pr?.number).toBe(1)
@@ -9418,6 +9586,63 @@ describe('declarative landing reconciliation', () => {
     const state = async () => reduceBuild(await h.store.getEvents(slug))
     return { ...h, slug, poll, state }
   }
+  test.each([false, true])(
+    'automatic landing retries a real GitHub limit across restart (uncertain=%s)',
+    async (uncertain) => {
+      const h = await candidate('auto')
+      const native = h.forge.setAutoMerge.bind(h.forge)
+      const resetAt = new Date(h.clock().getTime() + 120_000).toISOString()
+      let limited = true
+      const github = new GitHubForge({
+        repository: 'acme/repo',
+        now: () => h.clock().getTime(),
+        transport: async () => {
+          throw new GitHubApiError(
+            403,
+            'API rate limit exceeded',
+            {},
+            {
+              'x-ratelimit-remaining': '0',
+              'x-ratelimit-reset': String(Date.parse(resetAt) / 1000),
+            },
+          )
+        },
+      })
+      h.forge.setAutoMerge = async (...args) => {
+        if (limited && args[2]) {
+          if (uncertain) await args[3]?.canApply?.()
+          return github.setAutoMerge(...args)
+        }
+        return native(...args)
+      }
+      expect((await h.poll()).janitorFailed).toBe(1)
+      expect((await h.state()).landing?.applicationFailure).toBeDefined()
+      expect((await h.state()).landing?.nativeEnablePending !== undefined).toBe(uncertain)
+      expect((await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested')).toBe(
+        false,
+      )
+      const before = await h.store.getEvents(h.slug)
+      const restarted = harness({
+        store: h.store,
+        forge: h.forge,
+        wrapTickets: () => h.tickets,
+        toml: '[[landing]]\nmode = "auto"',
+      })
+      await restarted.dispatcher.tick({ acceptNewWork: false })
+      expect(await h.store.getEvents(h.slug)).toEqual(before)
+      limited = false
+      restarted.clock.set(new Date(Date.parse(resetAt) + 1).toISOString())
+      h.clock.set(new Date(Date.parse(resetAt) + 1).toISOString())
+      await restarted.dispatcher.tick({ acceptNewWork: false })
+      expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+      expect((await h.state()).landing?.applicationFailure).toBeUndefined()
+      expect((await h.store.getRepoEvents(REPO)).at(-1)?.type).toBe('dispatcher.forge-recovered')
+      h.forge.setPrState(1, { state: 'merged', sha: 'landed' })
+      await restarted.dispatcher.tick({ acceptNewWork: false })
+      expect((await h.state()).status).toBe('done')
+    },
+  )
+
   test('consent queue polls read each PR once and write only to repair observed drift', async () => {
     const h = harness({ toml: '[[landing]]\nmode = "consent"' })
     for (let number = 1; number <= 4; number++) {

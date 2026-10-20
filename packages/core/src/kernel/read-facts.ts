@@ -447,6 +447,7 @@ import type { RepositoryEvent } from '../events/repository'
 import { repositoryAttentionReducer } from './repository-attention'
 import { dispatchSettingsReducer } from './dispatch-settings'
 import { harvestReducer } from './harvest'
+import { forgeHealthReducer } from './forge-health'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 import { autoMergeDefaultReducer } from './auto-merge-default'
 import { effectiveConfigReducer } from './service-facts'
@@ -490,6 +491,7 @@ export interface RepositoryReadAcc {
   failedAt: Record<string, string>
   settings: ReturnType<typeof dispatchSettingsReducer.initial>
   harvest: ReturnType<typeof harvestReducer.initial>
+  forgeHealth: ReturnType<typeof forgeHealthReducer.initial>
   health: ReturnType<typeof ticketSourceHealthReducer.initial>
   autoMerge: ReturnType<typeof autoMergeDefaultReducer.initial>
   config: ReturnType<typeof effectiveConfigReducer.initial>
@@ -508,6 +510,7 @@ export const repositoryReadFactsReducer = defineReducer({
     4 +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
+    forgeHealthReducer.version +
     repositoryAttentionReducer.version +
     dispatchSettingsReducer.version +
     harvestReducer.version +
@@ -533,6 +536,7 @@ export const repositoryReadFactsReducer = defineReducer({
     harvestExecutionStarts: {},
     settings: dispatchSettingsReducer.initial(),
     harvest: harvestReducer.initial(),
+    forgeHealth: forgeHealthReducer.initial(),
     health: ticketSourceHealthReducer.initial(),
     autoMerge: autoMergeDefaultReducer.initial(),
     config: effectiveConfigReducer.initial(),
@@ -546,6 +550,7 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.openHarvest = openHarvestExecutionsReducer.advance(acc.openHarvest, events)
     acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
     acc.harvest = harvestReducer.advance(acc.harvest, events)
+    acc.forgeHealth = forgeHealthReducer.advance(acc.forgeHealth, events)
     acc.health = ticketSourceHealthReducer.advance(acc.health, events)
     acc.autoMerge = autoMergeDefaultReducer.advance(acc.autoMerge, events)
     acc.config = effectiveConfigReducer.advance(acc.config, events)
@@ -653,6 +658,7 @@ export const repositoryReadFactsReducer = defineReducer({
     openHarvest: openHarvestExecutionsReducer.finish(acc.openHarvest),
     settings: dispatchSettingsReducer.finish(acc.settings),
     harvest: harvestReducer.finish(acc.harvest),
+    forgeHealth: forgeHealthReducer.finish(acc.forgeHealth),
     health: ticketSourceHealthReducer.finish(acc.health),
     autoMerge: autoMergeDefaultReducer.finish(acc.autoMerge),
     config: effectiveConfigReducer.finish(acc.config),
