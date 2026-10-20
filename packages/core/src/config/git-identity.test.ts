@@ -8,7 +8,7 @@ import { join } from 'node:path'
  * (obs_cebe11ed / o_62444329): the changelog finalize step staged a correct
  * entry but `git commit` failed with 'Committer identity unknown' because the
  * guest workspace had no git identity. The fix is a defensive both-keys
- * fallback in the `ab-finalize-changelog` skill that writes a bot identity
+ * fallback in the `finalize-changelog` skill that writes a bot identity
  * repo-locally when resolution is missing or partial. (Remote sandboxes also
  * provisioned the same identity system-wide; this repository now builds in
  * local worktrees, which inherit the maintainer's own identity.)
@@ -21,7 +21,7 @@ import { join } from 'node:path'
  */
 
 const REPO_ROOT = join(import.meta.dir, '../../../..')
-const SKILL_PATH = join(REPO_ROOT, '.agents/skills/ab-finalize-changelog/SKILL.md')
+const SKILL_PATH = join(REPO_ROOT, '.agents/skills/finalize-changelog/SKILL.md')
 
 /** The bot identity the skill's fallback writes. */
 async function provisionedIdentity(): Promise<{ name: string; email: string }> {

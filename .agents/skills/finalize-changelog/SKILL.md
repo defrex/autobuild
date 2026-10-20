@@ -1,10 +1,10 @@
 ---
-name: ab-finalize-changelog
+name: finalize-changelog
 description: Add an opened build PR to this repository's changelog. Invoked as the changelog finalize post-step; takes only the build slug.
 disable-model-invocation: true
 ---
 
-# /ab-finalize-changelog <build>
+# /finalize-changelog <build>
 
 You are a failure-tolerant finalize post-step. The PR is already open. Add this
 build's one-line PR summary to the repository changelog as one local commit;
@@ -27,7 +27,7 @@ the kernel, not you, publishes that commit.
 
    `$AB_BUILD` must be the invocation's `<build>` slug. Do not query `gh`, the
    forge, Git remotes, or infer PR data from the branch.
-3. From the status JSON, require `.pr.number` to be a positive integer and
+3. From the status JSON, require `.pr.number` to be a safe positive integer and
    `.pr.url` to be a nonblank string. The title is the artifact's first physical
    line only: strip leading Markdown heading hashes and surrounding whitespace,
    collapse remaining whitespace runs to one space, and require a nonblank
@@ -41,43 +41,24 @@ The only accepted entry format is:
 - [#<number>](<url>) — <title>
 ```
 
-Before editing tracked files:
+Require a clean worktree before starting. Let the stable marker be `[#<number>](`.
+Count it across CHANGELOG.md (including historical releases) and the canonical
+`.changelog/<number>.md` fragment. Validate an existing fragment with
+`parseFragment` from `tools/changelog-fragments.ts`. Exactly one existing
+representation is an idempotent no-op, even after release consumption. Never
+rewrite an existing fragment when its title changes. Duplicates or malformed
+fragments are clean observed semantic failures.
 
-- Require exactly one level-two heading whose whole line is `## Unreleased`
-  (trailing horizontal whitespace is harmless). Missing or multiple matching
-  headings are a semantic failure. The Unreleased section is bounded by that
-  heading and the next level-two heading, or by EOF when no later level-two
-  heading exists; every later heading and released section is immutable.
-- Let the stable marker be the literal `[#<number>](` for this PR and count it
-  across `CHANGELOG.md`. Exactly one occurrence is a successful replay no-op:
-  make no commit and end normally. More than one is a semantic failure. Never
-  append another entry in either case.
-- With zero markers, require all PR/title inputs above. Normalize the title to
-  one line, construct exactly the format shown, and insert it as the first
-  nonblank content within the bounded Unreleased section, before every existing
-  entry. Keep one blank separator below the heading (introduce it when the
-  empty scaffold has none), and do not reorder or rewrite existing lines. When
-  the bounded section has no nonblank content and its next nonblank line is a
-  release heading, insert the entry after the heading's blank separator and
-  before that release heading — never beneath or inside the released section.
-
-After insertion, prove before committing that:
-
-- this PR marker occurs exactly once;
-- the new entry is the first nonblank content in the bounded Unreleased
-  section, including when it began as a freshly released empty scaffold;
-- `git diff --check -- CHANGELOG.md` passes; and
-- the unstaged diff has exactly one added entry line, with no removed or
-  modified existing lines and no changed path besides `CHANGELOG.md`. The only
-  other permitted addition is the heading's blank separator when the section
-  was the empty scaffold.
-
-If any proof fails, restore only the uncommitted `CHANGELOG.md` change and use
-the semantic-failure path below. Otherwise stage only that file, inspect the
-staged diff once more, and create one commit:
+With zero representations, create `.changelog/<number>.md` exclusively (never
+overwrite), containing exactly the entry above plus a trailing newline. Use
+`renderFragment` from `tools/changelog-fragments.ts` to validate inputs.
+Do not modify CHANGELOG.md. Inspect the new file and the staged diff: only this
+path and exactly this one entry may be added. Reject unrelated changes. Run
+`git diff --check` and `git diff --cached --check`. On semantic failure remove
+only this session's newly created uncommitted fragment, then observe the failure.
 
 ```sh
-git add -- CHANGELOG.md
+git add -- .changelog/<number>.md
 # Defensive: finalize commits must never fail on missing or partial identity
 # (an email-only or name-only identity still fails `git commit`). Skip the
 # fallback only when both keys resolve; otherwise set the repo-local identity
@@ -85,7 +66,7 @@ git add -- CHANGELOG.md
 # identity as the workspace `git-identity` provisioning step in autobuild.toml.
 { [ -n "$(git config user.name || true)" ] && [ -n "$(git config user.email || true)" ]; } || \
   { git config user.name 'autobuild[bot]'; git config user.email 'autobuild[bot]@users.noreply.github.com'; }
-git commit -m "chore: add changelog entry for #<number>" -- CHANGELOG.md
+git commit -m "chore: add changelog entry for #<number>" -- .changelog/<number>.md
 git status --porcelain
 ```
 
@@ -93,8 +74,7 @@ The final status must be empty. Never amend or rewrite history. Never push.
 
 ## Failure-tolerant ending
 
-For missing/malformed status or artifact data, a missing/ambiguous Unreleased
-section, duplicate markers, or any other clean semantic no-op, leave tracked
+For missing/malformed status or artifact data, duplicate markers, or any other clean semantic no-op, leave tracked
 files exactly as they were and record one specific observation, for example:
 
 ```sh

@@ -19,7 +19,7 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * reference guard, `packages/core/src/cli/skill-self-containment.test.ts`, so
  * guarding them here would be double coverage. Repo-local skills (today
  * readme-headline, impeccable, release, vercel-builds, verify-web-dashboard,
- * ab-finalize-changelog, and ab-verify-dashboard) have no canonical copy to
+ * finalize-changelog, and ab-verify-dashboard) have no canonical copy to
  * inherit that guard from; the recorded gap this check closes was
  * `readme-headline`'s inline-code mention of `docs/assets/headline-wide.png`,
  * which no check would have noticed had the asset disappeared. Inventory
