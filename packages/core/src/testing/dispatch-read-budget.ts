@@ -1,3 +1,4 @@
+import { loadReducerSnapshot } from '../store/snapshots'
 import { expect } from 'bun:test'
 import { DispatchFrontend } from '../cli/dispatch-frontend'
 import type { DispatchChildResult } from '../cli/dispatch-process'
@@ -146,7 +147,14 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
   const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
   await refresh()
   const initialSize = JSON.stringify(
-    (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.state,
+    (
+      await loadReducerSnapshot(
+        { getReducerSnapshot: getSnapshot },
+        { kind: 'repo', repo },
+        'dispatchFrontend',
+        { version: 2 },
+      )
+    )?.state,
   ).length
   let recordReads: number | undefined
   try {
@@ -179,7 +187,14 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       recordReads ??= metrics.records - before.records
       expect(metrics.records - before.records).toBe(recordReads)
       const size = JSON.stringify(
-        (await getSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 2))?.state,
+        (
+          await loadReducerSnapshot(
+            { getReducerSnapshot: getSnapshot },
+            { kind: 'repo', repo },
+            'dispatchFrontend',
+            { version: 2 },
+          )
+        )?.state,
       ).length
       // First advancement adds the child's identity; ticks add nothing.
       expect(size).toBeLessThan(initialSize + 1000)

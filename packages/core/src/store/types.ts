@@ -106,6 +106,7 @@ export interface ArtifactMeta {
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
 export interface BuildDigest {
+  compatibility?: import('../events/compatibility').CompatibilityState
   /** A kernel landing requested an audit and no audit settlement has followed. */
   integrationAuditPending?: true
   /** Compact confirmed landing evidence for admission; avoids full build reads. */
@@ -267,6 +268,8 @@ export interface SubscribeOptions {
 }
 
 export interface BuildStore {
+  /** Catalog used for event-derived batch answers, when known by this adapter. */
+  readonly catalogIdentity?: string
   /** Reads cross a network boundary; presentation polling may use a relaxed cadence. */
   readonly networkReads?: boolean
   /** Return an interface-enforced handle with authority over exactly `slug`.

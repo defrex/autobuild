@@ -14,3 +14,5 @@ export const REMOTE_STORE_PROTOCOL_VERSION = '4'
 
 export const AUTOBUILD_VERSION_HEADER = 'x-autobuild-version'
 export const REMOTE_STORE_PROTOCOL_VERSION_HEADER = 'x-autobuild-protocol-version'
+
+export const CATALOG_IDENTITY_HEADER = 'x-autobuild-catalog-identity'

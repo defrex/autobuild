@@ -225,7 +225,10 @@ test('a delayed writer and stale repair never overwrite a newer winner', async (
   expect((await delayed).cursor).toBe(20)
   expect(await readReducerValue(build, { reducer: 'build' }, h.storage)).toEqual(winner)
   const resolved = resolveReducerValue(build, { reducer: 'build' })
-  h.rows.set(resolved.key, { token: 'poison', snapshot: { version: 1, cursor: 500, state: null } })
+  h.rows.set(resolved.key, {
+    token: 'poison',
+    snapshot: { version: resolved.reducer.version, cursor: 500, state: null },
+  })
   const repair = h.storage.repair
   h.storage.repair = async (key, observed, snapshot) => {
     h.rows.set(key, {
@@ -244,7 +247,10 @@ test('a delayed writer and stale repair never overwrite a newer winner', async (
   expect(await readReducerValue(build, { reducer: 'build' }, h.storage)).toEqual(winner)
   expect(h.rows.get(resolved.key)!.token).toBe('valid-winner')
   h.storage.repair = repair
-  h.rows.set(resolved.key, { token: 'ahead', snapshot: { version: 1, cursor: 500, state: null } })
+  h.rows.set(resolved.key, {
+    token: 'ahead',
+    snapshot: { version: resolved.reducer.version, cursor: 500, state: null },
+  })
   expect(await readReducerValue(build, { reducer: 'build' }, h.storage)).toEqual(winner)
   expect(await readReducerValue(build, { reducer: 'build' }, h.storage)).toEqual(winner)
   expect(h.costs.at(-1)).toBe(0)
@@ -252,7 +258,7 @@ test('a delayed writer and stale repair never overwrite a newer winner', async (
   expect(await readReducerValue(build, { reducer: 'build' }, h.storage)).toEqual(winner)
 })
 
-test('deeply malformed, old-version and wrong-identity rows repair once', async () => {
+test('own malformed rows repair once; foreign versions remain untouched', async () => {
   const events = randomBuildLog(3, 40)
     .slice(0, 40)
     .map((event, index) => ({ ...event, seq: index + 1 }))
@@ -284,7 +290,9 @@ test('deeply malformed, old-version and wrong-identity rows repair once', async 
     const answer = await readReducerValue(build, request, h.storage)
     expect(answer.value).toEqual(json(resolved.reducer.reduce(events)))
     expect(await readReducerValue(build, request, h.storage)).toEqual(answer)
-    expect(h.costs.at(-1)).toBe(0)
+    expect(h.costs.at(-1)).toBe(snapshot.version === resolved.reducer.version ? 0 : 40)
+    if (snapshot.version !== resolved.reducer.version)
+      expect(h.rows.get(resolved.key)?.snapshot).toEqual(snapshot)
   }
 })
 

@@ -284,6 +284,13 @@ const reviewVerdictPayload = z.strictObject({
 })
 
 export const eventPayloadSchemas = {
+  'build.compatibility-deferred': z.strictObject({
+    boundary: z.number().int().positive(),
+    types: z.array(z.string().min(1)).min(1),
+    writerVersions: z.array(z.string().min(1)),
+    legacyVersionUnavailable: z.boolean(),
+    diagnostic: z.string().min(1),
+  }),
   // ── Build lifecycle ────────────────────────────────────────────────────────
   'build.created': z.strictObject({
     ticket: ticketRefSchema,

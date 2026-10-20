@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 import type { Forge } from '../ports/types'
@@ -15,6 +16,8 @@ export async function suspendNativeLanding(
   },
   operation: string,
 ): Promise<void> {
+  if (await deferMixedVersion(deps.store, deps.slug, { kind: 'kernel' }))
+    throw new MixedVersionDeferral()
   const state = (await readBuildFacts(deps.store, deps.slug)).value.state
   if (!state.pr) return
   const observed = await deps.forge.getPrState(deps.workspacePath, state.pr.number)

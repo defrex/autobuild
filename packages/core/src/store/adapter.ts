@@ -1,14 +1,16 @@
+export type { StoredEvent } from '../events/compatibility'
+export { READ_CATALOG_IDENTITY } from '../events/compatibility'
 export {
   validateTickFinish,
   repoTickCompletionSchema,
   repoTickObservationSchema,
 } from './repo-tick'
 export type { RepoTickCompletion, RepoTickObservation, RepoTickFinish } from './types'
-export { validateEventWrite } from '../events/catalog'
+export { validateEventWrite, prepareEventWrite } from '../events/catalog'
 export { humanActor } from '../events/envelope'
 export type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 export type { EventType } from '../events/payloads'
-export { validateRepositoryEventWrite } from '../events/repository'
+export { validateRepositoryEventWrite, prepareRepositoryEventWrite } from '../events/repository'
 export type {
   RepositoryEvent,
   RepositoryEventEnvelope,

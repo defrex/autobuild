@@ -1,3 +1,4 @@
+import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, type TreeProjection } from './dashboard/tree'
 import { buildVocabulary } from './dashboard/model'
@@ -97,6 +98,8 @@ export interface LeaseInfo {
 }
 
 export interface BuildSummary {
+  compatibility?: BuildState['compatibility']
+  compatibilityDiagnostic?: string
   kind?: 'integration' | 'work'
   target?: string
   integration?: ReturnType<typeof buildVocabulary>['integration']
@@ -247,6 +250,12 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
     ...(record.ticket !== undefined ? { ticket: record.ticket } : {}),
+    ...(state.compatibility.unknownFacts
+      ? {
+          compatibility: state.compatibility,
+          compatibilityDiagnostic: compatibilityDiagnostic(state.compatibility),
+        }
+      : {}),
     status: state.status,
     ...(active?.phase !== undefined ? { phase: active.phase } : {}),
     ...(round !== undefined ? { round } : {}),
@@ -541,6 +550,11 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
 /** Labeled sections, each omitted when absent ("when each is available"). */
 export function renderDetail(d: BuildDetail, now: Date): string[] {
   const lines: string[] = [`build ${d.slug}`]
+  if (d.compatibility)
+    lines.push(
+      `  newer facts: ${d.compatibility.unknownFacts} (${d.compatibility.decisiveFacts} decisive)`,
+    )
+  if (d.compatibilityDiagnostic) lines.push(`  ${safeStatusText(d.compatibilityDiagnostic)}`)
   if (d.ticket !== undefined) {
     const title = d.ticket.title !== undefined ? ` — ${d.ticket.title}` : ''
     lines.push(`  ticket:   ${d.ticket.id}${title}`)

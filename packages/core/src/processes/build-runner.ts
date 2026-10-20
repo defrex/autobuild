@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { hostname } from 'node:os'
 import { resumeAgent } from '../ports/runner/native-session'
 import type { AgentStartOpts } from '../ports/types'
@@ -222,6 +223,7 @@ type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
  * engine-selected stop acknowledgement that deliberately needs no workspace. */
 export type AttachmentResult =
   | { kind: 'workspace-ready' }
+  | { kind: 'compatibility-deferred' }
   | { kind: 'control-acknowledged'; command: 'pause' | 'abort' }
 
 /** §10 memory: a producer's live runner session, kept across review rounds. */
@@ -943,6 +945,8 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<AttachmentResult> {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
+      return { kind: 'compatibility-deferred' }
     const attaching = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     if (
       attaching.kind === 'node' &&
@@ -1078,12 +1082,16 @@ export class BuildRunner {
    * decision it executed; `wait` decisions execute nothing.
    */
   async step(): Promise<Decision> {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
+      return { kind: 'wait', reason: 'mixed-version' }
     const config = await this.captureConfig()
     const { store, slug } = this.deps
     await this.settleLocalReconcile()
     await completeAutomaticReconcile(store, slug)
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
+    if (await deferMixedVersion(store, slug, KERNEL))
+      return { kind: 'wait', reason: 'mixed-version' }
     if (this.recovery) {
       const current = [...facts.state.sessions.open, ...facts.state.sessions.suspended].find(
         (session) => session.session === this.recovery!.session,
@@ -1163,6 +1171,7 @@ export class BuildRunner {
           return decision
       }
     } catch (error) {
+      if (error instanceof MixedVersionDeferral) return { kind: 'wait', reason: 'mixed-version' }
       if (error instanceof FreshSessionRequired) return this.step()
       if (error instanceof RecoveryBoundaryChanged) return decision
       throw error
@@ -1177,12 +1186,17 @@ export class BuildRunner {
    * already deposited — see module doc).
    */
   async run(): Promise<BuildState> {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
+      return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     const initial = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     if (initial.kind === 'node' && !initial.nodeRestack?.conflict && !integrationCurrent(initial))
       return initial
     if (!this.attached) {
       const attachment = await this.attach()
-      if (attachment.kind === 'control-acknowledged') {
+      if (
+        attachment.kind === 'control-acknowledged' ||
+        attachment.kind === 'compatibility-deferred'
+      ) {
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       }
     }
@@ -1192,6 +1206,7 @@ export class BuildRunner {
         return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       for (;;) {
         if (this.deps.shutdownSignal?.aborted) break
+        if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) break
         await this.ensureLease()
         await this.settleLocalReconcile()
         const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
@@ -1223,7 +1238,8 @@ export class BuildRunner {
       }
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } catch (error) {
-      if (!(error instanceof SessionShutdown)) throw error
+      if (!(error instanceof SessionShutdown) && !(error instanceof MixedVersionDeferral))
+        throw error
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } finally {
       this.stopHeartbeat()
@@ -1248,6 +1264,7 @@ export class BuildRunner {
   }
 
   private async refreshSummary(): Promise<boolean> {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) return false
     try {
       await this.ensureLease()
     } catch {
@@ -1275,6 +1292,7 @@ export class BuildRunner {
   private async ensureLease(): Promise<void> {
     if (!this.leaseLost) return
     const { store, slug, instance } = this.deps
+    if (await deferMixedVersion(store, slug, KERNEL)) throw new MixedVersionDeferral()
     const reclaimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!reclaimed) throw new LeaseHeldError(slug, instance)
     this.leaseLost = false
@@ -1602,6 +1620,7 @@ export class BuildRunner {
   /** Re-read durable ownership and controls at the actual rewrite boundary. */
   private async assertAutomaticRewriteOwnership(allowPublication = false) {
     const { store, slug, instance, clock } = this.deps
+    if (await deferMixedVersion(store, slug, KERNEL)) throw new MixedVersionDeferral()
     const record = await store.getBuild(slug)
     if (record?.lease?.holder !== instance) throw new LeaseHeldError(slug, instance)
     if (
@@ -1631,6 +1650,7 @@ export class BuildRunner {
 
   /** A resolver deposits intent while its turn is live. Publish after it ends. */
   private async settleLocalReconcile() {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) return
     const { store, slug } = this.deps
     const facts = (await readBuildFacts(store, slug)).value
     if (facts.workspace !== null && isRemoteWorkspace(facts.workspace)) return
@@ -1843,7 +1863,7 @@ export class BuildRunner {
       }
       await store.append(slug, { actor: KERNEL, type: 'restack.completed', payload: intent })
     } catch (error) {
-      if (error instanceof LeaseHeldError) throw error
+      if (error instanceof LeaseHeldError || error instanceof MixedVersionDeferral) throw error
       if (error instanceof AutomaticRewriteDeferred) return
       await this.failPhase(
         'reconcile',
@@ -2101,6 +2121,7 @@ export class BuildRunner {
    * observation and never route a green build backward.
    */
   private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) return
     const { step, action } = decision
     if (!this.recovery)
       await this.deps.store.append(this.deps.slug, {
@@ -2169,6 +2190,7 @@ export class BuildRunner {
           pushedHead = head
         }
       } catch (error) {
+        if (error instanceof MixedVersionDeferral) throw error
         failureNote = `finalize publication failed: ${errorMessage(error)}`
       }
     }
@@ -3736,6 +3758,10 @@ export class BuildRunner {
     mayRetry = true,
     providerAttempts?: readonly ProviderAttempt[],
   ): Promise<void> {
+    // A decisive fact may arrive while the agent is live (including while
+    // its terminal is refused). Do not turn deferral into a consumed retry.
+    if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
+      throw new MixedVersionDeferral()
     const attempt = priorFailures + 1
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,

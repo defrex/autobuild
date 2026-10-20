@@ -1,3 +1,5 @@
+import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
+import { CATALOG_IDENTITY_HEADER } from './version'
 /**
  * Client-only unit coverage for RemoteBuildStore (SPEC §7.2 adapter 2): the
  * client is driven against a recording fake `fetchFn` whose canned responses
@@ -102,6 +104,7 @@ function fakeFetch(responses: CannedResponse[]) {
     if (!next) throw new Error('fakeFetch: no canned response left')
     const status = next.status ?? 200
     return {
+      headers: new Headers({ [CATALOG_IDENTITY_HEADER]: READ_CATALOG_IDENTITY }),
       ok: status < 400,
       status,
       json: async () => {
@@ -691,7 +694,12 @@ describe('request construction', () => {
     const { store, calls } = makeStore([{ body: wireEvent() }])
     const write = sampleEventWrite('shipped')
     await store.append('build-a', write)
-    expect(calls[0]?.body).toEqual({ actor: write.actor, type: write.type, payload: write.payload })
+    expect(calls[0]?.body).toEqual({
+      actor: write.actor,
+      type: write.type,
+      payload: write.payload,
+      compatibility: { writerVersion: AUTOBUILD_VERSION, classification: 'advisory' },
+    })
   })
 
   test('appendIfCurrent ships the expected seq alongside the write', async () => {
@@ -703,7 +711,12 @@ describe('request construction', () => {
     expect(envelope?.seq).toBe(2)
     expect(calls[0]?.body).toEqual({
       expectedSeq: 1,
-      event: { actor: write.actor, type: write.type, payload: write.payload },
+      event: {
+        actor: write.actor,
+        type: write.type,
+        payload: write.payload,
+        compatibility: { writerVersion: AUTOBUILD_VERSION, classification: 'advisory' },
+      },
     })
   })
 
@@ -878,7 +891,6 @@ describe('atomic deposits client half (D6, §8.7)', () => {
           payload: {
             round: 1,
             artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-            note: deposited[1]!.revision,
           },
         }
       },
@@ -899,10 +911,10 @@ describe('atomic deposits client half (D6, §8.7)', () => {
       event: {
         actor: AGENT,
         type: 'plan.completed',
+        compatibility: { writerVersion: AUTOBUILD_VERSION, classification: 'decisive' },
         payload: {
           round: 1,
           artifact: { kind: 'plan', rev: placeholderRev(0) },
-          note: placeholderRev(1),
         },
       },
     })

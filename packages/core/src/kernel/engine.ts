@@ -1,3 +1,4 @@
+import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
@@ -41,7 +42,14 @@ import { stalledChains, type FindingChain } from './stall'
 
 // ── The decision contract ────────────────────────────────────────────────────
 
-export type WaitReason = 'blocked' | 'paused' | 'awaiting-spec' | 'awaiting-pr' | 'done' | 'aborted'
+export type WaitReason =
+  | 'mixed-version'
+  | 'blocked'
+  | 'paused'
+  | 'awaiting-spec'
+  | 'awaiting-pr'
+  | 'done'
+  | 'aborted'
 
 export type VerifyAction =
   | { kind: 'run-check'; step: string; command: string; attempt: number }
@@ -120,6 +128,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
  * the event array. `decideNext(events, config)` is exactly this over
  * `reduceBuild(events)` and `indexLog(events)`. */
 export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Config): Decision {
+  if (mixedVersionDeferred(state)) return { kind: 'wait', reason: 'mixed-version' }
   // ── 1. Terminal (§15.5: terminal wins, latest wins) ────────────────────────
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
   if (state.status === 'done') return { kind: 'wait', reason: 'done' }

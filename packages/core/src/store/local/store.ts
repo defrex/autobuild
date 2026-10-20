@@ -1,3 +1,4 @@
+import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { readPersistedBuildDigests } from '../reduced-reads'
 import { assertPublicSnapshotReducer } from '../snapshots'
 import {
@@ -29,14 +30,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { humanActor } from '../../events/envelope'
 import {
-  validateEventWrite,
+  prepareEventWrite as validateEventWrite,
   type AbEvent,
   type EventEnvelope,
   type EventWrite,
 } from '../../events/catalog'
 import type { EventType } from '../../events/payloads'
 import {
-  validateRepositoryEventWrite,
+  prepareRepositoryEventWrite as validateRepositoryEventWrite,
   type RepositoryEvent,
   type RepositoryEventEnvelope,
   type RepositoryEventType,
@@ -199,6 +200,7 @@ export const BOOTSTRAP_DDL = [
     actor TEXT NOT NULL,
     type TEXT NOT NULL,
     payload TEXT NOT NULL,
+    compatibility TEXT,
     PRIMARY KEY (build, seq)
   )`,
   // The build-digest scan (AUT-487): type-leading so the digest query's cost
@@ -231,6 +233,7 @@ export const BOOTSTRAP_DDL = [
     actor TEXT NOT NULL,
     type TEXT NOT NULL,
     payload TEXT NOT NULL,
+    compatibility TEXT,
     PRIMARY KEY (repo, seq)
   )`,
   `CREATE TABLE IF NOT EXISTS repo_artifacts (
@@ -344,6 +347,7 @@ function ticketAssetKey(repo: string, ticketId: string, kind: string, name: stri
 }
 
 export class SqliteBuildStore implements BuildStore {
+  readonly catalogIdentity = READ_CATALOG_IDENTITY
   private readonly sqlite: Database
   private readonly db: BunSQLiteDatabase
   /** Per-stream in-process mutex (store/streams/lock.ts): serializes a
@@ -366,6 +370,11 @@ export class SqliteBuildStore implements BuildStore {
     this.sqlite.exec('PRAGMA busy_timeout = 5000')
     this.sqlite.exec('PRAGMA journal_mode = WAL')
     for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
+    for (const table of ['events', 'repo_events']) {
+      const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as { name: string }[]
+      if (!columns.some((column) => column.name === 'compatibility'))
+        this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN compatibility TEXT`)
+    }
     // Stores created before `repo_origin` existed keep working: add the column
     // idempotently when a pre-existing table lacks it (the bootstrap DDL above
     // covers fresh stores). No migration framework — one guarded ALTER at open.
@@ -605,6 +614,7 @@ export class SqliteBuildStore implements BuildStore {
         actor: validated.actor,
         type: validated.type,
         payload: validated.payload,
+        compatibility: validated.compatibility,
       })
       .run()
     this.db.update(builds).set({ updatedAt: ts }).where(eq(builds.slug, slug)).run()
@@ -615,6 +625,7 @@ export class SqliteBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     }
   }
 
@@ -841,6 +852,7 @@ export class SqliteBuildStore implements BuildStore {
               actor: row.actor,
               type: row.type,
               payload: row.payload,
+              ...(row.compatibility ? { compatibility: row.compatibility } : {}),
             }) as AbEvent,
         )
       },
@@ -1070,6 +1082,7 @@ export class SqliteBuildStore implements BuildStore {
         actor: validated.actor,
         type: validated.type,
         payload: validated.payload,
+        compatibility: validated.compatibility,
       })
       .run()
     this.db.update(repoStreams).set({ updatedAt: ts }).where(eq(repoStreams.repo, repo)).run()
@@ -1080,6 +1093,7 @@ export class SqliteBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
+      compatibility: validated.compatibility,
     }
   }
 
@@ -1182,6 +1196,7 @@ export class SqliteBuildStore implements BuildStore {
               actor: row.actor,
               type: row.type,
               payload: row.payload,
+              ...(row.compatibility ? { compatibility: row.compatibility } : {}),
             }) as RepositoryEvent,
         )
       },
@@ -1247,11 +1262,13 @@ export class SqliteBuildStore implements BuildStore {
           actor: string
           type: string
           payload: string
+          compatibility?: string | null
         }[]
         return rows.map((row) => ({
           ...row,
           actor: JSON.parse(row.actor),
           payload: JSON.parse(row.payload),
+          compatibility: row.compatibility ? JSON.parse(row.compatibility) : undefined,
         })) as (AbEvent | RepositoryEvent)[]
       },
       put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
@@ -1350,8 +1367,8 @@ export class SqliteBuildStore implements BuildStore {
          ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
            version = excluded.version, cursor = excluded.cursor,
            state = excluded.state, updated_at = excluded.updated_at
-         WHERE excluded.cursor > reducer_snapshots.cursor
-            OR (excluded.cursor = reducer_snapshots.cursor AND excluded.version > reducer_snapshots.version)`,
+         WHERE excluded.version >= reducer_snapshots.version AND (excluded.cursor > reducer_snapshots.cursor
+            OR (excluded.cursor = reducer_snapshots.cursor AND excluded.version > reducer_snapshots.version))`,
       )
       .run(
         scope.kind,
@@ -1439,6 +1456,7 @@ export class SqliteBuildStore implements BuildStore {
               actor: row.actor,
               type: row.type,
               payload: row.payload,
+              ...(row.compatibility ? { compatibility: row.compatibility } : {}),
             }) as RepositoryEvent,
         )
       },

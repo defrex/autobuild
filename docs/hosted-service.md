@@ -256,3 +256,38 @@ client version. Without it, both fields are projected away, preserving historica
 strict decoders. Current hosted clients send all three capability headers and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
 empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.
+
+## Reading across upgrades
+
+Within the advertised client compatibility window, readers with mixed-version
+read support tolerate newer build and repository facts. Raw event endpoints
+retain unknown types, payload fields and the producer's `compatibility`
+metadata (`writerVersion` and `classification`). Known payload fields remain
+validated. Adding an advisory field to an existing type is safe; a semantic
+change that older kernels must respect requires a new decisive event type.
+
+Named reduction responses retain exactly `{version, cursor, value}`. The
+`x-autobuild-catalog-identity` response header identifies the backend's read
+catalog independently of its package release and reducer version. Clients
+accept an answer only when that identity, reducer version and finished shape
+match their own; otherwise they replay raw events locally through the response
+cursor. A missing header from an earlier service also triggers replay. A
+service never invents an identity for a backend that supplies none. This keeps
+released strict JSON decoders working without a new request capability.
+
+Unknown advisory facts are counted and skipped. Unknown decisive facts defer
+claiming, routing, landing and publication only for their build; status,
+context and dashboards remain readable. One `build.compatibility-deferred`
+attention fact per decisive boundary appears in the default `ab watch` stream.
+Its diagnostic names unsupported types and producer releases: restart with a
+build that understands those types. The type names matter even when both
+processes report the same package version, as source builds may differ.
+Legacy unknown facts lacking metadata are decisive and report that the writer
+version is unavailable. Restarting with a reader that understands the facts
+clears the guard through replay, without an escalation answer.
+
+Caches are scoped to the reader's catalog. Replaying a reduction from an
+unrecognized reducer version never overwrites its bytes; lower-version snapshot
+writes cannot replace higher-version rows even at a later cursor. This
+protects both upgrade directions. Readers predating this support still fail
+closed; this guarantee does not widen the advertised client window.
