@@ -202,3 +202,68 @@ and 390px verify header geometry, current-link styles, keyboard Enter/Space,
 Tab focus rings, 44px menu targets, reverse-video open state, Escape focus
 return, breakpoint reset, no sideways scroll and accessible links without JS.
 Closed/open keyboard-focus screenshots are retained in build scratch evidence.
+## Integration-tree figure reference revision
+
+On 2026-10-19, the `integration-tree-figure` spec authorized the integration
+section immediately after the dispatcher: an eyebrow, headline, two-sentence
+lead, one link to `/docs/integration/`, and a responsive figure. The desktop
+figure places its four-step sequence to the right of the tree; the phone
+figure places it below. The drawing keeps main, the node ticket and its branch,
+and both child builds visible in the existing broadcast diagram vocabulary.
+
+One logical `data-capture-figure="integration-tree"` marker covers both
+responsive drawings. Its six 1,000ms beats show A landing, B restacking onto
+the new node head, B landing, node completion, verification, and consented
+node landing into main. The complete drawing is the default HTML and the
+reduced-motion and JavaScript-disabled state. The figure shares the pipeline's
+motion controller and once-on-entry/replay behavior, with one native replay
+control for its two responsive drawings. Reduced motion hides that control.
+
+`bun run capture:website` produced a successful 40-PNG inventory at
+`.ab/website-frames/inventory.json`: four landing baselines, twelve docs
+frames, and twenty-four motion samples across both figures. Every phone probe
+reported scrollWidth 390 and innerWidth 390; all stylesheets loaded and all
+reduced-motion frames remained still. The four reduced-motion landing
+references were copied from that capture. The four `*-motion-final.png`
+references were captured in Chromium by seeking both production adapters to
+their durations, with both replay controls visible. These supersede the
+pipeline-only final-state provenance recorded above.
+
+Separate Chromium playback checks passed for viewport entry, completion,
+keyboard and rapid replay, responsive resizing, preference changes, and the
+JavaScript-disabled fallback. Visibility handling was exercised with a
+synthetic `document.hidden` event. The focused caption correction moved
+`land ↑` and `restack → land ↑` below the child build boxes; review of the
+refreshed desktop and phone crops marked that collision fix resolved and
+approved it to ship. A motion-frame inspection also caught an SVG outline specificity issue; the
+corrected capture retains cyan connector paths without rectangular outlines,
+and review marked that fix resolved. These verdicts cover those two fixes only.
+
+The historical `reference.html` remains intact. Existing documentation
+references and unrelated guides are unchanged. The maintainer reviews the
+integrated reference set before the website node lands.
+
+## Combined integration figure and operating guides evidence
+
+Reconciliation onto `operating-seams-configuration` preserves all nine docs
+routes and the seams link alongside the integration section. A fresh complete
+capture produced 46 PNGs: eighteen docs stills, four landing stills, and
+twenty-four motion samples. All 23 phone probes report scrollWidth and
+innerWidth of 390; every stylesheet loaded, reduced-motion frames stayed still,
+and section/footer spacing passed. The four landing still references include
+both additions. Four separate normal-motion final captures seek both production
+adapters to completion with both replay controls visible. These eight references
+supersede the earlier separate-branch captures; production animation code and
+historical reference.html remain unchanged.
+
+## Combined shared header and integration figure references (2026-10-20)
+
+Reconciliation preserves the shared site header and its responsive menu alongside
+both animated figures, the operating guides, and all existing landing links.
+The eight landing references were regenerated with that combined page: four
+actual reduced-motion inventory frames and four normal-motion captures with
+both production adapters explicitly at completion and both replay controls
+visible. The fresh full capture contains 46 PNGs; every stylesheet loaded,
+all 23 phone probes fit 390px, reduced-motion frames remained still, and
+section/footer spacing passed. Inventory sheets and native-width header/tree
+crops were inspected. Historical HTML and docs reference images are unchanged.
