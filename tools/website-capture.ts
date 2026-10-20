@@ -104,6 +104,24 @@ export interface FigureProbe {
   still?: boolean
 }
 
+/** Expand discovered animated figures in stable start/midpoint/final order. */
+export function motionFrames(frame: WebsiteFrame, figures: FigureProbe[]): WebsiteFrame[] {
+  if (frame.motion !== 'reduce') return []
+  return figures
+    .filter((figure) => figure.animated)
+    .flatMap((figure) =>
+      (['start', 'midpoint', 'final'] as const).map((sample) => ({
+        ...frame,
+        reference: undefined,
+        id: `${frame.id}-figure-${artifactId(figure.id)}-${sample}`,
+        motion: 'normal' as const,
+        figure: figure.id,
+        duration: figure.duration,
+        sample,
+      })),
+    )
+}
+
 export interface Probe {
   error?: string
   reducedMotion: boolean
@@ -493,8 +511,10 @@ export interface CaptureOptions {
   chromium?: string
   /** Defaults to `<repo>/.ab/website-frames`; must stay under `.ab/`. */
   outputDir?: string
-  /** Synthetic fixture override; the CLI always discovers the complete build output. */
+  /** Bounded real-site smoke or fixture override; CLI discovers the complete build output. */
   frames?: WebsiteFrame[]
+  /** Include extra animated-figure samples; defaults to true for full capture. */
+  includeMotionSamples?: boolean
   files?: CaptureFiles
 }
 
@@ -538,20 +558,8 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
           ),
         ),
       )
-      if (frame.motion === 'reduce') {
-        for (const figure of probe.figures.filter((f) => f.animated)) {
-          for (const sample of ['start', 'midpoint', 'final'] as const) {
-            frames.push({
-              ...frame,
-              reference: undefined,
-              id: `${frame.id}-figure-${artifactId(figure.id)}-${sample}`,
-              motion: 'normal',
-              figure: figure.id,
-              duration: figure.duration,
-              sample,
-            })
-          }
-        }
+      if (options.includeMotionSamples ?? true) {
+        frames.push(...motionFrames(frame, probe.figures))
       }
       const problems = probeProblems(frame, probe)
       if (problems.length > 0) {
