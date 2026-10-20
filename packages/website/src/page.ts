@@ -1,3 +1,4 @@
+import { renderSiteHeader } from './site-header'
 import { heroFrame } from './frame'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
@@ -69,7 +70,7 @@ export function renderPage({ heroFrame: frame }: PageInput): string {
 <script type="module" src="site.js" defer></script>
 </head>
 <body>
-<header class="wrap"><div class="masthead"><b class="title">Autobuild</b><a class="dim" href="${REPO_URL}"><span class="hide-sm">github.com/defrex/autobuild</span><span class="show-sm">GitHub</span></a></div></header>
+${renderSiteHeader('home')}
 <main class="wrap"><div class="sections">${hero(frame)}${pipeline}${dispatcher}${seams}${throughput}${intake}${start}</div></main>
 <footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
