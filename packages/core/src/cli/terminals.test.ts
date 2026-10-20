@@ -485,6 +485,7 @@ describe('ab done — implement', () => {
     await settlePendingPublication(
       {
         ...deps,
+        forge: new GitHubForge(),
         storeRef: 'local',
         runId: 'test',
         publication: {
