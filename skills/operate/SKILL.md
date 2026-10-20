@@ -345,7 +345,10 @@ Treat every default-watch record as a call to act:
   the reported blocker.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
   persistent tick failure: diagnose through repository status and report the
-  condition to the operator. Never start or run a dispatcher.
+  condition to the operator. Repository read failures fail the watch tick and
+  retry on the next tick, using the existing five-minute persistent-failure
+  attention. For validation failures, inspect the stored tick error for reducer,
+  scope, cursor, field path, and running version/commit. Never start or run a dispatcher.
 - Persistent source degradation: inspect the source cause and reset evidence,
   diagnose and report the continuing intake problem.
 

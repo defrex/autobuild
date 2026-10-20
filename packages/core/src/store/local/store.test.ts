@@ -1,3 +1,5 @@
+import { repositoryReadFactsReducer } from '../../kernel/read-facts'
+import { validateReducerValue } from '../reducer-value-validation'
 /**
  * SqliteBuildStore against the shared BuildStore contract (SPEC §7), plus
  * the adapter-specific facts the contract can't see: durability across
@@ -1141,6 +1143,48 @@ test('opening a pre-counter database installs additive triggers without replay',
     expect(await upgraded.getRepoChangePosition('repo')).toBe('1')
   } finally {
     await upgraded.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('independent SQLite handles read exact repository prefixes during appends', async () => {
+  const root = await freshRoot()
+  const first = openLocalStore(root)
+  const second = openLocalStore(root)
+  try {
+    await first.ensureRepo('prefix')
+    for (let i = 0; i < 8; i++) {
+      const answers = await Promise.all([
+        first.getReducerValue({ kind: 'repo', repo: 'prefix' }, { reducer: 'repositoryReadFacts' }),
+        second.getReducerValue(
+          { kind: 'repo', repo: 'prefix' },
+          { reducer: 'repositoryReadFacts' },
+        ),
+        second.appendRepo('prefix', {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.ticket-source-degraded',
+          payload: {
+            source: 'linear',
+            operation: 'ready-scan',
+            cause: 'rate-limited',
+            message: 'limited',
+            resetAt: '2026-10-20T20:00:00.000Z',
+          },
+        }),
+      ])
+      const events = await first.getRepoEvents('prefix')
+      for (const answer of answers.slice(0, 2) as import('../reducer-values').ReducerValue[]) {
+        expect(validateReducerValue('repositoryReadFacts', answer.value)).toBe(true)
+        const acc = repositoryReadFactsReducer.advance(
+          repositoryReadFactsReducer.initial(),
+          events.slice(0, answer.cursor),
+        )
+        expect(answer.value as unknown).toEqual(repositoryReadFactsReducer.finish(acc))
+      }
+    }
+  } finally {
+    await first.close()
+    await second.close()
     await rm(root, { recursive: true, force: true })
   }
 })
