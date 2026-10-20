@@ -37,6 +37,7 @@ export interface DashboardParityProjection {
   builds: Array<{
     identity: string
     status: DashboardBuild['status']
+    integrationRow?: DashboardBuild['integrationRow']
     steps: Array<{
       label: string
       state: string
@@ -69,7 +70,8 @@ export function projectWebParity(model: DashboardModel): DashboardParityProjecti
     builds: model.builds.map((build) => ({
       identity: build.slug,
       status: build.status,
-      steps: steps(build.steps),
+      steps: steps(build.integrationRow?.steps ?? build.steps),
+      ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),
     })),
     ...(model.harvest
       ? {

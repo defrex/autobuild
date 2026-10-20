@@ -75,3 +75,46 @@ test('a build without pinned fields renders the no-pin path: no pipeline entry',
   expect(html).not.toContain('>pipeline <')
   expect(html).not.toContain('autobuild.toml@')
 })
+
+test('integration list uses shared words and qualifiers, accessible states and full-color alert classes', () => {
+  const row = pinnedBuild({})
+  row.kind = 'integration'
+  row.target = 'old-target'
+  row.steps = [{ label: 'old-detail-step', state: 'pending' }]
+  row.integrationRow = {
+    destination: 'NODE-900 release-1.0',
+    openChildren: ['a', 'b', 'c'],
+    children: { known: true, landed: 8, building: 2, queued: 1, total: 11 },
+    verified: false,
+    steps: [
+      { label: 'spec', state: 'done' },
+      { label: 'open', state: 'done' },
+      { label: 'collect', state: 'current' },
+      { label: 'verify', state: 'pending' },
+      { label: 'land', state: 'pending', qualifier: 'consent' },
+    ],
+    alert: { tone: 'yellow', text: 'ready to land into main — press l, or ab land demo' },
+  }
+  const html = renderBuildsView(row)
+  expect(html).toContain('integration into NODE-900 release-1.0')
+  expect(html).toContain('8/11 landed')
+  expect(html).toContain('2 building')
+  expect(html).toContain('1 queued')
+  expect(html).toContain('land(consent)')
+  expect(html).toContain('class="sr-only">, current')
+  expect(html).toContain('integration-alert warn')
+  expect(html).toContain('old-detail-step')
+  expect(html).not.toContain('→')
+  expect(html).not.toContain('━')
+  row.integrationRow.children = { known: false }
+  row.integrationRow.alert = {
+    tone: 'red',
+    text: 'unit failed — file a repair child targeting NODE-900',
+  }
+  row.integrationRow.steps[3] = { label: 'verify', state: 'current', qualifier: 'failed' }
+  const unknown = renderBuildsView(row)
+  expect(unknown).toContain('children unknown')
+  expect(unknown).not.toContain('8/11')
+  expect(unknown).toContain('integration-alert alert')
+  expect(unknown).toContain('verify(failed)')
+})

@@ -1,3 +1,8 @@
+import {
+  projectIntegrationRow,
+  enrichIntegrationRows,
+  type IntegrationRow,
+} from './integration-row'
 import { dispatchCapacity, type DispatchCapacity } from '../../kernel/dispatch-capacity'
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
@@ -122,7 +127,15 @@ export interface PipelineStep {
    * a verify/finalize step preserves its outcome alongside lifecycle `state`;
    * `waiting` annotates merge. Rendered inside the `(…)` note, so outcome
    * distinctions never rely on color alone. */
-  qualifier?: 'failed' | 'skipped' | 'waiting'
+  qualifier?:
+    | 'failed'
+    | 'skipped'
+    | 'waiting'
+    | 'consent'
+    | 'auto'
+    | 'held'
+    | 'policy pending'
+    | `${number}/${number}`
   /** Round (plan/implement loops) or attempt (verify/reconcile). Rendered as
    * `/n` riding the elapsed time when > 1 — supersedes the old `r2`/`a2`. */
   count?: number
@@ -158,6 +171,16 @@ export interface DashboardHarvest {
 }
 
 export interface DashboardBuild {
+  integrationRow?: IntegrationRow
+  collectionIdentity?: {
+    repo: string
+    source?: string
+    id?: string
+    targetBuild?: string
+    targetSource?: string
+    targetId?: string
+    status: BuildState['status']
+  }
   tree?: TreeProjection
   kind?: 'integration' | 'work'
   target?: string
@@ -413,7 +436,15 @@ export function autoMergeConsentReason(slug: string): string {
  */
 interface StepExtra {
   producedOutput?: boolean
-  qualifier?: 'failed' | 'skipped' | 'waiting'
+  qualifier?:
+    | 'failed'
+    | 'skipped'
+    | 'waiting'
+    | 'consent'
+    | 'auto'
+    | 'held'
+    | 'policy pending'
+    | `${number}/${number}`
   count?: number
   timing?: StepTiming
   reason?: string
@@ -570,6 +601,16 @@ export function projectBuildFromFacts(
       slug: record.slug,
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
+      integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      collectionIdentity: {
+        repo: record.repo,
+        source: record.ticket?.source,
+        id: record.ticket?.id,
+        targetBuild: state.target?.build,
+        targetSource: state.target?.ticket.source,
+        targetId: state.target?.ticket.id,
+        status: state.status,
+      },
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -587,6 +628,16 @@ export function projectBuildFromFacts(
       slug: record.slug,
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
+      integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      collectionIdentity: {
+        repo: record.repo,
+        source: record.ticket?.source,
+        id: record.ticket?.id,
+        targetBuild: state.target?.build,
+        targetSource: state.target?.ticket.source,
+        targetId: state.target?.ticket.id,
+        status: state.status,
+      },
       status,
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -897,6 +948,16 @@ export function projectBuildFromFacts(
     slug: record.slug,
     ...buildVocabulary(state),
     tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
+    integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+    collectionIdentity: {
+      repo: record.repo,
+      source: record.ticket?.source,
+      id: record.ticket?.id,
+      targetBuild: state.target?.build,
+      targetSource: state.target?.ticket.source,
+      targetId: state.target?.ticket.id,
+      status: state.status,
+    },
     status,
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
@@ -1194,7 +1255,7 @@ export function buildDashboardFromProjected(
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
 ): DashboardModel {
-  const builds = [...projectedBuilds].sort((a, b) => a.slug.localeCompare(b.slug))
+  const builds = enrichIntegrationRows(projectedBuilds).sort((a, b) => a.slug.localeCompare(b.slug))
   const harvestProjection = projectRepositoryHarvest(repositoryEvents)
   const settings = Array.isArray(repositoryEvents)
     ? reduceDispatchSettings(repositoryEvents)
