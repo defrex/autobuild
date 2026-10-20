@@ -349,7 +349,26 @@ contains `docs-desktop.png`, `docs-phone.png`, `docs-phone-menu.png`, and
 the docs Read register recorded in `design-system.md`: grouped sticky page
 navigation, article, section navigation, phone menu and section disclosure,
 and previous/next pager. Export copy is illustrative; current article words
-and order remain authoritative. Copy as Markdown and sample callouts are
-outside this change. Landing references remain unchanged. Capture discovers
+and order remain authoritative. Copy as Markdown and sample callouts were
+outside that layout change; the copy action is documented below. Landing references remain unchanged. Capture discovers
 all docs pages and also exercises Builds at 720px, 1000px, open phone menu,
 open phone TOC, and a fixed-height scrolled desktop viewport.
+
+## Docs Markdown copy (2026-10-20)
+
+The same pinned docs desktop and phone exports now govern the title action.
+All nine pages offer Copy as Markdown with announced success/failure, native
+keyboard activation, and retry handling. Authored article HTML is unchanged.
+Browser coverage exercises all pages at 1440px, 720px, and 390px, checks every
+heading and fenced block, and verifies canonical relative links and original
+external destinations. Exact fixtures cover nested lists, inline formatting,
+entities, and embedded backticks. Capture probes enforce action placement,
+minimum target height, and document overflow alongside existing docs evidence.
+Landing references are unchanged.
+
+The full capture passed all 75 frames (four landing stills, 23 docs frames,
+and 48 motion samples). All PNGs were opened in contact sheets, with larger
+crops of every docs title at desktop and phone widths and the 720px/1000px
+Builds frames. No visual correction to the approved layout was needed.
+Outcome labels keep the action width stable; a pending keyboard copy restores
+focus when disabling the action moved it to the document body.
