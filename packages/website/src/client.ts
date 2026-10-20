@@ -1,3 +1,4 @@
+import { bindDocs } from './docs-client'
 import { bindSiteHeader } from './site-header-client'
 import { bindPipelineMotion } from './pipeline-motion'
 import {
@@ -83,6 +84,7 @@ function bindCopy(button: HTMLButtonElement): void {
 
 if (typeof document !== 'undefined') {
   bindSiteHeader()
+  bindDocs()
   bindPipelineMotion()
   const selector = document.querySelector<HTMLElement>('.seam-selector')
   if (selector && SEAMS.length > 0) bindSeams(selector)

@@ -65,3 +65,15 @@ and motion descriptor inventory, and browser fixtures exercise sample seeking.
 `includeMotionSamples` defaults to true. `bun run capture:website` and the website
 verify step use the full default capture: every docs page at both widths and every
 animated figure's start, midpoint and final frames.
+
+## Docs interaction and scroll evidence
+
+When Builds is present, discovery adds `docs-builds-menu` and `docs-builds-toc`
+at 390px, `docs-builds-720`, `docs-builds-intermediate` at 1000px, and
+`docs-builds-scrolled` at 1440×900. State frames click the production disclosure
+buttons or scroll the iframe document to the third section. The scroll frame
+keeps a 900px viewport for measurement and screenshot; it is not a full-page
+shot. Probes record disclosure ARIA, synchronized active section markers,
+expected section from viewport position, sidebar visibility and sticky top
+geometry, and code-well containment. Every docs width checks document overflow.
+The report and inventory retain these measurements alongside each PNG.
