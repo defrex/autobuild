@@ -66,6 +66,11 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-native-sessions-narrow:png .ab/web-dashboard-frames/builds-native-sessions-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-forge-readiness-wide:png .ab/web-dashboard-frames/builds-forge-readiness-wide.png --attach
    ab artifact put web-dashboard-frame:builds-forge-readiness-narrow:png .ab/web-dashboard-frames/builds-forge-readiness-narrow.png --attach
+   ab artifact put web-dashboard-frame:integration-detail-wide:png .ab/web-dashboard-frames/integration-detail-wide.png --attach
+   ab artifact put web-dashboard-frame:integration-detail-narrow:png .ab/web-dashboard-frames/integration-detail-narrow.png --attach
+   ab artifact put web-dashboard-frame:integration-detail-conflict:png .ab/web-dashboard-frames/integration-detail-conflict.png --attach
+   ab artifact put web-dashboard-frame:integration-detail-failed:png .ab/web-dashboard-frames/integration-detail-failed.png --attach
+   ab artifact put web-dashboard-frame:integration-detail-ready-node:png .ab/web-dashboard-frames/integration-detail-ready-node.png --attach
    ab artifact put web-dashboard-frame:integration-wide:png .ab/web-dashboard-frames/integration-wide.png --attach
    ab artifact put web-dashboard-frame:integration-narrow:png .ab/web-dashboard-frames/integration-narrow.png --attach
    ab artifact put web-dashboard-frame:integration-dimmed:png .ab/web-dashboard-frames/integration-dimmed.png --attach

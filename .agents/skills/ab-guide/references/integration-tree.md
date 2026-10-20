@@ -168,3 +168,19 @@ written: abort and re-dispatch instead.
 
 See [forge requirements](landing-policy.md#forge-requirements),
 [restacking](restacking.md), and [migration from 0.x](migration-1.0.md).
+
+## Integration detail
+
+Both dashboards show destination (with the configured-base annotation for root
+targets), row progress and steps, branch/restack state, and all open and landed
+children with titles and states. Open children come first; live children show
+their current phase, unbuilt children read `queued`, contributions read `landed`.
+Cancelled tickets without contributions are excluded. Verification names the
+expected steps and only outcomes bound to the current node head and destination;
+failures name the repair-child instruction. Landing explains the rule and mode;
+ready consent names `l` and `ab land <slug>`. Conflicts name recorded files.
+These are Store-only projections: additive `integration.observed.children`
+metadata carries source/id, optional title and contribution build identity;
+`node.item-conflicted.files` and conflicted `restack.replayed.files` retain paths.
+Older events remain readable, with explicit unavailable titles/files. Display
+metadata never changes completeness or landing eligibility.
