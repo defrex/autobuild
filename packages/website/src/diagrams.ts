@@ -179,6 +179,15 @@ function pipelinePhone(): string {
   )
 }
 
+// Attach semantic identity to the existing primitive without changing its geometry.
+function marked(html: string, key: string): string {
+  return html.replace(/^<(div|svg)/, `<$1 data-sequence-key="${key}"`)
+}
+
+function routed(item: Connector, key: string): string {
+  return marked(connector(item), key)
+}
+
 export function dispatcherDiagram(): string {
   const connectors = [
     c('flow', 144, 232, 46, 8, 'M 0 4 L 46 4', true),
@@ -193,26 +202,34 @@ export function dispatcherDiagram(): string {
     { top: 204, done: 3, current: 'implement' },
     { top: 344, done: 5, current: 'verify:*' },
   ]
-  const parts: string[] = connectors.map(connector)
+  const parts: string[] = connectors.map((item, i) =>
+    routed(item, ['claim', 'route', 'route', 'start-0', 'start-1', 'start-2'][i]!),
+  )
   const nodes: string[] = []
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const y = row.top + 28
     parts.push(
-      connector(c('flow', 600, y, 46, 8, 'M 0 4 L 46 4', true)),
-      connector(c('write', 864, y, 38, 8, 'M 0 4 L 38 4', true)),
-      connector(c('write', 968, y, 14, 8, 'M 0 4 L 14 4', true)),
-      connector(c('event', 508, row.top + 64, 8, 24, 'M 4 0 L 4 24')),
-      connector(c('event', 512, row.top + 84, 470, 8, 'M 0 4 L 470 4', true)),
+      routed(c('flow', 600, y, 46, 8, 'M 0 4 L 46 4', true), `write-${index}`),
+      routed(c('write', 864, y, 38, 8, 'M 0 4 L 38 4', true), `write-${index}`),
+      routed(c('write', 968, y, 14, 8, 'M 0 4 L 14 4', true), `write-${index}`),
+      routed(c('event', 508, row.top + 64, 8, 24, 'M 4 0 L 4 24'), `write-${index}`),
+      routed(c('event', 512, row.top + 84, 470, 8, 'M 0 4 L 470 4', true), `write-${index}`),
     )
     nodes.push(
-      node({ left: 424, top: row.top, width: 176, height: 64, html: plainNode2('build-runner') }),
+      marked(
+        node({ left: 424, top: row.top, width: 176, height: 64, html: plainNode2('build-runner') }),
+        `runner-${index}`,
+      ),
     )
     for (let i = 0; i < 7; i++) {
       nodes.push(
-        cell(
-          648 + i * 32,
-          row.top + 20,
-          i < row.done ? 'done' : i === row.done ? 'live' : 'pending',
+        marked(
+          cell(
+            648 + i * 32,
+            row.top + 20,
+            i < row.done ? 'done' : i === row.done ? 'live' : 'pending',
+          ),
+          `runner-${index}`,
         ),
       )
     }
@@ -239,23 +256,29 @@ export function dispatcherDiagram(): string {
   }
   const rest = [
     caption({ left: 0, top: 148, width: 144, text: 'ready tickets' }),
-    plainNode(0, 168, 144, 40, 'ticket'),
-    plainNode(0, 216, 144, 40, 'ticket'),
-    plainNode(0, 264, 144, 40, 'ticket'),
-    plainNode(192, 200, 160, 72, 'dispatcher'),
+    marked(plainNode(0, 168, 144, 40, 'ticket'), 'ticket-0'),
+    marked(plainNode(0, 216, 144, 40, 'ticket'), 'ticket-1'),
+    marked(plainNode(0, 264, 144, 40, 'ticket'), 'ticket-2'),
+    marked(plainNode(192, 200, 160, 72, 'dispatcher'), 'dispatcher'),
     caption({ left: 648, top: 32, width: 240, text: 'one agent session per step' }),
-    node({
-      left: 984,
-      top: 48,
-      width: 136,
-      height: 400,
-      padding: '12px',
-      html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events<br>artifacts<br>streams</span>`,
-    }),
+    marked(
+      node({
+        left: 984,
+        top: 48,
+        width: 136,
+        height: 400,
+        padding: '12px',
+        html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events<br>artifacts<br>streams</span>`,
+      }),
+      'store',
+    ),
   ]
   return (
+    '<div data-capture-figure="dispatcher" data-capture-animated>' +
     diagram(1120, 470, DISPATCHER_DESCRIPTION, [...parts, ...nodes, ...rest].join('')) +
-    dispatcherPhone()
+    dispatcherPhone() +
+    replayControl('dispatcher') +
+    '</div>'
   )
 }
 
@@ -275,16 +298,16 @@ function dispatcherPhone(): string {
   )
   // The runner card paints first so the connectors that cross it stay visible.
   const backdrop = [
-    rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine),
-    rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine),
-    rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well),
+    marked(rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine), 'runner-2'),
+    marked(rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine), 'runner-1'),
+    marked(rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well), 'runner-0'),
   ]
   const parts = [
     caption({ left: 0, top: 0, width: 200, text: 'ready tickets' }),
-    plainNode(0, 24, 110, 40, 'ticket'),
-    plainNode(124, 24, 110, 40, 'ticket'),
-    plainNode(248, 24, 110, 40, 'ticket'),
-    plainNode(99, 104, 160, 56, 'dispatcher'),
+    marked(plainNode(0, 24, 110, 40, 'ticket'), 'ticket-0'),
+    marked(plainNode(124, 24, 110, 40, 'ticket'), 'ticket-1'),
+    marked(plainNode(248, 24, 110, 40, 'ticket'), 'ticket-2'),
+    marked(plainNode(99, 104, 160, 56, 'dispatcher'), 'dispatcher'),
     caption({
       left: 16,
       top: 222,
@@ -312,18 +335,40 @@ function dispatcherPhone(): string {
       color: COLOR.live,
       bold: true,
     }),
-    node({
-      left: 0,
-      top: 392,
-      width: 358,
-      height: 72,
-      html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events · artifacts · streams</span>`,
-    }),
+    marked(
+      node({
+        left: 0,
+        top: 392,
+        width: 358,
+        height: 72,
+        html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events · artifacts · streams</span>`,
+      }),
+      'store',
+    ),
   ]
   return phoneDiagram(
     464,
     DISPATCHER_DESCRIPTION,
-    [...backdrop, ...connectors.map(connector), ...parts].join(''),
+    [
+      ...backdrop,
+      ...connectors.map((item, i) =>
+        routed(
+          item,
+          [
+            'ticket-0',
+            'ticket-1',
+            'ticket-2',
+            'claim',
+            'claim',
+            'start',
+            'write',
+            'write',
+            'write',
+          ][i]!,
+        ),
+      ),
+      ...parts,
+    ].join(''),
   )
 }
 
@@ -353,10 +398,10 @@ export function intakeDiagram(): string {
     c('event', 425, 194, 8, 118, 'M 4 118 L 4 0', true),
   ]
   const nodes = [
-    plainNode(0, 0, 216, 56, 'customer support'),
-    plainNode(0, 72, 216, 56, 'meetings'),
-    plainNode(0, 144, 216, 56, 'telemetry · errors'),
-    plainNode(0, 216, 216, 56, 'build observations'),
+    marked(plainNode(0, 0, 216, 56, 'customer support'), 'source-0'),
+    marked(plainNode(0, 72, 216, 56, 'meetings'), 'source-1'),
+    marked(plainNode(0, 144, 216, 56, 'telemetry · errors'), 'source-2'),
+    marked(plainNode(0, 216, 216, 56, 'build observations'), 'source-3'),
     node({
       left: 336,
       top: 80,
@@ -393,12 +438,45 @@ export function intakeDiagram(): string {
     }),
   ]
   return (
+    '<div data-capture-figure="intake" data-capture-animated>' +
     diagram(
       1120,
       368,
       INTAKE_DESCRIPTION,
-      [...connectors.map(connector), ...nodes, ...captions].join(''),
-    ) + intakePhone()
+      [
+        ...connectors.map((item, i) =>
+          routed(
+            item,
+            [
+              'source-0',
+              'source-1',
+              'source-2',
+              'source-3',
+              'route',
+              'route',
+              'delivery',
+              'escalation',
+              'escalation',
+              'escalation',
+              'human',
+              'human',
+            ][i]!,
+          ),
+        ),
+        ...nodes.map((html, i) =>
+          i < 4
+            ? html
+            : marked(
+                html,
+                ['source-0', 'source-1', 'source-2', 'source-3', 'pm', 'queue', 'human'][i]!,
+              ),
+        ),
+        ...captions,
+      ].join(''),
+    ) +
+    intakePhone() +
+    replayControl('intake') +
+    '</div>'
   )
 }
 
@@ -415,10 +493,10 @@ function intakePhone(): string {
     c('escalate', 4, 228, 20, 176, 'M 20 172 L 4 172 L 4 4 L 18 4', true),
   ]
   const nodes = [
-    plainNode(0, 0, 171, 64, 'customer support'),
-    plainNode(187, 0, 171, 64, 'meetings'),
-    plainNode(0, 80, 171, 64, 'telemetry · errors'),
-    plainNode(187, 80, 171, 64, 'build observations'),
+    marked(plainNode(0, 0, 171, 64, 'customer support'), 'source-0'),
+    marked(plainNode(187, 0, 171, 64, 'meetings'), 'source-1'),
+    marked(plainNode(0, 80, 171, 64, 'telemetry · errors'), 'source-2'),
+    marked(plainNode(187, 80, 171, 64, 'build observations'), 'source-3'),
     node({
       left: 24,
       top: 176,
@@ -457,6 +535,32 @@ function intakePhone(): string {
   return phoneDiagram(
     432,
     INTAKE_DESCRIPTION,
-    [...connectors.map(connector), ...nodes, ...captions].join(''),
+    [
+      ...connectors.map((item, i) =>
+        routed(
+          item,
+          [
+            'source-0',
+            'source-1',
+            'source-2',
+            'source-3',
+            'route',
+            'human',
+            'human',
+            'delivery',
+            'escalation',
+          ][i]!,
+        ),
+      ),
+      ...nodes.map((html, i) =>
+        i < 4
+          ? html
+          : marked(
+              html,
+              ['source-0', 'source-1', 'source-2', 'source-3', 'pm', 'human', 'queue'][i]!,
+            ),
+      ),
+      ...captions,
+    ].join(''),
   )
 }
