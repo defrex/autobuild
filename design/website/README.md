@@ -341,3 +341,15 @@ eighteen docs stills, and forty-eight motion samples across four figures. All
 spacing pass. All inventory frames were opened in contact sheets, with larger
 desktop/phone dispatcher and intake start/midpoint/final crops. The four landing
 stills match the upstream reduced-motion reference files pixel for pixel.
+## Docs layout (2026-10-20)
+
+The approved `design/docs-layout` revision 0 asset pinned to `lay-out-the`
+contains `docs-desktop.png`, `docs-phone.png`, `docs-phone-menu.png`, and
+`docs-phone-toc.png`, plus standalone HTML exports and a README. These define
+the docs Read register recorded in `design-system.md`: grouped sticky page
+navigation, article, section navigation, phone menu and section disclosure,
+and previous/next pager. Export copy is illustrative; current article words
+and order remain authoritative. Copy as Markdown and sample callouts are
+outside this change. Landing references remain unchanged. Capture discovers
+all docs pages and also exercises Builds at 720px, 1000px, open phone menu,
+open phone TOC, and a fixed-height scrolled desktop viewport.
