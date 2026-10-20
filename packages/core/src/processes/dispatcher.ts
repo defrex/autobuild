@@ -1,3 +1,4 @@
+import { dispatchCapacity, nodeCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
   landingAuthorized,
@@ -15,7 +16,6 @@ import {
 import {
   integrationComplete,
   integrationCurrent,
-  integrationNeedsRunner,
   integrationConfig,
   integrationFailed,
   integrationVerified,
@@ -2235,6 +2235,28 @@ export class Dispatcher {
     return open?.localPath ?? open?.path ?? open?.ref ?? this.deps.checkout ?? this.deps.repo
   }
 
+  private async capacityBuilds(): Promise<CapacityBuild[]> {
+    const builds: CapacityBuild[] = []
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (digest.terminal) continue
+      const facts = await this.store.buildFacts(record.slug)
+      builds.push({
+        record,
+        state: facts.state,
+        workspace: facts.workspace !== null,
+        provisioning:
+          digest.kind === 'node' &&
+          (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined,
+      })
+    }
+    return builds
+  }
+
+  private async nodeHasCapacity(slug: string): Promise<boolean> {
+    const builds = await this.capacityBuilds()
+    return nodeCapacity(builds, slug, this.deps.clock()).occupied < this.deps.config.capacity
+  }
+
   private hasLiveExecutionLease(record: BuildRecord): boolean {
     return (
       record.lease !== undefined &&
@@ -4062,21 +4084,11 @@ export class Dispatcher {
     // Blocked and paused builds still occupy a slot: their workspaces and
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
-    let active = 0
-    const activeRefs: TicketRef[] = []
-    for (const { record, digest } of await this.repoBuildDigests()) {
-      if (digest.terminal === undefined) {
-        if (
-          digest.kind !== 'node' ||
-          (await this.store.buildFacts(record.slug)).state.nodeRestack?.conflict ||
-          (integrationNeedsRunner((await this.store.buildFacts(record.slug)).state) &&
-            (this.hasLiveExecutionLease(record) ||
-              (await this.store.buildFacts(record.slug)).workspace !== null))
-        )
-          active += 1
-        if (record.ticket) activeRefs.push(record.ticket)
-      }
-    }
+    const capacityBuilds = await this.capacityBuilds()
+    const active = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock()).occupied
+    const activeRefs: TicketRef[] = capacityBuilds
+      .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
+      .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
     let capacity = config.capacity - active
 
     // The ready scan runs even at full capacity: `queued` is the operator's
@@ -4704,19 +4716,7 @@ export class Dispatcher {
           }
         }
 
-        let occupied = 0
-        for (const other of await this.repoBuildDigests()) {
-          if (other.record.slug === record.slug || other.digest.terminal) continue
-          if (
-            other.digest.kind !== 'node' ||
-            (await this.store.buildFacts(other.record.slug)).state.nodeRestack?.conflict ||
-            (integrationNeedsRunner((await this.store.buildFacts(other.record.slug)).state) &&
-              (this.hasLiveExecutionLease(other.record) ||
-                (await this.store.buildFacts(other.record.slug)).workspace !== null))
-          )
-            occupied++
-        }
-        if (occupied >= this.deps.config.capacity) return
+        if (!(await this.nodeHasCapacity(record.slug))) return
         if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
           const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
           if (kicked === 'kicked') report.provisioning += 1
@@ -4902,20 +4902,7 @@ export class Dispatcher {
       if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
       return
     }
-    let occupied = 0
-    for (const other of await this.nonterminalBuilds()) {
-      if (other.slug === record.slug) continue
-      const current = (await this.store.buildFacts(other.slug)).state
-      if (
-        current.kind !== 'node' ||
-        current.nodeRestack?.conflict ||
-        (integrationNeedsRunner(current) &&
-          (this.hasLiveExecutionLease(other) ||
-            (await this.store.buildFacts(other.slug)).workspace !== null))
-      )
-        occupied++
-    }
-    if (occupied >= this.deps.config.capacity) return
+    if (!(await this.nodeHasCapacity(record.slug))) return
     await this.observeIntegration(record.slug)
     state = (await this.store.buildFacts(record.slug)).state
     if (!integrationCurrent(state)) return
