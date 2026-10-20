@@ -291,7 +291,9 @@ export interface WorkspacePublication {
    * remote branch after an interrupted acknowledgement. `ref` optionally
    * names the workspace whose git database the probe runs against — used by
    * the operator-sandbox publication path, whose provider probes from the
-   * sandbox checkout; the build-path callers omit it. */
+   * sandbox checkout; the build-path callers may also supply it. Inspection
+   * must not resume a stopped remote guest; publish owns guest cache repair
+   * before teardown. */
   isPublished?(input: { ref?: string; sha: string; branch: string }): Promise<boolean>
   /** Publish exactly one commit to exactly one branch; no arbitrary command
    * surface is exposed to the dispatcher or build child. */
@@ -349,6 +351,9 @@ export interface WorkspaceProvider {
     repo: string
     baseBranch: string
     branch: string
+    /** Confirmed publication and known stale cache tips, from durable facts.
+     * Providers must preserve unknown unpublished work during ordinary resume. */
+    publication?: { sha: string; cacheHeads: string[] }
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */
@@ -541,8 +546,11 @@ export interface Forge {
   readonly name: string
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting
-  /** Publish the workspace's current HEAD to this remote destination branch. */
-  pushBranch(workspacePath: string, branch: string): Promise<void>
+  /** Publish this exact SHA (HEAD for legacy callers); success requires authoritative readback. */
+  /** Exact authoritative observation, refreshing remote-backed caches only on a match.
+   * Missing capability refuses kernel publication before attempting a write. */
+  confirmPublication?(workspacePath: string, branch: string, sha: string): Promise<boolean>
+  pushBranch(workspacePath: string, branch: string, sha?: string): Promise<void>
   openPr(opts: {
     workspacePath: string
     head: string

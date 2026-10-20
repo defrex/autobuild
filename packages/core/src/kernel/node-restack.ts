@@ -1,3 +1,4 @@
+import { observePresence, originalForeign, type LandingEvidence } from './change-presence'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { buildTrailers, validateBuildSlug } from './build-identity'
 
@@ -111,6 +112,11 @@ async function reachableBuilds(deps: NodeGit, revisions: string[]): Promise<Set<
 export async function prepareNodeReplay(
   deps: NodeGit,
   input: { oldBase: string; oldHead: string; parent: string },
+  evidence: {
+    aliases: Map<string, string>
+    landings: LandingEvidence[]
+    upstream?: Set<string>
+  } = { aliases: new Map(), landings: [] },
 ): Promise<NodeReplayInputs> {
   if (
     (await git(deps, ['merge-base', '--is-ancestor', input.oldBase, input.oldHead], true))
@@ -120,6 +126,10 @@ export async function prepareNodeReplay(
       `node head ${input.oldHead} no longer descends from contribution base ${input.oldBase}`,
     )
   const upstream = await reachableBuilds(deps, [input.parent])
+  for (const id of evidence.landings.length
+    ? await observePresence(deps, input.parent, evidence.landings, evidence.aliases)
+    : [])
+    if (id.startsWith('build:')) upstream.add(id.slice('build:'.length))
   const changes: NodeChange[] = []
   const merges: NodeMergeProof[] = []
   for (const commit of await history(
@@ -192,6 +202,11 @@ export async function replayNodeChange(
   inputs: NodeReplayInputs,
   index: number,
   base: string,
+  evidence: {
+    aliases: Map<string, string>
+    landings: LandingEvidence[]
+    upstream?: Set<string>
+  } = { aliases: new Map(), landings: [] },
 ): Promise<
   | { kind: 'dropped'; head: string; reason: 'upstream-identity' | 'upstream-commit' }
   | { kind: 'replayed'; head: string }
@@ -202,14 +217,19 @@ export async function replayNodeChange(
   if (change === undefined) throw new Error(`missing node replay item ${index}`)
   if (change.build !== undefined && inputs.upstreamBuilds.includes(change.build))
     return { kind: 'dropped', head: base, reason: 'upstream-identity' }
-  const reachable = await git(
-    deps,
-    ['merge-base', '--is-ancestor', change.sha, inputs.parent],
-    true,
-  )
-  if (reachable.exitCode === 0) return { kind: 'dropped', head: base, reason: 'upstream-commit' }
-  if (reachable.exitCode !== 1)
-    throw new Error(`cannot prove upstream reachability for ${change.sha}`)
+  const present =
+    evidence.upstream ??
+    new Set(await observePresence(deps, inputs.parent, evidence.landings, evidence.aliases, true))
+  const changeIdentity =
+    change.build === undefined
+      ? `foreign:${originalForeign(change.sha, evidence.aliases)}`
+      : `build:${change.build}`
+  if (present.has(changeIdentity))
+    return {
+      kind: 'dropped',
+      head: base,
+      reason: change.build === undefined ? 'upstream-commit' : 'upstream-identity',
+    }
   if ((await output(deps, ['status', '--porcelain'])) !== '')
     throw new Error('node replay requires a clean worktree')
   await git(deps, ['checkout', '--detach', base])

@@ -89,7 +89,9 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         return { exitCode: 0 }
       }
       if (params.cmd === 'git' && (params.args as string[] | undefined)?.includes('push')) {
-        remote.head = (params.args as string[]).at(-1)!.split(':')[0]!
+        const [sha, ref] = (params.args as string[]).at(-1)!.split(':')
+        remote.head = sha!
+        forge.seedBranch(ref!.replace(/^refs\/heads\//, ''), sha!)
       }
       if (params.detached === true) {
         const launch = JSON.parse(
@@ -542,7 +544,9 @@ test('a guest that exits after the launching invocation detached is settled by t
         return { exitCode: 0 }
       }
       if (params.cmd === 'git' && (params.args as string[] | undefined)?.includes('push')) {
-        remote.head = (params.args as string[]).at(-1)!.split(':')[0]!
+        const [sha, ref] = (params.args as string[]).at(-1)!.split(':')
+        remote.head = sha!
+        forge.seedBranch(ref!.replace(/^refs\/heads\//, ''), sha!)
       }
       if (params.detached === true) {
         this.launches += 1

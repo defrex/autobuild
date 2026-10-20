@@ -168,6 +168,18 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         expect(pr.number).toBeGreaterThan(0)
         expect(pr.url.trim()).not.toBe('')
         expect(pr.headSha).toBe(remoteHead)
+        expect(harness.forge.confirmPublication).toBeDefined()
+        expect(
+          await harness.forge.confirmPublication!(harness.workspacePath, harness.head, remoteHead),
+        ).toBe(true)
+        expect(
+          await harness.forge.confirmPublication!(
+            harness.workspacePath,
+            harness.head,
+            '0'.repeat(40),
+          ),
+        ).toBe(false)
+        expect(await harness.controls.remoteHead(harness.head)).toBe(remoteHead)
 
         const retry = await harness.forge.openPr({
           workspacePath: harness.workspacePath,

@@ -464,12 +464,16 @@ export class FakeForge implements Forge {
     return content
   }
 
-  async pushBranch(workspacePath: string, branch: string): Promise<void> {
+  async confirmPublication(_workspacePath: string, branch: string, sha: string): Promise<boolean> {
+    return this.remoteBranches.get(branch) === sha
+  }
+
+  async pushBranch(workspacePath: string, branch: string, sha?: string): Promise<void> {
     this.pushes.push({ workspacePath, branch })
     this.publishedBranches.add(branch)
     this.remoteBranches.set(
       branch,
-      typeof this.headSha === 'string' ? this.headSha : this.headSha(this.nextNumber),
+      sha ?? (typeof this.headSha === 'string' ? this.headSha : this.headSha(this.nextNumber)),
     )
   }
 

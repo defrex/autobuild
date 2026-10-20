@@ -84,40 +84,40 @@ const PR_REF = {
 }
 
 describe('GitHubForge.pushBranch', () => {
-  test('publishes HEAD to an explicit destination ref with no rewrite bypass (D1)', async () => {
-    const calls: { cmd: string[]; cwd: string | undefined }[] = []
+  test('publishes a frozen SHA and independently confirms it before refreshing the cache', async () => {
+    const calls: string[][] = []
+    const sha = 'a'.repeat(40)
+    let remote = ''
     const forge = new GitHubForge({
-      transport: async () => ({ status: 200, headers: {} }),
-      exec: async (cmd, opts) => {
-        calls.push({ cmd, cwd: opts.cwd })
-        return { stdout: '', stderr: '', exitCode: 0 }
+      exec: async (cmd) => {
+        calls.push(cmd)
+        if (cmd[1] === 'push') remote = `${sha}\trefs/heads/ab/fix-login\n`
+        return { stdout: cmd[1] === 'ls-remote' ? remote : '', stderr: '', exitCode: 0 }
       },
     })
-    await forge.pushBranch('/ws/build-1', 'ab/fix-login')
-    expect(calls).toEqual([
-      {
-        cmd: ['git', 'push', '-u', 'origin', 'HEAD:refs/heads/ab/fix-login'],
-        cwd: '/ws/build-1',
-      },
+    await forge.pushBranch('/ws', 'ab/fix-login', sha)
+    expect(calls.map((c) => c[1])).toEqual([
+      'ls-remote',
+      'push',
+      'ls-remote',
+      'cat-file',
+      'update-ref',
     ])
-    const argv = calls[0]!.cmd
-    for (const forbidden of ['--force', '--force-with-lease', '--rebase']) {
-      expect(argv).not.toContain(forbidden)
-    }
+    expect(calls[1]).toEqual(['git', 'push', 'origin', `${sha}:refs/heads/ab/fix-login`])
+    expect(calls.at(-1)).toEqual(['git', 'update-ref', 'refs/heads/ab/fix-login', sha])
   })
 
-  test('a failed push surfaces the exact command and diagnostic', async () => {
+  test('a failed push requires confirmation and surfaces its diagnostic', async () => {
     const forge = new GitHubForge({
-      transport: async () => ({ status: 200, headers: {} }),
-      exec: async () => ({
+      exec: async (cmd) => ({
         stdout: '',
-        stderr: '! [rejected] HEAD -> ab/fix-login (non-fast-forward)',
-        exitCode: 1,
+        stderr: 'non-fast-forward',
+        exitCode: cmd[1] === 'push' ? 1 : 0,
       }),
     })
-    expect(
-      await forge.pushBranch('/ws/build-1', 'ab/fix-login').catch((e: unknown) => e as Error),
-    ).toMatchObject({ message: expect.stringContaining('non-fast-forward') })
+    await expect(forge.pushBranch('/ws', 'ab/fix-login', 'a'.repeat(40))).rejects.toThrow(
+      'non-fast-forward',
+    )
   })
 })
 

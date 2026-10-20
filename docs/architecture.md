@@ -363,8 +363,8 @@ requirement from the phase table.
 **Finalize publication.** Content-producing `finalize:*` checks or agents
 select and commit files locally and leave a clean worktree. `build-runner.ts`
 derives the last published head from event facts, rejects a non-descendant
-`HEAD`, and uses the `Forge.pushBranch` port for a regular kernel-side push
-before checkpointing the new head on `finalize.step-completed`. An unchanged
+`HEAD`, freezes that SHA, and uses the Forge port for a regular kernel-side push
+and exact authoritative readback before checkpointing the new head on `finalize.step-completed`. An unchanged
 head is a no-op; Git/Forge failures stay failure-tolerant observations.
 
 **Verify gating.** `packages/core/src/ontology.ts` owns the canonical
@@ -525,23 +525,15 @@ resumes at the branch tip, so the first provisioning fact remains immutable
 original provenance. A remote workspace lost before its branch is published
 can be freshly cut again; the latest `remote` or `local` provisioning base is
 the fallback review boundary, while `existing` facts only describe resumes.
-Separately, each successful implementation terminal in
-`packages/core/src/cli/terminals.ts` asks the Forge to snapshot its authoritative base when
-that optional capability exists; otherwise it privately refreshes the frozen
-target branch from `origin` and records
-a provenance-bounded range in `implement.completed`. The current implementation
-or replay base takes precedence over provisioning. That effective base must be
-an ancestor of HEAD; the unique snapshot/HEAD merge-base is selected only when
-it descends from the effective base. A rewritten destination therefore cannot
-pull sibling contributions into review. Successful leaf `restack.rewritten`,
-`restack.completed`, and `reconcile.rewritten` facts project the current range
-as `targetBase..headSha`, without modifying historical events or implementation
-notes/round. Context exposes this projection to review and agent verify steps;
-node integration-cycle context remains separate.
-It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
-errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
-execution-time target refresh in `packages/core/src/processes/build-runner.ts` remains a
-third, deliberately separate boundary and also fails closed.
+Each implementation terminal in `packages/core/src/cli/terminals.ts` records
+its proven contribution boundary verbatim: the projected implementation/replay
+base, falling back to the latest fresh cut. Branch-cut target sampling remains
+separate from review provenance. The immutable boundary must belong to HEAD's
+history; missing or invalid provenance fails before publication or notes deposit.
+There is no review-time target fetch or destination merge-base. Successful leaf
+rewrite facts project `targetBase..headSha` for context, review and agent verify
+steps without changing historical ranges. Node cycles retain separate semantics.
+Reconcile's execution-time target refresh remains a separate boundary.
 
 The builtin `vercel-sandbox` adapter provisions an exact GitHub revision into a
 fixed guest path. Fresh-environment bootstrap scrubs clone authority, installs
@@ -1158,7 +1150,9 @@ Historical merge completions retain their original shape and semantics.
 The optional grouped Forge rewrite capability owns authoritative head snapshots,
 immutable `refs/autobuild/archive/<slug>/<sha>` publication and expected-head CAS.
 GitHub uses explicit Git transport leases; local-git uses shared-database
-`update-ref` CAS without network calls. Trusted remote publication archives before
+`update-ref` CAS without network calls. Exact authoritative readback acknowledges
+publication. Remote-backed local refs are caches refreshed without expected-old
+CAS after confirmation, even if absent or recreated; checkout files are untouched. Trusted remote publication archives before
 replacement after guest teardown; it never uses ordinary append-only publication
 for restacks. Prepared, replayed, intended and rewritten facts support recovery.
 A contended rewrite preserves the observed work and retries on the same base.
@@ -1261,8 +1255,10 @@ Failed cycles park for repair children. The dispatcher temporarily provisions
 verification resources and rechecks head, parent, controls and completeness
 before publication. `integration-landing.ts` owns source-reserved root landing
 and immutable result audits; nested nodes use the destination writer transaction
-in `node-landing.ts`. GitHub uses guarded PR rebase; local-git uses an ancestry
-proof and exact-parent fast-forward. Shared status vocabulary exposes provenance
+in `node-landing.ts`. GitHub uses guarded PR rebase; local-git validates
+fast-forward shape against the frozen parent. Exact authoritative head readback
+or a durable confirmed receipt establishes publication; ancestry alone cannot
+acknowledge an unconfirmed candidate. Shared status vocabulary exposes provenance
 and mismatch attention in both frontends. Human forge merges remain observable
 escape hatches independent of completeness and verification.
 
