@@ -1,3 +1,4 @@
+import { stampCompatibility, type CompatibilityMetadata, buildEventPolicy } from './policy'
 /**
  * The event catalog: envelope + payload schemas + per-type actor rules, and
  * the single validation entry point every store adapter calls at append.
@@ -17,6 +18,7 @@ import { eventPayloadSchemas, isEventType, type EventPayload, type EventType } f
  * and monotonic, `ts` is ISO-8601; both are store-assigned on append.
  */
 export interface EventEnvelope<T extends EventType = EventType> {
+  compatibility?: CompatibilityMetadata
   build: string
   seq: number
   ts: string
@@ -30,6 +32,7 @@ export type AbEvent = { [T in EventType]: EventEnvelope<T> }[EventType]
 
 /** What a producer submits; the store assigns `seq`/`ts` (§15.1). */
 export interface EventWrite<T extends EventType = EventType> {
+  compatibility?: CompatibilityMetadata
   actor: Actor
   type: T
   payload: EventPayload<T>
@@ -40,6 +43,7 @@ export interface EventWrite<T extends EventType = EventType> {
  * catalog tables in SPEC §15.3.
  */
 export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
+  'build.compatibility-deferred': ['kernel', 'dispatcher'],
   'landing.decided': ['dispatcher', 'kernel'],
   'build.hold-requested': ['human'],
   'build.land-requested': ['human'],
@@ -194,6 +198,7 @@ export function validateEventWrite(input: {
   actor: unknown
   type: string
   payload: unknown
+  compatibility?: unknown
 }): EventWrite {
   if (!isEventType(input.type)) {
     throw new EventValidationError(
@@ -253,8 +258,27 @@ export function validateEventWrite(input: {
     }
   }
   return {
+    ...(input.compatibility === undefined
+      ? {}
+      : { compatibility: stampCompatibility(buildEventPolicy[input.type], input.compatibility) }),
     actor,
     type: input.type,
     payload: payloadResult.data,
   } as EventWrite
+}
+
+/** Producer boundary: validate strictly, then identify the actual writer. */
+export function prepareEventWrite(input: Parameters<typeof validateEventWrite>[0]): EventWrite {
+  try {
+    const validated = validateEventWrite(input)
+    return {
+      ...validated,
+      compatibility: stampCompatibility(buildEventPolicy[validated.type], validated.compatibility),
+    }
+  } catch (error) {
+    if (error instanceof EventValidationError) throw error
+    throw new EventValidationError(
+      `invalid compatibility metadata: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }

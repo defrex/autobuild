@@ -894,3 +894,145 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+if (testUrl) {
+  test('mixed-version persisted events retain opaque bytes and replay under catalog-specific checkpoints', async () => {
+    const {
+      newerFact,
+      readBuildFacts,
+      readBuildStreamSeed,
+      readRepositoryFacts,
+      deferMixedVersion,
+    } = await import('@defrex/autobuild/testing')
+    const { resolveReducerValue } = await import('@defrex/autobuild/store-adapter')
+    const database = await isolatedDatabase()
+    const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    const sql = new SQL(database.url, { max: 1 })
+    try {
+      await store.createBuild(sampleBuildInput('mixed'))
+      await store.append('mixed', sampleEventWrite('known'))
+      const writeFuture = async (seq: number, classification: 'advisory' | 'decisive') => {
+        const fact = newerFact(seq, classification)
+        await sql`INSERT INTO events (build, seq, ts, actor, type, payload, compatibility) VALUES (${'mixed'}, ${seq}, ${fact.ts}::timestamptz, ${JSON.stringify(fact.actor)}::jsonb, ${fact.type}, ${JSON.stringify(fact.payload)}::jsonb, ${JSON.stringify(fact.compatibility)}::jsonb)`
+      }
+      const amended =
+        await sql`UPDATE events SET payload = payload || '{"future":{"enabled":true}}'::jsonb WHERE build=${'mixed'} AND seq=1 RETURNING payload`
+      expect(amended).toHaveLength(1)
+      expect((await store.getEvents('mixed'))[0]!.payload as unknown).toHaveProperty('future', {
+        enabled: true,
+      })
+      await writeFuture(2, 'advisory')
+      expect((await readBuildFacts(store, 'mixed')).value.state.compatibility.unknownFacts).toBe(1)
+      expect((await readBuildFacts(store, 'mixed')).value.state.compatibility.decisiveFacts).toBe(0)
+      await writeFuture(3, 'decisive')
+      const facts = (await readBuildFacts(store, 'mixed')).value
+      expect(facts.state.compatibility.decisiveFacts).toBe(1)
+      expect(facts.state.lastSeq).toBe(3)
+      expect((await readBuildStreamSeed(store, 'mixed')).value.build.compatibility).toEqual(
+        facts.state.compatibility,
+      )
+      const raw = (await store.getEvents('mixed'))[2]!
+      expect(raw.type as string).toBe(newerFact(3).type)
+      expect(raw.payload as unknown).toEqual(newerFact(3).payload)
+      expect(raw.compatibility).toEqual(newerFact(3).compatibility)
+      const resolved = resolveReducerValue(
+        { kind: 'build', slug: 'mixed' },
+        { reducer: 'buildReadFacts' },
+      )
+      await sql`UPDATE reducer_snapshots SET version=${resolved.reducer.version + 1}, state=${JSON.stringify({ future: true })}::jsonb WHERE reducer=${resolved.key}`
+      const before =
+        await sql`SELECT version,cursor,state FROM reducer_snapshots WHERE reducer=${resolved.key}`
+      await writeFuture(4, 'decisive')
+      expect((await readBuildFacts(store, 'mixed')).value.state.compatibility.decisiveFacts).toBe(2)
+      expect(
+        await sql`SELECT version,cursor,state FROM reducer_snapshots WHERE reducer=${resolved.key}`,
+      ).toEqual(before)
+      await Promise.all([deferMixedVersion(store, 'mixed'), deferMixedVersion(store, 'mixed')])
+      expect(
+        (await store.getEvents('mixed')).filter((e) => e.type === 'build.compatibility-deferred'),
+      ).toHaveLength(1)
+      await store.ensureRepo('mixed-repo')
+      const fact = newerFact(1)
+      await sql`INSERT INTO repo_events (repo, seq, ts, actor, type, payload, compatibility) VALUES (${'mixed-repo'}, 1, ${fact.ts}::timestamptz, ${JSON.stringify(fact.actor)}::jsonb, ${fact.type}, ${JSON.stringify(fact.payload)}::jsonb, ${JSON.stringify(fact.compatibility)}::jsonb)`
+      expect(
+        (await readRepositoryFacts(store, 'mixed-repo')).value.compatibility.decisiveFacts,
+      ).toBe(1)
+      // Invalid known data is corruption, rather than a compatibility miss.
+      await sql`UPDATE events SET payload=${JSON.stringify({ id: 123 })}::jsonb WHERE build=${'mixed'} AND seq=1`
+      await sql`DELETE FROM reducer_snapshots WHERE scope_key=${'mixed'}`
+      await expect(readBuildFacts(store, 'mixed')).rejects.toThrow()
+    } finally {
+      await store.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  })
+}
+
+if (testUrl)
+  for (const order of ['older-first', 'newer-first']) {
+    test(`PostgreSQL keeps equal-version catalogs independent after upgrade (${order})`, async () => {
+      const { buildCreatedWrite, catalogIdentity, readBuildFacts, deferMixedVersion } =
+        await import('@defrex/autobuild/testing')
+      const { resolveReducerValue } = await import('@defrex/autobuild/store-adapter')
+      const database = await isolatedDatabase()
+      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      const sql = new SQL(database.url, { max: 1 })
+      try {
+        await store.createBuild(sampleBuildInput('supported'))
+        await store.append('supported', buildCreatedWrite())
+        const known = await store.getEvents('supported')
+        const pause = await store.append('supported', {
+          actor: { kind: 'human', user: 'fixture' },
+          type: 'build.pause-requested',
+          payload: {},
+        })
+        const scope = { kind: 'build', slug: 'supported' } as const
+        const request = { reducer: 'buildReadFacts' }
+        const current = resolveReducerValue(scope, request)
+        const older = resolveReducerValue(
+          scope,
+          request,
+          catalogIdentity({ 'build.created': 'decisive' }),
+        )
+        expect(older.reducer.version).toBe(current.reducer.version)
+        const olderAcc = older.reducer.advance(older.reducer.initial(), known)
+        olderAcc.build.compatibility = {
+          unknownFacts: 1,
+          decisiveFacts: 1,
+          lastSeq: 2,
+          decisiveBoundary: 2,
+          types: ['build.pause-requested'],
+          writerVersions: [pause.compatibility!.writerVersion],
+          legacyVersionUnavailable: false,
+          decisiveTypes: ['build.pause-requested'],
+          decisiveWriterVersions: [pause.compatibility!.writerVersion],
+          decisiveLegacyVersionUnavailable: false,
+        }
+        expect(older.entry.validate(olderAcc)).toBe(true)
+        const installOlder = () =>
+          sql`INSERT INTO reducer_snapshots (scope_kind,scope_key,reducer,version,cursor,state,updated_at) VALUES (${'build'},${'supported'},${older.key},${older.reducer.version},2,${JSON.stringify({ identity: older.identity, acc: olderAcc })}::jsonb,${new Date().toISOString()}::timestamptz)`
+        if (order === 'older-first') await installOlder()
+        expect(
+          (await readBuildFacts(store, 'supported')).value.state.compatibility.decisiveFacts,
+        ).toBe(0)
+        if (order === 'newer-first') await installOlder()
+        const before = await sql`SELECT * FROM reducer_snapshots WHERE reducer=${older.key}`
+        expect(
+          (await readBuildFacts(store, 'supported')).value.state.compatibility.unknownFacts,
+        ).toBe(0)
+        expect(await deferMixedVersion(store, 'supported')).toBe(false)
+        expect(await sql`SELECT * FROM reducer_snapshots WHERE reducer=${older.key}`).toEqual(
+          before,
+        )
+        const rows = await sql`SELECT reducer FROM reducer_snapshots WHERE scope_key=${'supported'}`
+        expect(rows.map((row: { reducer: string }) => row.reducer).sort()).toEqual(
+          [older.key, current.key].sort(),
+        )
+      } finally {
+        await store.close()
+        await sql.close()
+        await database.cleanup()
+      }
+    })
+  }

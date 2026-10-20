@@ -1,3 +1,9 @@
+import {
+  advanceCompatibility,
+  initialCompatibility,
+  projectEvents,
+  type CompatibilityState,
+} from '../events/compatibility'
 import type { NativeSessionHandle } from '../ports/types'
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
@@ -173,6 +179,8 @@ export interface AutoMergeProjection {
 export type ObservationRecord = EventPayload<'observation.recorded'>
 
 export interface BuildState {
+  compatibility: CompatibilityState
+  compatibilityDeferredBoundary?: number
   kind?: 'work' | 'node'
   target?: EventPayload<'build.created'>['target']
   baseBranch?: string
@@ -349,6 +357,8 @@ export function discardInFlight(state: Pick<BuildState, 'discardRequest'>): bool
  * trip through `JSON.stringify` — the foundation for incremental advancement
  * and cached state. */
 export interface BuildAcc {
+  compatibility: CompatibilityState
+  compatibilityDeferredBoundary: number
   kind?: 'work' | 'node'
   target?: EventPayload<'build.created'>['target']
   baseBranch?: string
@@ -405,10 +415,12 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 13
+export const BUILD_REDUCER_VERSION = 15
 
 function initialBuildAcc(): BuildAcc {
   return {
+    compatibility: initialCompatibility(),
+    compatibilityDeferredBoundary: 0,
     attached: false,
     pausedFlag: false,
     round: 0,
@@ -450,6 +462,11 @@ function initialBuildAcc(): BuildAcc {
 
 /** Fold `events` into `acc` in place. */
 function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
+  advanceCompatibility(acc.compatibility, events)
+  events = projectEvents(events)
+  for (const event of events)
+    if (event.type === 'build.compatibility-deferred')
+      acc.compatibilityDeferredBoundary = event.payload.boundary
   let attached = acc.attached
   let pausedFlag = acc.pausedFlag
   let terminal = acc.terminal
@@ -1138,7 +1155,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     finalizeCompletedSeq: acc.finalizeCompletedSeq,
     finalizeSteps: acc.finalizeSteps,
     lastEvent,
-    lastSeq: lastEvent?.seq ?? 0,
+    lastSeq: Math.max(lastEvent?.seq ?? 0, acc.compatibility.lastSeq),
+    compatibility: structuredClone(acc.compatibility),
+    compatibilityDeferredBoundary: acc.compatibilityDeferredBoundary,
     pinnedAssets: acc.pinnedAssets,
     specRev: acc.specRev,
     restartSince: acc.restartSince,
@@ -1175,6 +1194,7 @@ function finishBuild(acc: BuildAcc): BuildState {
  * only the events newer than it, then derive the state. */
 export const buildReducer: IncrementalReducer<BuildAcc, AbEvent, BuildState> = defineReducer({
   version: BUILD_REDUCER_VERSION,
+  rawEvents: true,
   initial: initialBuildAcc,
   fold: foldBuild,
   finish: finishBuild,

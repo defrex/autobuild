@@ -1,3 +1,4 @@
+import { compatibilityMetadataSchema } from '../../events/policy'
 /**
  * The wire protocol of the remote BuildStore (SPEC §7.2 adapter 2): JSON
  * bodies, artifact content as base64, errors as `{error, kind}`. Server
@@ -50,6 +51,7 @@ export type ErrorBody = z.infer<typeof errorBodySchema>
  * shadowed by a duplicate wire-schema error.
  */
 export const eventWriteWireSchema = z.object({
+  compatibility: compatibilityMetadataSchema.optional(),
   actor: z.unknown(),
   type: z.string().min(1),
   payload: z.unknown(),
@@ -87,6 +89,7 @@ export const buildRecordListSchema = z.array(buildRecordWireSchema)
 // ── Events ───────────────────────────────────────────────────────────────────
 
 export const eventEnvelopeWireSchema = z.object({
+  compatibility: compatibilityMetadataSchema.optional(),
   build: z.string(),
   seq: z.number().int().positive(),
   ts: z.string(),
@@ -115,6 +118,7 @@ export const repositoryRecordWireSchema = z.object({
 })
 
 export const repositoryEventEnvelopeWireSchema = z.object({
+  compatibility: compatibilityMetadataSchema.optional(),
   repo: z.string(),
   seq: z.number().int().positive(),
   ts: z.string(),
@@ -283,6 +287,20 @@ export const sessionDepositsResponseSchema = z.object({
 // the build's log carries no terminal fact, per the protocol's omission
 // convention for optional members.
 export const buildDigestWireSchema = z.object({
+  compatibility: z
+    .object({
+      unknownFacts: z.number().int().nonnegative(),
+      decisiveFacts: z.number().int().nonnegative(),
+      lastSeq: z.number().int().nonnegative(),
+      decisiveBoundary: z.number().int().nonnegative(),
+      types: z.array(z.string()),
+      writerVersions: z.array(z.string()),
+      legacyVersionUnavailable: z.boolean(),
+      decisiveTypes: z.array(z.string()).default([]),
+      decisiveWriterVersions: z.array(z.string()).default([]),
+      decisiveLegacyVersionUnavailable: z.boolean().default(false),
+    })
+    .optional(),
   integrationAuditPending: z.literal(true).optional(),
   mergedSha: z.string().min(1).optional(),
   nodeContribution: eventPayloadSchemas['node.contribution-recorded'].optional(),

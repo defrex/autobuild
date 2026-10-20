@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
 import { readBuildFacts, readPhaseFailures } from '../store/reduced-reads'
@@ -37,6 +38,7 @@ export async function settlePendingPublication(
 ): Promise<void> {
   const publication = deps.publication
   if (publication === undefined) return
+  if (await deferMixedVersion(deps.store, slug)) return
   await completeAutomaticReconcile(deps.store, slug)
   let events = (await readBuildFacts(deps.store, slug)).value
   const request = events.publication.latestUncompletedRequest()
@@ -252,6 +254,7 @@ export async function settlePendingPublication(
       await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
     }
   } catch (error) {
+    if (error instanceof MixedVersionDeferral) return
     if (request.payload.operation !== 'finalize-step') throw error
     const detail = error instanceof Error ? error.message : String(error)
     const note = `finalize publication failed: ${detail}`

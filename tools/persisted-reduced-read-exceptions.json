@@ -677,5 +677,21 @@
   "packages/core/src/cli/dashboard/model.ts::buildDashboard::reduce": {
     "kind": "reduction",
     "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getReducerValue::getEvents": {
+    "kind": "raw",
+    "reason": "Catalog/version fallback replays incompatible named answers locally through the fixed server cursor. Matching identity uses the persisted answer."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getReducerValue::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Catalog/version fallback replays incompatible named answers locally through the fixed server cursor. Matching identity uses the persisted answer."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getReducerValue::finish": {
+    "kind": "reduction",
+    "reason": "Catalog/version fallback replays incompatible named answers locally through the fixed server cursor. Matching identity uses the persisted answer."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getReducerValue::advance": {
+    "kind": "reduction",
+    "reason": "Catalog/version fallback replays incompatible named answers locally through the fixed server cursor. Matching identity uses the persisted answer."
   }
 }

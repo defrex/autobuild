@@ -16,7 +16,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -847,7 +847,13 @@ export const SCHEMA_V14_CHECKSUM = new Bun.CryptoHasher('sha256')
 const NODE_WRITER_DDL = `ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_holder text;
 ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_expires_at timestamptz;
 ALTER TABLE builds ADD COLUMN IF NOT EXISTS node_writer_ttl_ms bigint;`
-export const SCHEMA_DDL = `${SCHEMA_V14_DDL}\n${NODE_WRITER_DDL}`
+export const SCHEMA_V15_DDL = `${SCHEMA_V14_DDL}\n${NODE_WRITER_DDL}`
+export const SCHEMA_V15_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V15_DDL)
+  .digest('hex')
+const COMPATIBILITY_DDL = `ALTER TABLE events ADD COLUMN IF NOT EXISTS compatibility jsonb;
+ALTER TABLE repo_events ADD COLUMN IF NOT EXISTS compatibility jsonb;`
+export const SCHEMA_DDL = `${SCHEMA_V15_DDL}\n${COMPATIBILITY_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -1036,6 +1042,7 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['actor', 'jsonb', true],
     ['type', 'text', true],
     ['payload', 'jsonb', true],
+    ['compatibility', 'jsonb', false],
   ],
   artifacts: [
     ['build', 'text', true],
@@ -1074,6 +1081,7 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['actor', 'jsonb', true],
     ['type', 'text', true],
     ['payload', 'jsonb', true],
+    ['compatibility', 'jsonb', false],
   ],
   repo_artifacts: [
     ['repo', 'text', true],
@@ -1698,6 +1706,8 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 15 && marker.checksum === SCHEMA_V15_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 14 && marker.checksum === SCHEMA_V14_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 13 && marker.checksum === SCHEMA_V13_CHECKSUM) {
@@ -1735,6 +1745,7 @@ export async function migratePostgres(
       // Preserve historical physical column order: legacy repo_origin must
       // precede the new writer columns just as it does in fresh databases.
       await tx.unsafe(NODE_WRITER_DDL)
+      await tx.unsafe(COMPATIBILITY_DDL)
       if (options.legacyProjectEnv !== undefined) {
         await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(
           options.legacyProjectEnv,

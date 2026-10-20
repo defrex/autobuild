@@ -156,8 +156,8 @@ of a cursor: `getReducerSnapshot(scope, reducer, version)` and
 (`packages/core/src/store/snapshots.ts`). The log stays the only authority. The
 store enforces the invariants: the stored cursor never decreases (a write whose
 cursor does not advance is a no-op, so concurrent writers cannot undo each
-other), a row of another reducer version reads as absent and is replaced once a
-writer advances past it, and a cursor beyond the log's tail is refused and never
+other), a row of another reducer version reads as absent, and a lower-version
+writer never replaces a higher-version row even after advancing its cursor, and a cursor beyond the log's tail is refused and never
 returned. Every consumer treats a missing, mismatched, ahead-of-log, malformed
 or unreadable snapshot as a miss and replays the log, with identical results;
 deleting all snapshots changes no observable output (the integration harness
@@ -172,6 +172,24 @@ serving across the upgrade, a new client against a database that lacks the table
 reads every snapshot as missing and replays (SQLSTATE `42P01` is never an
 error), and an older client never asks. Run `bun run postgres:migrate` once to
 gain the table; until then the dispatcher and every other reader replay in full.
+
+**Mixed-version event decoding.** `events/compatibility.ts` separates opaque
+stored facts from the known event unions. Strict producer schemas stay in
+`events/payloads.ts` and `events/repository.ts`; `events/policy.ts` exhaustively
+classifies every type and stamps writer release metadata. Named read boundaries
+project known payloads before adapting selector rows, while build and repository
+facts retain compatibility counts across incremental resumes. Unknown facts
+still advance sequence cursors. `kernel/mixed-version.ts` guards affected build
+decisions and deduplicates the default-watch attention fact. Other builds and
+read-only queries continue. The [hosted upgrade guarantee](hosted-service.md#reading-across-upgrades)
+describes recovery and the supported-window boundary.
+
+All event-derived checkpoints include the combined read-catalog fingerprint in
+their keys, independently of numeric reducer versions. Snapshot envelopes validate
+that fingerprint; another catalog's rows remain untouched. Remote named values
+use `x-autobuild-catalog-identity` for cache acceptance, keeping their strict
+three-field JSON body unchanged. Missing or mismatching identity, version or
+finished shape causes bounded local replay without a remote cache write.
 
 **Named reducer values.** `BuildStore.getReducerValue(scope, {reducer, args?})`
 returns `{version, cursor, value}` for each eligible entry in the executable

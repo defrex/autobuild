@@ -1,3 +1,4 @@
+import { newerFact, seedNewerMemoryFact } from '../testing/newer-writer'
 import { readBuildFacts } from '../store/reduced-reads'
 import { done } from '../cli/terminals'
 import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-publication'
@@ -4351,6 +4352,57 @@ describe('remote publication terminal boundary', () => {
 // ── No terminal (D5, §8.4) ───────────────────────────────────────────────────
 
 describe('no-terminal retry policy (D5)', () => {
+  for (const priorFailures of [0, 1]) {
+    test(`mid-session decisive facts defer a refused terminal without consuming attempt ${priorFailures + 1}`, async () => {
+      const h = await makeHarness({
+        handlers: (store) => ({
+          plan: async (ctx) => {
+            await store.putArtifact(SLUG, { kind: 'plan', content: '# Finished plan' })
+            const seq = (await store.getEvents(SLUG)).at(-1)!.seq + 1
+            seedNewerMemoryFact(store as MemoryBuildStore, newerFact(seq, 'decisive', SLUG))
+            await expect(
+              done({
+                store,
+                env: {
+                  store: 'local',
+                  build: SLUG,
+                  phase: 'plan',
+                  round: 1,
+                  session: sessionOf(ctx),
+                },
+                workspacePath: ctx.opts.workspacePath,
+                forge: new FakeForge(),
+                ids: sequentialIds(),
+                exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+              }),
+            ).rejects.toThrow('Kernel decisions deferred')
+            return defaultTurnResult('terminal deferred')
+          },
+        }),
+      })
+      if (priorFailures)
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'phase.failed',
+          payload: {
+            phase: 'plan',
+            round: 1,
+            attempt: 1,
+            error: 'previous failure',
+            willRetry: true,
+          },
+        })
+      await h.br.attach()
+      expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'mixed-version' })
+      expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'mixed-version' })
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'phase.failed')).toHaveLength(priorFailures)
+      expect(ofType(events, 'escalation.raised')).toHaveLength(0)
+      expect(ofType(events, 'build.compatibility-deferred')).toHaveLength(1)
+      expect(await h.store.listArtifacts(SLUG, 'plan')).toHaveLength(1)
+    })
+  }
+
   test('a silent session fails the phase; the transcript and session.ended still land', async () => {
     const h = await makeHarness({
       handlers: () => ({ plan: () => defaultTurnResult('rambled and exited') }),

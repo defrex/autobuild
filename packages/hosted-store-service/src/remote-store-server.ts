@@ -1,3 +1,4 @@
+import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import {
@@ -723,6 +724,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           inputs,
           (deposited) =>
             ({
+              compatibility: body.event.compatibility,
               actor,
               type: body.event.type,
               payload: substitutePlaceholderRefs(body.event.payload, deposited),
@@ -834,12 +836,14 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     const supportsAudit = clientSupportsIntegrationAuditPending(
       req.headers.get(AUTOBUILD_VERSION_HEADER),
     )
-    return json(
+    const response = json(
       200,
       supportsAudit
         ? digests
         : digests.map(({ integrationAuditPending: _audit, ...digest }) => digest),
     )
+    if (store.catalogIdentity) response.headers.set(CATALOG_IDENTITY_HEADER, store.catalogIdentity)
+    return response
   }
 
   async function sessionRoute(req: Request, url: URL, id: string, rest: string): Promise<Response> {
@@ -943,7 +947,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       throw new RequestError(400, 'validation', String(error))
     }
     try {
-      return json(200, await store.getReducerValue(scope, body))
+      const result = await store.getReducerValue(scope, body)
+      const response = json(200, {
+        version: result.version,
+        cursor: result.cursor,
+        value: result.value,
+      })
+      if (result.catalogIdentity)
+        response.headers.set(CATALOG_IDENTITY_HEADER, result.catalogIdentity)
+      return response
     } catch (error) {
       if (
         scope.kind === 'repo' &&
@@ -1104,6 +1116,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         // rolls the whole deposit back (D6).
         const deposit = (deposited: import('@defrex/autobuild/store-adapter').ArtifactMeta[]) =>
           ({
+            compatibility: body.event.compatibility,
             actor,
             type: body.event.type,
             payload: substitutePlaceholderRefs(body.event.payload, deposited),
