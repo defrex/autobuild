@@ -1,3 +1,4 @@
+import { compatibilityDiagnostic, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
@@ -321,6 +322,9 @@ export async function completeFinalizePr(
   input: FinalizePrInput,
 ): Promise<EventEnvelope> {
   const { env, store } = deps
+  const boundary = (await readBuildFacts(store, env.build)).value.state
+  const diagnostic = compatibilityDiagnostic(boundary.compatibility)
+  if (diagnostic) throw new MixedVersionDeferral(diagnostic)
   const pr = await deps.forge.openPr({
     workspacePath: deps.workspacePath,
     head: input.branch,
@@ -363,6 +367,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
     )
   }
   const events = (await readBuildFacts(store, env.build)).value
+  const diagnostic = compatibilityDiagnostic(events.state.compatibility)
+  if (diagnostic) throw new MixedVersionDeferral(diagnostic)
   await assertNoPriorTerminal(store, env)
   const actor = agentActor(env.phase, env.session)
 

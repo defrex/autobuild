@@ -1,3 +1,4 @@
+import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
 import { hardReadinessKeys } from '../ports/forge/readiness'
 /**
  * Repository-scoped event catalog. These events deliberately do not enter the
@@ -563,6 +564,7 @@ export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
 >
 
 export interface RepositoryEventEnvelope<T extends RepositoryEventType = RepositoryEventType> {
+  compatibility?: CompatibilityMetadata
   repo: string
   seq: number
   ts: string
@@ -576,6 +578,7 @@ export type RepositoryEvent = {
 }[RepositoryEventType]
 
 export interface RepositoryEventWrite<T extends RepositoryEventType = RepositoryEventType> {
+  compatibility?: CompatibilityMetadata
   actor: Actor
   type: T
   payload: RepositoryEventPayload<T>
@@ -669,6 +672,7 @@ export function validateRepositoryEventWrite(input: {
   actor: unknown
   type: string
   payload: unknown
+  compatibility?: unknown
 }): RepositoryEventWrite {
   if (!isRepositoryEventType(input.type)) {
     throw new EventValidationError(
@@ -700,8 +704,34 @@ export function validateRepositoryEventWrite(input: {
     )
   }
   return {
+    ...(input.compatibility === undefined
+      ? {}
+      : {
+          compatibility: stampCompatibility(repositoryEventPolicy[input.type], input.compatibility),
+        }),
     actor,
     type: input.type,
     payload: result.data,
   } as RepositoryEventWrite
+}
+
+/** Producer boundary: validate strictly, then identify the actual writer. */
+export function prepareRepositoryEventWrite(
+  input: Parameters<typeof validateRepositoryEventWrite>[0],
+): RepositoryEventWrite {
+  try {
+    const validated = validateRepositoryEventWrite(input)
+    return {
+      ...validated,
+      compatibility: stampCompatibility(
+        repositoryEventPolicy[validated.type],
+        validated.compatibility,
+      ),
+    }
+  } catch (error) {
+    if (error instanceof EventValidationError) throw error
+    throw new EventValidationError(
+      `invalid compatibility metadata: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }

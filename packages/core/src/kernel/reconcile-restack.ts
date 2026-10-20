@@ -1,3 +1,4 @@
+import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
 import { readBuildFacts } from '../store/reduced-reads'
 import { isRemoteWorkspace } from '../events/workspace-remote'
@@ -215,6 +216,7 @@ export async function prepareRestack(
     restackId?: string
   },
 ): Promise<ReconcileTransaction> {
+  if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) throw new MixedVersionDeferral()
   const capability = requireRewrite(deps.forge)
   const events = await replayHistory(deps)
   const prior = events.findLast(

@@ -1,3 +1,8 @@
+import {
+  deferMixedVersion,
+  mixedVersionDeferred,
+  MixedVersionDeferral,
+} from '../kernel/mixed-version'
 import { dispatchCapacity, nodeCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
@@ -797,6 +802,7 @@ export class Dispatcher {
     const settle = this.deps.settlePublication
     if (settle === undefined) return undefined
     return async (slug) => {
+      if (await deferMixedVersion(this.store, slug)) return
       await settle(slug)
       await this.store.refreshBuild(slug)
     }
@@ -961,20 +967,32 @@ export class Dispatcher {
    * from here so a settled terminal build costs none. Records are read before
    * digests (as `operator/query.ts` does) so a concurrent create cannot fail
    * the completeness check. */
-  private async repoBuildDigests(): Promise<{ record: BuildRecord; digest: BuildDigest }[]> {
+  private async repoBuildDigests(
+    includeDeferred = false,
+  ): Promise<{ record: BuildRecord; digest: BuildDigest }[]> {
     const store = this.store
     const { repo } = this.deps
     const records = (await store.listBuilds()).filter((record) => record.repo === repo)
     const digests = await readBuildDigests(store, repo)
-    return records.map((record) => {
-      const digest = digests.get(record.slug)
-      if (digest === undefined) {
-        throw new Error(
-          `build digest missing for ${record.slug}: the digest read broke completeness`,
-        )
-      }
-      return { record, digest }
-    })
+    const blocked = new Set<string>()
+    for (const record of records) {
+      if (
+        (digests.get(record.slug)?.compatibility?.decisiveFacts ?? 0) > 0 &&
+        (await deferMixedVersion(store, record.slug))
+      )
+        blocked.add(record.slug)
+    }
+    return records
+      .filter((record) => includeDeferred || !blocked.has(record.slug))
+      .map((record) => {
+        const digest = digests.get(record.slug)
+        if (digest === undefined) {
+          throw new Error(
+            `build digest missing for ${record.slug}: the digest read broke completeness`,
+          )
+        }
+        return { record, digest }
+      })
   }
 
   /** Builds with no terminal fact: the only ones whose tick duties change
@@ -1221,6 +1239,7 @@ export class Dispatcher {
     launched: Set<string>,
     report: TickReport = emptyTickReport(),
   ): Promise<LaunchRunnerResult> {
+    if (await deferMixedVersion(this.store, slug)) return 'already-active'
     const launchState = (await this.store.buildFacts(slug)).state
     if (
       launchState.kind === 'node' &&
@@ -1621,6 +1640,7 @@ export class Dispatcher {
         // the marker's lease so the next supervisor adopts immediately.
         return
       }
+      if (await deferMixedVersion(store, slug)) return
       leaseClaimed = await store.claimLease(slug, entry.instance, BUILD_EXECUTION_LEASE_TTL_MS)
       if (!leaseClaimed) return // another live holder — the next tick re-evaluates
       heartbeat = setInterval(() => {
@@ -1635,6 +1655,10 @@ export class Dispatcher {
         return
       }
       const events = (await readBuildFacts(store, slug)).value
+      if (mixedVersionDeferred(events.state)) {
+        await deferMixedVersion(store, slug)
+        return
+      }
       const priorGenerations = events.workspaceGenerations
       const handle = await workspaces.provision({
         // Local providers provision FROM the physical checkout; remote
@@ -1807,6 +1831,10 @@ export class Dispatcher {
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
         // Existing partial facts leave the same work due on the next tick.
         let { state, workspace, log } = await this.store.buildFacts(record.slug)
+        if (mixedVersionDeferred(state)) {
+          await deferMixedVersion(this.store, record.slug)
+          continue
+        }
         const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Raw history, read at most once and only by a branch that acts on it:
         // the facts above answer every quiet-path question without it.
@@ -1988,6 +2016,7 @@ export class Dispatcher {
           )
         }
       } catch (error) {
+        if (error instanceof MixedVersionDeferral) continue
         const message = error instanceof Error ? error.message : String(error)
         report.janitorFailed += 1
         report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
@@ -2235,9 +2264,10 @@ export class Dispatcher {
     return open?.localPath ?? open?.path ?? open?.ref ?? this.deps.checkout ?? this.deps.repo
   }
 
+  /** Deferral withholds decisions, but cannot free an existing capacity reservation. */
   private async capacityBuilds(): Promise<CapacityBuild[]> {
     const builds: CapacityBuild[] = []
-    for (const { record, digest } of await this.repoBuildDigests()) {
+    for (const { record, digest } of await this.repoBuildDigests(true)) {
       if (digest.terminal) continue
       const facts = await this.store.buildFacts(record.slug)
       builds.push({
@@ -2554,6 +2584,7 @@ export class Dispatcher {
   ): Promise<void> {
     const store = this.store
     const { tickets, forge } = this.deps
+    if (await deferMixedVersion(store, record.slug)) return
     const pr = state.pr
     if (!pr) return
     // Forge calls run from the workspace when it still exists (it does until
@@ -3553,6 +3584,7 @@ export class Dispatcher {
   ): Promise<DispatchOutcome> {
     const store = this.store
     const { config } = this.deps
+    if (await deferMixedVersion(this.store, record.slug)) return 'parked'
     if (!(await this.dispatchBudget(record.slug))) return 'parked'
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
     try {
@@ -3633,6 +3665,7 @@ export class Dispatcher {
         events = (await readBuildFacts(store, record.slug)).value
       }
     } catch (error) {
+      if (error instanceof MixedVersionDeferral) return 'parked'
       const events = (await readBuildFacts(store, record.slug)).value
       if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
         const open = openWorkspace(events)
@@ -3680,6 +3713,7 @@ export class Dispatcher {
   ): Promise<Exclude<DispatchOutcome, 'deferred'>> {
     const store = this.store
 
+    if (await deferMixedVersion(this.store, record.slug)) return 'parked'
     if (!(await this.dispatchBudget(record.slug))) return 'parked'
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'spec'
     let authored = false
@@ -3937,6 +3971,10 @@ export class Dispatcher {
       }
       const facts = await this.store.buildFacts(record.slug)
       const state = facts.state
+      if (mixedVersionDeferred(state)) {
+        await deferMixedVersion(this.store, record.slug)
+        continue
+      }
       if (
         (state.status === 'queued' && state.discardRequest !== undefined) ||
         heldByRepositoryPause(state, paused)
@@ -4505,6 +4543,7 @@ export class Dispatcher {
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
+    if (await deferMixedVersion(this.store, record.slug)) return
     if (state.nodeRestack?.parentRequest && !state.nodeRestack.active) return
     if (
       state.nodeRestack?.parentChange &&
@@ -4656,6 +4695,7 @@ export class Dispatcher {
           workspacePath,
           holder,
           canWrite: async () => {
+            if (await deferMixedVersion(this.store, record.slug)) return false
             if (this.outOfBudget(opts)) return false
             if (state.pr && (await forge.getPrState(checkout, state.pr.number)).state !== 'open')
               return false

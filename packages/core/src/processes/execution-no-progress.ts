@@ -9,6 +9,7 @@ import type { RepoViewStore } from './repo-view'
 
 /** Every new event must explicitly choose whether it advances build work. */
 export const executionProgress = {
+  'build.compatibility-deferred': 'bookkeeping',
   'landing.decided': 'progress',
   'build.hold-requested': 'progress',
   'build.land-requested': 'progress',

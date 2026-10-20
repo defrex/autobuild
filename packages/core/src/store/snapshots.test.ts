@@ -84,9 +84,9 @@ describe('reducer snapshot helpers', () => {
     expect(await loadReducerSnapshot(wrong, scope, 'j', stub(1))).toBeNull()
   })
 
-  test('supersession: higher cursor wins, equal cursor needs a higher version', () => {
+  test('supersession never downgrades versions or regresses cursors', () => {
     expect(snapshotSupersedes({ version: 1, cursor: 1 }, undefined)).toBe(true)
-    expect(snapshotSupersedes({ version: 1, cursor: 2 }, { version: 9, cursor: 1 })).toBe(true)
+    expect(snapshotSupersedes({ version: 1, cursor: 2 }, { version: 9, cursor: 1 })).toBe(false)
     expect(snapshotSupersedes({ version: 9, cursor: 1 }, { version: 1, cursor: 2 })).toBe(false)
     expect(snapshotSupersedes({ version: 2, cursor: 2 }, { version: 1, cursor: 2 })).toBe(true)
     expect(snapshotSupersedes({ version: 1, cursor: 2 }, { version: 1, cursor: 2 })).toBe(false)

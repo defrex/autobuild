@@ -1,3 +1,9 @@
+import {
+  advanceCompatibility,
+  initialCompatibility,
+  type CompatibilityState,
+  type StoredEvent,
+} from '../events/compatibility'
 /**
  * The shared build-digest derivation (AUT-487): every BuildStore adapter
  * answers `getRepoBuildDigests` by fetching only the digest-relevant event
@@ -37,6 +43,7 @@ export const DIGEST_EVENT_TYPES = [
  * `pr-attachment.reclaimed` rows and `instance` for `execution.started` /
  * `execution.ended` rows instead of whole payloads. */
 export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
+  rawUnknown?: StoredEvent
   auditRequested?: boolean
   mergedSha?: string
   nodeContribution?: BuildDigest['nodeContribution']
@@ -55,6 +62,7 @@ export type DigestEvent = DigestEventRow
 
 /** The carried accumulator for `reduceBuildDigest`. */
 export interface DigestAcc {
+  compatibility: CompatibilityState
   integrationAuditPending?: true
   mergedSha?: string
   nodeContribution?: BuildDigest['nodeContribution']
@@ -74,7 +82,7 @@ export interface DigestAcc {
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 7
+export const BUILD_DIGEST_REDUCER_VERSION = 9
 
 export const buildDigestReducer: IncrementalReducer<
   DigestAcc,
@@ -82,9 +90,16 @@ export const buildDigestReducer: IncrementalReducer<
   Omit<BuildDigest, 'slug'>
 > = defineReducer({
   version: BUILD_DIGEST_REDUCER_VERSION,
-  initial: (): DigestAcc => ({ observations: [], hosted: [], reclaimed: [], openInstance: null }),
+  initial: (): DigestAcc => ({
+    compatibility: initialCompatibility(),
+    observations: [],
+    hosted: [],
+    reclaimed: [],
+    openInstance: null,
+  }),
   fold(acc, events) {
     for (const event of events) {
+      if (event.rawUnknown) advanceCompatibility(acc.compatibility, [event.rawUnknown])
       if (
         [
           'node.opened',
@@ -122,6 +137,7 @@ export const buildDigestReducer: IncrementalReducer<
     }
   },
   finish: ({
+    compatibility,
     integrationAuditPending,
     mergedSha,
     nodeContribution,
@@ -139,6 +155,7 @@ export const buildDigestReducer: IncrementalReducer<
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
     return {
+      ...(compatibility.unknownFacts ? { compatibility: structuredClone(compatibility) } : {}),
       ...(integrationAuditPending ? { integrationAuditPending } : {}),
       ...(mergedSha !== undefined ? { mergedSha } : {}),
       ...(nodeContribution !== undefined

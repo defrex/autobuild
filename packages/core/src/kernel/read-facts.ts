@@ -1,3 +1,9 @@
+import {
+  advanceCompatibility,
+  initialCompatibility,
+  projectEvents,
+  type CompatibilityState,
+} from '../events/compatibility'
 import { awaitsConsent } from './landing-readiness'
 import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
 import { landingCandidateId } from './landing-policy'
@@ -48,6 +54,7 @@ export interface BuildStreamSeed {
 }
 // Bump with either constituent's semantics or historical eligibility semantics.
 export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, BuildStreamSeed>({
+  rawEvents: true,
   version:
     4 +
     leafRestackReducer.version +
@@ -60,13 +67,15 @@ export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, Bu
     restack: leafRestackReducer.initial(),
   }),
   fold(acc, events) {
-    for (const event of events) {
+    for (const raw of events) {
+      acc.build = buildReducer.advance(acc.build, [raw])
+      const [event] = projectEvents([raw])
+      if (!event) continue
       if (event.type === 'workspace.provisioned' || event.type === 'node.opening')
         acc.branch = event.payload.branch
       if (event.type === 'build.completed' || event.type === 'build.aborted')
         acc.terminalEvent = event
       acc.restack = leafRestackReducer.advance(acc.restack, [event])
-      acc.build = buildReducer.advance(acc.build, [event])
       acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, [event])
       const state = buildReducer.finish(acc.build)
       if (awaitsConsent(state, acc.restack)) {
@@ -178,6 +187,7 @@ export interface BuildReadAcc {
   observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
 }
 export const buildReadFactsReducer = defineReducer({
+  rawEvents: true,
   version: 3 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     summaryRequests: summaryRequestsReducer.initial(),
@@ -250,7 +260,7 @@ export const buildReadFactsReducer = defineReducer({
     acc.lastExecution = lastExecutionOutcomeReducer.advance(acc.lastExecution, events)
     acc.dashboard = dashboardFactsReducer.advance(acc.dashboard, events)
     acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, events)
-    for (const event of events) {
+    for (const event of projectEvents(events)) {
       if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict')
         acc.summaryHistory.push({
           kind: 'review',
@@ -448,6 +458,7 @@ import { dispatchStatusReducer } from './dispatch-status'
  * correlations outside it use the explicitly parameterized cache. */
 export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
+  compatibility: CompatibilityState
   presence: Record<
     string,
     Extract<RepositoryEvent, { type: 'change-presence.observed' }>['payload']
@@ -492,8 +503,9 @@ export interface RepositoryReadAcc {
   publications: Extract<RepositoryEvent, { type: 'orchestrator.sandbox.published' }>[]
 }
 export const repositoryReadFactsReducer = defineReducer({
+  rawEvents: true,
   version:
-    2 +
+    4 +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     repositoryAttentionReducer.version +
@@ -505,6 +517,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxStatesReducer.version +
     dispatchStatusReducer('version').version,
   initial: (): RepositoryReadAcc => ({
+    compatibility: initialCompatibility(),
     presence: {},
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
@@ -528,6 +541,7 @@ export const repositoryReadFactsReducer = defineReducer({
     publications: [],
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
+    advanceCompatibility(acc.compatibility, events)
     acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
     acc.openHarvest = openHarvestExecutionsReducer.advance(acc.openHarvest, events)
     acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
@@ -536,7 +550,7 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.autoMerge = autoMergeDefaultReducer.advance(acc.autoMerge, events)
     acc.config = effectiveConfigReducer.advance(acc.config, events)
     acc.sandboxes = sandboxStatesReducer.advance(acc.sandboxes, events)
-    for (const event of events) {
+    for (const event of projectEvents(events)) {
       if (event.type === 'change-presence.observed')
         acc.presence[event.payload.destination] = event.payload
       if (event.type === 'harvest.failed') {
@@ -624,6 +638,7 @@ export const repositoryReadFactsReducer = defineReducer({
     }
   },
   finish: (acc: RepositoryReadAcc) => ({
+    compatibility: structuredClone(acc.compatibility),
     presence: structuredClone(acc.presence),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
@@ -677,7 +692,7 @@ export function dispatcherRunFactsReducer(run: string) {
     version: 2,
     initial: () => ({}),
     fold(acc, events) {
-      for (const event of events) {
+      for (const event of projectEvents(events)) {
         if (!('run' in event.payload) || event.payload.run !== run) continue
         foldDispatcherRunFact(acc, event)
       }

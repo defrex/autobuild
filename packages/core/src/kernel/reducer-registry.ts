@@ -1,3 +1,4 @@
+import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
 import { leafRestackReducer } from './leaf-restack-state'
 import { terminalGuardReducer } from './terminal-guard'
@@ -266,10 +267,15 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
             adapt: (events: Parameters<ValueCatalogEntry['adapt']>[0]) =>
               name === 'buildDigest'
                 ? events.map((event) => ({
+                    ...(decodeStoredEvent(event) === null ? { rawUnknown: event } : {}),
                     type: event.type,
                     seq: event.seq,
                     ts: event.ts,
-                    ...('hostedSeq' in event.payload ? { hostedSeq: event.payload.hostedSeq } : {}),
+                    ...(event.payload !== null &&
+                    typeof event.payload === 'object' &&
+                    'hostedSeq' in event.payload
+                      ? { hostedSeq: event.payload.hostedSeq }
+                      : {}),
                     ...(event.type === 'integration.landed'
                       ? { auditRequested: !!event.payload.operation }
                       : {}),
@@ -278,7 +284,11 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                       ? { nodeContribution: event.payload }
                       : {}),
                     ...(event.type === 'build.created' ? { kind: event.payload.kind } : {}),
-                    ...('instance' in event.payload ? { instance: event.payload.instance } : {}),
+                    ...(event.payload !== null &&
+                    typeof event.payload === 'object' &&
+                    'instance' in event.payload
+                      ? { instance: event.payload.instance }
+                      : {}),
                   }))
                 : events,
             create: parameterized[name]?.create ?? (() => entry.reducer),

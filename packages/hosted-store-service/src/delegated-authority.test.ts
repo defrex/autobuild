@@ -820,12 +820,29 @@ test('persisted lifecycle facts match full replay for historical anchors, duplic
       'session.started',
       { session: 'phase', phase: 'implement', round: 1, role: 'implement', runner: 'test' },
     ],
-    ['session.ended', { session: 'wrong', outcome: 'completed' }],
-    ['session.ended', { session: 'phase', outcome: 'completed' }],
+    [
+      'session.ended',
+      {
+        session: 'wrong',
+        transcript: { kind: 'transcript', rev: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+      },
+    ],
+    [
+      'session.ended',
+      {
+        session: 'phase',
+        transcript: { kind: 'transcript', rev: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+      },
+    ],
     ['build.aborted', {}],
   ] as const
   const repoSpecs = [
-    ['harvest.started', { run: 'run', observations: [], scan: { kind: 'scan', rev: 0 } }],
+    [
+      'harvest.started',
+      { run: 'run', observations: [{ build: 'oracle', seq: 1 }], scan: { kind: 'scan', rev: 0 } },
+    ],
     [
       'harvest.execution.authorized',
       { run: 'run', execution: 'exec', leaseHolder: 'holder', launch: 'started' },
@@ -858,8 +875,24 @@ test('persisted lifecycle facts match full replay for historical anchors, duplic
       'harvest.failed',
       { run: 'run', step: 'synthesize', round: 1, attempt: 1, error: 'test', willRetry: true },
     ],
-    ['harvest.session.ended', { run: 'run', session: 'wrong', outcome: 'completed' }],
-    ['harvest.session.ended', { run: 'run', session: 'phase', outcome: 'completed' }],
+    [
+      'harvest.session.ended',
+      {
+        run: 'run',
+        session: 'wrong',
+        transcript: { kind: 'transcript', rev: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+      },
+    ],
+    [
+      'harvest.session.ended',
+      {
+        run: 'run',
+        session: 'phase',
+        transcript: { kind: 'transcript', rev: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+      },
+    ],
     [
       'harvest.execution.released',
       { execution: 'exec', environmentId: 'env', snapshots: { outcome: 'confirmed' } },

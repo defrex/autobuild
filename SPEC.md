@@ -2388,6 +2388,7 @@ Every event shares:
   "seq": 42,                      // per-build, monotonic, assigned by the store on append
   "ts": "2026-07-15T14:03:22Z",   // assigned by the store
   "actor": { "kind": "agent", "role": "code-review", "session": "s_9f2" },
+  "compatibility": { "writerVersion": "1.0.0-beta.1", "classification": "decisive" },
   "type": "code-review.verdict",
   "payload": { /* per-type, frozen in packages/core/src/events/ */ }
 }
@@ -2518,6 +2519,47 @@ the kernel raises `escalation.raised {source: "stall"}` when any persistence
 chain survives `policy.stallRounds` rounds.
 
 ### 15.5 Derived state (the reducer)
+
+**Mixed-version reads.** Within the supported client window, readers that
+implement this contract preserve raw unknown facts and skip them in functional
+reducers. Known payloads project away added fields recursively while retaining
+validation of all known fields, required fields, enums and refinements. Writes
+remain strict. Every build and repository catalog type has an explicit
+`advisory` or `decisive` classification. Producers stamp their own release and
+classification in envelope `compatibility` metadata before transport; backing
+stores check supplied classifications against their catalog. Legacy known types
+use the local catalog; legacy unknown types are conservatively decisive with
+an unavailable-writer-version diagnostic. Added fields on existing types must
+be advisory; new semantics requiring old kernels to stop use a new decisive type.
+
+Build reductions retain reader-relative unknown and decisive counts, unsupported
+types and producer versions. Unknown facts advance raw cursors, including when
+they trail the last known fact. Unknown decisive facts defer claims, phase
+routing, integration and landing/publication decisions for that build only;
+read-only status/context/dashboard reads retain the lifecycle status. The
+kernel or dispatcher records advisory `build.compatibility-deferred` with the
+decisive boundary, types, versions and diagnostic, deduplicated per boundary.
+Default `ab watch` attention includes it. Diagnostics request a build that
+understands the unsupported types and name the writer releases, even when
+writer and reader share a release string. Upgrading clears deferral through
+local replay without answering an escalation. Repository unknown counts do
+not invent per-build blockers.
+
+Event-derived caches require both the exact reducer version and a deterministic
+read-catalog identity, including build/repository type classifications and a
+read-decoder revision. Named and generic checkpoints use catalog-specific keys;
+legacy/foreign-catalog snapshots are misses and are preserved. Unrecognized
+reducer versions replay without repairing their cache. No lower-version write
+replaces a higher-version row, even at a later cursor. Corrupt caches of the
+reader's own version may be conditionally repaired. Hosted named answers require
+matching version, catalog identity and locally valid finished shape; otherwise
+the client replays raw events locally through the returned cursor without
+writing the service cache. Catalog identity travels in response header
+`x-autobuild-catalog-identity`; strict JSON bodies remain exactly
+`{version, cursor, value}`. Missing/malformed headers also trigger local replay.
+A service omits identity for a backend without one. This guarantee excludes
+readers predating this contract and does not widen the supported client window.
+
 
 A nonterminal integration with `node.opened` derives `collecting` (below paused
 and blocked in precedence); it requires no attached runner. Empty/holding changes
