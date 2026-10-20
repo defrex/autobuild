@@ -3488,6 +3488,7 @@ describe('abDispatch watch build-runner coordination', () => {
     const branch = `ab/${slug}`
     const base = 'a'.repeat(40)
     const head = 'b'.repeat(40)
+    fx.forge.seedBranch(branch, head)
     await fx.store.createBuild({ slug, repo: fx.origin, branch })
     await fx.store.append(slug, {
       actor: DISPATCHER,
