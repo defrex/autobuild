@@ -47,7 +47,8 @@ legacy callers may omit SHA to select HEAD. Implement `confirmPublication`
 to inspect the authoritative head and refresh caches only on an exact SHA match;
 kernel callers refuse adapters without it before attempting a push. Hosted `WorkspacePublication` must
 provide authoritative `isPublished` and confirm after writing, as well as before
-retrying. Missing inspection fails actionably. Unconfirmed candidate ancestry
+retrying. Remote inspection must not resume a stopped guest or run commands in
+it: refresh the guest cache inside trusted publication before stopping it. Missing inspection fails actionably. Unconfirmed candidate ancestry
 never proves publication.
 
 Plugin API 1.3 adds the optional AgentRunner failure `cause` and the

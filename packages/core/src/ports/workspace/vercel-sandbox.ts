@@ -2532,23 +2532,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     )
   }
 
-  private async isPublished(input: {
-    ref?: string
-    sha: string
-    branch: string
-  }): Promise<boolean> {
+  private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
+    // Inspection must not resume a stopped persistent guest. Publication owns
+    // its cache refresh before teardown; recovery needs only forge readback.
     const head = await this.remoteBranchHead(input.branch, `published branch ${input.branch}`)
-    if (head !== input.sha) return false
-    // A retained guest is a separate cache. A released guest has no cache to
-    // repair and cannot prevent acknowledgement of the authoritative write.
-    const sandbox = input.ref === undefined ? undefined : this.sessions.get(input.ref)
-    if (sandbox)
-      await commandOrThrow(sandbox, {
-        cmd: 'git',
-        args: ['update-ref', `refs/heads/${input.branch}`, input.sha],
-        cwd: VERCEL_WORKSPACE_PATH,
-      })
-    return true
+    return head === input.sha
   }
 
   private async publish(

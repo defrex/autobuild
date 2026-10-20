@@ -291,7 +291,9 @@ export interface WorkspacePublication {
    * remote branch after an interrupted acknowledgement. `ref` optionally
    * names the workspace whose git database the probe runs against — used by
    * the operator-sandbox publication path, whose provider probes from the
-   * sandbox checkout; the build-path callers omit it. */
+   * sandbox checkout; the build-path callers may also supply it. Inspection
+   * must not resume a stopped remote guest; publish owns guest cache repair
+   * before teardown. */
   isPublished?(input: { ref?: string; sha: string; branch: string }): Promise<boolean>
   /** Publish exactly one commit to exactly one branch; no arbitrary command
    * surface is exposed to the dispatcher or build child. */

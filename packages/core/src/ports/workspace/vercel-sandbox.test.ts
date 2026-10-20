@@ -46,6 +46,12 @@ import {
   type VercelSnapshotInfo,
 } from './vercel-sandbox'
 
+import { settlePendingPublication } from '../../cli/publication-settlement'
+import { agentActor, DISPATCHER } from '../../events/envelope'
+import { sequentialIds } from '../../ids'
+import { FakeForge } from '../forge/fake'
+import { MemoryBuildStore } from '../../store/memory'
+
 const SHA = 'a'.repeat(40)
 
 class FakeSandbox implements VercelSandboxHandle {
@@ -2334,6 +2340,89 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.policies).toHaveLength(2)
     expect(JSON.stringify(h.sandbox.policies[1])).not.toContain('forge-secret')
   })
+
+  test.each([false, true])(
+    'settlement keeps the guest stopped after authoritative inspection (already published=%s)',
+    async (alreadyPublished) => {
+      let remoteHead: string | null = alreadyPublished ? SHA : null
+      const h = harness({ publishedSha: () => remoteHead })
+      const workspace = await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      })
+      let running = false
+      let resumes = 0
+      const resume = () => {
+        if (!running) resumes++
+        running = true
+      }
+      const command = h.sandbox.runCommand.bind(h.sandbox)
+      h.sandbox.runCommand = async (params) => {
+        resume()
+        if (params.cmd === 'git' && (params.args as string[])[0] === 'push') remoteHead = SHA
+        return command(params)
+      }
+      const stop = h.sandbox.stop.bind(h.sandbox)
+      h.sandbox.stop = async (...args) => {
+        await stop(...args)
+        running = false
+      }
+
+      const store = new MemoryBuildStore()
+      await store.createBuild({ slug: 'remote-build', repo: '/repo', branch: workspace.branch })
+      await store.append('remote-build', {
+        actor: DISPATCHER,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: h.provider.name,
+          ref: workspace.ref,
+          path: workspace.path,
+          branch: workspace.branch,
+          base: { source: 'remote', sha: 'b'.repeat(40) },
+          remote: true,
+        },
+      })
+      const notes = await store.putArtifact('remote-build', {
+        kind: 'implement-notes',
+        content: 'implemented',
+      })
+      await store.append('remote-build', {
+        actor: agentActor('implement', 'guest'),
+        type: 'publication.requested',
+        payload: {
+          operation: 'implement',
+          branch: workspace.branch,
+          sha: SHA,
+          round: 1,
+          base: 'b'.repeat(40),
+          artifact: { kind: notes.kind, rev: notes.revision },
+        },
+      })
+      const deps = {
+        store,
+        storeRef: 'https://store.example.test',
+        publication: h.provider.publication,
+        forge: new FakeForge(),
+        workspacePath: '/missing-vercel-settlement-cache',
+        exec: spawnExec,
+        ids: sequentialIds(),
+        runId: 'settlement',
+      }
+      await settlePendingPublication(deps, 'remote-build')
+      expect(
+        (await store.getEvents('remote-build')).filter((e) => e.type === 'implement.completed'),
+      ).toHaveLength(1)
+      expect(running).toBe(false)
+      expect(resumes).toBe(alreadyPublished ? 0 : 1)
+      const commandsAfterSettlement = h.sandbox.commands.length
+      const stopsAfterSettlement = h.sandbox.stops
+      await settlePendingPublication(deps, 'remote-build')
+      expect(h.sandbox.commands).toHaveLength(commandsAfterSettlement)
+      expect(h.sandbox.stops).toBe(stopsAfterSettlement)
+      expect(running).toBe(false)
+    },
+  )
 
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
     let reads = 0
