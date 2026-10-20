@@ -225,6 +225,13 @@ color when another detail dims the row. Detail retains its existing grammar.
 Neutral control placeholders occupy the same operator control landmark and wrapping geometry as the first loaded frame; there is no separate dispatcher-shaped line. Five build-row-shaped placeholders reserve the build register. Bars use only well and rule neutrals, remain static, contain no glyphs or values, and are hidden from assistive technology. One visually hidden polite live message names the loading surface once.
 
 ### Detail
+Integration details extend this grammar with Integration, text Progress, Branch
+and Steps, then Children (open-first id, fitted title and textual state),
+Verification (expected steps and current outcomes) and Landing (mode and rule).
+Conflict files and repair/consent instructions wrap as text. They use the same
+role tokens and introduce no progress graphic or controls. Leaf details retain
+the existing Pipeline.
+
 Unfolds in place directly under the selected row's previews, with no rule between them: a kv line (slack keys, ink values), an Actions section holding the lifecycle and destructive ghost words available to that status (or `no actions available` in slack), Pipeline as a vertical step list with round or attempt counts, blockers as red well blocks, the answer composer, Sessions as a wrapped kv line with a cyan `open transcript` word, Transcript as prompt then well-block text. Every section is a bold ink heading with content directly beneath; sections are one row apart. The operator path off a blocked build is also a focused inline step: RESUME opens a red `!` blocker line and a focused optional-guidance field inside the Actions section, above SUBMIT and CANCEL. Empty submit retries, text submits trimmed guidance, and a successful answer resumes through the existing answer lifecycle and closes the local step. While the step is open, the Actions section contains only SUBMIT and CANCEL; `r` and `a` do not invoke RESUME or ABORT, and the full detail composer keeps Guidance, Retry, Dismiss, Review ceiling, and both revised-spec choices. Esc or CANCEL closes the draft without writing while keeping detail open. A later RESUME may request the prompt again with an empty field; a later ABORT replaces the action words with a red `!` confirmation line and CONFIRM ABORT/CANCEL before any durable abort. Activating a control on another row leaves answer mode, selects that target, and performs that row's established action.
 
 ### Inputs / Fields

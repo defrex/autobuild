@@ -1251,6 +1251,15 @@ exhaustive source listings, frozen claims and retained contribution identities.
 `integration.*` events retain observations, immutable cycle inputs, landing
 intents, provenance and tree audits. The build reducer projects these facts and
 `engine.ts` routes nodes directly through verification, without producer phases.
+The shared `cli/dashboard/integration-detail.ts` projection supplies both
+dashboards with all child titles/states, current verification outcomes, landing
+rule explanations and restack files. Optional `integration.observed.children`
+metadata stores source/id, title and contribution identity without changing the
+authoritative membership arrays. Completed build records supply legacy title
+fallbacks; missing historical titles remain explicit. Optional `files` on
+`node.item-conflicted` and conflicted `restack.replayed` are captured as
+NUL-delimited unmerged Git paths; historical missing filenames remain explicit.
+Repository enrichment refreshes live child phases even without a parent delta.
 Failed cycles park for repair children. The dispatcher temporarily provisions
 verification resources and rechecks head, parent, controls and completeness
 before publication. `integration-landing.ts` owns source-reserved root landing

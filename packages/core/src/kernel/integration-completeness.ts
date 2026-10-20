@@ -40,6 +40,8 @@ export async function observeIntegration(
     contributions: [...(state.integration?.observation?.contributions ?? [])],
   }
   const children = new Set<string>()
+  observation.children = state.integration?.observation?.children
+
   try {
     if (!record?.ticket || !tickets.integrationTree || !tickets.listAll)
       throw new Error('ticket source cannot establish exhaustive integration completeness')
@@ -65,6 +67,65 @@ export async function observeIntegration(
         observation.contributions.push(build.slug)
     }
     observation.contributions.push(...(state.nodeRestack?.inventory?.contributions ?? []))
+    // Membership stays in the existing lifecycle arrays. This is display-only.
+    const display = new Map<string, NonNullable<typeof observation.children>[number]>()
+    const put = (
+      source: string,
+      id: string,
+      title?: string,
+      contribution?: string,
+      fresh = false,
+    ) => {
+      const key = JSON.stringify([source, id])
+      const previous =
+        display.get(key) ??
+        state.integration?.observation?.children?.find((c) => c.source === source && c.id === id)
+      display.set(key, {
+        source,
+        id,
+        ...(previous ?? {}),
+        ...((fresh ? title : (previous?.title ?? title))
+          ? { title: fresh ? title : (previous?.title ?? title) }
+          : {}),
+        ...(contribution
+          ? {
+              builds: [...new Set([...(previous?.builds ?? []), contribution])]
+                .filter((b) => observation.contributions.includes(b))
+                .sort(),
+            }
+          : {}),
+      })
+    }
+    for (const contribution of [...new Set(observation.contributions)].sort()) {
+      const build = builds.find((b) => b.record.slug === contribution)?.record
+      put(
+        build?.ticket?.source ?? record.ticket.source,
+        build?.ticket?.id ?? contribution,
+        build?.ticket?.title,
+        contribution,
+      )
+    }
+    for (const { record: build } of builds)
+      if (children.has(build.ticket?.id ?? build.slug))
+        put(
+          build.ticket?.source ?? record.ticket.source,
+          build.ticket?.id ?? build.slug,
+          build.ticket?.title,
+        )
+    for (const ticket of listing.tickets)
+      if (
+        (ticket.ref.source === record.ticket.source && children.has(ticket.ref.id)) ||
+        display.has(JSON.stringify([ticket.ref.source, ticket.ref.id]))
+      )
+        put(ticket.ref.source, ticket.ref.id, ticket.title, undefined, true)
+    for (const id of children) put(record.ticket.source, id)
+    if (observation.diagnostics.length)
+      for (const previous of state.integration?.observation?.children ?? [])
+        if (!display.has(JSON.stringify([previous.source, previous.id])))
+          display.set(JSON.stringify([previous.source, previous.id]), previous)
+    observation.children = [...display.values()].sort(
+      (a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id),
+    )
   } catch (error) {
     observation.diagnostics.push(error instanceof Error ? error.message : String(error))
   }

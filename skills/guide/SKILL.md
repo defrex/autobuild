@@ -1388,7 +1388,10 @@ a policy decision, label-dependent modes may read `policy pending`. A current
 verified node adds `verified`. Only restack conflicts, current verification
 failures (file a repair child targeting the node), and readiness awaiting
 consent add a list alert. Consent names `l` and `ab land <slug>`. Branch,
-restack, verification receipts, and open-child identities remain in detail.
+restack state and conflicting files remain in detail, along with every child's
+ticket id, title and live phase (or queued/landed), open-first counts, verification
+steps and current outcomes, repair instructions, and the landing rule. Cancelled
+children are omitted; historical missing titles or filenames are explicit.
 The operator web app uses the same facts as text, without a graphical bar.
 
 On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the

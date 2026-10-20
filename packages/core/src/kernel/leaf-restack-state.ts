@@ -66,7 +66,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 3,
+  version: 4,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),
