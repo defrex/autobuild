@@ -14,21 +14,27 @@ const schemas: Record<string, Shape> = shapes.schemas
  * optional fields and literal discriminants. No accumulator is trusted merely
  * because finish() happens to accept it. */
 export function validateAccumulator(name: string, value: unknown): boolean {
+  if (!Object.hasOwn(shapes.roots, name)) return false
   const root = (shapes.roots as Record<string, { acc: string }>)[name]
   return root !== undefined && matches(root.acc, value)
 }
 export function validateReducerValue(name: string, value: unknown): boolean {
+  if (!Object.hasOwn(shapes.roots, name)) return false
   const root = (shapes.roots as Record<string, { value: string }>)[name]
   return root !== undefined && matches(root.value, value)
 }
-function json(value: unknown): boolean {
+function json(value: unknown, seen = new Set<object>()): boolean {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
   if (typeof value === 'number') return Number.isFinite(value)
-  if (Array.isArray(value)) return value.every(json)
+  if (typeof value === 'object' && value !== null) {
+    if (seen.has(value)) return false
+    seen.add(value)
+  }
+  if (Array.isArray(value)) return value.every((item) => json(item, new Set(seen)))
   return (
     typeof value === 'object' &&
     Object.getPrototypeOf(value) === Object.prototype &&
-    Object.values(value).every(json)
+    Object.values(value).every((item) => json(item, new Set(seen)))
   )
 }
 function matches(id: string, value: unknown): boolean {
@@ -72,6 +78,100 @@ function matches(id: string, value: unknown): boolean {
     default:
       return false
   }
+}
+
+export interface ValidationFailure {
+  path: string
+  expected: string
+}
+
+/** Stable structural diagnostics only: persisted values never enter error text. */
+export function diagnoseReducerValue(name: string, value: unknown): ValidationFailure | undefined {
+  const root = Object.hasOwn(shapes.roots, name)
+    ? (shapes.roots as Record<string, { value: string }>)[name]
+    : undefined
+  if (!root) return { path: '$', expected: 'known reducer' }
+  const failure = diagnose(root.value, value, '$', 0)
+  return failure ? { path: failure.path, expected: failure.expected } : undefined
+}
+function property(path: string, key: string): string {
+  return /^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`
+}
+type Diagnostic = ValidationFailure & { depth: number }
+function diagnoseJson(
+  value: unknown,
+  path: string,
+  depth: number,
+  seen = new Set<object>(),
+): Diagnostic | undefined {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  )
+    return undefined
+  if (typeof value !== 'object' || seen.has(value)) return { path, expected: 'json', depth }
+  seen.add(value)
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const failure = diagnoseJson(value[i], `${path}[${i}]`, depth + 1, new Set(seen))
+      if (failure) return failure
+    }
+  } else if (Object.getPrototypeOf(value) === Object.prototype) {
+    for (const key of Object.keys(value).sort()) {
+      const failure = diagnoseJson(
+        (value as Record<string, unknown>)[key],
+        property(path, key),
+        depth + 1,
+        new Set(seen),
+      )
+      if (failure) return failure
+    }
+  } else return { path, expected: 'json', depth }
+  return undefined
+}
+function diagnose(id: string, value: unknown, path: string, depth: number): Diagnostic | undefined {
+  if (matches(id, value)) return undefined
+  const shape = schemas[id]!
+  const failure = {
+    path,
+    depth,
+    expected: shape.kind === 'literal' ? JSON.stringify(shape.value) : shape.kind,
+  }
+  if (shape.kind === 'json') return diagnoseJson(value, path, depth)
+  if (shape.kind === 'union') {
+    return (shape.items as string[])
+      .map((item) => diagnose(item, value, path, depth)!)
+      .reduce((best, next) => (next.depth > best.depth ? next : best))
+  }
+  if (shape.kind === 'array' && Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const found = diagnose(shape.items as string, value[i], `${path}[${i}]`, depth + 1)
+      if (found) return found
+    }
+  }
+  if (
+    shape.kind === 'object' &&
+    value !== null &&
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const record = value as Record<string, unknown>
+    for (const [key, prop] of Object.entries(shape.props!)) {
+      if (!(key in record) && prop.optional) continue
+      const found = diagnose(prop.type, record[key], property(path, key), depth + 1)
+      if (found) return found
+    }
+    for (const key of Object.keys(record).sort()) {
+      if (Object.hasOwn(shape.props!, key)) continue
+      if (!shape.index)
+        return { path: property(path, key), expected: 'no additional property', depth: depth + 1 }
+      const found = diagnose(shape.index, record[key], property(path, key), depth + 1)
+      if (found) return found
+    }
+  }
+  return failure
 }
 
 /** Existing optional object fields keep their ordinary JSON omission semantics.

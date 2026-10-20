@@ -194,3 +194,52 @@ test('journal refresh samples metadata once and publishes facts atomically', asy
   await counted.refreshJournal()
   expect(counted.repositoryFacts().settings.intake).toBe(false)
 })
+
+for (const operation of ['append', 'artifact', 'tick'] as const) {
+  test(`committed ${operation} retains its result when facts refresh fails`, async () => {
+    const { store, view } = await setup()
+    await view.refresh()
+    const snapshot = view.repositoryFacts()
+    const original = store.getReducerValue.bind(store)
+    store.getReducerValue = async () => {
+      throw new Error('read unavailable')
+    }
+    const event = {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-failed' as const,
+      payload: { run: 'r', error: 'failure' },
+    }
+    if (operation === 'tick') {
+      await store.claimRepoLease('repo', 'r', 60_000)
+      await store.beginRepoTick('repo', 'r')
+    }
+    const write = async () =>
+      operation === 'append'
+        ? view.appendRepo('repo', event)
+        : operation === 'artifact'
+          ? view.appendRepoWithArtifacts('repo', [], () => event)
+          : view.finishRepoTick('repo', 'r', { outcome: 'failed', error: 'failure' }, [
+              {
+                actor: DISPATCHER,
+                type: 'dispatcher.tick-started',
+                payload: {
+                  run: 'r',
+                  startedAt: (await store.getRepo('repo'))!.tick!.open!.startedAt,
+                },
+              },
+              event,
+            ])
+    const error = await write().catch((error) => error)
+    expect(error.name).toBe('CommittedRefreshError')
+    expect(error.result).toBeDefined()
+    expect(view.repositoryFacts()).toEqual(snapshot)
+    await expect(view.refreshJournal()).rejects.toThrow('read unavailable')
+    store.getReducerValue = original
+    await view.refreshJournal()
+    expect(await store.getRepoHighWater('repo')).toBeGreaterThan(0)
+    store.appendRepo = async () => {
+      throw new Error('write unavailable')
+    }
+    await expect(view.appendRepo('repo', event)).rejects.toThrow('write unavailable')
+  })
+}

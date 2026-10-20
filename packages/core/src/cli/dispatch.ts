@@ -1,3 +1,4 @@
+import { formatDispatcherError } from '../runtime-identity'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { openTicketSource } from './ticket'
 import {
@@ -2931,7 +2932,14 @@ class DispatchLoop {
     events: RepositoryEventWrite[],
   ): Promise<RepoTickFinish | null> {
     try {
-      return await this.repoView.finishRepoTick(this.repoIdentity, this.runId, completion, events)
+      // Closing a durable boundary must not depend on a subsequent view read.
+      // The next operational tick refreshes the view before any decisions.
+      return await this.wiring.store.finishRepoTick(
+        this.repoIdentity,
+        this.runId,
+        completion,
+        events,
+      )
     } catch (error) {
       const observation = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))
         ?.tick
@@ -2952,9 +2960,8 @@ class DispatchLoop {
           ))
       )
         throw error
-      // The failed response bypassed the view's own-write fold. Refresh its
-      // cursor from the journal, including any committed boundary pair.
-      await this.repoView.refresh()
+      // Metadata confirms the exact committed boundary. The next operational
+      // tick refreshes facts before making decisions.
       return { observation, events: [] }
     }
   }
@@ -2963,10 +2970,10 @@ class DispatchLoop {
     const failed = {
       actor: DISPATCHER,
       type: 'dispatcher.tick-failed' as const,
-      payload: { run: this.runId, error: error instanceof Error ? error.message : String(error) },
+      payload: { run: this.runId, error: formatDispatcherError(error) },
     }
     if (this.tickStartedAt === undefined) {
-      await this.appendStatus(failed)
+      await this.wiring.store.appendRepo(this.repoIdentity, failed)
       return
     }
     const result = await this.finishTick({ outcome: 'failed', error: failed.payload.error }, [
@@ -4046,7 +4053,7 @@ class DispatchLoop {
           startup = false
         } catch (error) {
           if (this.forgePublicationFailed) throw error
-          const message = error instanceof Error ? error.message : String(error)
+          const message = formatDispatcherError(error)
           await this.publishTickFailure(error)
           this.warn(`tick failed: ${message}`)
         }

@@ -1,7 +1,11 @@
 import { decodeLog } from '../kernel/log-index-value'
 /** The consumer boundary for current reductions. Raw event reads are for event output. */
 import type { BuildStore } from './types'
-import { validateReducerValue } from './reducer-value-validation'
+import {
+  diagnoseReducerValue,
+  validateReducerValue,
+  type ValidationFailure,
+} from './reducer-value-validation'
 import type {
   buildReadFactsReducer,
   buildStreamSeedReducer,
@@ -9,6 +13,20 @@ import type {
 } from '../kernel/read-facts'
 import { publicationStateReducer } from '../processes/publication-state'
 import type { SnapshotScope } from './snapshots'
+
+export class ReducerValueValidationError extends Error {
+  constructor(
+    readonly reducer: string,
+    readonly scope: SnapshotScope,
+    readonly cursor: number,
+    readonly failure: ValidationFailure,
+  ) {
+    super(
+      `invalid persisted value for ${reducer}; scope=${JSON.stringify(scope)}; cursor=${cursor}; path=${failure.path}; expected=${failure.expected}`,
+    )
+    this.name = 'ReducerValueValidationError'
+  }
+}
 
 type Reader = Pick<BuildStore, 'getReducerValue'>
 export async function readBuildStreamSeed(store: Reader, slug: string) {
@@ -40,8 +58,8 @@ async function readValue<T>(
   reducer: string,
 ): Promise<{ cursor: number; value: T }> {
   const result = await store.getReducerValue(scope, { reducer })
-  if (!validateReducerValue(reducer, result.value))
-    throw new Error(`invalid persisted value for ${reducer}`)
+  const failure = diagnoseReducerValue(reducer, result.value)
+  if (failure) throw new ReducerValueValidationError(reducer, scope, result.cursor, failure)
   // The generated validator checks the complete finished contract before decoding.
   return { cursor: result.cursor, value: result.value as T }
 }

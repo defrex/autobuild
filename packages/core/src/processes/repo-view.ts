@@ -64,6 +64,17 @@ import type {
   Unsubscribe,
 } from '../store/types'
 
+/** The write committed; only the subsequent local projection refresh failed. */
+export class CommittedRefreshError<T = unknown> extends Error {
+  constructor(
+    readonly result: T,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'CommittedRefreshError'
+  }
+}
+
 export interface RepoViewOptions {
   repo: string
   resident?: boolean
@@ -387,7 +398,7 @@ export class RepoViewStore implements BuildStore {
       return result
     })
   }
-  private async foldJournalAppend(event: RepositoryEvent): Promise<void> {
+  private foldJournalAppend(event: RepositoryEvent): void {
     const window = this.journalWindow
     if (window && event.seq > window.cursor) {
       if (event.seq === window.cursor + 1) {
@@ -395,14 +406,24 @@ export class RepoViewStore implements BuildStore {
         window.cursor = event.seq
       } else window.dirty = true
     }
-    await this.refreshJournal()
+  }
+  private async refreshCommitted<T>(result: T): Promise<T> {
+    try {
+      await this.refreshJournal()
+    } catch (error) {
+      throw new CommittedRefreshError(result, error)
+    }
+    return result
   }
   async appendRepo<T extends RepositoryEventType>(
     repo: string,
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>> {
     const result = await this.backing.appendRepo(repo, event)
-    if (repo === this.repo) await this.foldJournalAppend(result as RepositoryEvent)
+    if (repo === this.repo) {
+      this.foldJournalAppend(result as RepositoryEvent)
+      return this.refreshCommitted(result)
+    }
     return result
   }
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
@@ -411,7 +432,10 @@ export class RepoViewStore implements BuildStore {
     makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{ event: RepositoryEventEnvelope<T>; artifacts: RepositoryArtifactMeta[] }> {
     const result = await this.backing.appendRepoWithArtifacts(repo, artifacts, makeEvent)
-    if (repo === this.repo) await this.foldJournalAppend(result.event as RepositoryEvent)
+    if (repo === this.repo) {
+      this.foldJournalAppend(result.event as RepositoryEvent)
+      return this.refreshCommitted(result)
+    }
     return result
   }
   async claimNodeWriter(slug: string, holder: string, ttlMs: number): Promise<boolean> {
@@ -522,8 +546,9 @@ export class RepoViewStore implements BuildStore {
   }
   async finishRepoTick(...args: Parameters<BuildStore['finishRepoTick']>) {
     const result = await this.backing.finishRepoTick(...args)
-    if (result && args[0] === this.repo) {
-      for (const event of result.events) await this.foldJournalAppend(event)
+    if (result && result.events.length > 0 && args[0] === this.repo) {
+      for (const event of result.events) this.foldJournalAppend(event)
+      return this.refreshCommitted(result)
     }
     return result
   }
