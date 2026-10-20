@@ -3075,3 +3075,64 @@ test('integration list has three routine lines, one alert and a 22-cell colored 
   )
   expect(narrow.join('\n')).not.toContain('\\u{1b}')
 })
+
+test('integration detail fits children by cells, sanitizes controls and scrolls through landing', () => {
+  const node = build({
+    slug: 'integration',
+    kind: 'integration',
+    integrationRow: {
+      destination: 'main',
+      children: { known: true, landed: 1, building: 1, queued: 1, total: 3 },
+      openChildren: ['A', 'B'],
+      verified: false,
+      steps: [{ label: 'collect', state: 'current' }],
+    },
+    integrationDetail: {
+      destination: 'main (the configured base branch)',
+      branch: 'ab-node/integration',
+      restack: 'conflicted',
+      conflictFiles: ['src/日本語 file.ts'],
+      membershipKnown: true,
+      diagnostics: [],
+      children: [
+        {
+          source: 'fake',
+          id: 'A',
+          title: `${'界'.repeat(100)}\x1b[31m`,
+          state: 'implement',
+          landed: false,
+        },
+        { source: 'fake', id: 'B', title: 'Queued title', state: 'queued', landed: false },
+        { source: 'fake', id: 'C', title: 'Landed title', state: 'landed', landed: true },
+      ],
+      verification: 'pending — once every child has landed',
+      verifySteps: [{ step: 'unit', outcome: 'pending' }],
+      landing: 'consent — press l, or ab land integration',
+    },
+  })
+  const m = { ...model([node]), view: { kind: 'detail' as const, slug: node.slug, scroll: 0 } }
+  const lines = rd(m, { color: false, width: 55 })
+  const text = lines.join('\n')
+  for (const fact of [
+    'Integration',
+    'Progress',
+    'Branch',
+    'Steps',
+    'Children',
+    'implement',
+    'queued',
+    'landed',
+    'Verification',
+    'Landing',
+    'ab land',
+  ])
+    expect(text).toContain(fact)
+  expect(text).not.toContain('Pipeline')
+  expect(text).not.toContain('\x1b')
+  expect(lines.every((line) => cellWidth(line) <= 55)).toBe(true)
+  const bottom = rd(
+    { ...m, view: { ...m.view, scroll: Number.MAX_SAFE_INTEGER } },
+    { color: false, width: 55, height: 14 },
+  ).join('\n')
+  expect(bottom).toContain('Landing')
+})

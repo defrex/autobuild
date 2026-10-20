@@ -172,6 +172,38 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 44,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
   },
+  ...(['wide', 'narrow'] as const).map((size) => ({
+    id: `integration-detail-${size}`,
+    scenario: 'integration' as const,
+    columns: size === 'wide' ? 140 : 70,
+    rows: 80,
+    detail: { slug: 'integration-with-pr', scroll: 0 },
+    requires: [
+      'Integration',
+      'Progress',
+      'Branch',
+      'Steps',
+      'Children',
+      'implement',
+      'code-review',
+      'Verification',
+      'Landing',
+      'Queued documentation work',
+    ],
+  })),
+  ...(['conflict', 'failed', 'ready-node'] as const).map((state) => ({
+    id: `integration-detail-${state}`,
+    scenario: 'integration' as const,
+    columns: 110,
+    rows: 60,
+    detail: { slug: `queue-${state}`, scroll: 0 },
+    requires:
+      state === 'conflict'
+        ? ['Conflict', 'src/a file.ts']
+        : state === 'failed'
+          ? ['repair child', 'unit']
+          : ['press l, or ab land queue-ready-node'],
+  })),
   {
     id: 'integration-wide',
     selection: { kind: 'build', slug: 'queue-held' },
@@ -534,7 +566,9 @@ mode = "auto"
       payload: {
         openChildren:
           label === 'with-pr'
-            ? ['NODE-3', ...(consentQueueFixtures ? ['queue-active'] : []), 'QUEUED-CHILD']
+            ? capacityIdentities
+              ? ['NODE-3', ...(consentQueueFixtures ? ['queue-active'] : []), 'QUEUED-CHILD']
+              : ['WORK-1', 'WORK-2', 'QUEUED-CHILD']
             : [],
         contributions:
           label === 'with-pr'
@@ -543,6 +577,21 @@ mode = "auto"
               ? ['nested-landed']
               : [],
         diagnostics: label === 'unknown' ? ['ticket enumeration unavailable'] : [],
+        ...(label === 'with-pr'
+          ? {
+              children: [
+                { source: 'fake', id: 'WORK-1', title: 'Implement the documentation pages' },
+                { source: 'fake', id: 'WORK-2', title: 'Review the new integration dashboard' },
+                { source: 'fake', id: 'QUEUED-CHILD', title: 'Queued documentation work' },
+                ...Array.from({ length: 8 }, (_, i) => ({
+                  source: 'fake',
+                  id: `DONE-${i}`,
+                  title: `Completed integration work ${i + 1}`,
+                  builds: [`landed-${i}`],
+                })),
+              ],
+            }
+          : {}),
       },
     })
     if (label === 'with-pr')
@@ -553,6 +602,40 @@ mode = "auto"
       })
     if (label === 'aborted')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+  }
+  for (const [index, phase] of (capacityIdentities ? [] : ['implement', 'code-review']).entries()) {
+    const slug = `detail-work-${index + 1}`
+    const ticket = {
+      source: 'fake',
+      id: `WORK-${index + 1}`,
+      title: index ? 'Review the new integration dashboard' : 'Implement the documentation pages',
+    }
+    await harness.store.createBuild({
+      slug,
+      repo: harness.origin,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: harness.origin,
+          ticket,
+          baseBranch: 'ab-node/integration-with-pr',
+          target: { ticket: { source: 'fake', id: 'NODE-2' }, build: 'integration-with-pr' },
+        },
+      },
+    })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: slug, host: 'capture' },
+    })
+    await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: phase === 'implement' ? 'implement.started' : 'code-review.started',
+      payload: { round: 1 },
+    })
   }
   if (!consentQueueFixtures) return harness
   for (const [index, label] of [
@@ -724,7 +807,7 @@ mode = "auto"
         await harness.store.append(slug, {
           actor: DISPATCHER,
           type: 'node.item-conflicted',
-          payload: { id: label, index: 0, base: parent },
+          payload: { id: label, index: 0, base: parent, files: ['src/a file.ts', 'src/日本語.ts'] },
         })
     }
     await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
@@ -1353,7 +1436,7 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   }
   const text = plain.join('\n')
   const commonEvidence =
-    spec.scenario === 'integration' || spec.scenario === 'capacity'
+    (spec.scenario === 'integration' || spec.scenario === 'capacity') && !spec.detail
       ? ['integration', 'collect', 'children unknown']
       : spec.scenario === 'happy'
         ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']

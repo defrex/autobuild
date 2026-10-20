@@ -1,3 +1,4 @@
+import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import { dispatchCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
@@ -283,7 +284,26 @@ export async function getOperatorBuild(opts: {
     const row = projectBuildFromFacts(record, state, facts, config, undefined, pinned.config)
     // Implied by the gate; kept as an explicit check (not an assertion) so the
     // code never lies if `effectiveStatus` and `projectBuild` ever drift.
-    if (row !== null) dashboardRow = decorateWithPinnedMeta(row, pinned)
+    if (row !== null) {
+      dashboardRow = decorateWithPinnedMeta(row, pinned)
+      if (row.integrationDetail) {
+        const records = await opts.store.listBuildsForRepo(opts.repo)
+        const digests = await readBuildDigests(opts.store, opts.repo)
+        const children: DashboardBuild[] = []
+        for (const child of records) {
+          if (
+            child.repo !== opts.repo ||
+            child.slug === row.slug ||
+            digests.get(child.slug)?.terminal === 'done'
+          )
+            continue
+          const facts = (await readBuildFacts(opts.store, child.slug)).value
+          const projected = projectBuildFromFacts(child, facts.state, facts, config)
+          if (projected) children.push(projected)
+        }
+        dashboardRow = enrichIntegrationRows([dashboardRow, ...children], records)[0]!
+      }
+    }
   }
   return {
     detail: detailFromFacts(record, facts, opts.now),
@@ -410,7 +430,7 @@ async function dashboardFromView(
   ]
   const capacityProjection = dispatchCapacity(capacityBuilds, config.capacity, opts.clock())
   const model = buildDashboardFromProjected(
-    projected,
+    enrichIntegrationRows(projected, records),
     {
       repo: opts.repo,
       queued: status.queued ?? 0,
