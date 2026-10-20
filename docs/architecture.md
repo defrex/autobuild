@@ -1262,6 +1262,11 @@ facts. The build reducer retains them by bracket session id after session end;
 absence means no harness identity was reported. Adapters guard host/workspace
 and resume only native persisted state with fresh execution options.
 
+Operator pause immediately cancels live turns, records suspension with cause
+`pause` (with or without a native handle, including remote workspaces), then
+acknowledges the still-current request. A newer resume supersedes pause; abort
+wins. Check-only steps and builds without a live agent retain boundary behavior.
+
 Local git-worktree runners suspend an interrupted agent turn on dispatcher
 SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
 with cause `shutdown`, the native handle, active milliseconds, partial transcript
@@ -1284,7 +1289,7 @@ This is write-ahead resume intent, not a handshake: the prompt may execute and
 its terminal may land before the adapter reports native acceptance through
 `session.resumed`. Recovery retries an unaccepted attempt using the inherited
 handle; a superseded attempt's late acceptance is marked stale and changes no
-lifecycle state. The interruption prompt names shutdown or runner loss and asks
+lifecycle state. The interruption prompt names pause, shutdown or runner loss and asks
 the agent to re-check the worktree and re-run anything in flight. Phase and round
 are retained, including uncommitted local work.
 
@@ -1293,4 +1298,5 @@ milliseconds charge each live segment; suspended intervals are excluded. An
 abruptly lost segment is conservatively charged from its recorded start to
 recovery. Interrupted and continuation transcripts remain separate artifacts;
 logical totals sum known segment usage once and preserve every transcript ref.
-Unknown crash usage is not fabricated. Pause does not interrupt a live turn.
+Unknown crash usage is not fabricated. Pause interrupts live turns and retains
+the suspension cause through continuation.
