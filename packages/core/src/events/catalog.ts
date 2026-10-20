@@ -173,6 +173,9 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   // revalidate already-persisted envelopes.
   'escalation.answered': ['human'],
   'phase.failed': ['kernel'],
+  'session.build-read-failed': ['kernel'],
+  'phase.deferred': ['kernel'],
+  'phase.deferral-escalated': ['kernel'],
 }
 
 /**

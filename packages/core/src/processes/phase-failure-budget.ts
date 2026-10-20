@@ -24,6 +24,7 @@ export interface PhaseFailureResetEscalation {
   round?: number
   source: EscalationSource
   policyCause?: PolicyEscalationCause
+  deferral?: 'own-build-read'
 }
 
 /**
@@ -36,7 +37,7 @@ export function resetsPhaseFailureBudget(
   phase: Phase,
   round: number,
 ): boolean {
-  if (raise.phase !== phase) return false
+  if (raise.deferral === 'own-build-read' || raise.phase !== phase) return false
 
   if (raise.source !== 'policy' || raise.policyCause === undefined) {
     return raise.round === undefined || raise.round === round
