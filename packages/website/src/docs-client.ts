@@ -1,3 +1,6 @@
+import { SITE_URL } from './constants'
+import { articleMarkdown } from './docs-markdown'
+
 /** Choose the last heading above the reading offset; clamp at either document boundary. */
 export function activeSection(tops: readonly number[], offset: number, atEnd = false): number {
   if (!tops.length) return -1
@@ -12,6 +15,38 @@ export function activeSection(tops: readonly number[], offset: number, atEnd = f
 export function bindDocs(): void {
   const root = document.querySelector<HTMLElement>('[data-docs]')
   if (!root) return
+  const copy = root.querySelector<HTMLButtonElement>('[data-docs-copy]')
+  const article = root.querySelector('article')
+  const status = root.querySelector<HTMLElement>('[data-copy-status]')
+  if (copy && article && status) {
+    let reset: ReturnType<typeof setTimeout> | undefined
+    copy.addEventListener('click', async () => {
+      if (copy.disabled) return
+      clearTimeout(reset)
+      const hadFocus = document.activeElement === copy
+      copy.disabled = true
+      status.textContent = ''
+      try {
+        await navigator.clipboard.writeText(
+          articleMarkdown(article, new URL(location.pathname, SITE_URL).href),
+        )
+        copy.textContent = 'Copied'
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        status.textContent = 'Copied'
+        reset = setTimeout(() => {
+          copy.textContent = 'Copy as Markdown'
+        }, 2000)
+      } catch {
+        copy.textContent = 'Copy failed'
+        // A new task allows assistive technology to observe repeated failures.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        status.textContent = 'Copy failed'
+      } finally {
+        copy.disabled = false
+        if (hadFocus && document.activeElement === document.body) copy.focus()
+      }
+    })
+  }
   const button = root.querySelector<HTMLButtonElement>('[data-toc-toggle]')
   const list = root.querySelector<HTMLElement>('#docs-sections')
   if (button && list) {
