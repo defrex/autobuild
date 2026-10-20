@@ -82,6 +82,18 @@ export interface WebFrameSpec {
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
   {
+    id: 'capacity-wide',
+    width: 1440,
+    height: 1600,
+    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+  },
+  {
+    id: 'capacity-narrow',
+    width: 390,
+    height: 3200,
+    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+  },
+  {
     id: 'builds-native-sessions-wide',
     width: 1440,
     height: 2200,
@@ -391,6 +403,7 @@ export interface WebFixtureModels {
   happy: DashboardModel
   /** The `mixed-wide` scenario: blocked, pausing, queued-and-held builds under a repository pause. */
   integration: DashboardModel
+  capacity?: DashboardModel
   mixed: DashboardModel
 }
 
@@ -581,6 +594,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'builds-forge-readiness-narrow': {
       const model = models.forgeReadiness ?? models.mixed
       return shell(builds(model), { model })
+    }
+    case 'capacity-wide':
+    case 'capacity-narrow': {
+      const capacity = models.capacity ?? models.integration
+      return shell(builds(capacity), { model: capacity })
     }
     case 'integration-wide':
       return shell(builds(models.integration), { model: models.integration })
@@ -1044,6 +1062,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
       happy: frameModel(capture, 'headline-happy-wide'),
       mixed: frameModel(capture, 'mixed-wide'),
       integration: frameModel(capture, 'integration-wide'),
+      capacity: frameModel(capture, 'capacity-wide'),
     }
   } finally {
     await rm(workspace, { recursive: true, force: true })

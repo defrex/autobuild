@@ -673,6 +673,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       queued: 2,
       activeCount: 3,
       capacity: 1,
+      capacityProjection: { configured: 1, occupied: 3, effective: 1, borrowingNodes: [] },
       observationCount: 4,
       observationLimit: 5,
     })
