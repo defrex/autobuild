@@ -1,5 +1,6 @@
 export { landingPolicyDisplay } from '../cli/dashboard/landing-display'
 export {
+  pauseResumeHelp,
   buildActionAvailability,
   dashboardBuildControl,
   harvestActionAvailability,

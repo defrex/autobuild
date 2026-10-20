@@ -153,8 +153,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
     } else if (frame.id === 'native-sessions') {
-      expect(frame.text).toContain('suspended cause shutdown')
-      expect(frame.text).toContain('resumed cause shutdown continued from s_interrupted')
+      expect(frame.text).toContain('suspended cause pause')
+      expect(frame.text).toContain('fresh session: workspace-not-local-git-worktree')
+      expect(frame.text).toContain('resumed cause pause continued from s_interrupted')
     } else if (frame.id.startsWith('session-')) {
       expect(frame.text).toContain('Session  complete-dashboard-evidence')
       if (frame.id === 'session-live') {

@@ -22,7 +22,7 @@ export function nativeSessionCapture() {
         phase: 'implement',
         round: 1,
         handle,
-        cause: 'shutdown',
+        cause: 'pause',
         activeMs: 1000,
         transcript: { kind: 'transcript', rev: 0 },
         usage: { inputTokens: 100, outputTokens: 20, turns: 1 },
@@ -40,7 +40,7 @@ export function nativeSessionCapture() {
           predecessor: 's_interrupted',
           root: 's_interrupted',
           handle,
-          cause: 'shutdown',
+          cause: 'pause',
           activeMs: 1000,
           budgetMs: 3600000,
         },
@@ -53,9 +53,28 @@ export function nativeSessionCapture() {
         predecessor: 's_interrupted',
         root: 's_interrupted',
         handle,
-        cause: 'shutdown',
+        cause: 'pause',
         stale: false,
       },
+    ],
+    [
+      'session.started',
+      { session: 's_remote', role: 'plan', runner: 'pi', phase: 'plan', round: 1 },
+    ],
+    [
+      'session.suspended',
+      {
+        session: 's_remote',
+        phase: 'plan',
+        round: 1,
+        cause: 'pause',
+        activeMs: 500,
+        transcript: { kind: 'transcript', rev: 1 },
+      },
+    ],
+    [
+      'session.resume-fallback',
+      { session: 's_remote', reason: 'workspace-not-local-git-worktree' },
     ],
   ] as const
   return projectSessions(

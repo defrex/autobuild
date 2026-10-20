@@ -575,7 +575,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.',
+    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.',
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {

@@ -700,7 +700,7 @@ export const eventPayloadSchemas = {
         predecessor: z.string().min(1),
         root: z.string().min(1),
         handle: nativeSessionHandleSchema,
-        cause: z.enum(['shutdown', 'runner-loss']),
+        cause: z.enum(['shutdown', 'pause', 'runner-loss']),
         activeMs: z.number().nonnegative(),
         budgetMs: z.number().positive(),
       })
@@ -724,8 +724,8 @@ export const eventPayloadSchemas = {
     session: z.string().min(1),
     phase: phaseSchema,
     round: round.optional(),
-    handle: nativeSessionHandleSchema,
-    cause: z.literal('shutdown'),
+    handle: nativeSessionHandleSchema.optional(),
+    cause: z.enum(['shutdown', 'pause']),
     activeMs: z.number().nonnegative(),
     transcript: artifactRefSchema,
     usage: z
@@ -741,7 +741,7 @@ export const eventPayloadSchemas = {
     predecessor: z.string().min(1),
     root: z.string().min(1),
     handle: nativeSessionHandleSchema,
-    cause: z.enum(['shutdown', 'runner-loss']),
+    cause: z.enum(['shutdown', 'pause', 'runner-loss']),
     stale: z.boolean(),
   }),
   'session.resume-fallback': z.strictObject({
