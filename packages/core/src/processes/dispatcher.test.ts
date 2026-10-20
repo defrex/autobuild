@@ -5033,6 +5033,43 @@ describe('Dispatcher janitor', () => {
     },
   )
 
+  test('pending attachment reclamation waits through cooldown without failure receipts', async () => {
+    const h = harness({ prAttachments: true })
+    const slug = await seedBuild(h, { slug: 'cleanup-cooldown', workspace: false })
+    await seedHostedPrAttachment(h, slug)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.forge-degraded',
+      payload: {
+        forge: h.forge.name,
+        message: 'limit',
+        resetAt: new Date(h.clock().getTime() + 60_000).toISOString(),
+        firstFailureAt: h.clock().toISOString(),
+      },
+    })
+    for (let tick = 0; tick < 3; tick++) await h.dispatcher.tick()
+    expect(h.forge.prAttachmentReclaims).toHaveLength(0)
+    const events = await h.store.getEvents(slug)
+    expect(
+      events.filter(
+        (e) =>
+          e.type === 'pr-attachment.reclaim-failed' || e.type === 'build.janitor-attempt-failed',
+      ),
+    ).toEqual([])
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.forge.prAttachmentReclaims).toHaveLength(1)
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'pr-attachment.reclaimed'),
+    ).toHaveLength(1)
+  })
+
   test('a done build retries transient reclamation, records attempts, and becomes idempotent', async () => {
     const h = harness({ prAttachments: true })
     const slug = await seedBuild(h, {

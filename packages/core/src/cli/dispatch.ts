@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { guardForge } from '../kernel/guarded-forge'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { openTicketSource } from './ticket'
@@ -2955,7 +2956,8 @@ class DispatchLoop {
         (finished.outcome === 'completed' &&
           completion.outcome === 'completed' &&
           Object.entries(completion.counters).some(
-            ([key, value]) => finished.counters[key as keyof typeof finished.counters] !== value,
+            ([key, value]) =>
+              !isDeepStrictEqual(finished.counters[key as keyof typeof finished.counters], value),
           ))
       )
         throw error

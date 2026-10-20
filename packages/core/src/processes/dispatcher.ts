@@ -3371,6 +3371,7 @@ export class Dispatcher {
           payload: { hostedSeq: hosted.seq },
         })
       } catch (error) {
+        if (error instanceof ForgeCooldown) throw error
         try {
           await this.store.append(slug, {
             actor: DISPATCHER,

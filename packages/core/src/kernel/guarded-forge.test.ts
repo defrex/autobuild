@@ -59,6 +59,7 @@ test('failure discriminants validate fields without requiring shared class ident
 test('runner composition retries a new limit only after durable dispatcher recovery', async () => {
   const now = manualClock()
   const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
   const append = store.appendRepo.bind(store)
   store.appendRepo = (async (repo, event) => {
     const result = await append(repo, event)

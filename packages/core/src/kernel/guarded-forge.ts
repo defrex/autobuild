@@ -59,7 +59,9 @@ export function guardForge(
     if (!isForgeFailure(error) || error.details.kind !== 'rate-limited') return
     const active = await health()
     if (active?.resetAt === error.details.resetAt && active.message === error.message) return
-    await deps.store.ensureRepo(deps.repo)
+    // Runner/phase credentials cannot administer repositories; their repo
+    // already exists. Only the dispatcher may create it.
+    if (!deps.wait) await deps.store.ensureRepo(deps.repo)
     await deps.store.appendRepo(deps.repo, {
       actor: KERNEL,
       type: 'dispatcher.forge-degraded',

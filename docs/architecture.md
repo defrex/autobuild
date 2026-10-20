@@ -1057,7 +1057,12 @@ validates issuance, durable lifecycle bindings and the 60-second terminal grace;
 `machine-auth.ts` authenticates these signed version-2 grants as delegated
 principals. `remote-store-server.ts` enforces resource mutations before deposits,
 including body-selected and addressed-stream resources. Operator routes reject
-these principals. Ticket routes deny build grants and allow harvest grants only the reads and
+these principals. Build-runner and build-phase grants may append only the
+kernel's `dispatcher.forge-degraded` repository fact, in their own project,
+so runner/CLI guards can record a newly observed rate limit and wait for
+durable dispatcher recovery. This exception grants no repository administration,
+recovery, lease, or other journal writes. The agent-visible build-scoped Store
+still denies repository writes. Ticket routes deny build grants and allow harvest grants only the reads and
 runner filing operations they require. Ticket sources and assets are partitioned
 by the authenticated project.
 
