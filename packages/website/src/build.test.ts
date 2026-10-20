@@ -97,12 +97,17 @@ describe('static site', () => {
     ).toEqual(words(reference))
   })
 
-  test('pipeline is one logical motion figure with a hidden native replay control', async () => {
+  test('four logical motion figures each have a hidden native replay control', async () => {
     const { 'index.html': html, 'site.js': js } = await buildFiles()
     expect(html.match(/data-capture-figure="pipeline"/g)).toHaveLength(1)
-    expect(html.match(/data-capture-animated/g)).toHaveLength(2)
+    expect(html.match(/data-capture-animated/g)).toHaveLength(4)
+    for (const id of ['pipeline', 'dispatcher', 'intake', 'integration-tree']) {
+      expect(html.match(new RegExp(`data-capture-figure="${id}"`, 'g'))).toHaveLength(1)
+      expect(html).toContain(
+        `data-motion-replay hidden aria-label="Replay ${id === 'integration-tree' ? 'integration tree' : id} animation"`,
+      )
+    }
     const pipeline = html.match(/<div data-capture-figure="pipeline"[\s\S]*?<\/button><\/div>/)![0]
-    expect(pipeline.match(/data-capture-animated/g)).toHaveLength(1)
     expect(pipeline.match(/data-motion-node=/g)).toHaveLength(16)
     expect(html).toContain('data-motion-replay hidden aria-label="Replay pipeline animation"')
     expect(html).toContain('type="button" class="word motion-replay"')
