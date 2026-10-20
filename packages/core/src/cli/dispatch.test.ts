@@ -1,3 +1,4 @@
+import { RepositoryAttention } from '../kernel/repository-attention'
 import { reduceBuild } from '../kernel/reducer'
 import { gitRewrite } from '../ports/forge/git-rewrite'
 /**
@@ -1662,7 +1663,10 @@ describe('dispatcher run identity without a kernelRunId', () => {
       expect(started).toBeDefined()
       expect(failed).toMatchObject({
         actor: { kind: 'dispatcher' },
-        payload: { run: started!.payload.run, error: 'injected tick failure' },
+        payload: {
+          run: started!.payload.run,
+          error: expect.stringContaining('injected tick failure'),
+        },
       })
       // The invocation still closes its run boundary cleanly.
       expect(
@@ -4453,7 +4457,7 @@ describe('abDispatch watch harvest coordination', () => {
       expect(fx.err).toEqual([
         standingDiagnostic,
         'harvest runner failed: injected Harvest lease publication-race failure',
-        'tick failed: injected dispatcher.tick-completed rejection',
+        expect.stringContaining('tick failed: injected dispatcher.tick-completed rejection'),
         standingDiagnostic,
       ])
       expect(fx.cliErrors).toEqual([])
@@ -10166,7 +10170,9 @@ describe('dispatch rate-limit journaling', () => {
         const events = await fx.store.getRepoEvents(fx.origin)
         const failures = events.filter((event) => event.type === 'dispatcher.tick-failed')
         expect(failures).toHaveLength(1)
-        expect(failures[0]).toMatchObject({ payload: { error: error.message } })
+        expect(failures[0]).toMatchObject({
+          payload: { error: expect.stringContaining(error.message) },
+        })
         expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(false)
         expect(events.some((event) => event.type === 'dispatcher.run-stopped')).toBe(true)
         expect(fx.tickets.claims).toEqual([])
@@ -10207,7 +10213,7 @@ describe('dispatch rate-limit journaling', () => {
       const events = await fx.store.getRepoEvents(fx.origin)
       expect(events.filter((event) => event.type === 'dispatcher.tick-failed')).toHaveLength(1)
       expect(events.find((event) => event.type === 'dispatcher.tick-failed')).toMatchObject({
-        payload: { error: error.message },
+        payload: { error: expect.stringContaining(error.message) },
       })
       expect(reads).toBe(2)
       expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
@@ -10917,12 +10923,19 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
     let finishes = 0
     let lostResponses = 0
     let ticks = 0
+    let readBlocked = false
+    const read = fx.store.getReducerValue.bind(fx.store)
+    fx.store.getReducerValue = async (...args) => {
+      if (readBlocked) throw new Error('read blocked after lost response')
+      return read(...args)
+    }
     fx.store.finishRepoTick = async (...args) => {
       const result = await finish(...args)
       finishes++
       if (finishes === (lost === 'idle' ? 2 : 1)) {
         expect(result).not.toBeNull()
         lostResponses++
+        readBlocked = true
         throw new Error('injected response loss after commit')
       }
       return result
@@ -10949,6 +10962,7 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
           expect((await fx.store.getRepo(fx.origin))!.tick!.finished!.completedAt).toBe(
             clock().toISOString(),
           )
+          readBlocked = false
           if (++ticks === 3) stop.abort()
           clock.advance(1000)
         },
@@ -10964,7 +10978,11 @@ for (const lost of ['recorded', 'idle', 'failed'] as const) {
       expect(events.findLast((event) => event.type === 'dispatcher.run-stopped')).toMatchObject({
         payload: { outcome: 'normal' },
       })
-      expect(fx.err).toEqual(lost === 'failed' ? ['tick failed: injected ticket scan failure'] : [])
+      expect(fx.err).toEqual(
+        lost === 'failed'
+          ? [expect.stringContaining('tick failed: injected ticket scan failure')]
+          : [],
+      )
     } finally {
       stop.abort()
       await fx.cleanup()
@@ -11439,4 +11457,119 @@ for (const network of [false, true]) {
       await fx.cleanup()
     }
   }, 15_000)
+}
+
+for (const mode of [
+  'rejected',
+  'invalid',
+  'degraded',
+  'failure-publication',
+  'persistent',
+] as const) {
+  test(`watch survives repository read failure: ${mode}`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const get = fx.store.getReducerValue.bind(fx.store)
+    const begin = fx.store.beginRepoTick.bind(fx.store)
+    const append = fx.store.appendRepo.bind(fx.store)
+    let armed = false
+    let failures = 0
+    let sleeps = 0
+    const warnings: string[] = []
+    fx.store.beginRepoTick = async (...args) => {
+      const result = await begin(...args)
+      if (sleeps === 0 && mode !== 'degraded') armed = true
+      return result
+    }
+    fx.store.appendRepo = async (...args) => {
+      const result = await append(...args)
+      if (
+        mode === 'degraded' &&
+        failures === 0 &&
+        args[1].type === 'dispatcher.ticket-source-degraded'
+      )
+        armed = true
+      return result
+    }
+    fx.store.getReducerValue = async (scope, request) => {
+      const result = await get(scope, request)
+      if (armed && request.reducer === 'repositoryReadFacts') {
+        failures++
+        if (mode !== 'persistent' && mode !== 'failure-publication') armed = false
+        if (mode === 'invalid') {
+          const value = structuredClone(result.value) as Record<string, unknown>
+          value.settings = { intake: 'broken' }
+          return { ...result, value: value as typeof result.value }
+        }
+        throw new Error('injected repository read failure')
+      }
+      return result
+    }
+    const originalList = fx.tickets.listReady.bind(fx.tickets)
+    if (mode === 'degraded')
+      fx.tickets.listReady = async (...args) => {
+        if (sleeps === 0) throw new TicketSourceRateLimitError('fake', clock().getTime() + 1000)
+        return originalList(...args)
+      }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => warnings.push(line),
+        plain: true,
+        signal: stop.signal,
+        intervalMs: 1,
+        wire: fx.wire,
+        sleep: async () => {
+          sleeps++
+          if (mode === 'persistent' && sleeps === 7) {
+            const attention = new RepositoryAttention()
+            for (const event of await fx.store.getRepoEvents(fx.origin)) attention.fold(event)
+            expect(
+              attention
+                .pending(clock())
+                .some((item) => item.observation.type === 'dispatcher.tick-failure-persistent'),
+            ).toBe(true)
+          }
+          if (mode === 'persistent' && sleeps < 7) {
+            clock.advance(60_000)
+          } else {
+            armed = false
+            if (sleeps >= (mode === 'persistent' ? 8 : 2)) stop.abort()
+          }
+        },
+      })
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const failed = events.filter((event) => event.type === 'dispatcher.tick-failed')
+      expect(failed).toHaveLength(mode === 'persistent' ? 7 : 1)
+      expect(failures).toBeGreaterThan(0)
+      const attention = new RepositoryAttention()
+      for (const event of events) attention.fold(event)
+      expect(attention.pending(clock())).toEqual([])
+      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+      expect(events.filter((event) => event.type === 'dispatcher.run-started')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'dispatcher.run-stopped')).toHaveLength(1)
+      expect(events.find((event) => event.type === 'dispatcher.run-stopped')).toMatchObject({
+        payload: { outcome: 'normal' },
+      })
+      if (mode === 'invalid') {
+        const error = failed[0]!.payload.error
+        for (const field of [
+          'repositoryReadFacts',
+          '$.settings.intake',
+          'cursor=',
+          'autobuild=',
+          'commit=',
+        ])
+          expect(error).toContain(field)
+        expect(warnings.some((line) => line.includes(error))).toBe(true)
+      }
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
 }

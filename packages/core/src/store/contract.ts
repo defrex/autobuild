@@ -1,3 +1,5 @@
+import { repositoryReadFactsReducer } from '../kernel/read-facts'
+import { validateReducerValue } from './reducer-value-validation'
 import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { AUTOBUILD_VERSION } from './remote/version'
 import { sameParentRejection } from '../kernel/node-restack-state'
@@ -289,6 +291,38 @@ function atT0(offsetMs: number): string {
 
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
+    test('concurrent repository reads and appends return exact committed prefixes', async () => {
+      await withStore(factory, undefined, async (store) => {
+        const repo = 'prefix-probe'
+        await store.ensureRepo(repo)
+        for (let i = 0; i < 8; i++) {
+          const [first, , second] = await Promise.all([
+            readRepositoryFacts(store, repo),
+            store.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.ticket-source-degraded',
+              payload: {
+                source: 'linear',
+                operation: 'ready-scan',
+                cause: 'rate-limited',
+                message: 'limited',
+                resetAt: '2026-10-20T20:00:00.000Z',
+              },
+            }),
+            readRepositoryFacts(store, repo),
+          ])
+          const events = await store.getRepoEvents(repo)
+          for (const answer of [first, second]) {
+            expect(validateReducerValue('repositoryReadFacts', answer.value)).toBe(true)
+            const acc = repositoryReadFactsReducer.advance(
+              repositoryReadFactsReducer.initial(),
+              events.slice(0, answer.cursor),
+            )
+            expect(answer.value).toEqual(repositoryReadFactsReducer.finish(acc))
+          }
+        }
+      })
+    })
     describe('builds', () => {
       test('parent rejection deduplication survives persisted payload and snapshot key order', async () => {
         await withStore(factory, undefined, async (store) => {

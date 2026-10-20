@@ -248,6 +248,11 @@ the requested historical run. A never-started fresh invocation does not request
 historical correlation. Stopped dispatcher history is not copied into every
 current read.
 
+Consumer validation failures report the reducer name, scope, returned store
+cursor, structural field path and expected shape without persisted values.
+Dispatcher tick warnings and stored failures add the running distribution's
+version and source commit, captured at startup (or `unknown` without metadata).
+
 Hosted project build listings use the optional backing-store
 `listBuildsForRepo` capability with the authenticated repository. Postgres filters
 build rows in SQL before hosted ticket readable-id projection. Admin listings
@@ -434,6 +439,16 @@ the repository record even with an unchanged event cursor, merging matching-run
 completion samples with journal ticks. Heartbeat renewal cannot invent progress.
 The memory, SQLite, Postgres and remote adapters share this contract, including
 no mutation after lease expiry and no partial publication on validation failure.
+Repository read failures fail a watch tick and retry on the next iteration;
+continuous failures use the existing five-minute persistent-tick attention.
+Failure settlement writes through the fenced backing store without reading the
+failed projection. Repository view writes distinguish a committed result from a
+subsequent refresh failure, retaining the last complete snapshot while propagating
+the read error to the operational caller. Exact metadata confirmation acknowledges
+lost finish responses without requiring another projection read or duplicating
+boundaries. Every operational tick refreshes facts before routing work. Startup
+configuration errors, fatal forge publication errors, lease fencing and once-mode
+failure behavior retain their existing semantics.
 
 Timeout escalation is held while the matching repository tick observation is open
 (with historical `tick-started` journal fallback when no observation exists),

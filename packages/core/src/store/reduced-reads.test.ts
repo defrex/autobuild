@@ -57,3 +57,29 @@ test('SQLite digest discovery scopes records before reading persisted values', a
     database.close()
   }
 })
+
+test('repository invalid answers preserve typed boundary diagnostics', async () => {
+  const { readRepositoryFacts, ReducerValueValidationError } = await import('./reduced-reads')
+  const { repositoryReadFactsReducer } = await import('../kernel/read-facts')
+  const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+  const result = await readRepositoryFacts(
+    {
+      getRepo: async () => null,
+      getReducerValue: async () => ({
+        version: 1,
+        cursor: 47,
+        value: { ...value, settings: { ...value.settings, intake: 'private-value' } } as never,
+      }),
+    },
+    'repo',
+    true,
+  ).catch((error) => error)
+  expect(result).toBeInstanceOf(ReducerValueValidationError)
+  expect(result).toMatchObject({
+    reducer: 'repositoryReadFacts',
+    scope: { kind: 'repo', repo: 'repo' },
+    cursor: 47,
+    failure: { path: '$.settings.intake', expected: 'boolean' },
+  })
+  expect(result.message).not.toContain('private-value')
+})

@@ -17,7 +17,7 @@ import {
   type ReducerValueStorage,
 } from './reducer-values'
 import type { ReducerSnapshot, SnapshotScope } from './snapshots'
-import { validateAccumulator } from './reducer-value-validation'
+import { validateAccumulator, validateReducerValue } from './reducer-value-validation'
 
 const build: SnapshotScope = { kind: 'build', slug: 'b' }
 const repo: SnapshotScope = { kind: 'repo', repo: 'r' }
@@ -337,3 +337,75 @@ test('repository persisted configuration state does not contain irrelevant ticks
   expect(JSON.stringify(h.rows.get(key)!.snapshot.state)).toBe(before)
   expect(before).not.toContain('dispatcher.tick-started')
 })
+
+for (const warm of [false, true]) {
+  for (const boundary of ['highWater', 'read', 'events', 'put'] as const) {
+    test(`repository prefix invariant: ${warm ? 'warm' : 'cold'} concurrent ${boundary}`, async () => {
+      const events: RepositoryEvent[] = []
+      const { storage } = cache(events)
+      const request = { reducer: 'repositoryReadFacts' }
+      const { entry, reducer } = resolveReducerValue(repo, request)
+      const append = (type: RepositoryEvent['type'], payload: unknown) => {
+        events.push({
+          repo: 'r',
+          seq: events.length + 1,
+          ts: '2026-10-20T19:06:38.000Z',
+          actor: { kind: 'dispatcher' },
+          type,
+          payload,
+        } as RepositoryEvent)
+      }
+      append('dispatcher.ticket-source-degraded', {
+        source: 'linear',
+        operation: 'ready-scan',
+        cause: 'rate-limited',
+        message: 'limited',
+        resetAt: '2026-10-20T19:07:38.000Z',
+      })
+      if (warm) await readReducerValue(repo, request, storage)
+      append('dispatcher.ticket-source-dependency-limited', { source: 'linear' })
+      let release!: () => void
+      let entered!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const arrived = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      let held = false
+      const intercepted = {
+        ...storage,
+        [boundary]: async (...args: unknown[]) => {
+          // Sampling before the barrier forces a reader with an older boundary
+          // to observe the second reader's newer checkpoint on release.
+          const result = await (storage[boundary] as (...args: unknown[]) => Promise<unknown>)(
+            ...args,
+          )
+          if (!held) {
+            held = true
+            entered()
+            await blocked
+          }
+          return result
+        },
+      } as ReducerValueStorage
+      const first = readReducerValue(repo, request, intercepted)
+      await arrived
+      append('dispatcher.ticket-source-dependency-limited', { source: 'linear' })
+      append('dispatcher.ticket-source-recovered', {
+        source: 'linear',
+        operation: 'ready-scan',
+        cause: 'rate-limited',
+      })
+      append('dispatcher.tick-started', { run: 'r', startedAt: '2026-10-20T19:06:38.000Z' })
+      append('dispatcher.tick-failed', { run: 'r', error: 'probe' })
+      const second = await readReducerValue(repo, request, storage)
+      release()
+      for (const answer of [await first, second]) {
+        expect(validateReducerValue('repositoryReadFacts', answer.value)).toBe(true)
+        const acc = reducer.advance(reducer.initial(), entry.adapt(events.slice(0, answer.cursor)))
+        expect(answer.value).toEqual(entry.value(reducer.finish(acc)))
+      }
+    })
+  }
+}
