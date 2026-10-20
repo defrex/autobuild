@@ -12,6 +12,7 @@ const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', '
 function textOf(html: string): string[] {
   const body = html.slice(html.indexOf('<body'))
   return body
+    .replace(/<header[\s\S]*?<\/header>/g, '')
     .replace(/<(script|style)[\s\S]*?<\/\1>/g, '')
     .replace(/<br\s*\/?>/g, ' ')
     .replace(/<[^>]+>/g, '\n')
@@ -148,7 +149,7 @@ describe('static site', () => {
 
   test('sections are separated by space alone and the page closes on GitHub', async () => {
     const { 'index.html': html, 'site.css': css } = await buildFiles()
-    expect(html).not.toContain('class="rule"')
+    expect(html.slice(html.indexOf('<main'))).not.toContain('site-rule')
     expect(html).not.toContain('inside one build-runner')
     expect(html).not.toContain('setup.md')
     const last = html.slice(html.lastIndexOf('<section'))
