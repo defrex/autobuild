@@ -1010,3 +1010,14 @@ textarea {
   white-space: nowrap;
   border: 0;
 }
+
+/* Shared list alerts retain state color despite .sub and focus dimming. */
+.integration-alert.alert {
+  color: var(--alert);
+}
+.integration-alert.warn {
+  color: var(--title);
+}
+.integration-progress {
+  overflow-wrap: anywhere;
+}

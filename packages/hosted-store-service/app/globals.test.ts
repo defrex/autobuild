@@ -176,7 +176,8 @@ test('held queued builds keep their canonical yellow warning while rows dim', ()
   expect(buildsView).toContain('<span className="warn held">(held)</span>')
   expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
 
-  const documentedException = 'STATUS words, the yellow `(held)` annotation, and red alert lines'
+  const documentedException =
+    'STATUS words, the yellow `(held)` annotation, red alert lines, and yellow integration consent alerts'
   expect(designRule('The Alert Never Dims Rule')).toContain(documentedException)
   expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
 })
@@ -257,4 +258,9 @@ test('design sidecar previews use valid canonical fallback colors', () => {
   ]) {
     expect(previewCss, `missing sidecar preview fallback ${canonical}`).toContain(canonical)
   }
+})
+
+test('integration failure and consent alerts preserve full color above subline and dimming rules', () => {
+  expect(stylesheet).toMatch(/\.integration-alert\.alert\s*\{\s*color:\s*var\(--alert\);\s*\}/)
+  expect(stylesheet).toMatch(/\.integration-alert\.warn\s*\{\s*color:\s*var\(--title\);\s*\}/)
 })

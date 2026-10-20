@@ -1374,6 +1374,19 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
+Integration list rows name the destination and show children landed out of the
+known total, with the remainder split into building and queued. Cancelled
+children are excluded. Missing or diagnostic-bearing observations show
+`children unknown`; a successful empty enumeration shows `no children yet`.
+The five list steps are `spec`, `open`, `collect`, `verify`, and `land`, with
+verification progress or failure and the landing mode in parentheses. Before
+a policy decision, label-dependent modes may read `policy pending`. A current
+verified node adds `verified`. Only restack conflicts, current verification
+failures (file a repair child targeting the node), and readiness awaiting
+consent add a list alert. Consent names `l` and `ab land <slug>`. Branch,
+restack, verification receipts, and open-child identities remain in detail.
+The operator web app uses the same facts as text, without a graphical bar.
+
 On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
 terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied

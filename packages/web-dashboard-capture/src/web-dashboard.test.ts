@@ -36,7 +36,8 @@ test('every terminal capture fixture has identical web rows and step facts', asy
         builds: frame.model.builds.map((build) => ({
           identity: build.slug,
           status: build.status,
-          steps: build.steps.map((step) => ({
+          ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),
+          steps: (build.integrationRow?.steps ?? build.steps).map((step) => ({
             label: step.label,
             state: step.state,
             ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),

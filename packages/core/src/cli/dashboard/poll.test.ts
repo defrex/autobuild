@@ -523,3 +523,74 @@ test('full enrichment refresh sees standalone artifacts at an unchanged reposito
   expect(row(await cache.refresh(), 'metadata')?.effectiveConfigRev).toBeUndefined()
   expect(row(await cache.refresh(CONFIG, 0, true), 'metadata')?.effectiveConfigRev).toBe(42)
 })
+
+test('integration split follows child transitions with no parent delta and immutable snapshots', async () => {
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const ticket = { source: 'file', id: 'NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    ticket,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { repo: REPO, ticket, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  await store.append('node', {
+    actor: { kind: 'dispatcher' },
+    type: 'integration.observed',
+    payload: { openChildren: ['CHILD'], contributions: ['landed'], diagnostics: [] },
+  })
+  await store.createBuild({
+    slug: 'child',
+    repo: REPO,
+    ticket: { source: 'file', id: 'CHILD' },
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        ticket: { source: 'file', id: 'CHILD' },
+        kind: 'work',
+        baseBranch: 'ab-node/node',
+        target: { ticket, build: 'node' },
+      },
+    },
+  })
+  const reader = new CountingReader(store)
+  const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+  const initial = await cache.refresh()
+  const counts = (snapshot: typeof initial) =>
+    snapshot.builds.find((b) => b.slug === 'node')!.integrationRow!.children
+  expect(counts(initial)).toMatchObject({ known: true, building: 0, queued: 1 })
+  const parentSeq = initial.states.get('node')!.lastSeq
+  await store.append('child', {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'test', host: 'test' },
+  })
+  reader.resetCalls()
+  const running = await cache.refresh()
+  expect(counts(running)).toMatchObject({ building: 1, queued: 0 })
+  expect(counts(initial)).toMatchObject({ building: 0, queued: 1 })
+  expect(reader.eventCalls.find((c) => c.slug === 'node')!.since).toBe(parentSeq)
+  reader.hidden.add('child')
+  expect(counts(await cache.refresh())).toMatchObject({ building: 0, queued: 1 })
+  reader.hidden.clear()
+  await store.append('child', {
+    actor: { kind: 'dispatcher' },
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+  expect(counts(await cache.refresh())).toMatchObject({ building: 0, queued: 1 })
+  reader.resetCalls()
+  await cache.refresh()
+  expect(reader.eventCalls.some((c) => c.slug === 'child')).toBe(false)
+  const reconfigured = structuredClone(CONFIG)
+  reconfigured.landing = [{ from: 'node', into: 'root', mode: 'auto' }]
+  const refreshed = await cache.refresh(reconfigured, 1)
+  expect(refreshed.builds.find((b) => b.slug === 'node')!.integrationRow!.steps[4]!.qualifier).toBe(
+    'auto',
+  )
+})
