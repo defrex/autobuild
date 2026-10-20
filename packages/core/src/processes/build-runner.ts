@@ -2319,7 +2319,7 @@ export class BuildRunner {
         return {
           actor: agentActor(step, session),
           failureNote: sessionBudgetError(resolved.sessionBudgetSeconds),
-          cancelled: false,
+          cancelled: await this.settleReadDeferral(session),
         }
       }
       if (handle !== undefined) {
@@ -2462,7 +2462,7 @@ export class BuildRunner {
       return {
         actor: agentActor(step, session),
         failureNote: sessionBudgetError(sessionBudgetSeconds),
-        cancelled: false,
+        cancelled: await this.settleReadDeferral(session),
       }
     }
 

@@ -7284,3 +7284,41 @@ test('same-turn context recovery and a valid terminal override the read marker',
   expect(ofType(events, 'phase.failed')).toHaveLength(0)
   expect((await h.br.step()).kind).toBe('run-phase')
 })
+
+test('finalize post-step expiry still parks classified read evidence before recording an outcome', async () => {
+  const timers = new ManualSessionBudgetScheduler()
+  let signalRead!: () => void
+  const readRecorded = new Promise<void>((resolve) => {
+    signalRead = resolve
+  })
+  const h = await makeHarness({
+    runnerOpts: { scheduleSessionBudget: timers.schedule },
+    handlers: (store) => ({
+      ...happyHandlers(store),
+      'release-notes': async (ctx) => {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.build-read-failed',
+          payload: {
+            session: sessionOf(ctx),
+            phase: 'finalize',
+            round: 1,
+            operation: 'context',
+            reason: 'own-build-read',
+            diagnostic: 'unreadable before expiry',
+          },
+        })
+        signalRead()
+        return new Promise<AgentTurnResult>(() => {})
+      },
+    }),
+  })
+  const running = h.br.run()
+  await readRecorded
+  await timers.expireNext()
+  expect((await running).status).toBe('blocked')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+  expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+  expect(ofType(events, 'phase.failed')).toHaveLength(0)
+})
