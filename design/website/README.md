@@ -202,3 +202,16 @@ and 390px verify header geometry, current-link styles, keyboard Enter/Space,
 Tab focus rings, 44px menu targets, reverse-video open state, Escape focus
 return, breakpoint reset, no sideways scroll and accessible links without JS.
 Closed/open keyboard-focus screenshots are retained in build scratch evidence.
+
+## Docs layout (2026-10-20)
+
+The approved `design/docs-layout` revision 0 asset pinned to `lay-out-the`
+contains `docs-desktop.png`, `docs-phone.png`, `docs-phone-menu.png`, and
+`docs-phone-toc.png`, plus standalone HTML exports and a README. These define
+the docs Read register recorded in `design-system.md`: grouped sticky page
+navigation, article, section navigation, phone menu and section disclosure,
+and previous/next pager. Export copy is illustrative; current article words
+and order remain authoritative. Copy as Markdown and sample callouts are
+outside this change. Landing references remain unchanged. Capture discovers
+all docs pages and also exercises Builds at 720px, 1000px, open phone menu,
+open phone TOC, and a fixed-height scrolled desktop viewport.

@@ -18,3 +18,13 @@ for (const section of ['home', 'docs'] as const) {
     expect(html).toContain('class="site-rule" aria-hidden="true">─')
   })
 }
+
+test('docs slot stays inside the existing disclosure before site links; Home ignores it', () => {
+  const slot = '<div>docs groups</div>'
+  expect(renderSiteHeader('home', slot)).toBe(renderSiteHeader('home'))
+  const nav = renderSiteHeader('docs', slot).match(/<nav[\s\S]*?<\/nav>/)![0]
+  expect(nav.indexOf(slot)).toBeGreaterThan(0)
+  expect(nav.indexOf(slot)).toBeLessThan(nav.indexOf('href="/"'))
+  expect(nav.match(/<nav/g)).toHaveLength(1)
+  expect(nav).toContain('aria-label="Documentation menu"')
+})
