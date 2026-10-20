@@ -47,7 +47,10 @@ const dispatchRun = z.string().min(1)
  * replay unchanged. */
 const dispatcherSetting = z.strictObject({ enabled: z.boolean(), run: dispatchRun.optional() })
 const boundedDiagnostics = z.array(z.string().min(1)).max(1_000)
+export { forgeRequestCountsSchema } from '../ports/forge-telemetry'
+import { forgeRequestCountsSchema } from '../ports/forge-telemetry'
 const tickCountersSchema = z.strictObject({
+  forgeRequests: forgeRequestCountsSchema.optional(),
   merged: z.number().int().nonnegative(),
   closed: z.number().int().nonnegative(),
   conflicted: z.number().int().nonnegative(),
@@ -533,7 +536,18 @@ export const changePresenceEventPayloadSchemas = {
   }),
 } as const
 
+export const forgeHealthEventPayloadSchemas = {
+  'dispatcher.forge-degraded': z.strictObject({
+    forge: z.string().min(1),
+    message: z.string().min(1),
+    resetAt: z.iso.datetime(),
+    firstFailureAt: z.iso.datetime(),
+  }),
+  'dispatcher.forge-recovered': z.strictObject({ forge: z.string().min(1) }),
+} as const
+
 export const repositoryEventPayloadSchemas = {
+  ...forgeHealthEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
   ...harvestEventPayloadSchemas,
@@ -552,6 +566,8 @@ export const REPOSITORY_EVENT_TYPES = Object.keys(
 export const REPOSITORY_ATTENTION_EVENTS = [
   'harvest.escalated',
   'harvest.failed',
+  'dispatcher.forge-degraded',
+  'dispatcher.forge-recovered',
   'dispatcher.ticket-source-degraded',
   'dispatcher.ticket-source-recovered',
   'dispatcher.tick-failed',
@@ -643,6 +659,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.tick-completed': ['dispatcher'],
   'dispatcher.ticket-scan-completed': ['dispatcher'],
   'dispatcher.ticket-source-dependency-limited': ['dispatcher'],
+  'dispatcher.forge-degraded': ['dispatcher', 'kernel'],
+  'dispatcher.forge-recovered': ['dispatcher', 'kernel'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],

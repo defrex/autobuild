@@ -427,7 +427,7 @@ export async function makeHarness(opts: {
   /** Resolve the config's forge name through a plugin registration instead of
    * injecting FakeForge directly. The selected adapter still shares this one
    * fake journal across CLI terminals, runner, dispatcher, and janitor. */
-  pluginForge?: { prAttachments?: boolean }
+  pluginForge?: { prAttachments?: boolean; apiVersion?: string }
   /** Exercise the shipped offline forge against a repository with no remote. */
   localGitForge?: boolean
   /** Optional transport adapter around the backing memory store. Hosted tests
@@ -486,7 +486,7 @@ export async function makeHarness(opts: {
     plugins = createPluginRegistry()
     plugins.register({
       name: 'e2e-forge-plugin',
-      apiVersion: '^1.0.0',
+      apiVersion: opts.pluginForge.apiVersion ?? '^1.0.0',
       forges: { [config.forge]: async () => forge },
     })
     selectedForge = await createForge({

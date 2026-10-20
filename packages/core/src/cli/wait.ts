@@ -215,6 +215,7 @@ function stateSatisfies(
       return !!state.nodeRestack?.conflict || !!(restack.active && restack.replay?.conflicted)
     case 'attention':
       return (
+        state.janitor?.attention === true ||
         awaitsConsent(state, restack) ||
         !!state.nodeRestack?.conflict ||
         !!(restack.active && restack.replay?.conflicted) ||

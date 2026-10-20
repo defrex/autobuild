@@ -79,3 +79,5 @@ export { newerFact, seedNewerMemoryFact, NEWER_EVENT_TYPE } from './newer-writer
 export { READ_CATALOG_IDENTITY, catalogIdentity } from '../events/compatibility'
 export { readBuildFacts, readBuildStreamSeed, readRepositoryFacts } from '../store/reduced-reads'
 export { deferMixedVersion } from '../kernel/mixed-version'
+
+export { guardForge } from '../kernel/guarded-forge'

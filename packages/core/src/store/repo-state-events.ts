@@ -23,6 +23,8 @@ const RUN_STARTED = 'dispatcher.run-started'
  * setting types are enumerated because they share one schema group with the
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
+  'dispatcher.forge-degraded',
+  'dispatcher.forge-recovered',
   ...Object.keys(changePresenceEventPayloadSchemas),
   ...Object.keys(ticketSourceHealthEventPayloadSchemas),
   ...Object.keys(harvestEventPayloadSchemas),
@@ -151,7 +153,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 4
+export const JOURNAL_VIEW_REDUCER_VERSION = 5
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {

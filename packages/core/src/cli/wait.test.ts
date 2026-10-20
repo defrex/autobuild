@@ -2068,3 +2068,45 @@ test('read deferral attention wakes live and current-state waits and closes on a
   const answered = harness(store, { forValues: ['attention'] })
   expect(await abWait({ ...answered.base, slugs: ['b1'], timeout: '1' })).toBe(3)
 })
+
+test('janitor failure wakes default watchers and satisfies current attention until recovery', async () => {
+  const { BUILD_ATTENTION_EVENTS, renderWatchLine } = await import('./watch')
+  const { reduceBuild } = await import('../kernel/reducer')
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.janitor-attempt-failed',
+    payload: {
+      firstFailureAt: '2026-07-15T11:40:00.000Z',
+      attempt: 8,
+      message: 'publication failed',
+      nextAttemptAt: '2026-07-15T12:05:00.000Z',
+    },
+  })
+  const attention = await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.janitor-failing',
+    payload: { message: 'publication failed' },
+  })
+  expect(BUILD_ATTENTION_EVENTS).toContain('build.janitor-failing')
+  expect(renderWatchLine(attention, reduceBuild(await store.getEvents('b1')))).toContain(
+    'Janitor failing: publication failed',
+  )
+  let ticks = 0
+  const h = harness(store, {
+    forValues: ['attention'],
+    onTick: () => {
+      ticks++
+    },
+  })
+  expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '1' })).toBe(0)
+  expect(ticks).toBe(0)
+  await store.append('b1', { actor: DISPATCHER, type: 'build.janitor-recovered', payload: {} })
+  expect(
+    matchState(
+      parseConditions(['attention'], []).conditions,
+      reduceBuild(await store.getEvents('b1')),
+    ),
+  ).toBeNull()
+})
