@@ -1,4 +1,5 @@
 import { renderSiteHeader } from './site-header'
+import { integrationDiagram } from './integration-diagram'
 import { heroFrame } from './frame'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
@@ -26,6 +27,8 @@ const hero = (frame: string): string =>
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}<p><a href="/docs/builds/">Follow one build end to end</a></p>${pipelineDiagram()}</section>`
 
 const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}<p><a href="/docs/dispatcher/">Read about the dispatcher</a></p>${dispatcherDiagram()}${dispatcherLegend()}</section>`
+
+const integration = `<section class="section">${intro('autobuild · integration', 'Build together, land together', 'Builds land into a node’s branch and sibling work restacks onto its new head. Once the node is complete and verified, it lands into its parent under your landing policy.')}<p><a href="/docs/integration/">Read about the integration tree</a></p>${integrationDiagram()}</section>`
 
 const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}<p><a href="/docs/seams/">Explore the infrastructure seams</a></p></section>`
 
@@ -71,7 +74,7 @@ export function renderPage({ heroFrame: frame }: PageInput): string {
 </head>
 <body>
 ${renderSiteHeader('home')}
-<main class="wrap"><div class="sections">${hero(frame)}${pipeline}${dispatcher}${seams}${throughput}${intake}${start}</div></main>
+<main class="wrap"><div class="sections">${hero(frame)}${pipeline}${dispatcher}${integration}${seams}${throughput}${intake}${start}</div></main>
 <footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
 </html>
