@@ -36,6 +36,16 @@ inspect the diff and not to decide applicability again.
    verdict unless the build's spec expects the frames to change; when it does,
    name each expected difference in the report. When the spec says the frames
    must be unchanged, a differing frame is never a pass.
+   When the context manifest supplies `commitRange.base`, also run
+   `bun tools/capture-parity.ts --base <commitRange.base>` to compare against
+   the kernel-recorded start of this build's change. Record both baselines and
+   results. The default merge base can predate changes inherited by this build
+   (for example when local default-branch refs are stale). Frames identical to
+   the recorded starting revision are
+   inherited evidence, not changes requiring this build's spec to authorize
+   them. Every difference against the starting revision must still be expected
+   by the spec; a failed capture or unexplained difference still fails. This
+   supplemental comparison does not relax any visual criterion below.
 5. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
    tool, both viewports. Judge the images themselves. The `.html` files are
    human evidence and may help identify a frame, but they are not a basis for

@@ -90,7 +90,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
   {
     id: 'capacity-narrow',
     width: 390,
-    height: 2200,
+    height: 3200,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
   },
   {
