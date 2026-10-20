@@ -424,6 +424,7 @@ export interface WebFixtureModels {
   /** The `headline-happy-wide` scenario: five running builds, a merged PR, a running harvest. */
   happy: DashboardModel
   /** The `mixed-wide` scenario: blocked, pausing, queued-and-held builds under a repository pause. */
+  integrationNarrow?: DashboardModel
   integration: DashboardModel
   capacity?: DashboardModel
   mixed: DashboardModel
@@ -630,7 +631,10 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
         }),
         { model: models.integration },
       )
-    case 'integration-narrow':
+    case 'integration-narrow': {
+      const model = models.integrationNarrow ?? models.integration
+      return shell(builds(model), { model })
+    }
     case 'integration-wide':
       return shell(builds(models.integration), { model: models.integration })
     case 'builds-loading-wide':
@@ -1093,6 +1097,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
       happy: frameModel(capture, 'headline-happy-wide'),
       mixed: frameModel(capture, 'mixed-wide'),
       integration: frameModel(capture, 'integration-wide'),
+      integrationNarrow: frameModel(capture, 'integration-narrow'),
       capacity: frameModel(capture, 'capacity-wide'),
     }
   } finally {

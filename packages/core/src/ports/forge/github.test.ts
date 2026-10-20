@@ -1082,10 +1082,13 @@ describe('GitHubForge.setAutoMerge', () => {
       })
     }
 
-    await expectUnproven(
-      makeForge([{ status: 500, json: { message: 'network down' } }]).forge,
-      'network down',
-    )
+    await expect(
+      makeForge([{ status: 500, json: { message: 'network down' } }]).forge.setAutoMerge(
+        '/ws',
+        42,
+        true,
+      ),
+    ).rejects.toMatchObject({ details: { kind: 'transient' } })
     await expectUnproven(
       makeForge([
         prView(),
@@ -1142,6 +1145,12 @@ describe('GitHubForge.setAutoMerge', () => {
       { status: 500, json: { message: 'Server Error' } },
     ]) {
       const generic = makeForge([prView(), branchWith(fullProtection), nearMiss])
+      if (nearMiss.status === 500) {
+        await expect(generic.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toMatchObject({
+          details: { kind: 'transient' },
+        })
+        continue
+      }
       expect(await generic.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
         kind: 'deferred',
         reason: { code: 'unproven-gate-state' },
@@ -2319,4 +2328,53 @@ describe('node PR retargeting', () => {
         ]).forge.retargetPr('.', 7, 'new'),
       ).rejects.toThrow('refused')
     })
+})
+
+test('GraphQL HTTP-200 rate errors survive native landing convenience catches', async () => {
+  const now = Date.parse('2026-10-20T00:00:00Z')
+  const forge = new GitHubForge({
+    repository: 'acme/app',
+    now: () => now,
+    transport: async (_method, path): Promise<GitHubResponse> =>
+      path !== 'graphql'
+        ? { status: 200, headers: {}, json: { node_id: 'PR_123', auto_merge: {} } }
+        : {
+            status: 200,
+            headers: {
+              'x-ratelimit-remaining': '0',
+              'x-ratelimit-reset': String((now + 120_000) / 1000),
+            },
+            json: { errors: [{ message: 'API rate limit exceeded', type: 'RATE_LIMITED' }] },
+          },
+  })
+  await expect(forge.setAutoMerge('/ws', 1, false)).rejects.toMatchObject({
+    forgeFailure: 'autobuild.forge-failure.v1',
+    details: { kind: 'rate-limited', resetAt: '2026-10-20T00:02:00.000Z' },
+  })
+})
+
+test('wire observers count failed requests and retain concurrent build context', async () => {
+  const { withForgeRequestContext } = await import('../forge-request-context')
+  const seen: (string | undefined)[] = []
+  const forge = new GitHubForge({
+    repository: 'acme/app',
+    transport: async (_method, path) => {
+      await Promise.resolve()
+      if (path.endsWith('/2')) throw new GitHubApiError(503, 'unavailable')
+      return {
+        status: 200,
+        headers: {},
+        json: { state: 'open', merged: false, mergeable: true, merge_commit_sha: null },
+      }
+    },
+  })
+  const stop = forge.observeRequests((ctx) => seen.push(ctx.build))
+  await Promise.allSettled([
+    withForgeRequestContext({ build: 'a' }, () => forge.getPrState('/ws', 1)),
+    withForgeRequestContext({ build: 'b' }, () => forge.getPrState('/ws', 2)),
+  ])
+  expect(seen.sort()).toEqual(['a', 'b'])
+  stop()
+  await forge.getPrState('/ws', 1)
+  expect(seen).toHaveLength(2)
 })

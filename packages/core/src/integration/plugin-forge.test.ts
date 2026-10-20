@@ -1,3 +1,5 @@
+import { ForgeFailure, type ForgeRequestObserver, type Forge } from '../plugin-sdk'
+import { readForgeHealth } from '../store/reduced-reads'
 import { expect, test } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -25,6 +27,7 @@ async function openPluginBuild(
     configToml?: string
     prAttachments?: boolean
     ticket?: string
+    apiVersion?: string
   } = {},
 ): Promise<{ h: E2eHarness; slug: string }> {
   const h = await makeHarness({
@@ -32,6 +35,7 @@ async function openPluginBuild(
     tickets: [readyTicket(opts.ticket ?? 'PF-1')],
     configToml: opts.configToml ?? PLUGIN_CONFIG,
     pluginForge: {
+      ...(opts.apiVersion ? { apiVersion: opts.apiVersion } : {}),
       ...(opts.prAttachments === true ? { prAttachments: true } : {}),
     },
   })
@@ -211,6 +215,45 @@ test('current-API plugin receives bounded summary calls for hundreds of post-PR 
     expect(ofType(events, 'pr-attachment.designated')).toHaveLength(300)
     expect(ofType(events, 'pr-summary.attempted')).toHaveLength(2)
     expect(h.forge.comments[0]!.body.length).toBeLessThanOrEqual(65_536)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('an API 1.8 plugin records request attribution and recovers from classified limits', async () => {
+  const { h, slug } = await openPluginBuild({ ticket: 'PF-limit', apiVersion: '^1.8.0' })
+  try {
+    const observers = new Set<ForgeRequestObserver>()
+    ;(h.forge as Forge).observeRequests = (observer) => {
+      observers.add(observer)
+      return () => {
+        observers.delete(observer)
+      }
+    }
+    const poll = h.forge.getPrState.bind(h.forge)
+    let limited = true
+    const resetAt = new Date(h.clock().getTime() + 120_000).toISOString()
+    h.forge.getPrState = async (...args) => {
+      for (const observer of observers) observer({})
+      if (limited) throw new ForgeFailure('plugin rate limit', { kind: 'rate-limited', resetAt })
+      return poll(...args)
+    }
+    const failed = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(failed.janitorFailed).toBe(1)
+    expect(failed.forgeRequests).toEqual({
+      total: 1,
+      unattributed: 0,
+      builds: [{ build: slug, requests: 1 }],
+      complete: true,
+    })
+    expect((await readForgeHealth(h.store, h.origin))?.resetAt).toBe(resetAt)
+    const waiting = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(waiting.forgeRequests?.total).toBe(0)
+    limited = false
+    h.clock.advance(180_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await readForgeHealth(h.store, h.origin)).toBeUndefined()
+    expect(reduceBuild(await h.events(slug)).janitor).toBeUndefined()
   } finally {
     await h.cleanup()
   }

@@ -1,3 +1,4 @@
+import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
 import { leafRestackReducer } from './leaf-restack-state'
@@ -183,6 +184,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   },
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },
+  forgeHealthValue: { reducer: optionalValue(forgeHealthReducer), covers: [] },
 }
 
 /** Qualification concerns the existing finished contract, including absence. */
@@ -209,6 +211,7 @@ const valueExclusions: Record<string, string> = {
   ),
 }
 const repositoryValues = new Set([
+  'forgeHealthValue',
   'repositoryReadFacts',
   'dispatcherRunFacts',
   'repositoryAttention',

@@ -25,6 +25,7 @@ import {
   readBuildFacts,
   readBuildStreamSeed,
   readRepositoryFacts,
+  readForgeHealth,
   readRepositoryAttention,
   readBuildDigests,
   readDispatcherRunFacts,
@@ -168,6 +169,7 @@ export async function reducedReadBudget(opts: {
     await readBuildStreamSeed(store, slug)
     await readBuildFacts(store, slug)
     await readRepositoryFacts(store, repo)
+    await readForgeHealth(store, repo)
     await readBuildDigests(store, repo)
     await readRepositoryAttention(store, repo)
     const handle = await opts.fresh()
@@ -399,6 +401,7 @@ async function coldDispatchOnceBudget(
       payload: { enabled: false },
     })
   const boundary = (await readRepositoryFacts(store, onceRepo)).cursor
+  await readForgeHealth(store, onceRepo)
   const directory = await mkdtemp(join(tmpdir(), 'ab-cold-once-'))
   try {
     await writeFile(

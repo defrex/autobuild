@@ -1,3 +1,5 @@
+import { isForgeFailure, type ForgeRequestObserver } from '../forge-failure'
+import { forgeRequestContext, guardedForgeRequest } from '../forge-request-context'
 import { inspectGitHubReadiness } from './github-readiness'
 import type { ForgeReadinessInput } from './readiness'
 import { gitRewrite } from './git-rewrite'
@@ -35,6 +37,7 @@ import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin
 import type { Exec } from '../workspace/git-worktree'
 import {
   GitHubApiError,
+  classifyGitHubFailure,
   createGitHubFetchTransport,
   githubTokenSource,
   restPlanLimitation,
@@ -598,6 +601,7 @@ export class GitHubForge implements Forge {
       })
       return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       throw new Error(redact(error instanceof Error ? error.message : String(error)))
     }
   }
@@ -627,8 +631,11 @@ export class GitHubForge implements Forge {
   /** Bounded waits between mergeability re-queries on the UNKNOWN path. */
   private readonly mergeabilityRetryDelaysMs: number[]
 
+  private readonly now: () => number
+
   constructor(
     opts: {
+      now?: () => number
       transport?: GitHubRequest
       exec?: Exec
       /** Literal token, or a resolver. Absent: the adapter resolves
@@ -645,6 +652,7 @@ export class GitHubForge implements Forge {
       mergeabilityRetryDelaysMs?: number[]
     } = {},
   ) {
+    this.now = opts.now ?? Date.now
     this.exec = opts.exec ?? bunExec
     this.env = opts.env ?? {}
     this.token = opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec)
@@ -652,10 +660,15 @@ export class GitHubForge implements Forge {
     // stored login, probed lazily through this adapter's exec seam on the
     // first request. A request that still goes out anonymously carries the
     // miss reason in its error, so nothing is probed at construction time.
-    this.transport =
-      opts.transport ??
-      createGitHubFetchTransport({
-        token: this.token,
+    const transport = opts.transport ?? createGitHubFetchTransport({ token: this.token })
+    this.transport = async (...args) =>
+      guardedForgeRequest(async () => {
+        for (const observer of this.requestObservers) observer(forgeRequestContext())
+        try {
+          return await transport(...args)
+        } catch (error) {
+          throw classifyGitHubFailure(error, this.now())
+        }
       })
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository
@@ -708,6 +721,14 @@ export class GitHubForge implements Forge {
     })
   }
 
+  private readonly requestObservers = new Set<ForgeRequestObserver>()
+  observeRequests(observer: ForgeRequestObserver): () => void {
+    this.requestObservers.add(observer)
+    return () => {
+      this.requestObservers.delete(observer)
+    }
+  }
+
   private async request(
     method: string,
     path: string,
@@ -756,8 +777,14 @@ export class GitHubForge implements Forge {
     }
     const errors = envelope.data.errors
     if (errors !== undefined && errors.length > 0) {
-      throw new Error(
-        `GitHub GraphQL ${operation} failed: ${errors.map((e) => e.message).join('; ')}`,
+      throw classifyGitHubFailure(
+        new GitHubApiError(
+          response.status,
+          `GitHub GraphQL ${operation} failed: ${errors.map((e) => e.message).join('; ')}`,
+          response.json,
+          response.headers,
+        ),
+        this.now(),
       )
     }
     if (envelope.data.data === undefined || envelope.data.data === null) {
@@ -829,6 +856,7 @@ export class GitHubForge implements Forge {
       )
       return { number: created.number, url: created.html_url, headSha: created.head.sha }
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       if (error instanceof GitHubApiError && error.status === 422) {
         const raced = await probe()
         if (raced) return raced
@@ -1094,6 +1122,7 @@ export class GitHubForge implements Forge {
     try {
       await this.request('PATCH', prPath, { body: { state: 'closed' } })
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       closeError = error
     }
     // Re-read even after a mutation failure: GitHub may have merged the PR in
@@ -1114,12 +1143,14 @@ export class GitHubForge implements Forge {
     try {
       await this.request('GET', `${repoPath}/git/ref/heads/${branch}`)
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       if (error instanceof GitHubApiError && error.status === 404) return // idempotent
       throw error
     }
     try {
       await this.request('DELETE', `${repoPath}/git/refs/heads/${branch}`)
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       // A probe/delete race (branch deleted elsewhere) is still a success.
       if (error instanceof GitHubApiError && error.status === 404) return
       throw error
@@ -1204,6 +1235,7 @@ export class GitHubForge implements Forge {
             protection.required_pull_request_reviews !== null)
       }
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       classicError = errorMessage(error)
     }
 
@@ -1241,6 +1273,7 @@ export class GitHubForge implements Forge {
             (rule) => rule.type === 'pull_request' || CONTROLLED_WRITE_RULE_TYPES.has(rule.type),
           ))
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       if (
         rulesPagesRead === 0 &&
         error instanceof GitHubApiError &&
@@ -1482,6 +1515,7 @@ export class GitHubForge implements Forge {
           throw new Error(disposition.reason)
       }
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       return {
         kind: 'deferred',
         reason: {
@@ -1688,6 +1722,7 @@ export class GitHubForge implements Forge {
           await this.request('PATCH', `${root}/issues/comments/${match.id}`, { body: { body } })
           return
         } catch (error) {
+          if (isForgeFailure(error)) throw error
           if (!(error instanceof GitHubApiError) || error.status !== 404 || scan !== 0) throw error
         }
       }
@@ -1734,6 +1769,7 @@ export class GitHubForge implements Forge {
     try {
       return await adopt()
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       if (!(error instanceof GitHubApiError && error.status === 404)) throw error
     }
     try {
@@ -1751,6 +1787,7 @@ export class GitHubForge implements Forge {
       )
       return result.object.sha
     } catch (error) {
+      if (isForgeFailure(error)) throw error
       if (!(error instanceof GitHubApiError && error.status === 422)) throw error
       return adopt()
     }

@@ -84,10 +84,10 @@ the same resolved working directory.
 ### Watch for attention events
 
 `ab watch --json` is the standing monitor. Keep its default filter: every
-record calls for action. It reports build escalations and merge decisions,
+record calls for action. It reports build escalations, persistent janitor failures and merge decisions,
 harvest escalations/recovery exhaustion, rejected configuration, reloads needing
-restart, abnormal dispatcher stops/loss, degradation past reset (15 minutes
-without reset), and five minutes of continuous tick failures. Advertised resets
+restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
+for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
 on that retry stays silent. Source grace and cooldown-driven failures do not
 start the tick-failure clock. Routine outcomes and self-healing failures stay silent.
@@ -432,6 +432,31 @@ entry position: resuming suppresses the same episode, while a new candidate or
 exit/re-entry can notify again. Explicit `--event` globs remain event-only.
 Use `ab wait --for consent --for node-landed --for restack-conflicted --json`
 for one wake; state waits return immediately when already satisfied. `--for
-attention` also includes consent readiness and landing/conflict attention.
+attention` also includes consent readiness, janitor failure attention and landing/conflict attention.
 Resume event backlogs with `--since <cursor>`; keep handling emitted records
 before interpreting terminal completion.
+
+## Forge failure recovery
+
+Janitor failures are durable per-build episodes. Eligible failures retry after
+30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
+Skipped polls preserve the episode across restart. After
+`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
+notifies default watchers and appears on the build row. A successful attempt
+clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+
+A classified forge rate limit records repository degradation with `resetAt`.
+Forge work waits during cooldown; passing the deadline permits a recovery
+request, and only success clears degradation. A further limit extends cooldown.
+Native landing application failures keep candidate-specific retry eligibility,
+including automatic decisions without a human command. Retries recheck consent,
+holds, verification and the exact candidate. Uncertain enables remain pending
+until cancellation can be confirmed after cooldown. Publication retries reuse
+cancellation receipts only when the forge confirms the same disabled state for
+the same candidate and publication operation.
+
+Tick telemetry counts provider wire requests, including failures. Counts are
+unavailable for uninstrumented adapters. Attribution retains at most ten builds
+ordered by descending count then build name; repository requests are unattributed.
+Repository status names a hotspot only when one build makes at least two requests
+and more than half of attributed requests. Telemetry never controls workflow.

@@ -1,0 +1,92 @@
+import { expect, test } from 'bun:test'
+import { MemoryBuildStore } from '../store/memory'
+import { FakeForge } from '../ports/forge/fake'
+import { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
+import { manualClock } from '../testing/fixed'
+import { readForgeHealth } from '../store/reduced-reads'
+import { guardForge, ForgeCooldown } from './guarded-forge'
+
+test('classified limits persist across wrappers, gate subsequent calls, and recover only on success', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const raw = new FakeForge()
+  let calls = 0
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  raw.getPrState = async () => {
+    calls++
+    throw {
+      forgeFailure: 'autobuild.forge-failure.v1',
+      message: 'secondary limit',
+      details: { kind: 'rate-limited', resetAt },
+    }
+  }
+  let forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now })
+  await expect(forge.getPrState('/r', 1)).rejects.toMatchObject({ message: 'secondary limit' })
+  expect((await readForgeHealth(store, 'r'))?.resetAt).toBe(resetAt)
+  forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now })
+  await expect(forge.getPrState('/r', 1)).rejects.toBeInstanceOf(ForgeCooldown)
+  expect(calls).toBe(1)
+  now.advance(60_000)
+  raw.getPrState = async () => {
+    throw new Error('ordinary failure')
+  }
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('ordinary failure')
+  expect(await readForgeHealth(store, 'r')).toBeDefined()
+  raw.setPrState(1, { state: 'open', mergeable: null })
+  raw.getPrState = FakeForge.prototype.getPrState.bind(raw)
+  await forge.getPrState('/r', 1)
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+  expect((await store.getRepoEvents('r')).map((e) => e.type)).toEqual([
+    'dispatcher.forge-degraded',
+    'dispatcher.forge-recovered',
+  ])
+})
+
+test('failure discriminants validate fields without requiring shared class identity', () => {
+  expect(
+    isForgeFailure(new ForgeFailure('network', { kind: 'transient', retry: 'retryable' })),
+  ).toBe(true)
+  expect(
+    isForgeFailure({
+      forgeFailure: 'autobuild.forge-failure.v1',
+      message: 'limit',
+      details: { kind: 'rate-limited', resetAt: 'bad' },
+    }),
+  ).toBe(false)
+  expect(isForgeFailure(new Error('API rate limit exceeded'))).toBe(false)
+})
+
+test('runner composition retries a new limit only after durable dispatcher recovery', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const append = store.appendRepo.bind(store)
+  store.appendRepo = (async (repo, event) => {
+    const result = await append(repo, event)
+    if (event.type === 'dispatcher.forge-degraded') {
+      now.advance(60_000)
+      await append(repo, {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.forge-recovered',
+        payload: { forge: 'plugin' },
+      })
+    }
+    return result
+  }) as typeof store.appendRepo
+  let calls = 0
+  const raw = new FakeForge()
+  raw.getPrState = async () => {
+    if (++calls === 1)
+      throw new ForgeFailure('limit', {
+        kind: 'rate-limited',
+        resetAt: new Date(now().getTime() + 60_000).toISOString(),
+      })
+    return { state: 'open', mergeable: true }
+  }
+  const forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now, wait: true })
+  expect(await forge.getPrState('/r', 1)).toEqual({ state: 'open', mergeable: true })
+  expect(calls).toBe(2)
+  expect((await store.getRepoEvents('r')).map((e) => e.type)).toEqual([
+    'dispatcher.forge-degraded',
+    'dispatcher.forge-recovered',
+  ])
+})

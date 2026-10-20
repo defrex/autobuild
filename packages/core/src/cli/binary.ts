@@ -1,3 +1,6 @@
+import { guardForge } from '../kernel/guarded-forge'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
+import { openProductionStore } from './store-opening'
 /**
  * Shared wiring for the `ab` process entry points. Production calls this with
  * argv only; the repo-local hot entry may additionally supply a per-paint
@@ -190,8 +193,21 @@ export async function runBinary(
     return 1
   }
 
-  const store = openProductionSessionStore(cliEnv)
+  const kernelStore = openProductionStore(cliEnv.store, cliEnv.token)
+  const store = scopeLocalStoreToPhaseSession(kernelStore, {
+    kind: 'build',
+    id: cliEnv.build,
+    session: cliEnv.session,
+  })
   try {
+    const record = await store.getBuild(cliEnv.build)
+    if (record)
+      forge = guardForge(forge, {
+        store: kernelStore,
+        repo: record.repo,
+        name: forge.name,
+        wait: true,
+      })
     return await runCli(argv, {
       ...unscopedDeps,
       store,

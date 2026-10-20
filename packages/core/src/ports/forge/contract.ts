@@ -90,6 +90,17 @@ async function pushAndOpen(harness: ForgeContractHarness): Promise<{
  */
 export function describeForgeContract(name: string, factory: ForgeContractFactory): void {
   describe(`Forge contract: ${name}`, () => {
+    test('optional request observation registers and disposes without requiring legacy adapters', async () => {
+      await withForge(factory, undefined, async ({ forge }) => {
+        if (!forge.observeRequests) return
+        const stop = forge.observeRequests((context) => {
+          expect(context.build === undefined || typeof context.build === 'string').toBe(true)
+        })
+        expect(typeof stop).toBe('function')
+        stop()
+      })
+    })
+
     test('optional node refs open empty without a PR and retries preserve their head', async () => {
       await withForge(factory, undefined, async (h) => {
         const forge = h.forge
