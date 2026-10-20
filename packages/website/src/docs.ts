@@ -1,3 +1,4 @@
+import { renderSiteHeader } from './site-header'
 import { INSTALL_COMMAND, REPO_URL, SITE_URL } from './constants'
 import { OG_HEIGHT, OG_IMAGE_ALT, OG_WIDTH } from './og'
 
@@ -315,9 +316,11 @@ export function renderDocsPage(page: DocsPage): string {
 </head>
 <body class="docs">
 <a class="skip-link" href="#content">Skip to content</a>
-<header class="docs-wrap"><div class="masthead"><a class="title" href="/">Autobuild</a><a href="${REPO_URL}">GitHub</a></div><nav aria-label="Documentation"><ul>${nav}</ul></nav></header>
+${renderSiteHeader('docs')}
+<nav class="docs-wrap docs-nav" aria-label="Documentation"><ul>${nav}</ul></nav>
 <main id="content" tabindex="-1" class="docs-wrap"><article><h1 class="headline">${escapeHtml(page.title)}</h1>${page.content}</article></main>
 <footer class="docs-wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a href="/">Home</a></div></footer>
+<script type="module" src="/site.js"></script>
 </body>
 </html>
 `
