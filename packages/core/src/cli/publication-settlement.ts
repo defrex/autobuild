@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
@@ -32,6 +33,12 @@ async function confirmDispatcherCache(
   sha: string,
 ) {
   if (!deps.forge.confirmPublication) return
+  try {
+    if (!(await stat(deps.workspacePath)).isDirectory()) return
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return
+    throw error
+  }
   const repository = await deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: deps.workspacePath })
   if (repository.exitCode !== 0 || !repository.stdout.trim()) return
   if (!(await deps.forge.confirmPublication(deps.workspacePath, branch, sha)))

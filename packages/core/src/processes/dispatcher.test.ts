@@ -9161,6 +9161,16 @@ describe('integration node dispatch', () => {
     expect(h.forge.opened).toHaveLength(0)
     h.forge.remoteBranches.set(node.branch!, 'child-commit')
     h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'node.inventory',
+      payload: {
+        head: h.forge.remoteBranches.get(node.branch!)!,
+        builds: ['child'],
+        contributions: ['child'],
+        foreign: [],
+      },
+    })
     await h.dispatcher.tick()
     expect(h.forge.opened).toHaveLength(1)
     expect(h.forge.opened[0]?.base).toBe('main')
@@ -9235,6 +9245,16 @@ describe('integration crash boundaries', () => {
     const node = (await h.store.listBuilds())[0]!
     h.forge.remoteBranches.set(node.branch!, 'child')
     h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'node.inventory',
+      payload: {
+        head: h.forge.remoteBranches.get(node.branch!)!,
+        builds: ['child'],
+        contributions: ['child'],
+        foreign: [],
+      },
+    })
     const append = h.store.append.bind(h.store)
     let fail = true
     h.store.append = (async (slug, event) => {
@@ -9361,7 +9381,18 @@ test.each([true, false])(
     const node = (await h.store.listBuilds())[0]!
     h.forge.remoteBranches.set(node.branch!, 'child')
     h.forge.nodeComparisons.set(`main...${node.branch}`, 1)
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'node.inventory',
+      payload: {
+        head: h.forge.remoteBranches.get(node.branch!)!,
+        builds: ['child'],
+        contributions: ['child'],
+        foreign: [],
+      },
+    })
     h.forge.openPr = async () => {
+      h.forge.remoteBranches.set(node.branch!, BASE_SHA)
       h.forge.nodeComparisons.set(`main...${node.branch}`, 0)
       throw classified
         ? new NoCommitsBetweenBranchesError('No commits between main and node')
