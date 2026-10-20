@@ -156,6 +156,9 @@ export interface Probe {
     rightTop: number
     scrollY: number
     codeContained: boolean
+    copyPresent: boolean
+    copyHeight: number
+    copyPlaced: boolean
   }
   error?: string
   reducedMotion: boolean
@@ -269,6 +272,9 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
     const visible = (node) => Boolean(node && getComputedStyle(node).display !== 'none')
     const headings = [...document.querySelectorAll('article h2')]
     const expectedHeading = scrollY > 0 && scrollY + innerHeight >= root.scrollHeight - 2 ? headings.at(-1) : headings.filter(h => h.getBoundingClientRect().top <= 24).at(-1) || headings[0]
+    const copy = document.querySelector('[data-docs-copy]')
+    const copyRect = copy?.getBoundingClientRect()
+    const titleRect = document.querySelector('article h1')?.getBoundingClientRect()
     const docs = docsRoot ? {
       menuExpanded: document.querySelector('[data-site-menu]')?.getAttribute('aria-expanded') === 'true',
       tocExpanded: document.querySelector('[data-toc-toggle]')?.getAttribute('aria-expanded') === 'true',
@@ -277,6 +283,9 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
       leftVisible: visible(left), rightVisible: visible(right),
       leftTop: left?.getBoundingClientRect().top || 0, rightTop: right?.getBoundingClientRect().top || 0,
       scrollY,
+      copyPresent: Boolean(copy && copy.textContent === 'Copy as Markdown'),
+      copyHeight: copyRect?.height || 0,
+      copyPlaced: Boolean(copyRect && titleRect && (innerWidth < 720 ? copyRect.top >= titleRect.bottom && copyRect.left === titleRect.left : copyRect.left >= titleRect.right && copyRect.top < titleRect.bottom)),
       codeContained: [...document.querySelectorAll('article pre')].every(pre => pre.getBoundingClientRect().right <= innerWidth && pre.getBoundingClientRect().left >= 0 && getComputedStyle(pre).overflowX === 'auto'),
     } : undefined
     const probe = { docs,
@@ -410,6 +419,9 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
   }
   if (frame.kind === 'docs' && probe.docs) {
     const docs = probe.docs
+    if (!docs.copyPresent) problems.push('missing docs copy action')
+    if (docs.copyHeight < (frame.width < 720 ? 44 : 40)) problems.push('docs copy target too short')
+    if (!docs.copyPlaced) problems.push('incorrect docs copy placement')
     if (docs.menuExpanded !== (frame.docsState === 'menu'))
       problems.push('incorrect docs menu state')
     if (docs.tocExpanded !== (frame.docsState === 'toc')) problems.push('incorrect docs TOC state')
@@ -539,7 +551,7 @@ export async function runRealtimeChromium(
   profileDir: string,
   width: number,
   height: number,
-  mode: { dumpDom: true } | { screenshot: string },
+  mode: { dumpDom: true; pressEnterWhen?: string; timeoutMs?: number } | { screenshot: string },
   url: string,
 ): Promise<string> {
   const proc = Bun.spawn(
@@ -550,6 +562,8 @@ export async function runRealtimeChromium(
       '--disable-gpu',
       '--hide-scrollbars',
       '--force-prefers-reduced-motion',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
       '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       'about:blank',
@@ -617,7 +631,35 @@ export async function runRealtimeChromium(
     })
     await send('Page.navigate', { url })
     let dom = ''
-    for (let attempt = 0; attempt < 200; attempt++) {
+    let keySent = false
+    for (
+      let attempt = 0;
+      attempt < (('dumpDom' in mode ? mode.timeoutMs : undefined) ?? 10000) / 50;
+      attempt++
+    ) {
+      if ('dumpDom' in mode && mode.pressEnterWhen && !keySent) {
+        const ready = await send('Runtime.evaluate', {
+          expression: `Boolean(document.querySelector(${JSON.stringify(mode.pressEnterWhen)}))`,
+          returnByValue: true,
+        })
+        if (ready.result?.value) {
+          await send('Input.dispatchKeyEvent', {
+            type: 'keyDown',
+            text: '\r',
+            unmodifiedText: '\r',
+            key: 'Enter',
+            code: 'Enter',
+            windowsVirtualKeyCode: 13,
+          })
+          await send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'Enter',
+            code: 'Enter',
+            windowsVirtualKeyCode: 13,
+          })
+          keySent = true
+        }
+      }
       const result = await send('Runtime.evaluate', {
         expression:
           'document.querySelector(\'meta[name="capture-probe"]\') ? document.documentElement.outerHTML : ""',
@@ -627,7 +669,14 @@ export async function runRealtimeChromium(
       if (dom) break
       await Bun.sleep(50)
     }
-    if (!dom) throw Error('real-time capture produced no probe')
+    if (!dom) {
+      const state = await send('Runtime.evaluate', {
+        expression:
+          'JSON.stringify({url: location.href, ready: document.readyState, progress: document.body?.dataset.progress})',
+        returnByValue: true,
+      })
+      throw Error(`real-time capture produced no probe: ${state.result?.value}`)
+    }
     if ('screenshot' in mode) {
       const shot = await send('Page.captureScreenshot', {
         format: 'png',
