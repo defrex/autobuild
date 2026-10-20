@@ -17,6 +17,43 @@ a trailer, and a landed node transports its whole owned contribution. Empty
 completed nodes contribute nothing. Sibling work waits for landing into the common
 ancestor and cascade; same-node landings satisfy presence directly.
 
+## Choosing a destination
+
+Whenever grooming produces more than one ticket for a feature, explicitly choose
+root or a node before filing. Use a node when the set should reach the base branch
+as one integrated change, or intermediate states should not ship independently.
+Use root when every ticket is independently valuable and safe to land alone.
+Nested nodes can collect a subfeature before contributing it to a larger feature.
+A node provides one integrated delivery to its parent under the configured forge
+method; it does not promise one physical Git commit.
+
+Blockers and targets are independent: blockers order work; targets decide where
+it lands. A blocker inside the same node resolves when its change lands into that
+node, so a dependency chain can advance without waiting for root consent, subject
+to the normal claim gates and presence rules. Dependencies across destinations
+still need the presence evidence described above and in
+[blocker resolution](ticket-dependencies.md#when-a-blocker-resolves).
+
+Read the consuming repository's `autobuild.toml` and evaluate its effective
+[landing policy](landing-policy.md) for the actual ticket kinds, destinations and
+labels. Ordered `[[landing]]` rules use the first match; `from`, `into` and `label`
+predicates are ANDed, with omitted predicates acting as wildcards. Without a
+match, leaves default to auto and nodes to consent. Explain the resulting landing
+and consent flow to the human in plain terms. Ask when grooming does not make the
+destination choice clear. This decision is separate from workflow-state placement
+and never authorizes promoting tickets to ready.
+
+For example, **if** the matched rules require consent into root and allow automatic
+landing into nodes (the staged-release example in the policy reference), a
+root-targeted chain waits for consent separately for each ticket and ships each
+intermediate change to the base branch. Under those same rules, children collect
+automatically in a node and the verified, complete node waits for consent once
+into root. Other matching rules can produce different flows; auto authorization
+still obeys every readiness and merge gate. If the live dispatcher rejected a
+configuration reload, the edited file is not evidence of its effective policy.
+Resolve or report that uncertainty using existing operator repository status
+and configuration-reload evidence before claiming which policy is active.
+
 ## Tickets and admission
 
 Tickets default to `kind = "work"` with no `target`. A target is a node ticket
@@ -25,8 +62,13 @@ cycles are refused. A node with targeting tickets cannot be demoted, even when
 those children are completed. Clear or reparent its children first.
 
 File tickets persist kind and target in frontmatter. Hosted tickets validate
-changes transactionally within the project. Linear uses the exact `node` label
-for kind and the parent relation for target only when that parent has the node
+changes transactionally within the project. Existing tickets default to work with
+no target; metadata changes increment the revision once, while equivalent aliases
+and unchanged values do not. Legacy plugins without `integrationTree` support
+read as work with no target and refuse explicit metadata writes, including clears
+and mixed patches, with guidance to use a capable source.
+
+Linear uses the exact `node` label for kind and the parent relation for target only when that parent has the node
 label. Ordinary grouping parents remain grouping and survive unrelated edits;
 explicit target clear clears the parent relation. Label replacement can demote a
 node and receives the same guards; explicit kind and labels must agree. Linear

@@ -18,24 +18,55 @@ describe('ticket grooming skill guidance', () => {
   })
 
   test('spec stages dependency chains and verifies blockers before ready publication', () => {
-    expect(spec).toContain('ab ticket create "A" --body a.md --json --state Triage')
+    expect(spec).toContain(
+      'ab ticket create "A" --body a.md --target "$node_id" --json --state Triage',
+    )
+    expect(spec).toContain(
+      'ab ticket create "Integration" --body integration.md --kind node --json --state Triage',
+    )
+    expect(spec).toContain("jq -r '.ref.id' node-ticket.json")
+    for (const id of ['node', 'a', 'b', 'c']) {
+      expect(spec).toContain(`ab ticket show "$${id}_id" --json`)
+      expect(spec.indexOf(`ab ticket show "$${id}_id" --json`)).toBeLessThan(
+        spec.indexOf('ab ticket move "$node_id" Ready --json'),
+      )
+    }
+    expect(spec.indexOf('ab ticket move "$node_id" Ready --json')).toBeLessThan(
+      spec.indexOf('ab ticket move "$a_id" Ready --json'),
+    )
     expect(spec).toContain("jq -r '.ref.id' a-ticket.json")
     expect(spec).toContain(
-      'ab ticket create "B" --body b.md --blocked-by "$a_id" --json --state Triage',
+      'ab ticket create "B" --body b.md --blocked-by "$a_id" --target "$node_id" --json --state Triage',
     )
     expect(spec).toContain("jq -r '.ref.id' b-ticket.json")
     expect(spec).toContain(
-      'ab ticket create "C" --body c.md --blocked-by "$b_id" --json --state Triage',
+      'ab ticket create "C" --body c.md --blocked-by "$b_id" --target "$node_id" --json --state Triage',
     )
     expect(spec.indexOf('ab ticket show "$c_id" --json')).toBeLessThan(
       spec.indexOf('ab ticket move "$a_id" Ready --json'),
     )
+    expect(spec).toContain("jq -r '.ref.id' c-ticket.json")
     expect(spec).toContain('ab ticket move "$b_id" Ready --json')
     expect(spec).toContain('ab ticket move "$c_id" Ready --json')
     expect(spec).toContain('Never parse an id from the human-readable confirmation line')
     expect(spec).toContain(
       'adding a blocker\nafter a ticket has already been claimed does not stop its active build',
     )
+  })
+
+  test('filing entry points share destination guidance without stale mechanics', async () => {
+    const operate = await readFile(join(DIST_ROOT, 'skills', 'operate', 'SKILL.md'), 'utf8')
+    for (const guide of [spec, tickets, operate]) {
+      expect(guide).toContain('../ab-guide/references/integration-tree.md#choosing-a-destination')
+      expect(guide).not.toContain('intent only')
+      expect(guide).not.toContain('behavior are unchanged in this increment')
+      expect(guide).not.toContain('Hosted sources and legacy plugins read as work')
+    }
+    expect(spec).toContain('Whenever grooming produces more than one ticket for a feature')
+    expect(spec).toContain('including when fleshing out an existing ticket')
+    expect(spec).toContain("repository's effective landing policy in `autobuild.toml`")
+    expect(spec).toContain('Ask the human when the')
+    expect(spec).toContain('never changes the requested workflow state')
   })
 
   test('canonical spec guidance matches live and pristine installed copies', async () => {
