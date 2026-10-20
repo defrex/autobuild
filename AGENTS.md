@@ -115,10 +115,17 @@ Autobuild hosts or starts:
 - **When the web server is configured**, it is any agent running anywhere,
   connected through the MCP connector and calling the operator tools.
 
-In this repository, run the CLI from source as `bun bin/ab.ts`, never a global
-`ab`. This checkout does not install `@defrex/autobuild` as a dependency, and a
+In interactive sessions at the repository root, run the CLI from source as
+`bun bin/ab.ts`, never a global `ab`. This checkout does not install `@defrex/autobuild` as a dependency, and a
 global install can be a different version from the one the dispatcher runs.
 That includes long-running `watch` and `wait` monitors.
+
+Inside a build session, identified by nonblank `AB_BUILD` and `AB_SESSION`
+environment variables, use plain `ab` on the runner-prepared `PATH`, never
+`bun bin/ab.ts` from the worktree. This applies to context, artifacts, phase
+terminals (`done` and `verdict`), observations, escalations, and permitted
+status queries. The runner supplies its own distribution's launcher; a build
+branch's CLI can lag the runner's event schema and fail to read its writes.
 
 There is no orchestrator setup step, and no human has to start it. The embedded
 hosted turn runner (AUT-342) is an abandoned direction, removed by AUT-658;
@@ -140,7 +147,7 @@ running. Do not substitute a force-kill for a clean stop. Since AUT-855, a clean
 stop suspends live sessions; restarting resumes durable work without manually
 resetting or requeuing builds.
 
-**Agent-safe read-only diagnosis:** run
+**Agent-safe read-only diagnosis (interactive repository-root sessions):** run
 `bun bin/ab.ts repository status --json` and `bun tools/dispatcher-check.ts`.
 The check uses the authoritative held dispatcher run, correlating its local
 PID (including an interactive launcher's private child) through Linux process
