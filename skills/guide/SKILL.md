@@ -803,6 +803,8 @@ nonnegative integer so zero can disable that trigger.
 | `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
 | `maxReviewRounds` | `6` | positive integer | Default `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. When that cap parks a build, `ab answer <slug> --review-round-ceiling <n>` may replace it for only the escalation's loop and current spec revision. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
+| `janitorFailureAttentionSeconds` | `600` | positive integer | Consecutive janitor failure duration before build attention. |
+| `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
 
 Dispatch failures share one budget across stages until runner attachment. At
@@ -1852,6 +1854,9 @@ With no slugs the repository journal is included; named watches add it with
 
 The default watch reports actionable conditions only:
 
+- `build.janitor-failing`: a build has failed janitor attempts for the configured attention threshold. A successful attempt clears it.
+- `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.
+
 - Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
@@ -1994,7 +1999,7 @@ vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `abo
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
-`attention` (an open escalation or a build waiting for a merge decision). Repeatable `--event`
+`attention` (an open escalation, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
 globs in supply order — and the record names what matched.
@@ -2005,7 +2010,7 @@ means an open escalation exactly as everywhere else. In the manner of `kubectl
 wait`, a condition that already holds when the command starts returns
 immediately with that build's latest event (`--since` does not suppress this);
 otherwise the first later event whose reduction produces it ends the wait.
-`attention` is also a current-state condition: an already open escalation or
+`attention` is also a current-state condition: existing janitor failure attention, an already open escalation or
 merge decision returns immediately, including with `--since`. Merge matches
 use the same observation as watch. During replay, only new escalation events
 or undelivered eligible merge decisions satisfy attention. `--event` conditions
@@ -2212,3 +2217,28 @@ ab ticket edit AUT-8
 
 Use `expectedRevision` on MCP `tickets.update`, `tickets.move`, `tickets.block`
 and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.
+
+## Forge failure recovery
+
+Janitor failures are durable per-build episodes. Eligible failures retry after
+30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
+Skipped polls preserve the episode across restart. After
+`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
+notifies default watchers and appears on the build row. A successful attempt
+clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+
+A classified forge rate limit records repository degradation with `resetAt`.
+Forge work waits during cooldown; passing the deadline permits a recovery
+request, and only success clears degradation. A further limit extends cooldown.
+Native landing application failures keep candidate-specific retry eligibility,
+including automatic decisions without a human command. Retries recheck consent,
+holds, verification and the exact candidate. Uncertain enables remain pending
+until cancellation can be confirmed after cooldown. Publication retries reuse
+cancellation receipts only when the forge confirms the same disabled state for
+the same candidate and publication operation.
+
+Tick telemetry counts provider wire requests, including failures. Counts are
+unavailable for uninstrumented adapters. Attribution retains at most ten builds
+ordered by descending count then build name; repository requests are unattributed.
+Repository status names a hotspot only when one build makes at least two requests
+and more than half of attributed requests. Telemetry never controls workflow.

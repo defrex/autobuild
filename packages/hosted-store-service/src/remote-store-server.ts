@@ -36,7 +36,7 @@ import {
  * `appendWithArtifacts` callback — atomicity is the backing store's, not
  * re-implemented here.
  */
-import type { ZodType, z } from 'zod'
+import { z, type ZodType } from 'zod'
 import type { AbEvent, EventWrite } from '@defrex/autobuild/plugin-sdk'
 import {
   EventValidationError,
@@ -460,6 +460,21 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (kind === 'build') {
         if (!grant.kind.startsWith('build') || grant.id !== id)
           throw new MachineAuthError(403, 'write outside delegated build')
+      } else if (
+        kind === 'repo' &&
+        (grant.kind === 'build-runner' || grant.kind === 'build-phase') &&
+        req.method === 'POST' &&
+        new URL(req.url).pathname.split('/').slice(3).join('/') === 'events'
+      ) {
+        // Kernel forge guards report newly observed limits through the journal.
+        // Delegates cannot recover the forge, change leases, or append other facts.
+        const body = eventWriteWireSchema.safeParse(await req.clone().json())
+        if (
+          !body.success ||
+          !z.object({ kind: z.literal('kernel') }).safeParse(body.data.actor).success ||
+          body.data.type !== 'dispatcher.forge-degraded'
+        )
+          throw new MachineAuthError(403, 'write outside delegated resource')
       } else if (kind === 'repo' && grant.kind.startsWith('harvest')) {
         await authorizeHarvestMutation(req, value)
       } else throw new MachineAuthError(403, 'write outside delegated resource')
