@@ -193,7 +193,7 @@ describe('website capture', () => {
 
   const chromium = chromiumBinary()
   test.skipIf(!chromium)(
-    'captures four real PNGs with the stylesheet loaded and the remote state applied',
+    'captures landing, docs and motion PNGs with the stylesheet loaded and the remote state applied',
     async () => {
       const dir = join(import.meta.dir, '..', '.ab', `website-capture-test-${process.pid}`)
       await captureWebsite({ chromium, outputDir: dir })
@@ -205,7 +205,9 @@ describe('website capture', () => {
       const report = await Bun.file(join(dir, 'verify-report.md')).text()
       expect(report).toContain('PASS: `phone-remote` has no sideways scroll')
     },
-    120_000,
+    // Each animated figure adds twelve sequential Chromium probe/screenshot
+    // pairs. Allow the complete three-figure inventory to finish on CI.
+    300_000,
   )
 })
 
