@@ -838,7 +838,16 @@ command = "postgres"
     const store = await seedDashboardStore(3)
     const legacy = await legacySnapshot({ store, repo: REPO, clock })
     const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
-    expect(snapshot).toEqual(legacy)
+    expect(snapshot.model.capacity).toEqual({
+      configured: 7,
+      occupied: 3,
+      effective: 7,
+      borrowingNodes: [],
+    })
+    expect(snapshot).toEqual({
+      ...legacy,
+      model: { ...legacy.model, capacity: snapshot.model.capacity },
+    })
 
     // Explicit assertions on the snapshot's shape, so a future change that
     // makes BOTH paths drift together still fails here (AC 1).
