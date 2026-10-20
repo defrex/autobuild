@@ -280,7 +280,7 @@ export interface DashboardModel {
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
-  /** Every nonterminal build consumes one configured dispatch capacity slot. */
+  /** Shared occupied/effective slot counter; idle integration nodes are free. */
   active: DashboardCounter
   capacity?: DispatchCapacity
   /** Recorded observation occurrences not claimed by a Harvest snapshot,
