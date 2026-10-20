@@ -29,9 +29,13 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     expect(html).toContain(`<meta property="og:url" content="${SITE_URL}${page.path}">`)
     expect(html).toContain('href="/site.css"')
     expect(html).toContain(`content="${SITE_URL}/og.png"`)
-    expect(html).not.toContain('<script')
+    expect(html).toContain('<script type="module" src="/site.js"></script>')
     expect(html.match(/<h1[ >]/g)).toHaveLength(1)
-    expect(html.match(/aria-current="page"/g)).toHaveLength(1)
+    expect(html.match(/aria-current="page"/g)).toHaveLength(2)
+    for (const label of ['Site', 'Documentation']) {
+      const nav = html.match(new RegExp(`<nav[^>]*aria-label="${label}"[^>]*>[\\s\\S]*?</nav>`))![0]
+      expect(nav.match(/aria-current="page"/g)).toHaveLength(1)
+    }
     expect(html).toContain(`href="${page.path}" aria-current="page"`)
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html).toContain('href="/"')
