@@ -11,6 +11,10 @@ export const compatibilityMetadataSchema = z.strictObject({
 export type CompatibilityMetadata = z.infer<typeof compatibilityMetadataSchema>
 export const buildEventPolicy = {
   'build.compatibility-deferred': 'advisory',
+  'build.janitor-attempt-failed': 'decisive',
+  'build.janitor-recovered': 'decisive',
+  'build.janitor-failing': 'advisory',
+  'landing.application-failed': 'decisive',
   'landing.decided': 'decisive',
   'build.hold-requested': 'decisive',
   'build.land-requested': 'decisive',
@@ -175,6 +179,8 @@ export const repositoryEventPolicy = {
   'dispatcher.tick-completed': 'advisory',
   'dispatcher.ticket-scan-completed': 'advisory',
   'dispatcher.ticket-source-dependency-limited': 'decisive',
+  'dispatcher.forge-degraded': 'decisive',
+  'dispatcher.forge-recovered': 'decisive',
   'dispatcher.ticket-source-degraded': 'decisive',
   'dispatcher.ticket-source-recovered': 'decisive',
   'dispatcher.tick-failed': 'decisive',

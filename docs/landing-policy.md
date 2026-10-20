@@ -154,3 +154,8 @@ recovery. An unconfirmed candidate's descendants do not prove success. Durable
 confirmed receipts preserve historical writes. Local refs cache confirmed heads;
 remote expected-head leases and durable writer reservations still guard writes.
 Local-git's shared database retains authoritative CAS.
+
+Native cancellation receipts are candidate- and operation-specific. Publication
+retries confirm forge state before reusing a receipt; external re-enables require
+another confirmed cancellation. Classified transient landing failures retain
+retry eligibility and recheck authorization after repository forge cooldown.

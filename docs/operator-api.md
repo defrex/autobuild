@@ -237,6 +237,9 @@ record the first signal in the stop fact, and release its lease before exit.
 
 The default watch reports actionable conditions only:
 
+- `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
+- `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
+
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
   conflicted `restack.replayed` events. `build.consent-ready` is the single
   signal for a ready consent or held landing, including first repository-wide
@@ -302,3 +305,10 @@ or clears before changing other fields. Dispatch routing is unchanged.
 Landing controls use `land` and `hold` with acknowledged durable state. Land
 requires readiness and survives restacks; hold persists until land. Repository
 auto-merge settings are retired; configure ordered `[[landing]]` rules.
+
+Default attention includes `build.janitor-failing` and
+`dispatcher.forge-persistent`. Raw `dispatcher.forge-degraded` and
+`dispatcher.forge-recovered` facts are available through explicit event filters.
+Active janitor attention clears on a successful attempt. Repository status
+includes forge degradation/reset and available request counts; `dispatcher.forge-persistent` requires a completed retry opportunity past
+the original reset, which later rate limits cannot postpone indefinitely.

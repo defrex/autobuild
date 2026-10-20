@@ -266,3 +266,14 @@ export async function readDispatcherRunFacts(
     value: result.value as import('../kernel/read-facts').DispatcherRunFacts,
   }
 }
+
+/** Narrow durable health read for each forge boundary. */
+export async function readForgeHealth(store: Reader & Pick<BuildStore, 'getRepo'>, repo: string) {
+  if ((await store.getRepo(repo)) === null) return undefined
+  const result = await readValue<{ value?: import('../kernel/forge-health').ForgeDegradation }>(
+    store,
+    { kind: 'repo', repo },
+    'forgeHealthValue',
+  )
+  return result.value.value
+}

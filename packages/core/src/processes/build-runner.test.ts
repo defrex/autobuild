@@ -2293,6 +2293,7 @@ describe('finalize post-step publication', () => {
       finalizeHeads: [FINALIZE_HEAD],
       finalizeAncestors: [true],
     })
+    h.forge.setAutoMergeState(7, true)
     h.forge.setAutoMerge = async () => ({ kind: 'deferred' })
     await h.br.step()
     expect(h.forge.pushes).toEqual([])

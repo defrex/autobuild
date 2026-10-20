@@ -66,3 +66,55 @@ test('a concurrent merge is settled instead of publishing a replacement', async 
     'settle it before publishing',
   )
 })
+
+test('publication retry confirms one receipt; a new attempt and external enable are distinct', async () => {
+  const h = await fixture()
+  const start = h.forge.autoMergeCalls.length
+  await suspendNativeLanding(h, 'publication:10')
+  const first = await h.store.getEvents(h.slug)
+  await suspendNativeLanding(h, 'publication:10')
+  expect(await h.store.getEvents(h.slug)).toEqual(first)
+  expect(h.forge.autoMergeCalls.length - start).toBe(1)
+  await suspendNativeLanding(h, 'publication:11')
+  expect((await h.store.getEvents(h.slug)).length).toBe(first.length + 1)
+  // Disabled readback can confirm the new operation without another mutation.
+  expect(h.forge.autoMergeCalls.length - start).toBe(1)
+  await h.forge.setAutoMerge('/repo', 1, true)
+  await suspendNativeLanding(h, 'publication:11')
+  expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+  expect((await h.store.getEvents(h.slug)).length).toBe(first.length + 2)
+})
+
+test('unknown native state requires cancellation despite a matching disabled receipt', async () => {
+  const h = await fixture()
+  await suspendNativeLanding(h, 'publication:10')
+  const read = h.forge.getPrState.bind(h.forge)
+  h.forge.getPrState = async (...args) => {
+    const state = await read(...args)
+    return state.state === 'open' ? { ...state, nativeAutoMerge: undefined } : state
+  }
+  h.forge.setAutoMerge = async () => ({ kind: 'deferred' })
+  await expect(suspendNativeLanding(h, 'publication:10')).rejects.toThrow('publication suspended')
+})
+
+test('legacy receipts without publication head scope require a new confirmation', async () => {
+  const h = await fixture()
+  await h.forge.setAutoMerge('/repo', 1, false)
+  const state = (await readBuildFacts(h.store, h.slug)).value.state
+  await h.store.append(h.slug, {
+    actor: KERNEL,
+    type: 'landing.native-applied',
+    payload: {
+      enabled: false,
+      operation: 'publication:10',
+      candidate: state.landing!.decision!.candidate,
+      decisionSeq: state.landing!.decision!.seq,
+      commandSeq: state.landing!.command!.seq,
+    },
+  })
+  const before = (await h.store.getEvents(h.slug)).length
+  await suspendNativeLanding(h, 'publication:10')
+  expect((await h.store.getEvents(h.slug)).length).toBe(before + 1)
+  await suspendNativeLanding(h, 'publication:10')
+  expect((await h.store.getEvents(h.slug)).length).toBe(before + 1)
+})

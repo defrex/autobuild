@@ -693,5 +693,9 @@
   "packages/core/src/store/remote/client.ts::RemoteBuildStore/getReducerValue::advance": {
     "kind": "reduction",
     "reason": "Catalog/version fallback replays incompatible named answers locally through the fixed server cursor. Matching identity uses the persisted answer."
+  },
+  "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::reduce": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload over caller-supplied repository events; current production callers use persisted repository facts."
   }
 }

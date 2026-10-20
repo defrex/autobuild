@@ -602,6 +602,9 @@ export function projectBuildFromFacts(
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      ...(state.janitor?.attention
+        ? { setupError: `Janitor failing: ${state.janitor.message}` }
+        : {}),
       collectionIdentity: {
         repo: record.repo,
         source: record.ticket?.source,
@@ -629,6 +632,9 @@ export function projectBuildFromFacts(
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      ...(state.janitor?.attention
+        ? { setupError: `Janitor failing: ${state.janitor.message}` }
+        : {}),
       collectionIdentity: {
         repo: record.repo,
         source: record.ticket?.source,
@@ -923,8 +929,9 @@ export function projectBuildFromFacts(
     steps[steps.length - 1] = { ...steps[steps.length - 1]!, reason }
   }
 
-  const setupError =
-    state.infrastructureFailure !== undefined
+  const setupError = state.janitor?.attention
+    ? `Janitor failing: ${state.janitor.message}`
+    : state.infrastructureFailure !== undefined
       ? `${state.infrastructureFailure.provider} ${state.infrastructureFailure.operation} failed ` +
         `(attempt ${state.infrastructureFailure.attempt}, ${state.infrastructureFailure.cause}${
           state.infrastructureFailure.cleanupPending ? ', cleanup pending' : ''
