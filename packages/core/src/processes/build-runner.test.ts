@@ -7048,3 +7048,277 @@ test('a terminal winning while the continuation stream opens prevents native lau
   await h.br.step()
   expect(ofType(await h.store.getEvents(SLUG), 'plan-review.started')).toHaveLength(1)
 })
+
+describe('classified own-build reads', () => {
+  test('persistent context read failures park once per explicit authorization without spending phase failures', async () => {
+    let calls = 0
+    let repaired = false
+    const h = await makeHarness({
+      handlers: (store) => ({
+        plan: async (ctx) => {
+          calls++
+          if (repaired) return happyHandlers(store).plan!(ctx)
+          const read = store.getReducerValue.bind(store)
+          store.getReducerValue = async () => {
+            throw new Error('own build unreadable')
+          }
+          try {
+            await expect(
+              buildContext({
+                store,
+                env: {
+                  store: 'local',
+                  build: SLUG,
+                  phase: 'plan',
+                  round: 1,
+                  session: sessionOf(ctx),
+                },
+                workspacePath: ctx.opts.workspacePath,
+              }),
+            ).rejects.toThrow('own build unreadable')
+          } finally {
+            store.getReducerValue = read
+          }
+          return defaultTurnResult('context failed')
+        },
+      }),
+    })
+    await h.br.attach()
+    for (let episode = 1; episode <= 4; episode++) {
+      await h.br.step()
+      for (let replay = 0; replay < 3; replay++)
+        expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'blocked' })
+      const events = await h.store.getEvents(SLUG)
+      expect(calls).toBe(episode)
+      expect(ofType(events, 'phase.failed')).toHaveLength(0)
+      expect(ofType(events, 'phase.deferred')).toHaveLength(episode)
+      const raises = ofType(events, 'phase.deferral-escalated')
+      expect(raises).toHaveLength(episode)
+      expect(reduceBuild(events).status).toBe('blocked')
+      await h.store.append(SLUG, {
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: {
+          id: raises.at(-1)!.payload.id,
+          answer: 'access repaired',
+          resolution: episode % 2 ? 'retry' : 'guidance',
+        },
+      })
+    }
+    repaired = true
+    await h.br.step()
+    expect(ofType(await h.store.getEvents(SLUG), 'plan.completed')).toHaveLength(1)
+    expect(ofType(await h.store.getEvents(SLUG), 'phase.failed')).toHaveLength(0)
+  })
+
+  for (const settled of [false, true])
+    test(`repairs crash gap after ${settled ? 'deferral' : 'session end'} without an agent`, async () => {
+      const h = await makeHarness({
+        handlers: () => ({
+          plan: () => {
+            throw new Error('must not launch')
+          },
+        }),
+      })
+      await h.br.attach()
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { session: 's_crash', role: 'plan', runner: 'scripted', phase: 'plan', round: 1 },
+      })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.build-read-failed',
+        payload: {
+          session: 's_crash',
+          phase: 'plan',
+          round: 1,
+          operation: 'context',
+          reason: 'own-build-read',
+          diagnostic: 'unreadable',
+        },
+      })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: 's_crash',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'prior', resumedFromSeq: 0 },
+        },
+      })
+      if (settled)
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'phase.deferred',
+          payload: {
+            session: 's_crash',
+            phase: 'plan',
+            round: 1,
+            reason: 'own-build-read',
+            diagnostic: 'unreadable',
+          },
+        })
+      expect((await h.br.step()).kind).toBe('raise-read-deferral')
+      expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'blocked' })
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'phase.deferred')).toHaveLength(1)
+      expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+      expect(ofType(events, 'phase.failed')).toHaveLength(0)
+      expect(h.runner.sessions.size).toBe(0)
+    })
+})
+
+test('a deferral answer preserves a genuine failure, and the next ordinary failure still exhausts', async () => {
+  let calls = 0
+  const h = await makeHarness({
+    handlers: (store) => ({
+      plan: async (ctx) => {
+        calls++
+        if (calls === 1)
+          await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'session.build-read-failed',
+            payload: {
+              session: sessionOf(ctx),
+              phase: 'plan',
+              round: 1,
+              operation: 'context',
+              reason: 'own-build-read',
+              diagnostic: 'cannot read',
+            },
+          })
+        return defaultTurnResult('no terminal')
+      },
+    }),
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'phase.failed',
+    payload: {
+      phase: 'plan',
+      round: 1,
+      attempt: 1,
+      error: 'real previous failure',
+      willRetry: true,
+    },
+  })
+  await h.br.attach()
+  await h.br.step()
+  const raise = ofType(await h.store.getEvents(SLUG), 'phase.deferral-escalated')[0]!
+  await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'escalation.answered',
+    payload: { id: raise.payload.id, answer: 'fixed', resolution: 'retry' },
+  })
+  await h.br.step()
+  await h.br.step()
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.failed').map((event) => event.payload.attempt)).toEqual([1, 2])
+  expect(ofType(events, 'escalation.raised').at(-1)!.payload.policyCause).toBe(
+    'phase-attempt-limit',
+  )
+  expect(calls).toBe(2)
+})
+
+for (const role of ['verify-e2e', 'release-notes'] as const)
+  test(`${role} read failure parks its distinct agent path before completion`, async () => {
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        [role]: async (ctx: ScriptContext) => {
+          const { phase, round } = parseAbPhase(ctx.opts.env.AB_PHASE!)
+          await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'session.build-read-failed',
+            payload: {
+              session: sessionOf(ctx),
+              phase,
+              round,
+              operation: 'context',
+              reason: 'own-build-read',
+              diagnostic: 'cannot read contract',
+            },
+          })
+          return defaultTurnResult('context unavailable')
+        },
+      }),
+    })
+    const state = await h.br.run()
+    expect(state.status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'phase.failed')).toHaveLength(0)
+    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+    if (role === 'release-notes') expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+    else
+      expect(
+        ofType(events, 'verify.completed').filter((event) => event.payload.step === 'e2e'),
+      ).toHaveLength(0)
+  })
+
+test('same-turn context recovery and a valid terminal override the read marker', async () => {
+  const h = await makeHarness({
+    handlers: (store) => ({
+      plan: async (ctx) => {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.build-read-failed',
+          payload: {
+            session: sessionOf(ctx),
+            phase: 'plan',
+            round: 1,
+            operation: 'context',
+            reason: 'own-build-read',
+            diagnostic: 'transient',
+          },
+        })
+        return happyHandlers(store).plan!(ctx)
+      },
+    }),
+  })
+  await h.br.attach()
+  await h.br.step()
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'plan.completed')).toHaveLength(1)
+  expect(ofType(events, 'phase.deferred')).toHaveLength(0)
+  expect(ofType(events, 'phase.failed')).toHaveLength(0)
+  expect((await h.br.step()).kind).toBe('run-phase')
+})
+
+test('finalize post-step expiry still parks classified read evidence before recording an outcome', async () => {
+  const timers = new ManualSessionBudgetScheduler()
+  let signalRead!: () => void
+  const readRecorded = new Promise<void>((resolve) => {
+    signalRead = resolve
+  })
+  const h = await makeHarness({
+    runnerOpts: { scheduleSessionBudget: timers.schedule },
+    handlers: (store) => ({
+      ...happyHandlers(store),
+      'release-notes': async (ctx) => {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.build-read-failed',
+          payload: {
+            session: sessionOf(ctx),
+            phase: 'finalize',
+            round: 1,
+            operation: 'context',
+            reason: 'own-build-read',
+            diagnostic: 'unreadable before expiry',
+          },
+        })
+        signalRead()
+        return new Promise<AgentTurnResult>(() => {})
+      },
+    }),
+  })
+  const running = h.br.run()
+  await readRecorded
+  await timers.expireNext()
+  expect((await running).status).toBe('blocked')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+  expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+  expect(ofType(events, 'phase.failed')).toHaveLength(0)
+})

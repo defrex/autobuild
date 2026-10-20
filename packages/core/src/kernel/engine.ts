@@ -64,6 +64,7 @@ export type VerifyAction =
 export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
 
 export type Decision =
+  | ({ kind: 'raise-read-deferral' } & import('./read-deferrals').ReadDeferral)
   | { kind: 'restack'; trigger: 'verify-entry' | 'awaiting-landing'; cycle: number }
   | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
   | { kind: 'wait'; reason: WaitReason }
@@ -154,6 +155,8 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).
   if (state.openEscalations.length > 0) return { kind: 'wait', reason: 'blocked' }
+  const deferred = log.readDeferrals.find((item) => item.ended)
+  if (deferred) return { kind: 'raise-read-deferral', ...deferred }
   if (state.kind === 'node') {
     if (state.nodeRestack?.conflict) {
       const attempt =
@@ -241,7 +244,9 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // condition's crash gap or acknowledge its exhausted budget.
   const allRaised = [...state.openEscalations, ...state.answeredEscalations]
   const raisedAfter = (seq: number, source: EscalationSource, phase: EscalationTarget): boolean =>
-    allRaised.some((e) => e.seq > seq && e.source === source && e.phase === phase)
+    allRaised.some(
+      (e) => e.seq > seq && e.source === source && e.phase === phase && e.deferral === undefined,
+    )
   const reconcileNoProgressRaisedAfter = (seq: number): boolean =>
     allRaised.some(
       (e) =>
@@ -346,7 +351,7 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   const lastFail = fails.at(-1)
   if (
     lastFail !== undefined &&
-    fails.length >= config.policy.maxVerifyAttempts &&
+    new Set(fails.map((failure) => failure.attempt)).size >= config.policy.maxVerifyAttempts &&
     !raisedAfter(lastFail.seq, 'policy', verifyPhase(lastFail.step))
   ) {
     // Exhaustion escalates once per failure: an exact policy raise for this
@@ -728,11 +733,17 @@ type GuidanceDestination = 'plan' | 'code' | `verify:${string}` | 'other'
  * feeds implement. Finalize/reconcile guidance travels through `ab context`.
  */
 function guidanceDestination(
-  escalation: Pick<AnsweredEscalation, 'phase' | 'source'>,
+  escalation: Pick<AnsweredEscalation, 'phase' | 'source' | 'deferral'>,
 ): GuidanceDestination {
   const { phase, source } = escalation
+  if (
+    escalation.deferral === 'own-build-read' &&
+    (phase === 'plan-review' || phase === 'code-review')
+  )
+    return 'other'
   if (phase === 'plan' || phase === 'plan-review') return 'plan'
   if (phase === 'implement' || phase === 'code-review') return 'code'
-  if (isVerifyPhase(phase)) return source === 'agent' ? phase : 'code'
+  if (isVerifyPhase(phase))
+    return source === 'agent' || escalation.deferral === 'own-build-read' ? phase : 'code'
   return 'other'
 }

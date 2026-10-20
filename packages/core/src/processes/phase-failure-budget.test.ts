@@ -85,3 +85,16 @@ describe('phase-failure budget reset semantics', () => {
     expect(resetsPhaseFailureBudget(agentRaise, 'plan', 4)).toBe(false)
   })
 })
+
+test('own-build-read attention never resets genuine failures', () => {
+  expect(
+    resetsPhaseFailureBudget(
+      { phase: 'plan', round: 1, source: 'policy', deferral: 'own-build-read' },
+      'plan',
+      1,
+    ),
+  ).toBe(false)
+  expect(resetsPhaseFailureBudget({ phase: 'plan', round: 1, source: 'policy' }, 'plan', 1)).toBe(
+    true,
+  )
+})

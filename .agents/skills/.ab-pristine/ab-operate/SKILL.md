@@ -435,3 +435,12 @@ for one wake; state waits return immediately when already satisfied. `--for
 attention` also includes consent readiness and landing/conflict attention.
 Resume event backlogs with `--since <cursor>`; keep handling emitted records
 before interpreting terminal completion.
+
+### Own-build read deferral attention
+
+`phase.deferral-escalated` is ordinary blocked attention: repair the scoped
+CLI/store access described in its question before answering retry or guidance.
+The answer authorizes a fresh session and clears no genuine phase failures.
+Repeated classified read failures park immediately again; they do not consume
+the phase failure allowance. Default watch and attention waits deliver the new
+raise with its own event type.
