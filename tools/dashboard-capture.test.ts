@@ -87,6 +87,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'mixed-wide',
     'mixed-narrow',
     'unicode-transcript',
+    'native-sessions',
     'session-live',
     'session-closed',
     'resume-prompt',
@@ -151,6 +152,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
+    } else if (frame.id === 'native-sessions') {
+      expect(frame.text).toContain('suspended cause shutdown')
+      expect(frame.text).toContain('resumed cause shutdown continued from s_interrupted')
     } else if (frame.id.startsWith('session-')) {
       expect(frame.text).toContain('Session  complete-dashboard-evidence')
       if (frame.id === 'session-live') {

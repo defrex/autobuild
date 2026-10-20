@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 /** Private shipped child: one operating-system process per build. */
 import { runBuildChild } from '../packages/core/src/processes/build-child'
-import { BuildChildExitCoordinator } from '../packages/core/src/processes/build-child-exit'
+import {
+  BuildChildExitCoordinator,
+  BuildChildShutdown,
+} from '../packages/core/src/processes/build-child-exit'
 import { watchBuildParent } from '../packages/core/src/processes/build-parent-watch'
 import { BUILD_RUNNER_OPTIONS_ENV } from '../packages/core/src/ports/workspace/local-build-execution'
 import {
@@ -30,17 +33,16 @@ if (input.supervision.kind === 'local-parent') {
   // session. Environment-owned execution deliberately installs neither this
   // group reaper nor a meaningless host-PID watchdog.
   const terminal = new BuildChildExitCoordinator({ groupId: process.pid })
-  process.on('SIGINT', () => terminal.terminate(130))
-  process.on('SIGTERM', () => terminal.terminate(143))
-  terminal.setParentWatch(
-    watchBuildParent(input.supervision.parentPid, () => terminal.terminate(143)),
-  )
+  const shutdown = new BuildChildShutdown(terminal)
+  process.on('SIGINT', () => shutdown.request(130))
+  process.on('SIGTERM', () => shutdown.request(143))
+  terminal.setParentWatch(watchBuildParent(input.supervision.parentPid, () => shutdown.finish(143)))
   try {
-    await runBuildChild(input, process.env, undefined, { guest })
+    await runBuildChild(input, process.env, undefined, { guest, shutdownSignal: shutdown.signal })
   } catch {
     exitCode = 1
   }
-  terminal.terminate(exitCode)
+  shutdown.finish(exitCode)
 } else {
   // Vercel owns teardown of the complete VM session. Addressing a POSIX group
   // here could leave the SDK believing a still-running environment completed.

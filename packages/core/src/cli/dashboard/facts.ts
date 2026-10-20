@@ -14,7 +14,7 @@ import type { AbEvent } from '../../events/catalog'
 import { defineReducer } from '../../kernel/incremental'
 import { verifyPhase } from '../../ontology'
 
-export const DASHBOARD_FACTS_REDUCER_VERSION = 1
+export const DASHBOARD_FACTS_REDUCER_VERSION = 2
 
 /** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
  * seq of the `*.started` event, so callers can scope by the same seq
@@ -40,7 +40,10 @@ export interface DispatchFailureFact {
 /** Max seq per round of one loop output event. */
 export type RoundSeqs = Record<string, number>
 
-type SessionEvent = Extract<AbEvent, { type: 'session.started' | 'session.ended' }>
+type SessionEvent = Extract<
+  AbEvent,
+  { type: 'session.started' | 'session.ended' | 'session.suspended' | 'session.resumed' }
+>
 
 export interface DashboardFacts {
   /** Seq of the latest event of each queued-row kind (`undefined` until seen). */
@@ -187,6 +190,8 @@ export const dashboardFactsReducer = defineReducer<DashboardFacts, AbEvent, Dash
             error: event.payload.error,
           }
           break
+        case 'session.suspended':
+        case 'session.resumed':
         case 'session.started':
         case 'session.ended':
           acc.sessionEvents.push(event)

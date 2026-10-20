@@ -831,6 +831,21 @@ describe('response parsing', () => {
 // ── Atomic deposits, client half (D6, §8.7) ──────────────────────────────────
 
 describe('atomic deposits client half (D6, §8.7)', () => {
+  test('conditional deposits use a distinct fail-closed endpoint and preserve conflict responses', async () => {
+    const { store, calls } = makeStore([{ body: null }])
+    expect(
+      await store.appendWithArtifactsIfCurrent('build-a', 7, [], () => sampleEventWrite()),
+    ).toBeNull()
+    expect(calls[0]?.url).toBe('http://store.test/builds/build-a/deposits/conditional')
+    expect(calls[0]?.body).toMatchObject({ expectedSeq: 7 })
+    const older = makeStore([
+      { status: 404, body: { error: { code: 'not-found', message: 'unsupported route' } } },
+    ])
+    await expect(
+      older.store.appendWithArtifactsIfCurrent('build-a', 7, [], () => sampleEventWrite()),
+    ).rejects.toThrow()
+    expect(older.calls).toHaveLength(1)
+  })
   test('makeEvent sees sentinel metas with negative placeholder revisions', async () => {
     const realMetas = [
       wireArtifactMeta({ kind: 'plan', revision: 4, blobRef: 'sha256-real-plan' }),

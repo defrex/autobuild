@@ -255,6 +255,19 @@ export function scopeLocalStoreToPhaseSession(
         return event
       })
     },
+    async appendWithArtifactsIfCurrent<T extends EventType>(
+      slug: string,
+      expectedSeq: number,
+      artifacts: ArtifactInput[],
+      makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+    ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+      own('appendWithArtifactsIfCurrent', 'build', slug)
+      return store.appendWithArtifactsIfCurrent(slug, expectedSeq, artifacts, (deposited) => {
+        const event = makeEvent(deposited)
+        authorizeActor('appendWithArtifactsIfCurrent', event.actor)
+        return event
+      })
+    },
     async getEvents(
       slug: string,
       sinceSeq?: number,
