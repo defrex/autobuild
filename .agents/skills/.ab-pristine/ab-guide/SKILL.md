@@ -1868,7 +1868,10 @@ The default watch reports actionable conditions only:
   for five minutes in one run. A successful tick, new run, or matching stop
   ends the episode. Source grace and cooldown-driven failures do not start
   this clock; after grace, the first qualifying failure starts a new five-minute
-  interval. Each persistence episode is reported once.
+  interval. Each persistence episode is reported once. Repository read failures
+  fail the watch tick and retry on the next tick; repeated failures use this
+  existing attention. Validation errors include reducer, scope, cursor, field
+  path, and running version/commit in the stored tick error.
 
 Repository conditions are included with no slugs or with `--repository`.
 Routine outcomes and self-healing failures are silent. Repeatable
