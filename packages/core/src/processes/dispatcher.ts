@@ -6,7 +6,11 @@ import {
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
 import { recordJanitorFailure } from '../kernel/janitor-failure'
 import { isForgeFailure } from '../ports/forge-failure'
-import { withForgeRequestContext, forgeRequestContext } from '../ports/forge-request-context'
+import {
+  ForgeRequestDeferred,
+  withForgeRequestContext,
+  forgeRequestContext,
+} from '../ports/forge-request-context'
 import { dispatchCapacity, nodeCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
@@ -3463,12 +3467,19 @@ export class Dispatcher {
     // publication's fate BEFORE the destructive reap. The guard's append
     // failure propagates — a stale workspace with an unrecorded pending
     // request is never reaped (the next tick retries).
-    events = await settlePublicationFactsBeforeRelease(
-      { store: this.store, settlePublication: this.settlePublication },
-      slug,
-      events,
-      reason,
-    )
+    try {
+      events = await settlePublicationFactsBeforeRelease(
+        { store: this.store, settlePublication: this.settlePublication },
+        slug,
+        events,
+        reason,
+      )
+    } catch (error) {
+      // Keep this generation and its pending work until forge recovery,
+      // while allowing the sweep to supervise the remaining builds.
+      if (error instanceof ForgeRequestDeferred) return false
+      throw error
+    }
     const attempt = (events.cleanupCounts[JSON.stringify(open.ref)] ?? 0) + 1
     try {
       const outcome = await recovery.reap({

@@ -6590,6 +6590,48 @@ describe('publication loss before workspace release', () => {
     return { h, slug, requestSeq, reapCalls, settleCalls }
   }
 
+  test('forge scheduling deferrals park a reap without failing the tick or blocking sibling supervision', async () => {
+    const { ForgeCooldown } = await import('../kernel/guarded-forge')
+    const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+    for (const signal of [new ForgeCooldown('cooldown'), new ForgeRequestDeferred('deferred')]) {
+      let coolingDown = true
+      const fixture = await seedLostGuest({
+        settlePublication: async (slug) => {
+          fixture.settleCalls.push(slug)
+          if (coolingDown) throw signal
+          await fixture.h.store.append(slug, {
+            actor: DISPATCHER,
+            type: 'implement.completed',
+            payload: {
+              round: 1,
+              commits: { base: BASE, head: SHA },
+              artifact: { kind: 'implement-notes', rev: 0 },
+            },
+          })
+        },
+      })
+      const sibling = await seedBuild(fixture.h, { slug: 'sibling', attached: false })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await fixture.h.dispatcher.tick({ acceptNewWork: false })
+        expect(fixture.reapCalls).toEqual([])
+        const events = await fixture.h.store.getEvents(fixture.slug)
+        expect(
+          events.some((e) => e.type === 'publication.lost' || e.type === 'workspace.released'),
+        ).toBe(false)
+        expect(publicationPending(events)).toBe(true)
+      }
+      expect(fixture.h.launches).toContain(sibling)
+      expect(fixture.h.launches).not.toContain(fixture.slug)
+      coolingDown = false
+      await fixture.h.dispatcher.tick({ acceptNewWork: false })
+      await fixture.h.dispatcher.drainProvisioning()
+      expect(fixture.reapCalls).toEqual(['sandbox-g0'])
+      const events = await fixture.h.store.getEvents(fixture.slug)
+      expect(events.some((e) => e.type === 'publication.lost')).toBe(false)
+      expect(events.some((e) => e.type === 'implement.completed')).toBe(true)
+    }
+  })
+
   test('the loss shape (spec AC2): the reaped stale workspace records publication.lost first', async () => {
     const fixture = await seedLostGuest({
       settlePublication: async () => {
