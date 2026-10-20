@@ -591,3 +591,28 @@ a.dim {
     color: #000000;
   }
 }
+
+[data-integration-beats][data-integration-active]:not(svg) {
+  outline: 2px solid #55b8b8;
+  outline-offset: -2px;
+}
+svg[data-integration-active] {
+  outline: none;
+}
+svg[data-integration-active] > path {
+  stroke: #55b8b8;
+}
+[data-integration-active] b {
+  color: #55b8b8;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-integration-beats][data-integration-active]:not(svg) {
+    outline: none;
+  }
+  [data-integration-active] b {
+    color: inherit;
+  }
+  svg[data-integration-active] > path {
+    stroke: #888888;
+  }
+}
