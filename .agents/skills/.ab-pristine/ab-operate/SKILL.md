@@ -210,7 +210,11 @@ Read events with a cursor or a small `--events` count; logs are long.
   `--review-round-ceiling <n>` raises the round limit, `--revise-spec <file>`
   resolves with a revised spec. Run `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
-  hold and release the whole repository.
+  hold and release the whole repository. Pause immediately interrupts live agent
+  sessions and acknowledges after they stop. Resume continues the same native
+  session where supported; remote or unsupported sessions rerun fresh, with a
+  reason recorded in session.resume-fallback. Without a live agent (including
+  check-only verify), pause still takes effect at the next boundary.
 - `ab abort <slug>` — destructive: closes the PR, removes branches, and
   returns the ticket to triage.
 - `ab hold <slug>` — persistently hold a landing and revoke earlier consent.

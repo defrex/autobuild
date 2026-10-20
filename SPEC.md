@@ -1521,7 +1521,7 @@ This is write-ahead resume intent, not a handshake: the prompt may execute and
 its terminal may land before the adapter reports native acceptance through
 `session.resumed`. Recovery retries an unaccepted attempt using the inherited
 handle; a superseded attempt's late acceptance is marked stale and changes no
-lifecycle state. The interruption prompt names shutdown or runner loss and asks
+lifecycle state. The interruption prompt names pause, shutdown or runner loss and asks
 the agent to re-check the worktree and re-run anything in flight. Phase and round
 are retained, including uncommitted local work.
 
@@ -1530,7 +1530,17 @@ milliseconds charge each live segment; suspended intervals are excluded. An
 abruptly lost segment is conservatively charged from its recorded start to
 recovery. Interrupted and continuation transcripts remain separate artifacts;
 logical totals sum known segment usage once and preserve every transcript ref.
-Unknown crash usage is not fabricated. Pause does not interrupt a live turn.
+Unknown crash usage is not fabricated.
+
+Pause immediately cancels a live agent turn and records suspension with cause
+`pause`, including remote sessions and sessions without a native handle.
+Acknowledgement follows adapter stop and durable suspension (or a winning phase
+terminal). Remote and unsupported recovery records a reasoned fresh-session
+fallback. No-live-session and check-only steps retain boundary-based pause.
+Abort takes precedence. A resume before cancellation prevents interruption;
+after cancellation starts the runner finishes suspension, then honors the latest
+request. Pause acknowledgement uses compare-and-append so it cannot overwrite
+a newer resume. Repository pause settles when all affected live builds settle.
 
 The optional `resume` capability continues native state in a fresh process,
 using explicit new execution options and environment. Success returns
@@ -2427,9 +2437,10 @@ rejection is `EventValidationError`.
    channel — and polling covers commands exactly the way it covers
    `subscribe`. A runner that is dead still receives pause/resume/abort
    commands and escalation answers on resume. While a turn is live, the runner
-   subscribes from its session boundary and forwards an abort as caller-owned
+   subscribes from its session boundary and forwards pause or abort as caller-owned
    cancellation to the AgentRunner; it closes the session transcript without
-   recording `phase.failed` and acknowledges abort. The supervising execution
+   recording `phase.failed`, records suspension for pause, and acknowledges the
+   current control. The supervising execution
    retains the lease until the build's complete process tree has been reaped.
 
 ### 15.3 Catalog

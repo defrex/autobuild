@@ -60,3 +60,7 @@ export function repositoryActionAvailability(model: DashboardModel) {
 export function harvestActionAvailability(harvest: DashboardHarvest | undefined) {
   return { resume: harvest?.action === 'resume', acknowledge: harvest?.action === 'acknowledge' }
 }
+
+/** Shared explanation for the two operator frontends. */
+export const pauseResumeHelp =
+  'Pause stops the live session immediately; resume continues where it stopped when supported. Remote or unsupported sessions rerun fresh.'

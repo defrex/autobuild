@@ -5848,7 +5848,7 @@ test('restart still reclaims and reruns a phase even when a durable native handl
 })
 
 describe('native suspension and continuation', () => {
-  function successor(h: Harness, runner: AgentRunner = h.runner) {
+  function successor(h: Harness, runner: AgentRunner = h.runner, remote = false) {
     let id = 100
     return new BuildRunner({
       store: h.store.scopeBuild(SLUG),
@@ -5860,6 +5860,7 @@ describe('native suspension and continuation', () => {
       },
       workspacePath: h.workspacePath,
       workspaceProvider: 'git-worktree',
+      workspaceRemote: remote,
       branch: BRANCH,
       slug: SLUG,
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -5917,7 +5918,7 @@ describe('native suspension and continuation', () => {
     expect(resumed).toBe(true)
     const log = await h.store.getEvents(SLUG)
     const acceptance = ofType(log, 'session.resumed')[0]!
-    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle.nativeId)
+    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
     expect(ofType(log, 'plan.started')).toHaveLength(1)
     const continuation = ofType(log, 'session.started').at(-1)!
     expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
@@ -5925,6 +5926,444 @@ describe('native suspension and continuation', () => {
     const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
     expect(journal.messages[0]).toContain('interrupted (shutdown)')
     expect(journal.messages[0]).toContain('Re-check the worktree')
+  })
+
+  for (const countermanded of [false, true]) {
+    test(`pause before session.started is ${countermanded ? 'countermanded by resume' : 'honored without waiting for the phase'}`, async () => {
+      const shutdown = new AbortController()
+      const h = await makeHarness({
+        nativeSessions: true,
+        workspaceProvider: 'git-worktree',
+        shutdownSignal: shutdown.signal,
+        handlers: countermanded
+          ? happyHandlers
+          : (store) => ({
+              ...happyHandlers(store),
+              'ab-plan': async () => {
+                await new Promise(() => {})
+                return defaultTurnResult()
+              },
+            }),
+      })
+      const append = h.store.append.bind(h.store)
+      let injected = false
+      h.store.append = async (slug, event) => {
+        if (!injected && event.type === 'session.started') {
+          injected = true
+          await append(slug, {
+            actor: humanActor('operator'),
+            type: 'build.pause-requested',
+            payload: {},
+          })
+          if (countermanded) {
+            await append(slug, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+          }
+        }
+        return append(slug, event)
+      }
+      const running = h.br.run()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('pre-session pause did not settle')), 1000)
+      })
+      try {
+        const state = await Promise.race([running, deadline])
+        const log = await h.store.getEvents(SLUG)
+        expect(ofType(log, 'build.pause-requested')[0]!.seq).toBeLessThan(
+          ofType(log, 'session.started')[0]!.seq,
+        )
+        expect(ofType(log, 'phase.failed')).toHaveLength(0)
+        if (countermanded) {
+          expect(ofType(log, 'session.suspended')).toHaveLength(0)
+          expect(ofType(log, 'build.paused')).toHaveLength(0)
+          expect(ofType(log, 'plan.completed')).toHaveLength(1)
+        } else {
+          expect(state.status).toBe('paused')
+          expect(ofType(log, 'session.suspended')).toHaveLength(1)
+          expect(ofType(log, 'session.suspended')[0]!.payload.cause).toBe('pause')
+          expect(ofType(log, 'plan.completed')).toHaveLength(0)
+          expect(ofType(log, 'build.paused')[0]!.seq).toBeGreaterThan(
+            ofType(log, 'session.suspended')[0]!.seq,
+          )
+        }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+        shutdown.abort()
+        await running
+      }
+    })
+  }
+
+  test('pause suspends promptly and resumes the same native session', async () => {
+    let observed!: () => void
+    const ready = new Promise<void>((r) => {
+      observed = r
+    })
+    let resumed = false
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            if (!ctx.message) {
+              observed()
+              await new Promise(() => {})
+            }
+            resumed = true
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    const running = h.br.run()
+    await ready
+    const read = h.store.getReducerValue.bind(h.store)
+    let failedRead = false
+    h.store.getReducerValue = async (scope, request) => {
+      if (!failedRead && request.reducer === 'buildReadFacts') {
+        failedRead = true
+        throw new Error('transient pause read failure')
+      }
+      return read(scope, request)
+    }
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    await running
+    const before = await h.store.getEvents(SLUG)
+    const suspended = ofType(before, 'session.suspended')[0]!
+    expect(suspended.payload.cause).toBe('pause')
+    expect(failedRead).toBe(true)
+    expect(
+      await h.store.getArtifact(
+        SLUG,
+        suspended.payload.transcript.kind,
+        suspended.payload.transcript.rev,
+      ),
+    ).not.toBeNull()
+    expect(reduceBuild(before).status).toBe('paused')
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.resume-requested',
+      payload: {},
+    })
+    const resumedRunner = successor(h)
+    await resumedRunner.attach()
+    await resumedRunner.step()
+    expect(resumed).toBe(true)
+    const log = await h.store.getEvents(SLUG)
+    const acceptance = ofType(log, 'session.resumed')[0]!
+    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
+    expect(ofType(log, 'plan.started')).toHaveLength(1)
+    const continuation = ofType(log, 'session.started').at(-1)!
+    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
+    expect(continuation.payload.round).toBe(1)
+    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
+    expect(journal.messages[0]).toContain('interrupted (pause)')
+    expect(journal.messages[0]).toContain('Re-check the worktree')
+  })
+
+  for (const scenario of ['missing-handle', 'remote', 'unsupported'] as const) {
+    test(`pause suspends ${scenario} sessions and logs a fresh recovery fallback`, async () => {
+      let ready!: () => void
+      const observed = new Promise<void>((resolve) => {
+        ready = resolve
+      })
+      let first = true
+      const h = await makeHarness({
+        nativeSessions: scenario !== 'missing-handle',
+        workspaceProvider: 'git-worktree',
+        workspaceRemote: scenario === 'remote',
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          return {
+            ...handlers,
+            'ab-plan': async (ctx) => {
+              if (first) {
+                first = false
+                ready()
+                await new Promise(() => {})
+              }
+              return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+            },
+          }
+        },
+      })
+      const running = h.br.run()
+      await observed
+      await h.store.append(SLUG, {
+        actor: humanActor('operator'),
+        type: 'build.pause-requested',
+        payload: {},
+      })
+      expect((await running).status).toBe('paused')
+      const suspended = ofType(await h.store.getEvents(SLUG), 'session.suspended')
+      expect(suspended).toHaveLength(1)
+      expect(suspended[0]!.payload.cause).toBe('pause')
+      if (scenario === 'missing-handle') expect(suspended[0]!.payload.handle).toBeUndefined()
+      await h.store.append(SLUG, {
+        actor: humanActor('operator'),
+        type: 'build.resume-requested',
+        payload: {},
+      })
+      const runner =
+        scenario === 'unsupported'
+          ? {
+              name: h.runner.name,
+              start: h.runner.start.bind(h.runner),
+              continue: h.runner.continue.bind(h.runner),
+              end: h.runner.end.bind(h.runner),
+            }
+          : h.runner
+      const next = successor(h, runner, scenario === 'remote')
+      await next.attach()
+      await next.step()
+      const log = await h.store.getEvents(SLUG)
+      expect(ofType(log, 'session.resumed')).toHaveLength(0)
+      expect(ofType(log, 'session.resume-fallback')[0]!.payload.reason).toBe(
+        scenario === 'remote'
+          ? 'workspace-not-local-git-worktree'
+          : scenario === 'unsupported'
+            ? 'unsupported-runtime'
+            : 'missing-handle',
+      )
+      expect(ofType(log, 'phase.failed')).toHaveLength(0)
+    })
+  }
+
+  for (const command of ['resume', 'abort'] as const) {
+    test(`${command} during pause cleanup supersedes pause without stranding the build`, async () => {
+      let ready!: () => void
+      const observed = new Promise<void>((resolve) => {
+        ready = resolve
+      })
+      let h!: Harness
+      let interrupted = false
+      const runner: AgentRunner = {
+        name: 'scripted',
+        start: (...args) => h.runner.start(...args),
+        continue: (...args) => h.runner.continue(...args),
+        resume: (...args) => h.runner.resume(...args),
+        end: async (handle) => {
+          if (!interrupted) {
+            interrupted = true
+            await h.store.append(SLUG, {
+              actor: humanActor('operator'),
+              type: command === 'resume' ? 'build.resume-requested' : 'build.abort-requested',
+              payload: {},
+            })
+          }
+          return h.runner.end(handle)
+        },
+      }
+      h = await makeHarness({
+        nativeSessions: true,
+        workspaceProvider: 'git-worktree',
+        runtimeRunner: runner,
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          return {
+            ...handlers,
+            'ab-plan': async (ctx) => {
+              if (!ctx.message) {
+                ready()
+                await new Promise(() => {})
+              }
+              return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+            },
+          }
+        },
+      })
+      const running = h.br.run()
+      await observed
+      await h.store.append(SLUG, {
+        actor: humanActor('operator'),
+        type: 'build.pause-requested',
+        payload: {},
+      })
+      const state = await running
+      const log = await h.store.getEvents(SLUG)
+      expect(ofType(log, 'build.paused')).toHaveLength(0)
+      expect(ofType(log, 'session.suspended')).toHaveLength(1)
+      expect(ofType(log, 'phase.failed')).toHaveLength(0)
+      if (command === 'abort') expect(state.status).toBe('aborted')
+      else {
+        expect(ofType(log, 'session.resumed')).toHaveLength(1)
+        expect(ofType(log, 'plan.completed')).toHaveLength(1)
+      }
+    })
+  }
+
+  test('resume winning the pause acknowledgement CAS prevents a stale paused fact', async () => {
+    let ready!: () => void
+    const observed = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            if (!ctx.message) {
+              ready()
+              await new Promise(() => {})
+            }
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    const append = h.store.appendIfCurrent.bind(h.store)
+    let raced = false
+    h.store.appendIfCurrent = async (slug, cursor, write) => {
+      if (write.type === 'build.paused' && !raced) {
+        raced = true
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.resume-requested',
+          payload: {},
+        })
+      }
+      return append(slug, cursor, write)
+    }
+    const running = h.br.run()
+    await observed
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    await running
+    const log = await h.store.getEvents(SLUG)
+    expect(raced).toBe(true)
+    expect(ofType(log, 'build.paused')).toHaveLength(0)
+    expect(ofType(log, 'session.resumed')).toHaveLength(1)
+    expect(ofType(log, 'phase.failed')).toHaveLength(0)
+  })
+
+  test('a pause countermanded before cancellation leaves the running turn intact', async () => {
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            await store.append(SLUG, {
+              actor: humanActor('operator'),
+              type: 'build.pause-requested',
+              payload: {},
+            })
+            await store.append(SLUG, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    await h.br.run()
+    const log = await h.store.getEvents(SLUG)
+    expect(ofType(log, 'session.suspended')).toHaveLength(0)
+    expect(ofType(log, 'build.paused')).toHaveLength(0)
+    expect(ofType(log, 'plan.completed')).toHaveLength(1)
+  })
+
+  test('a phase terminal landing during pause cleanup wins over suspension', async () => {
+    let ready!: () => void
+    const observed = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    let h!: Harness
+    const runner: AgentRunner = {
+      name: 'scripted',
+      start: (...args) => h.runner.start(...args),
+      continue: (...args) => h.runner.continue(...args),
+      resume: (...args) => h.runner.resume(...args),
+      end: async (handle) => {
+        const journal = h.runner.sessions.get(handle.id)!
+        const ctx = { opts: journal.opts, session: handle, turn: 1, history: [] }
+        await happyHandlers(h.store).plan!(ctx)
+        return h.runner.end(handle)
+      },
+    }
+    h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      runtimeRunner: runner,
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'ab-plan': async () => {
+          ready()
+          await new Promise(() => {})
+          return defaultTurnResult()
+        },
+      }),
+    })
+    const running = h.br.run()
+    await observed
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    expect((await running).status).toBe('paused')
+    const log = await h.store.getEvents(SLUG)
+    expect(ofType(log, 'session.suspended')).toHaveLength(0)
+    expect(ofType(log, 'plan.completed')).toHaveLength(1)
+    expect(ofType(log, 'session.ended')).toHaveLength(1)
+    expect(ofType(log, 'phase.failed')).toHaveLength(0)
+  })
+
+  test('abort of an already suspended build never resumes its native session', async () => {
+    let ready!: () => void
+    const observed = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'ab-plan': async () => {
+          ready()
+          await new Promise(() => {})
+          return defaultTurnResult()
+        },
+      }),
+    })
+    const running = h.br.run()
+    await observed
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    expect((await running).status).toBe('paused')
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    expect((await successor(h).run()).status).toBe('aborted')
+    const log = await h.store.getEvents(SLUG)
+    expect(ofType(log, 'session.resumed')).toHaveLength(0)
+    expect(ofType(log, 'session.started')).toHaveLength(1)
   })
 
   test('an attempt without acceptance is retried with inherited identity; terminal before acceptance is valid', async () => {
