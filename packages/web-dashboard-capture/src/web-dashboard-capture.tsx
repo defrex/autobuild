@@ -117,6 +117,36 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 1800,
     requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
   },
+  ...(['wide', 'narrow'] as const).map((size) => ({
+    id: `integration-detail-${size}`,
+    width: size === 'wide' ? 1440 : 390,
+    height: 2600,
+    requires: [
+      'Integration',
+      'Progress',
+      'Branch',
+      'Steps',
+      'Children',
+      'implement',
+      'code-review',
+      'Verification',
+      'Landing',
+    ],
+  })),
+  ...(['conflict', 'failed', 'ready-node'] as const).map((state) => ({
+    id: `integration-detail-${state}`,
+    width: 1440,
+    height: 3000,
+    requires: [
+      'Verification',
+      'Landing',
+      ...(state === 'conflict'
+        ? ['src/a file.ts']
+        : state === 'failed'
+          ? ['repair child']
+          : ['press l, or ab land']),
+    ],
+  })),
   {
     id: 'integration-wide',
     width: 1440,
@@ -611,6 +641,14 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
 }
 
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
+  if (spec.id.startsWith('integration-detail-')) {
+    const state = spec.id.slice('integration-detail-'.length)
+    const slug = state === 'wide' || state === 'narrow' ? 'integration-with-pr' : `queue-${state}`
+    return shell(
+      builds(models.integration, { detailOpen: true, selection: { kind: 'build', slug } }),
+      { model: models.integration },
+    )
+  }
   switch (spec.id) {
     case 'builds-forge-readiness-wide':
     case 'builds-forge-readiness-narrow': {

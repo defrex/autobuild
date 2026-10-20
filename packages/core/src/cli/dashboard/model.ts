@@ -1,3 +1,4 @@
+import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
   projectIntegrationRow,
   enrichIntegrationRows,
@@ -172,6 +173,7 @@ export interface DashboardHarvest {
 
 export interface DashboardBuild {
   integrationRow?: IntegrationRow
+  integrationDetail?: IntegrationDetail
   collectionIdentity?: {
     repo: string
     source?: string
@@ -180,6 +182,9 @@ export interface DashboardBuild {
     targetSource?: string
     targetId?: string
     status: BuildState['status']
+    title?: string
+    phase?: string
+    createdAt?: string
   }
   tree?: TreeProjection
   kind?: 'integration' | 'work'
@@ -602,6 +607,13 @@ export function projectBuildFromFacts(
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      integrationDetail: projectIntegrationDetail(
+        record,
+        state,
+        facts.log.restack,
+        config,
+        pipeline,
+      ),
       collectionIdentity: {
         repo: record.repo,
         source: record.ticket?.source,
@@ -610,6 +622,13 @@ export function projectBuildFromFacts(
         targetSource: state.target?.ticket.source,
         targetId: state.target?.ticket.id,
         status: state.status,
+        title: record.ticket?.title,
+        phase:
+          state.currentPhase?.phase ??
+          buildVocabulary(state).integration ??
+          state.phase ??
+          state.status,
+        createdAt: record.createdAt,
       },
       status,
       alsoPaused: false,
@@ -629,6 +648,13 @@ export function projectBuildFromFacts(
       ...buildVocabulary(state),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      integrationDetail: projectIntegrationDetail(
+        record,
+        state,
+        facts.log.restack,
+        config,
+        pipeline,
+      ),
       collectionIdentity: {
         repo: record.repo,
         source: record.ticket?.source,
@@ -637,6 +663,13 @@ export function projectBuildFromFacts(
         targetSource: state.target?.ticket.source,
         targetId: state.target?.ticket.id,
         status: state.status,
+        title: record.ticket?.title,
+        phase:
+          state.currentPhase?.phase ??
+          buildVocabulary(state).integration ??
+          state.phase ??
+          state.status,
+        createdAt: record.createdAt,
       },
       status,
       alsoPaused: false,
@@ -949,6 +982,7 @@ export function projectBuildFromFacts(
     ...buildVocabulary(state),
     tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
     integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+    integrationDetail: projectIntegrationDetail(record, state, facts.log.restack, config, pipeline),
     collectionIdentity: {
       repo: record.repo,
       source: record.ticket?.source,
@@ -957,6 +991,13 @@ export function projectBuildFromFacts(
       targetSource: state.target?.ticket.source,
       targetId: state.target?.ticket.id,
       status: state.status,
+      title: record.ticket?.title,
+      phase:
+        state.currentPhase?.phase ??
+        buildVocabulary(state).integration ??
+        state.phase ??
+        state.status,
+      createdAt: record.createdAt,
     },
     status,
     alsoPaused: state.status === 'paused' && status === 'blocked',
@@ -1307,7 +1348,10 @@ export function buildDashboard(
   )
   const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(
-    builds,
+    enrichIntegrationRows(
+      builds,
+      entries.map((e) => e.record),
+    ),
     {
       ...header,
       capacityProjection,
