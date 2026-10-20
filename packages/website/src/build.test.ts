@@ -112,7 +112,8 @@ describe('static site', () => {
     expect(html).toContain('data-motion-replay hidden aria-label="Replay pipeline animation"')
     expect(html).toContain('type="button" class="word motion-replay"')
     expect(js).toContain('__websiteCapture')
-    expect(js).not.toMatch(/https?:\/\//)
+    // Docs copy uses the canonical origin as a URL base, without a network service.
+    expect(js.replaceAll(SITE_URL, '')).not.toMatch(/https?:\/\//)
   })
 
   test('core guides have one ordinary link in their matching landing sections', async () => {
