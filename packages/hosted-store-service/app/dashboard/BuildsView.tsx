@@ -558,26 +558,64 @@ function BuildRow({
           <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
         </span>
       </div>
-      {ceiling && <p className="sub">{ceiling}</p>}
-      {row.target && (
+      {!row.integrationRow && ceiling && <p className="sub">{ceiling}</p>}
+      {!row.integrationRow && row.target && (
         <div>
           {row.kind ?? 'work'} · target {row.target}
           {row.integration ? ` · ${row.integration}` : ''}
         </div>
       )}
-      {row.abortProgress !== undefined ? (
+      {row.integrationRow ? (
+        <>
+          <p className="sub integration-progress">
+            integration into {row.integrationRow.destination}
+            {'  '}
+            {row.integrationRow.children.known ? (
+              row.integrationRow.children.total ? (
+                <>
+                  <span className="ok">
+                    {row.integrationRow.children.landed}/{row.integrationRow.children.total} landed
+                  </span>
+                  {row.integrationRow.children.building > 0 && (
+                    <span className="live"> · {row.integrationRow.children.building} building</span>
+                  )}
+                  {row.integrationRow.children.queued > 0 && (
+                    <span className="slack"> · {row.integrationRow.children.queued} queued</span>
+                  )}
+                </>
+              ) : (
+                <span className="slack">no children yet</span>
+              )
+            ) : (
+              <span className="slack">children unknown</span>
+            )}
+            {row.integrationRow.verified && <span className="ok"> · verified</span>}
+          </p>
+          <StepLine steps={row.integrationRow.steps} now={now} label={`${row.slug} pipeline`} />
+          {row.integrationRow.alert && (
+            <p
+              className={`sub integration-alert ${row.integrationRow.alert.tone === 'red' ? 'alert' : 'warn'}`}
+              role="status"
+            >
+              <span aria-hidden>! </span>
+              {row.integrationRow.alert.text}
+            </p>
+          )}
+        </>
+      ) : row.abortProgress !== undefined ? (
         <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
       ) : row.dispatch !== undefined ? (
         <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
       ) : (
         <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
       )}
-      {row.setupError !== undefined && (
+      {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
       )}
-      {row.blockers.map((blocker) => (
-        <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
-      ))}
+      {!row.integrationRow &&
+        row.blockers.map((blocker) => (
+          <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
+        ))}
       {open && (
         <BuildDetail
           id={detailId}
