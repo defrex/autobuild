@@ -1,3 +1,4 @@
+import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
 import { treeVocabulary, consentQueue } from './tree'
 /**
@@ -372,6 +373,49 @@ function renderBuild(
   // The slug is the sole flexible segment; narrow frames truncate it before
   // the right-pinned lifecycle status.
   const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
+  if (build.integrationRow) {
+    const row = build.integrationRow
+    const children = row.children
+    let bar = paint('┄'.repeat(22), 'dim', color)
+    let counts = [paint('children unknown', 'dim', color)]
+    if (children.known) {
+      const cells = integrationBarCells(children.landed, children.building, children.queued)
+      bar =
+        paint('━'.repeat(cells[0]!), 'green', color) +
+        paint('━'.repeat(cells[1]!), 'cyan', color) +
+        paint('─'.repeat(children.total ? cells[2]! : 22), 'dim', color)
+      counts = children.total
+        ? [
+            paint(`${children.landed}/${children.total} landed`, 'green', color),
+            ...(children.building ? [paint(`· ${children.building} building`, 'cyan', color)] : []),
+            ...(children.queued ? [paint(`· ${children.queued} queued`, 'dim', color)] : []),
+          ]
+        : [paint('no children yet', 'dim', color)]
+    }
+    lines.push(
+      ...packLines(
+        [
+          paint(`integration → ${row.destination}`, 'bold', color),
+          bar,
+          ...counts,
+          ...(row.verified ? [paint('· verified', 'green', color)] : []),
+        ],
+        width,
+        '  ',
+      ),
+    )
+    lines.push(
+      ...packLines(
+        row.steps.map((s) => renderStep(s, color, now)),
+        width,
+        '  ',
+      ),
+    )
+    if (row.alert)
+      for (const line of wrappedText(row.alert.text, Math.max(1, width - 4), ''))
+        lines.push(paint(`  ! ${line}`, row.alert.tone, color))
+    return lines
+  }
   if (build.target)
     lines.push(
       truncate(

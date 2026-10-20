@@ -242,3 +242,44 @@ test('ticketless fallback is scoped to the frozen target and source-qualified ch
     building: 0,
   })
 })
+
+test('real integration observations exclude native cancelled children from every count', async () => {
+  const { observeIntegration } = await import('../../kernel/integration-completeness')
+  const { MemoryBuildStore } = await import('../../store/memory')
+  const { FakeTicketSource } = await import('../../ports/tickets/fake')
+  const ticket = (id: string, status: string) => ({
+    ref: { source: 'fake', id },
+    title: id,
+    body: '',
+    labels: [],
+    state: status,
+    resolved: false,
+    revision: '0',
+  })
+  const tickets = new FakeTicketSource(
+    [
+      { ...ticket('NODE-1', 'Ready'), kind: 'node' },
+      { ...ticket('CANCELLED', 'Cancelled'), target: 'NODE-1' },
+      { ...ticket('OPEN', 'Ready'), target: 'NODE-1' },
+    ],
+    { doneState: 'Cancelled' },
+  )
+  const store = new MemoryBuildStore()
+  await store.createBuild({
+    ...record,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { ticket: record.ticket!, repo: record.repo, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  const observation = await observeIntegration(store, tickets, record.slug)
+  expect(observation.openChildren).toEqual(['OPEN'])
+  expect(row({ ...node(), integration: { observation } }).children).toEqual({
+    known: true,
+    landed: 0,
+    building: 0,
+    queued: 1,
+    total: 1,
+  })
+})

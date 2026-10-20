@@ -3027,3 +3027,51 @@ test('tree row, detail and queue labels use the shared vocabulary', async () => 
     Object.assign(treeVocabulary, original)
   }
 })
+
+test('integration list has three routine lines, one alert and a 22-cell colored track', () => {
+  const row = build({
+    slug: 'integration-demo',
+    kind: 'integration',
+    target: 'main',
+    integrationRow: {
+      destination: 'main',
+      openChildren: ['A', 'B', 'C'],
+      children: { known: true, landed: 8, building: 2, queued: 1, total: 11 },
+      verified: false,
+      steps: [
+        { label: 'spec', state: 'done' },
+        { label: 'open', state: 'done' },
+        { label: 'collect', state: 'current' },
+        { label: 'verify', state: 'pending' },
+        { label: 'land', state: 'pending', qualifier: 'consent' },
+      ],
+    },
+  })
+  const rendered = rd(model([row]), { color: true, width: 140, height: 40 })
+  const start = rendered.findIndex((line) => stripAnsi(line).includes('integration-demo'))
+  const body = rendered.slice(start, start + 3)
+  expect(stripAnsi(body[1]!)).toContain('integration → main')
+  expect(stripAnsi(body[1]!)).toContain('8/11 landed · 2 building · 1 queued')
+  expect(body[1]).toContain(`\x1b[32m${'━'.repeat(16)}`)
+  expect(body[1]).toContain(`\x1b[36m${'━'.repeat(4)}`)
+  expect(stripAnsi(body[2]!)).toContain('land(consent)')
+  expect(rendered.join('\n')).not.toContain('restack idle')
+  expect(rendered.join('\n')).not.toContain('merge(waiting)')
+  row.integrationRow!.alert = {
+    tone: 'red',
+    text: 'unit failed — file a repair child targeting NODE-1',
+  }
+  const alerted = rd(model([row]), { color: false, width: 140, height: 40 })
+  expect(alerted[start + 3]).toContain('! unit failed')
+  row.integrationRow!.children = { known: false }
+  expect(rd(model([row]), { color: false, width: 140, height: 40 }).join('\n')).toContain(
+    `${'┄'.repeat(22)} children unknown`,
+  )
+  row.integrationRow!.destination = 'NODE-900 日本語-release'
+  const narrow = rd(model([row]), { color: true, width: 50, height: 50 })
+  expect(narrow.every((line) => cellWidth(stripAnsi(line)) <= 50)).toBe(true)
+  expect(narrow.map(stripAnsi).join(' ').replaceAll('!', '').replace(/\s+/g, ' ')).toContain(
+    'repair child targeting NODE-1',
+  )
+  expect(narrow.join('\n')).not.toContain('\\u{1b}')
+})
