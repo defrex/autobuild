@@ -229,6 +229,11 @@ Read events with a cursor or a small `--events` count; logs are long.
 
 ### Tickets
 
+For feature sets you file yourself, consult the shared
+[destination choice guidance](../ab-guide/references/integration-tree.md#choosing-a-destination):
+explicitly choose root or a node, evaluate the repository's effective landing
+policy, and explain the landing flow to the human. Ask when intent is unclear.
+
 `ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
 move tickets; the `ab-tickets` skill covers the tracker's details. Moving a
 ticket into the ready state sends it to dispatch — do that only when the

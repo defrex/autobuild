@@ -60,49 +60,10 @@ and claims the ticket only after they resolve and other readiness gates pass.
 
 ## Node tickets and targets
 
-Tickets have `kind = "work"` by default, or `kind = "node"` for a named
-integration point. The optional `target` is a node ticket id in the same source;
-omission means the configured `baseBranch` root. Nodes may target other nodes.
-A ready node opens an integration branch; a targeting build freezes that node
-as its base and landing destination. The existing cascade restacks descendants
-when a parent moves. Blockers remain a separate graph.
-
-Use `ab ticket create "Integration" --body spec.md --kind node`, then
-`ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
-reset kind with `--kind work`. Omitted fields preserve existing values.
-`ab ticket show <id> [--json]` exposes both fields; `ab ticket tree [--json]`
-shows the configured root and every ticket, including completed work and empty
-nodes, nested by target with state. Siblings are sorted by id. Invalid external
-graphs and listing diagnostics are reported explicitly.
-
-Targets must exist and be nodes in the configured source. Self-targeting,
-ancestor cycles and demoting a node with targeting tickets are refused before
-any part of the requested update is written, regardless of ticket state.
-Clear or reparent its children before demotion. File frontmatter persists the
-fields; `ab ticket edit` displays them read-only. Change them through update.
-Kind and target participate in content revisions and revision-checked writes.
-File writes retain their existing best-effort, unlocked concurrency semantics.
-
-Linear uses the exact `node` issue label for kind and the parent relation for
-target, only when the parent carries that label. Ordinary grouping parents do
-not impose targets and survive unrelated updates. Explicit target clear clears
-the parent relation. Label replacements can demote nodes and receive the same
-guards; explicit kind and label instructions must agree about `node`. Label
-and parent connections are fully paginated. Linear still refuses guarded writes.
-
-Hosted sources support kind and target with project-scoped transactional validation.
-Existing tickets default to work with no target. Metadata changes increment the
-revision once; equivalent aliases and unchanged values do not. Node demotion
-checks all targeting tickets, including completed work. Legacy plugins without
-integrationTree support read as work with no target and refuse metadata writes.
-
-
-A node remains incomplete while any ticket targeting it is unresolved, including
-triage and backlog tickets. Done and cancelled tickets are terminal. A complete
-node with landed contributions verifies its exact head before explicit per-build
-landing consent can publish it. If node verification fails, file a repair child
-with that node as its target; landing the repair triggers a fresh cycle. Human
-forge merges are recorded escape hatches from these gates.
+Read [nodes and targets](integration-tree.md) for lifecycle, validation and
+source storage, and [choosing a destination](integration-tree.md#choosing-a-destination)
+when filing a feature set. Blockers order work independently of landing targets;
+landing authorization follows the repository's matched policy.
 
 ## When a blocker resolves
 
