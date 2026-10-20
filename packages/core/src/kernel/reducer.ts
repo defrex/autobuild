@@ -104,6 +104,7 @@ export interface OpenSession {
   startedAt: string
   nativeResumeFallback?: boolean
   resumed?: boolean
+  suspensionCause?: EventPayload<'session.suspended'>['cause']
   suspendedActiveMs?: number
   session: string
   role: string
@@ -770,7 +771,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           }
           suspended.set(open.session, {
             ...open,
-            nativeHandle: event.payload.handle,
+            nativeHandle: event.payload.handle ?? open.nativeHandle,
+            suspensionCause: event.payload.cause,
             suspendedActiveMs: event.payload.activeMs,
           })
           openSessions.delete(open.session)

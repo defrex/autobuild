@@ -29,7 +29,7 @@ import type {
   PipelineStep,
 } from './model'
 import { landingPolicyDisplay } from './landing-display'
-import { dashboardBuildControl } from './actions'
+import { dashboardBuildControl, pauseResumeHelp } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { projectSessionDocument, projectSessionParts } from './session-view'
@@ -632,6 +632,7 @@ function sessionLines(session: DashboardSession, selected: boolean, opts: Render
     ...(session.model !== undefined ? [`model ${session.model}`] : []),
     session.status,
     ...(session.cause ? [`cause ${session.cause}`] : []),
+    ...(session.fallbackReason ? [`fresh session: ${session.fallbackReason}`] : []),
     ...(session.predecessor ? [`continued from ${session.predecessor}`] : []),
     ...(session.stream !== undefined ? [`stream ${session.stream} (${session.streamStatus})`] : []),
     ...(session.reclaimedBy !== undefined
@@ -676,6 +677,7 @@ function detailBody(
 ): DetailBodyLayout {
   const { color, width } = opts
   const body: string[] = []
+  if (dashboardBuildControl(build.status)) body.push(...wrappedText(pauseResumeHelp, width, '  '))
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
   if (build.target)
     body.push(

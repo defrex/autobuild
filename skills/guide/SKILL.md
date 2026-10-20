@@ -1452,7 +1452,11 @@ action; queued builds offer `d discard`. Land requires readiness; hold may be
 recorded before readiness. There is no repository landing toggle.
 
 A running build reads `PAUSING` after `p` appends its pause request and before
-the kernel acknowledges it at a safe boundary. During that window `p` appends
+the live session stops and the kernel records its suspension. Pause interrupts
+live agent work immediately; resume continues where it stopped when supported,
+while remote or unsupported sessions rerun fresh with a recorded fallback reason.
+Without a live agent, acknowledgement still waits for a safe boundary. During
+that window `p` appends
 the opposing resume request, cancels the stale pause, and projects the build
 back to `RUNNING`. An acknowledged paused build offers only `r resume` and reads
 `RESUMING` until the kernel acknowledges that request; there is no gesture to
@@ -1796,7 +1800,11 @@ segments separately, with their individual transcript refs and usage.
 
 The phase budget counts active time across interruptions using the original
 ceiling. Suspended intervals do not consume it; abrupt loss is conservatively
-charged through recovery. Pause still lets the current turn finish.
+charged through recovery. Pause immediately suspends a live turn with cause
+`pause`, including remote sessions and sessions without a native handle. Resume
+continues the local native session where eligible; otherwise the recorded
+fallback explains the fresh rerun. Pause acknowledgement follows turn stop and
+suspension or terminal settlement.
 
 Each session row also shows its live-view stream: the stream id and
 whether that stream is `open` or `closed` — for example `stream st_1f2e (open)`.
