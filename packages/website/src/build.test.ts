@@ -75,6 +75,10 @@ describe('static site', () => {
     ).toHaveLength(1)
     const landing = html
       .replace('<a href="/docs/seams/">Explore the infrastructure seams</a>', '')
+      .replace(
+        /<section class="section">(?:(?!<section)[\s\S])*?autobuild · integration[\s\S]*?<\/section>/,
+        '',
+      )
       .replace('<a class="btn" href="/docs/">Documentation</a>', '')
       .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
       .replace('<a href="/docs/builds/">Follow one build end to end</a>', '')
@@ -96,8 +100,10 @@ describe('static site', () => {
   test('pipeline is one logical motion figure with a hidden native replay control', async () => {
     const { 'index.html': html, 'site.js': js } = await buildFiles()
     expect(html.match(/data-capture-figure="pipeline"/g)).toHaveLength(1)
-    expect(html.match(/data-capture-animated/g)).toHaveLength(1)
-    expect(html.match(/data-motion-node=/g)).toHaveLength(16)
+    expect(html.match(/data-capture-animated/g)).toHaveLength(2)
+    const pipeline = html.match(/<div data-capture-figure="pipeline"[\s\S]*?<\/button><\/div>/)![0]
+    expect(pipeline.match(/data-capture-animated/g)).toHaveLength(1)
+    expect(pipeline.match(/data-motion-node=/g)).toHaveLength(16)
     expect(html).toContain('data-motion-replay hidden aria-label="Replay pipeline animation"')
     expect(html).toContain('type="button" class="word motion-replay"')
     expect(js).toContain('__websiteCapture')
@@ -109,18 +115,18 @@ describe('static site', () => {
     const sections = [...html.matchAll(/<section class="section">[\s\S]*?<\/section>/g)].map(
       (match) => match[0],
     )
-    expect(sections).toHaveLength(7)
+    expect(sections).toHaveLength(8)
     for (const [index, title, path] of [
       [1, 'Every ticket runs the pipeline', '/docs/builds/'],
       [2, 'A dispatcher spawns builds', '/docs/dispatcher/'],
-      [5, 'Let the queue fill itself', '/docs/tickets/'],
+      [3, 'Build together, land together', '/docs/integration/'],
+      [6, 'Let the queue fill itself', '/docs/tickets/'],
     ] as const) {
       expect(sections[index]).toContain(title)
       expect(sections[index]!.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
       expect(sections[index]).toContain(`<a href="${path}">`)
       expect(html.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
     }
-    expect(html).not.toContain('href="/docs/integration/"')
   })
 
   test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
@@ -140,7 +146,7 @@ describe('static site', () => {
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
     expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
     expect(html).toContain(`href="${REPO_URL}"`)
-    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
+    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(8)
     expect(html).toContain('fully local')
     expect(html).toContain('bun add -d --exact @defrex/autobuild')
     expect(html).toContain('bun ab init')
@@ -163,8 +169,8 @@ describe('static site', () => {
 
   test('each figure has a desktop and a portrait form with one description', async () => {
     const { 'index.html': html, 'site.css': css } = await buildFiles()
-    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(3)
-    expect(html.match(/class="phone-only"/g)).toHaveLength(3)
+    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(4)
+    expect(html.match(/class="phone-only"/g)).toHaveLength(4)
     const desk = [...html.matchAll(/class="scroll desk-only"[^>]*aria-label="([^"]+)"/g)].map(
       (m) => m[1],
     )
@@ -173,7 +179,7 @@ describe('static site', () => {
     )
     expect(phone).toEqual(desk)
     // Every portrait drawing is capped to the page width, never a fixed desktop size.
-    expect(html.match(/width: 358px; max-width: 100%/g)).toHaveLength(3)
+    expect(html.match(/width: 358px; max-width: 100%/g)).toHaveLength(4)
     const small = css.slice(css.indexOf('@media (max-width: 719px)'))
     expect(small).toMatch(/\.desk-only\s*{\s*display: none/)
     expect(small).toMatch(/\.phone-only\s*{\s*display: block/)
