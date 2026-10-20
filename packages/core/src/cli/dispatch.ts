@@ -1,3 +1,4 @@
+import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { openTicketSource } from './ticket'
 import {
   inspectForgeReadiness,
@@ -3638,6 +3639,11 @@ class DispatchLoop {
           (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: configSnapshot.config.capacity,
+        capacityProjection: dispatchCapacity(
+          buildSnapshot.capacityBuilds ?? [],
+          configSnapshot.config.capacity,
+          this.wiring.clock(),
+        ),
         observationCount: this.observationCount,
         observationLimit: configSnapshot.config.policy.harvestThreshold,
       },

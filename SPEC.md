@@ -342,7 +342,8 @@ Authorization follows ordered landing policy: nodes default to explicit consent,
 while an auto rule authorizes a complete, verified candidate without a command.
 They never enter plan, implement, code-review or finalize. A node conflict uses
 source-aware reconcile. Idle collecting nodes own no execution resources;
-verification temporarily uses ordinary execution capacity. Empty nodes have no PR.
+reconcile and verification use descendant-sensitive execution capacity (§12).
+Empty nodes have no PR.
 
 ```
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize (+ finalize:*)
@@ -2028,6 +2029,17 @@ A ready node ticket opens an integration build on `ab-node/<slug>`, cut
 from its parent's sampled head. Opening intent and acknowledgement are durable;
 the branch is open to targeting tickets immediately, without a PR. Idle integration
 builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
+
+A node requesting reconcile or verification is admitted before new ticket
+claims. Its candidate occupancy excludes itself and capacity-bearing blocked or
+paused descendants, following accepted source-qualified build target ancestry.
+Running descendants and unrelated builds still count; ordinary blocked and
+paused work retains its slot for every other admission. Provisioning reserves
+node occupancy before the runner starts. This exception never raises the budget
+for new claims. Status and both dashboards report actual occupancy, configured
+capacity, effective display capacity and the nodes using descendant-held slots.
+Idle collecting nodes remain free.
+
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.

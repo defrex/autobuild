@@ -669,5 +669,13 @@
   "packages/core/src/cli/status.ts::detail::indexLog": {
     "kind": "reduction",
     "reason": "Pure event-array reference overload for status projection; store-backed callers pass persisted log facts."
+  },
+  "packages/core/src/cli/dashboard/model.ts::buildDashboard::openBuildWorkspace": {
+    "kind": "reduction",
+    "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."
+  },
+  "packages/core/src/cli/dashboard/model.ts::buildDashboard::reduce": {
+    "kind": "reduction",
+    "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."
   }
 }

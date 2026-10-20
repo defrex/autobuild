@@ -9722,3 +9722,82 @@ describe('declarative landing reconciliation', () => {
     expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
   })
 })
+
+for (const asynchronous of [false, true]) {
+  test(`pending verification has priority over new claims and reserves the only slot (async provisioning: ${asynchronous})`, async () => {
+    const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
+    let releaseProvision: (() => void) | undefined
+    const pendingProvision = new Promise<void>((resolve) => {
+      releaseProvision = resolve
+    })
+    const provider: WorkspaceProvider = {
+      name: local.name,
+      ...(asynchronous
+        ? {
+            recovery: {
+              reap: async () => ({
+                outcome: 'absent' as const,
+                snapshots: { outcome: 'confirmed' as const, deleted: 0 },
+              }),
+            },
+          }
+        : {}),
+      provision: async (input) => {
+        if (asynchronous) await pendingProvision
+        return local.provision(input)
+      },
+      release: (handle) => local.release(handle),
+    }
+    const config =
+      'capacity = 1\n[commands]\ntrue = "true"\n[verify]\nsteps = ["unit"]\n[verify.unit]\nkind = "check"\ncommand = "true"\n'
+    const h = harness({ toml: config, workspaceProvider: provider, tickets: [readyTicket('NEW')] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    for (const slug of ['first-node', 'second-node']) {
+      const branch = `ab-node/${slug}`
+      const head = `head-${slug}`
+      const ticket = { source: 'fake', id: slug }
+      await h.store.createBuild({
+        slug,
+        repo: REPO,
+        branch,
+        ticket,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { ticket, repo: REPO, baseBranch: 'main', kind: 'node' },
+        },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.opened',
+        payload: { sha: BASE_SHA },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'integration.observed',
+        payload: {
+          openChildren: [],
+          diagnostics: [],
+          contributions: ['landed-child'],
+        },
+      })
+      h.forge.remoteBranches.set(branch, head)
+      h.forge.nodeComparisons.set(`main...${branch}`, 1)
+    }
+    const report = await h.dispatcher.tick()
+    expect(report.janitorFailed).toBe(0)
+    expect(h.tickets.claims).toEqual([])
+    if (asynchronous) {
+      expect(report.provisioning).toBe(1)
+      expect(h.launches).toEqual([])
+      // A second tick while provisioning is parked must retain the reservation.
+      await h.dispatcher.tick()
+      expect(h.tickets.claims).toEqual([])
+      expect(h.launches).toEqual([])
+      releaseProvision!()
+      await h.dispatcher.drainProvisioning()
+    }
+    expect(h.launches).toEqual(['first-node'])
+    expect(local.provisions).toHaveLength(1)
+  })
+}
