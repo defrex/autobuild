@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { buildFiles } from '../packages/website/src/build'
+import { SEAMS } from '../packages/website/src/seams'
 import {
   assertOutputUnderScratch,
   captureWebsite,
+  motionFrames,
+  artifactId,
+  type WebsiteFrame,
   discoverFrames,
   chromiumBinary,
   injectProbe,
@@ -196,11 +200,46 @@ describe('website capture', () => {
     'captures four real PNGs with the stylesheet loaded and the remote state applied',
     async () => {
       const dir = join(import.meta.dir, '..', '.ab', `website-capture-test-${process.pid}`)
-      await captureWebsite({ chromium, outputDir: dir })
+      const frames = discoverFrames({ ...(await buildFiles()) }).filter((f) => f.kind === 'landing')
+      await captureWebsite({ chromium, outputDir: dir, frames, includeMotionSamples: false })
+      const inventory: { frame: WebsiteFrame; probe: Probe }[] = await Bun.file(
+        join(dir, 'inventory.json'),
+      ).json()
+      expect(inventory.map((entry) => entry.frame)).toEqual(frames)
+      expect(frames.map((frame) => frame.id)).toEqual(WEBSITE_FRAMES.map((frame) => frame.id))
+      for (const { frame, probe: measured } of inventory) {
+        expect(frame.sample).toBeUndefined()
+        expect(measured.stylesheetLoaded).toBe(true)
+        expect(probeProblems(frame, measured)).toEqual([])
+        if (frame.remote) {
+          expect(measured.lean).toBe('remote')
+          expect(measured.status).toBe('fully remote')
+          expect(measured.runtime).toBe('codex')
+          expect(measured.knobSettled).toBe(true)
+          expect(measured.chips).toEqual(
+            SEAMS.flatMap((seam) =>
+              seam.adapters.map((adapter) => ({
+                seam: seam.id,
+                adapter: adapter.id,
+                pressed: (
+                  seam.id === 'runtime'
+                    ? adapter.id === 'codex'
+                    : adapter.side === 'remote'
+                )
+                  ? 'true'
+                  : 'false',
+              })),
+            ),
+          )
+        }
+      }
       for (const frame of WEBSITE_FRAMES) {
         const png = join(dir, `${frame.id}.png`)
         expect(existsSync(png)).toBe(true)
-        expect((await stat(png)).size).toBeGreaterThan(0)
+        expect((await stat(png)).size).toBeGreaterThan(8)
+        expect(new Uint8Array(await Bun.file(png).arrayBuffer()).slice(0, 8)).toEqual(
+          new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+        )
       }
       const report = await Bun.file(join(dir, 'verify-report.md')).text()
       expect(report).toContain('PASS: `phone-remote` has no sideways scroll')
@@ -350,4 +389,45 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     ['docs/tickets/index.html', 1440],
     ['docs/tickets/index.html', 390],
   ])
+})
+
+test('full discovery expands every animated figure at both widths in sample order', () => {
+  const baselines = discoverFrames(fixtureFiles())
+  expect(baselines.slice(0, 4)).toEqual(
+    WEBSITE_FRAMES.map((frame) => ({
+      ...frame,
+      page: 'index.html',
+      kind: 'landing',
+      motion: 'reduce',
+    })),
+  )
+  const figures = [
+    { id: 'pipeline', animated: true, duration: 1000 },
+    { id: 'static', animated: false },
+    { id: 'tree', animated: true, duration: 2400 },
+  ]
+  const expanded = baselines.flatMap((frame) => {
+    const samples = motionFrames(frame, figures)
+    expect(samples).toEqual(
+      figures
+        .filter((figure) => figure.animated)
+        .flatMap((figure) =>
+          (['start', 'midpoint', 'final'] as const).map((sample) => ({
+            ...frame,
+            reference: undefined,
+            id: `${frame.id}-figure-${artifactId(figure.id)}-${sample}`,
+            motion: 'normal',
+            figure: figure.id,
+            duration: figure.duration,
+            sample,
+          })),
+        ),
+    )
+    expect(motionFrames({ ...frame, motion: 'normal' }, figures)).toEqual([])
+    expect(motionFrames(frame, [{ id: 'static', animated: false }])).toEqual([])
+    return samples
+  })
+  expect(new Set([...baselines, ...expanded].map((frame) => frame.id)).size).toBe(
+    baselines.length + expanded.length,
+  )
 })
