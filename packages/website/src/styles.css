@@ -616,3 +616,21 @@ svg[data-integration-active] > path {
     stroke: #888888;
   }
 }
+
+/* The flow figures use the pipeline's bounded state emphasis. Text never disappears. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-sequence-state="active"]:not(svg) {
+    outline: 2px solid #55b8b8;
+    outline-offset: -2px;
+  }
+  [data-sequence-state="running"]:not(svg) {
+    outline: 2px solid #55b8b8;
+    outline-offset: -2px;
+  }
+  svg[data-sequence-state="waiting"] {
+    opacity: 0.25;
+  }
+  svg[data-sequence-state="active"] > path {
+    stroke: #55b8b8;
+  }
+}
