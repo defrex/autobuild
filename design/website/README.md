@@ -32,7 +32,8 @@ Design canvas so builds can read it without access to claude.ai.
   it above a full-width build store, and the intake lays its four sources in
   a 2×2 grid with the PM agent below.
 - Sections are 288px apart at desktop width and 192px apart below 720px, with
-  the same space after the last section. No horizontal rules appear anywhere.
+  the same space after the last section. No horizontal rules appear in the landing content; the shared header now
+  carries the authorized glyph rule described below.
   The pipeline section has no "inside one build-runner" caption, and the page
   closes on outlined "Getting started" and "View on GitHub" buttons.
 - `design-system.md` and `tokens.json` are the Autobuild design system the page
@@ -172,3 +173,32 @@ figures. Pipeline progression, completion, and replay remain unchanged.
 The eight landing references now match the combined capture byte for byte,
 including all four authorized text links. Section and footer gaps remain
 288px desktop and 192px phone; terminal-to-action spacing remains 48px.
+
+## Shared site header (2026-10-20)
+
+The `shared-site-header` spec explicitly authorizes replacing the landing and
+all docs mastheads with one shared header. Its pinned `design/docs-layout`
+asset revision 0 (exported from the maintainer-approved
+https://claude.ai/artifact/D2keNruscKe8J6Ywp1fje6 canvas) supplies the header
+contract. The 64px masthead uses the 1440px frame and 32px desktop inset;
+a separate 24px row of rule-colored `─` follows it. Below 720px the inset is
+16px and Menu reveals only Home, Docs, Changelog and GitHub. The docs layout
+and docs navigation inside that menu belong to the next ticket.
+
+All eight reduced-motion baseline and normal-motion final landing references
+were refreshed from their matching `capture:website` inventory entries.
+The historical HTML export, content, diagrams, animation, section spacing,
+and footer remain intact. The header adds a 16px vertical offset to landing
+content. The header-only glyph rule is the exception to the historical
+no-horizontal-rules statement above.
+
+Evidence: all 34 PNGs were inspected, covering nine docs routes at both
+widths, four landing stills and twelve pipeline motion samples. Every phone
+probe passes overflow checks, stylesheets load, reduced motion is still,
+and normal motion retains its start/midpoint/final progression. Landing gaps
+remain 288px desktop and 192px phone, with 48px terminal-to-action spacing.
+Separate Chromium checks on Home, Docs and nested Builds at 1440, 720, 719
+and 390px verify header geometry, current-link styles, keyboard Enter/Space,
+Tab focus rings, 44px menu targets, reverse-video open state, Escape focus
+return, breakpoint reset, no sideways scroll and accessible links without JS.
+Closed/open keyboard-focus screenshots are retained in build scratch evidence.
