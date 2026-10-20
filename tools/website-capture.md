@@ -52,3 +52,16 @@ preparation. Missing/duplicate IDs, missing adapters, invalid durations, rejecte
 seeks and missing final acknowledgement fail capture. No marked figures is an
 explicit zero count, not omitted evidence. Fixture examples and negative cases
 live in `website-capture.test.ts`.
+
+## Unit smoke versus full verification
+
+The real-site unit smoke builds and serves the actual site and uses Chromium to
+capture the four landing baselines, checking PNG signatures, stylesheet readiness
+and remote seam state. It passes explicit landing `frames` and
+`includeMotionSamples: false` to `captureWebsite`; baseline figure readiness and
+stillness checks remain active. Pure discovery/expansion tests cover the full page
+and motion descriptor inventory, and browser fixtures exercise sample seeking.
+
+`includeMotionSamples` defaults to true. `bun run capture:website` and the website
+verify step use the full default capture: every docs page at both widths and every
+animated figure's start, midpoint and final frames.
