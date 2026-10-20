@@ -1249,6 +1249,25 @@ reviewer sees prior findings but not the producer's session. What a phase
 
 ### 8.4 Terminal discipline [D5]
 
+Classified session deferrals consume no phase failures. Unsupported decisive
+facts retain the mixed-version wait gate and durable compatibility diagnostic.
+When the scoped `ab context` initial own-build read fails, the CLI best-effort
+writes `session.build-read-failed` with exact session, phase, round, operation
+`context`, reason `own-build-read`, and diagnostic. A valid terminal from that
+session wins if the agent recovers. Otherwise settlement records `phase.deferred`
+and `phase.deferral-escalated`, immediately projecting ordinary blocked attention.
+The raise cites `own-build-read:<evidenceSeq>`; replay repairs either settlement
+crash gap before launching another agent. An `escalation.answered` retry or
+guidance authorizes one fresh session without resetting genuine phase failures;
+a new classified failure parks again. There are zero automatic paid retries
+after this deferral. If evidence cannot be written, ordinary recovery applies;
+agent output and `no-terminal` alone never classify a read failure.
+
+Ordinary silence, provider failures and session timeouts retain the runner's
+phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
+an internal runner option, not an accepted `[policy]` TOML key. Reconcile
+execution and unchanged-base progress budgets retain their existing accounting.
+
 **Every phase ends with exactly one terminal command** — `done`, `verdict`,
 or `escalate`. The CLI rejects a second terminal call, and each terminal
 validates its preconditions before emitting the phase event (no `done`
@@ -1347,7 +1366,9 @@ implementer:  ab context   (findings.json now materialized) → …
 
 **Failure paths:**
 
-- *Completed turn, no terminal* → `phase.failed {no-terminal}`, retry per
+- *Classified own-build read failure, no terminal* → `phase.deferred`, then
+  `phase.deferral-escalated`; blocked until an explicit answer, with no phase failure.
+- *Completed turn, no terminal and no classified deferral* → `phase.failed {no-terminal}`, retry per
   policy [D5].
 - *Session budget expiry* → abort and best-effort `end`, then retryable
   `phase.failed {error: "phase session budget expired after … seconds"}`; retry
@@ -1366,8 +1387,9 @@ implementer:  ab context   (findings.json now materialized) → …
 - *Wrong-resource access or wrong-session agent write* → the applicable
   build-scoped or ambient-session Store handle rejects it at the interface;
   a remote token enforces the same scope over the wire [D8].
-- *Store unreachable* → CLI retries with backoff; a phase that cannot
-  deposit cannot complete → `phase.failed`, runner-level policy takes over.
+- *Store unreachable* → CLI retries with backoff; when read-failure evidence can be deposited, the own-build-read attention
+  protocol applies. If writes also fail, no durable classifier can be guaranteed;
+  ordinary runner recovery applies.
 
 ### 8.8 Outer-loop namespace
 
@@ -2484,7 +2506,7 @@ with illustrative members:
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Leaf restacking | `target.moved {branch, sha}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
-| Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
+| Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -2670,7 +2692,12 @@ discarded}` last. No runner is required.
 report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
 2 → approve → verify re-runs **from the first step** (implement changed the
-code; cheap checks first), `attempt: 2`. `policy.maxVerifyAttempts`
+code; cheap checks first), `attempt: 2`. `policy.maxVerifyAttempts` counts distinct failed logical verify cycles since
+the latest spec revision; duplicate failure evidence for one attempt counts once.
+Passed or skipped target-movement, restack and reconcile cycles consume zero.
+Cycle identifiers remain monotonic independently of this budget. The history
+pass, pass, pass, fail uses one failure even when the failing cycle is attempt 4.
+The third distinct failed cycle at the default limit escalates. Budget
 exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
 policy escalation routes to `implement` and outranks the pending report. By
 contrast, when the agent verifier itself uses `ab escalate`, guidance answering
@@ -2748,7 +2775,7 @@ Historical orphan-only logs remain valid and require no repair.
 The re-run retains another `implement.started {round: 2}` as evidence of the
 execution attempt. Duplicate starts for one logical round or attempt are not
 policy units: review budget follows verdict rounds, phase retry budget follows
-`phase.failed`, verify budget follows failed completions while a crashed step
+`phase.failed`, verify budget follows distinct failed cycle identifiers after the spec revision while a crashed step
 reuses its attempt, and reconcile no-progress budget follows distinct completed
 attempts. Recovery alone therefore consumes none of those budgets. The provider
 restores the already-created branch at round 1's pushed head [D3]; the Git

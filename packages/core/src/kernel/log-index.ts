@@ -1,3 +1,9 @@
+import {
+  initialReadDeferrals,
+  foldReadDeferrals,
+  type ReadDeferralsAcc,
+  type ReadDeferral,
+} from './read-deferrals'
 import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
 /**
  * The engine's raw-log index (see `LogIndex`): the projections `reduceBuild`
@@ -125,6 +131,7 @@ export interface ReconcileProgressRecord {
 }
 
 export interface LogIndex {
+  readDeferrals: ReadDeferral[]
   restack: LeafRestackState
   /** Latest post-restart policy fact; authoritative only for its originating
    * reconcile completion, never for a newer review or reconcile cycle. */
@@ -187,7 +194,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 4
+export const LOG_INDEX_REDUCER_VERSION = 5
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
@@ -223,6 +230,7 @@ export type LogIndexCandidate =
   | { kind: 'reconcile-completed'; seq: number }
 
 export interface LogIndexAcc {
+  readDeferrals: ReadDeferralsAcc
   restack: LeafRestackState
   /** Full-log running state. */
   restartSeq: number
@@ -243,6 +251,7 @@ export interface LogIndexAcc {
 
 function initialLogIndexAcc(): LogIndexAcc {
   return {
+    readDeferrals: initialReadDeferrals(),
     restack: { gates: {} },
     restartSeq: 0,
     maxRoundEver: { plan: 0, code: 0 },
@@ -268,6 +277,7 @@ function emptyLoop(): LoopIndex {
 }
 
 function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
+  foldReadDeferrals(acc.readDeferrals, events)
   acc.restack = leafRestackReducer.advance(acc.restack, events)
   const noteRound = (loop: LoopName, round: number): void => {
     if (round > acc.maxRoundEver[loop]) acc.maxRoundEver[loop] = round
@@ -633,6 +643,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
           .at(-1)
 
   return {
+    readDeferrals: structuredClone(acc.readDeferrals.pending),
     restack: structuredClone(acc.restack),
     restartSeq,
     plan,

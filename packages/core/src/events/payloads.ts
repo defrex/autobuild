@@ -987,6 +987,30 @@ export const eventPayloadSchemas = {
     reviewRoundCeiling: z.number().int().positive().optional(),
   }),
   /** Infra failure — distinct from verdicts (a verdict is a fact, not a failure). */
+  'session.build-read-failed': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round,
+    operation: z.literal('context'),
+    reason: z.literal('own-build-read'),
+    diagnostic: z.string().trim().min(1),
+  }),
+  'phase.deferred': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round,
+    reason: z.literal('own-build-read'),
+    diagnostic: z.string().trim().min(1),
+  }),
+  'phase.deferral-escalated': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round,
+    id: z.string().min(1),
+    evidenceSeq: z.number().int().positive(),
+    question: z.string().min(1),
+    refs: z.array(z.string()),
+  }),
   'phase.failed': z.strictObject({
     phase: phaseSchema,
     round: round.optional(),

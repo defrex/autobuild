@@ -126,6 +126,9 @@ export const executionProgress = {
   'observation.recorded': 'progress',
   'escalation.raised': 'progress',
   'escalation.answered': 'progress',
+  'session.build-read-failed': 'bookkeeping',
+  'phase.deferred': 'bookkeeping',
+  'phase.deferral-escalated': 'bookkeeping',
   'phase.failed': 'failure',
 } satisfies Record<EventType, 'bookkeeping' | 'failure' | 'progress'>
 

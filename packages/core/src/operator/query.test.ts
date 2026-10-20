@@ -1193,3 +1193,26 @@ test('operator integration counts agree with terminal polling without completed 
   expect(detail.dashboardRow!.tree!.children).toEqual(['CHILD'])
   expect(detail.dashboardRow!.steps.map((s) => s.label)).toContain('merge')
 })
+
+test('operator reduced attention exposes own-build read gates without a raw-event filter', async () => {
+  const store = new MemoryBuildStore()
+  await publishRun(store, 'read-gate-run', config(2, 5))
+  await createBuild(store, 'read-gate', 'active')
+  const question = 'Repair CLI/store access then retry'
+  await store.append('read-gate', {
+    actor: KERNEL,
+    type: 'phase.deferral-escalated',
+    payload: {
+      id: 'esc_read',
+      session: 's_read',
+      phase: 'plan',
+      round: 1,
+      evidenceSeq: 1,
+      refs: ['own-build-read:1'],
+      question,
+    },
+  })
+  const result = await getOperatorBuild({ store, repo: REPO, slug: 'read-gate', now: new Date() })
+  expect(result.dashboardRow).toMatchObject({ status: 'blocked', blockers: [question] })
+  expect(JSON.stringify(result)).toContain(question)
+})
