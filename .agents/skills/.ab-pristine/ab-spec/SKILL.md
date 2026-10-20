@@ -15,38 +15,30 @@ session.
 
 ## Node tickets and targets
 
-Tickets have `kind = "work"` by default, or `kind = "node"` for a named
-integration point. The optional `target` is a node ticket id in the same source;
-omission means the configured `baseBranch` root. Nodes may target other nodes.
-These fields currently describe intent only: dispatch, branches and landing
-behavior are unchanged in this increment. Blockers remain a separate graph.
+For node lifecycle, target validation and source-specific storage, read
+[nodes and targets](../ab-guide/references/integration-tree.md). When filing
+related work, follow the shared
+[destination choice](../ab-guide/references/integration-tree.md#choosing-a-destination)
+guidance before choosing root or a node.
 
-Use `ab ticket create "Integration" --body spec.md --kind node`, then
-`ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
-reset kind with `--kind work`. Omitted fields preserve existing values.
-`ab ticket show <id> [--json]` exposes both fields; `ab ticket tree [--json]`
-shows the configured root and every ticket, including completed work and empty
-nodes, nested by target with state. Siblings are sorted by id. Invalid external
-graphs and listing diagnostics are reported explicitly.
+```sh
+ab ticket create "Integration" --body spec.md --kind node
+ab ticket create "Child" --body child.md --target <node-id>
+ab ticket update <id> --target <node-id>
+ab ticket update <id> --no-target
+ab ticket update <id> --kind work
+ab ticket show <id> --json
+ab ticket tree --json
+```
 
-Targets must exist and be nodes in the configured source. Self-targeting,
-ancestor cycles and demoting a node with targeting tickets are refused before
-any part of the requested update is written, regardless of ticket state.
-Clear or reparent its children before demotion. File frontmatter persists the
-fields; `ab ticket edit` displays them read-only. Change them through update.
-Kind and target participate in content revisions and revision-checked writes.
-File writes retain their existing best-effort, unlocked concurrency semantics.
-
-Linear uses the exact `node` issue label for kind and the parent relation for
-target, only when the parent carries that label. Ordinary grouping parents do
-not impose targets and survive unrelated updates. Explicit target clear clears
-the parent relation. Label replacements can demote nodes and receive the same
-guards; explicit kind and label instructions must agree about `node`. Label
-and parent connections are fully paginated. Linear still refuses guarded writes.
-
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+Whenever grooming produces more than one ticket for a feature, explicitly choose
+root or a node before filing, including when fleshing out an existing ticket
+splits it into several tickets. Consult the shared destination criteria and read
+the repository's effective landing policy in `autobuild.toml`; explain the actual
+landing and consent flow to the human in plain terms. Ask the human when the
+choice is unclear from grooming. Root is valid when each ticket can ship alone.
+Choosing root or a node never changes the requested workflow state or silently
+promotes tickets; the placement instructions below still apply.
 
 ## Ticket operations
 
@@ -104,24 +96,42 @@ blockers at creation, read back and verify them, then move to ready last. The
 human's requested final placement still wins; temporary staging needs no new
 placement question. Never assume the source default is non-ready.
 
-For a dependency chain, create in dependency order and obtain each new id from
-the command's complete JSON result. This example assumes the repository's triage
-state is `Triage`, its ready state is `Ready`, and the human requested ready:
+For a dependency chain explicitly chosen to ship together under a node, create
+in dependency order and obtain each new id from the command's complete JSON
+result. Write a spec-standard node body in `integration.md` as well as the child
+specs. This example assumes the repository's triage state is `Triage`, its ready
+state is `Ready`, and the human requested ready placement for the whole set.
+Use the repository's actual states; if final placement is non-ready, leave the
+set there after verification instead of promoting it. Root remains a valid
+explicit choice when each ticket is independently useful and safe to ship:
 
 ```sh
-ab ticket create "A" --body a.md --json --state Triage > a-ticket.json
+ab ticket create "Integration" --body integration.md --kind node --json --state Triage > node-ticket.json
+node_id="$(jq -r '.ref.id' node-ticket.json)"
+ab ticket create "A" --body a.md --target "$node_id" --json --state Triage > a-ticket.json
 a_id="$(jq -r '.ref.id' a-ticket.json)"
-ab ticket create "B" --body b.md --blocked-by "$a_id" --json --state Triage > b-ticket.json
+ab ticket create "B" --body b.md --blocked-by "$a_id" --target "$node_id" --json --state Triage > b-ticket.json
 b_id="$(jq -r '.ref.id' b-ticket.json)"
-ab ticket create "C" --body c.md --blocked-by "$b_id" --json --state Triage > c-ticket.json
+ab ticket create "C" --body c.md --blocked-by "$b_id" --target "$node_id" --json --state Triage > c-ticket.json
 c_id="$(jq -r '.ref.id' c-ticket.json)"
+ab ticket show "$node_id" --json
+ab ticket show "$a_id" --json
 ab ticket show "$b_id" --json
 ab ticket show "$c_id" --json
-# Verify both tickets remain in Triage and their full blocker sets are present.
+# Verify the node and all children remain in Triage, all child targets equal
+# node_id, and every complete blocker set is correct (A: none; B: A; C: B).
+# Repair and read back any mismatch before publishing any ticket.
+ab ticket move "$node_id" Ready --json
 ab ticket move "$a_id" Ready --json
 ab ticket move "$b_id" Ready --json
 ab ticket move "$c_id" Ready --json
 ```
+
+Register and verify all planned children before making the node ready, so it
+cannot collect a partial feature. The node must satisfy the repository's ready
+gates and open before children can be claimed; a CLI move alone does not prove
+admission. After publication, read back the final states, targets and blockers;
+repair partial writes without blindly creating duplicates.
 
 Never parse an id from the human-readable confirmation line: it can contain the
 new ticket id and blocker ids in the same source-local form. Dependency order

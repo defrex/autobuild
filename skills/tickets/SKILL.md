@@ -11,49 +11,21 @@ content and blocker relationships. The default file source needs no secret.
 
 ## Node tickets and targets
 
-Tickets have `kind = "work"` by default, or `kind = "node"` for a named
-integration point. The optional `target` is a node ticket id in the same source;
-omission means the configured `baseBranch` root. Nodes may target other nodes.
-Ready node tickets open integration branches. Work claims freeze their target
-identity and branch. Blockers remain a separate graph.
+For node lifecycle, target validation and source-specific storage, read
+[nodes and targets](../ab-guide/references/integration-tree.md). When filing
+related work, follow the shared
+[destination choice](../ab-guide/references/integration-tree.md#choosing-a-destination)
+guidance before choosing root or a node.
 
-Use `ab ticket create "Integration" --body spec.md --kind node`, then
-`ab ticket update <id> --target <node-id>`. Clear a target with `--no-target`;
-reset kind with `--kind work`. Omitted fields preserve existing values.
-`ab ticket show <id> [--json]` exposes both fields; `ab ticket tree [--json]`
-shows the configured root and every ticket, including completed work and empty
-nodes, nested by target with state. Siblings are sorted by id. Invalid external
-graphs and listing diagnostics are reported explicitly.
-
-Changing an open node target re-parents its branch and existing PR; `--no-target`
-moves it to the configured root. The dispatcher confirms source metadata, replays
-only node-owned contributions onto the new parent, then retargets the same review.
-Children follow through the ordinary cascade; conflicts use normal source-aware
-reconcile. Pending moves block verification and landing. Cycles, non-open parents,
-landing/closing nodes and unsupported forge retargeting are refused with a reason.
-Busy operations must settle first. Changing a claimed work target is refused before
-any combined patch is written: abort and re-dispatch instead. Direct provider edits
-are observed too; invalid edits leave effective ancestry unchanged with a durable
-diagnostic. Status shows effective ancestry; ticket tree shows source metadata.
-
-Targets must exist and be nodes in the configured source. Self-targeting,
-ancestor cycles and demoting a node with targeting tickets are refused before
-any part of the requested update is written, regardless of ticket state.
-Clear or reparent its children before demotion. File frontmatter persists the
-fields; `ab ticket edit` displays them read-only. Change them through update.
-Kind and target participate in content revisions and revision-checked writes.
-File writes retain their existing best-effort, unlocked concurrency semantics.
-
-Linear uses the exact `node` issue label for kind and the parent relation for
-target, only when the parent carries that label. Ordinary grouping parents do
-not impose targets and survive unrelated updates. Explicit target clear clears
-the parent relation. Label replacements can demote nodes and receive the same
-guards; explicit kind and label instructions must agree about `node`. Label
-and parent connections are fully paginated. Linear still refuses guarded writes.
-
-Hosted sources and legacy plugins read as work with no target and refuse any
-explicit metadata write, including clears and mixed patches, with guidance to
-use a capable source. No hosted storage or protocol change is implied.
+```sh
+ab ticket create "Integration" --body spec.md --kind node
+ab ticket create "Child" --body child.md --target <node-id>
+ab ticket update <id> --target <node-id>
+ab ticket update <id> --no-target
+ab ticket update <id> --kind work
+ab ticket show <id> --json
+ab ticket tree --json
+```
 
 ## Hosted ticket ids
 
