@@ -283,3 +283,18 @@ test('real integration observations exclude native cancelled children from every
     total: 1,
   })
 })
+
+test('janitor attention appears on the shared row and clears without changing lifecycle', () => {
+  const state = node()
+  state.janitor = {
+    firstFailureAt: '2026-01-01T00:00:00.000Z',
+    attempt: 8,
+    message: 'publication failed',
+    nextAttemptAt: '2026-01-01T00:20:00.000Z',
+    attention: true,
+  }
+  expect(row(state).alert).toEqual({ tone: 'red', text: 'Janitor failing: publication failed' })
+  expect(state.status).toBe('running')
+  delete state.janitor
+  expect(row(state).alert).toBeUndefined()
+})

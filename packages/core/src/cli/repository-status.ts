@@ -3,6 +3,8 @@ import {
   type DispatchCapacity,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
+import { forgeHealthReducer, type ForgeDegradation } from '../kernel/forge-health'
+import { forgeHotspot, type ForgeRequestCounts } from '../ports/forge-telemetry'
 import { configSchema } from '../config/schema'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -30,6 +32,9 @@ export interface RepositoryStatus extends DispatchSettings {
   capacity?: DispatchCapacity
   warningLines?: string[]
   dispatcher: DispatcherLiveness
+  forgeRequests?: ForgeRequestCounts
+  forgeRequestHotspot?: string
+  forgeDegradation?: ForgeDegradation
   ticketSourceDegradation?: TicketSourceDegradation
   /** Live operator sandboxes (AUT-340); released environments are omitted. */
   sandboxes: Array<{
@@ -99,10 +104,21 @@ export function projectRepositoryStatus(
       ? forgeReadinessWarnings(reduceDispatchStatus(events, latestRun.payload.run))
       : []
   return {
+    ...(forgeHealthReducer.reduce(events)
+      ? { forgeDegradation: forgeHealthReducer.reduce(events) }
+      : {}),
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
+    ...(() => {
+      const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
+      const forgeRequests =
+        tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
+      return forgeRequests
+        ? { forgeRequests, forgeRequestHotspot: forgeHotspot(forgeRequests) }
+        : {}
+    })(),
     ...reduceDispatchSettings(events),
     sandboxes: sandboxStates(events)
       .filter((state) => state.state !== 'released')
@@ -127,7 +143,16 @@ export function repositoryStatusFromFacts(
     repo,
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
+    ...(() => {
+      const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
+      const forgeRequests =
+        tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
+      return forgeRequests
+        ? { forgeRequests, forgeRequestHotspot: forgeHotspot(forgeRequests) }
+        : {}
+    })(),
     ...facts.settings,
+    ...(facts.forgeHealth ? { forgeDegradation: facts.forgeHealth } : {}),
     ...(facts.health === undefined ? {} : { ticketSourceDegradation: facts.health }),
     sandboxes: facts.sandboxes
       .filter((state) => state.state !== 'released')
@@ -151,9 +176,24 @@ export function repositoryStatusFromFacts(
 }
 
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
+  const tick = (
+    status.dispatcher.holder ??
+    status.dispatcher.expiredHolder ??
+    status.dispatcher.latestRun
+  )?.lastTick
+  const requests = tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
+  const hotspot = forgeHotspot(requests)
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
   return [
+    requests
+      ? `forge requests: ${requests.total} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
+      : 'forge requests: unavailable',
+    ...(status.forgeDegradation
+      ? [
+          `forge ${status.forgeDegradation.forge}: degraded — ${status.forgeDegradation.message}; reset ${status.forgeDegradation.resetAt}`,
+        ]
+      : []),
     ...(active === undefined
       ? []
       : [

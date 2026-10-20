@@ -1063,3 +1063,92 @@ test('delegated credentials cannot forge value checkpoints or extend an ended li
   f.advance(60000)
   expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(401)
 })
+
+test.each(['build-runner', 'build-phase'] as const)(
+  '%s forge guard records cooldown through delegated HTTP authority and waits for dispatcher recovery',
+  async (kind) => {
+    const { RemoteBuildStore } = await import('@defrex/autobuild/remote-store')
+    const { FakeForge, ForgeFailure } = await import('@defrex/autobuild/plugin-sdk')
+    const { guardForge } = await import('@defrex/autobuild/testing')
+    const f = await fixture()
+    let token = f.token
+    if (kind === 'build-phase') {
+      await f.store.append('one', {
+        actor: { kind: 'kernel' },
+        type: 'session.started',
+        payload: {
+          session: 'guard-phase',
+          role: 'implement',
+          runner: 'fake',
+          phase: 'implement',
+          round: 1,
+        },
+      })
+      const response = await f.issue(f.token, { kind, id: 'one', session: 'guard-phase' })
+      expect(response.status).toBe(200)
+      token = (await response.json()).token
+    }
+    const remote = new RemoteBuildStore({
+      url: 'http://store',
+      token,
+      fetchFn: ((input, init) => f.server.fetch(new Request(input, init))) as typeof fetch,
+    })
+    const raw = new FakeForge()
+    let calls = 0
+    raw.getPrState = async () => {
+      if (++calls === 1)
+        throw new ForgeFailure('primary limit', {
+          kind: 'rate-limited',
+          resetAt: new Date(f.clock().getTime() + 1000).toISOString(),
+        })
+      return { state: 'open', mergeable: true }
+    }
+    const guarded = guardForge(raw, {
+      store: remote,
+      repo: A,
+      name: 'github',
+      now: f.clock,
+      wait: true,
+    })
+    const result = guarded.getPrState(A, 1)
+    // Wait for the actual HTTP append before checking that retry is parked.
+    for (let n = 0; n < 100 && (await f.store.getRepoEvents(A)).length === 0; n++)
+      await Bun.sleep(10)
+    expect((await f.store.getRepoEvents(A)).map((e) => e.type)).toEqual([
+      'dispatcher.forge-degraded',
+    ])
+    expect(calls).toBe(1)
+    f.advance(60_000)
+    // Only the dispatcher can record recovery; delegates get no general repo write grant.
+    for (const body of [
+      {
+        actor: { kind: 'kernel' },
+        type: 'dispatcher.forge-recovered',
+        payload: { forge: 'github' },
+      },
+      {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.forge-degraded',
+        payload: {
+          forge: 'github',
+          message: 'x',
+          resetAt: f.clock().toISOString(),
+          firstFailureAt: f.clock().toISOString(),
+        },
+      },
+    ])
+      expect(
+        (await f.server.fetch(request(`/repos/${encodeURIComponent(A)}/events`, token, body)))
+          .status,
+      ).toBe(403)
+    expect((await f.server.fetch(request('/repos', token, { repo: A }))).status).toBe(403)
+    await f.store.appendRepo(A, {
+      actor: { kind: 'dispatcher' },
+      type: 'dispatcher.forge-recovered',
+      payload: { forge: 'github' },
+    })
+    expect(await result).toEqual({ state: 'open', mergeable: true })
+    expect(calls).toBe(2)
+  },
+  35_000,
+)

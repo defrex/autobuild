@@ -355,3 +355,38 @@ test('remote rate limit dispositions let the next phase resume while respecting 
     (await h.store.getEvents(BUILD)).findLast((e) => e.type === 'pr-summary.settled')?.payload,
   ).toMatchObject({ disposition: 'deferred' })
 })
+
+test('summary-only workspace release waits on forge scheduling deferrals', async () => {
+  const { settlePublicationBeforeRelease } = await import('../processes/publication-loss')
+  const { ForgeCooldown } = await import('../kernel/guarded-forge')
+  const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+  const h = await fixture(true)
+  await start(h)
+  await finish(h, 'screens', 'skipped')
+  for (const error of [new ForgeCooldown('cooldown'), new ForgeRequestDeferred('deferred')]) {
+    await expect(
+      settlePublicationBeforeRelease(
+        {
+          store: h.store,
+          settlePublication: async () => {
+            throw error
+          },
+        },
+        BUILD,
+        await h.store.getEvents(BUILD),
+        'terminal',
+      ),
+    ).rejects.toBe(error)
+  }
+  expect((await h.store.getEvents(BUILD)).some((e) => e.type === 'publication.lost')).toBe(false)
+  await settlePublicationBeforeRelease(
+    {
+      store: h.store,
+      settlePublication: async () => settleSummaryRequests({ ...h.deps, holder: 'host' }),
+    },
+    BUILD,
+    await h.store.getEvents(BUILD),
+    'terminal',
+  )
+  expect(h.forge.comments).toHaveLength(1)
+})

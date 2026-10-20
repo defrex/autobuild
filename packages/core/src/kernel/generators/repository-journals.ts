@@ -149,6 +149,16 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
     const run = pick(rand, ['run-a', 'run-b'])
     const templates: Array<() => Spec> = [
       () => ({
+        type: 'dispatcher.forge-degraded',
+        payload: {
+          forge: 'github',
+          message: 'rate limited',
+          firstFailureAt: '2026-01-01T00:00:00.000Z',
+          resetAt: '2026-01-01T00:01:00.000Z',
+        },
+      }),
+      () => ({ type: 'dispatcher.forge-recovered', payload: { forge: 'github' } }),
+      () => ({
         type: 'dispatcher.run-started',
         payload: {
           run,
