@@ -91,16 +91,19 @@ export function diagnoseReducerValue(name: string, value: unknown): ValidationFa
     ? (shapes.roots as Record<string, { value: string }>)[name]
     : undefined
   if (!root) return { path: '$', expected: 'known reducer' }
-  return diagnose(root.value, value, '$')
+  const failure = diagnose(root.value, value, '$', 0)
+  return failure ? { path: failure.path, expected: failure.expected } : undefined
 }
 function property(path: string, key: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`
 }
+type Diagnostic = ValidationFailure & { depth: number }
 function diagnoseJson(
   value: unknown,
   path: string,
+  depth: number,
   seen = new Set<object>(),
-): ValidationFailure | undefined {
+): Diagnostic | undefined {
   if (
     value === null ||
     typeof value === 'string' ||
@@ -108,11 +111,11 @@ function diagnoseJson(
     (typeof value === 'number' && Number.isFinite(value))
   )
     return undefined
-  if (typeof value !== 'object' || seen.has(value)) return { path, expected: 'json' }
+  if (typeof value !== 'object' || seen.has(value)) return { path, expected: 'json', depth }
   seen.add(value)
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const failure = diagnoseJson(value[i], `${path}[${i}]`, new Set(seen))
+      const failure = diagnoseJson(value[i], `${path}[${i}]`, depth + 1, new Set(seen))
       if (failure) return failure
     }
   } else if (Object.getPrototypeOf(value) === Object.prototype) {
@@ -120,29 +123,31 @@ function diagnoseJson(
       const failure = diagnoseJson(
         (value as Record<string, unknown>)[key],
         property(path, key),
+        depth + 1,
         new Set(seen),
       )
       if (failure) return failure
     }
-  } else return { path, expected: 'json' }
+  } else return { path, expected: 'json', depth }
   return undefined
 }
-function diagnose(id: string, value: unknown, path: string): ValidationFailure | undefined {
+function diagnose(id: string, value: unknown, path: string, depth: number): Diagnostic | undefined {
   if (matches(id, value)) return undefined
   const shape = schemas[id]!
   const failure = {
     path,
+    depth,
     expected: shape.kind === 'literal' ? JSON.stringify(shape.value) : shape.kind,
   }
-  if (shape.kind === 'json') return diagnoseJson(value, path)
+  if (shape.kind === 'json') return diagnoseJson(value, path, depth)
   if (shape.kind === 'union') {
     return (shape.items as string[])
-      .map((item) => diagnose(item, value, path)!)
-      .reduce((best, next) => (next.path.length > best.path.length ? next : best))
+      .map((item) => diagnose(item, value, path, depth)!)
+      .reduce((best, next) => (next.depth > best.depth ? next : best))
   }
   if (shape.kind === 'array' && Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const found = diagnose(shape.items as string, value[i], `${path}[${i}]`)
+      const found = diagnose(shape.items as string, value[i], `${path}[${i}]`, depth + 1)
       if (found) return found
     }
   }
@@ -155,13 +160,14 @@ function diagnose(id: string, value: unknown, path: string): ValidationFailure |
     const record = value as Record<string, unknown>
     for (const [key, prop] of Object.entries(shape.props!)) {
       if (!(key in record) && prop.optional) continue
-      const found = diagnose(prop.type, record[key], property(path, key))
+      const found = diagnose(prop.type, record[key], property(path, key), depth + 1)
       if (found) return found
     }
     for (const key of Object.keys(record).sort()) {
       if (Object.hasOwn(shape.props!, key)) continue
-      if (!shape.index) return { path: property(path, key), expected: 'no additional property' }
-      const found = diagnose(shape.index, record[key], property(path, key))
+      if (!shape.index)
+        return { path: property(path, key), expected: 'no additional property', depth: depth + 1 }
+      const found = diagnose(shape.index, record[key], property(path, key), depth + 1)
       if (found) return found
     }
   }
