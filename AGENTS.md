@@ -62,6 +62,18 @@ upgrade tooling. `tools/vendored-skills-sync.test.ts` holds every copy to byte
 parity with the canonical install form with no exception list, so a plan that
 excludes `.ab-pristine` from a skill change is wrong and will fail verify.
 
+Installed skills are what consuming agents read when deciding how to work, so a
+stale skill sentence misleads more than stale code. Any change that alters
+product behavior must update every installed skill and `ab-guide` reference
+that describes that behavior, in the same commit. Plans search `skills/` for
+the changed concept and name each passage to revise or confirm. Plan and code
+reviewers treat a missed passage as a blocking finding. Increment language
+such as "currently", "in this increment", or "unchanged for now" is the usual
+symptom: when a later ticket finishes the work, the sentence has to go. A
+duplicated skill passage is also a trap, because one copy gets updated and the
+other doesn't. AUT-883 exists because `ab-spec` kept telling agents node
+tickets were intent-only after `ab-tickets` had been corrected.
+
 ## What the README is for
 
 `README.md` is marketing material for engineers: enough to understand what
