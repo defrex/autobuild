@@ -143,3 +143,5 @@ export { readBuildFacts } from '../store/reduced-reads'
 
 export { listOperatorLandings } from './landings'
 export { readTicketTree, getOperatorTicketTree } from './tickets'
+
+export { requestNodeRestack } from './restack'

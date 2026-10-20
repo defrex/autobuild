@@ -596,6 +596,25 @@ mode = "auto"
           : {}),
       },
     })
+    if (label !== 'unknown') {
+      const parent = label === 'with-pr' ? 'b'.repeat(40) : 'opening-sha'
+      if (label === 'with-pr')
+        await harness.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'target.moved',
+          payload: { branch: 'main', sha: parent },
+        })
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.parent-distance',
+        payload: {
+          base: 'opening-sha',
+          parent,
+          branch: label === 'nested' ? 'ab-node/integration-with-pr' : 'main',
+          count: label === 'with-pr' ? 3 : 0,
+        },
+      })
+    }
     if (label === 'with-pr')
       await harness.store.append(slug, {
         actor: DISPATCHER,
@@ -715,6 +734,16 @@ mode = "auto"
         head,
         parent,
         config: JSON.stringify({ verify: { steps: label === 'failed' ? ['unit'] : [] } }),
+      },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.parent-distance',
+      payload: {
+        base: parent,
+        parent,
+        branch: 'ab-node/integration-with-pr',
+        count: 0,
       },
     })
     if (label === 'failed') {

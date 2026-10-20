@@ -235,26 +235,15 @@ exactly as today. Rewriting a branch between review rounds would churn review
 ranges for no benefit. The reviewer judges the change, not the snapshot it sat
 on.
 
-**Integration builds restack whenever the parent moves.** An integration build
-mostly holds no runner (§7). Clean restacks happen kernel-side immediately. A
-conflict attaches a runner for `reconcile`.
+**Integration restack timing is amended by [RFC 0002 §3 and §8](0002-integration-tree-hardening.md).**
+Nodes now restack on demand; see the running [restacking contract](../docs/restacking.md).
 
-### 6.4 The cascade
+### 6.4 The cascade (amended)
 
-When a change lands on node *N*, *N*'s head moves. The kernel then:
-
-1. records a target-moved fact for every open child node of *N* and every
-   leaf build targeting *N*;
-2. restacks each child node (clean ones immediately, conflicted ones through
-   their integration build's `reconcile`), which moves *their* heads and
-   recurses;
-3. restacks each leaf build that is awaiting landing; leaf builds earlier in
-   the pipeline absorb at their next verify entry.
-
-Landings on a busy root would otherwise trigger a storm. The cascade
-**coalesces**: a restack always targets the parent's head as of when the
-restack starts, never an intermediate one. Several upstream landings during
-one restack cost a second restack, not one per landing.
+Parent movement is observed without eager replay. Completeness before verification,
+freshness before landing, dependency presence, operator request and re-parenting
+supply demand. Active frozen transactions finish; nested nodes need independent
+demand. Leaf timing is unchanged. This adopts only RFC 0002 §3/§8.
 
 ### 6.5 Verification after a restack
 
@@ -283,7 +272,7 @@ spec → open → collect ⟲ restack → verify:* → land → closed
   in a branch namespace reserved for nodes (distinct from build branches,
   `ab/<slug>`, to avoid ref collisions). From then on, children may be claimed.
 - **collect** — children land changes. The integration build holds no runner
-  and consumes no capacity. Parent movement triggers restacks (§6.4).
+  and consumes no capacity. Parent movement is observed; demand triggers restacks (§6.4, amended by RFC 0002).
 - **complete** (the exit from collect) — the node is *complete*: every ticket targeting it is in a
   terminal state (done or cancelled), and at least one change has landed.
   Tickets still in triage, backlog, or ready keep the node open. Shipping part
@@ -293,7 +282,7 @@ spec → open → collect ⟲ restack → verify:* → land → closed
 - **land** — subject to landing policy (§8). The node's stack lands on the
   parent as its own changes, preserving one root commit per build, then the
   node closes. Its landing is itself a landing into the parent, so the
-  parent's cascade follows.
+  parent's head moves and its descendants observe the movement; their own demand controls replay.
 
 There is no plan, implement, or code-review phase. An integration build never
 authors code except through conflict resolution. Revisions are new child
@@ -388,11 +377,11 @@ facts record, for every node head, which change identities it contains.
 | Blocker lands into | X targets | Resolved when |
 |---|---|---|
 | the same node | that node | the blocker lands |
-| an ancestor of X's target | a descendant | the blocker lands, and the cascade restacks X's target onto it |
-| a sibling subtree | its own node | the blocker's node lands into the common ancestor, and the cascade carries it down |
+| an ancestor of X's target | a descendant | the blocker lands, and presence demand restacks the minimal path to X's target |
+| a sibling subtree | its own node | the blocker's node lands into the common ancestor, and presence demand carries it down the required path |
 | a descendant of X's target | an ancestor | the blocker's node lands into X's target |
 
-Because the cascade is automatic, no case needs operator action. A blocker on a
+Because presence demand is automatic, no case needs operator action. A blocker on a
 **node** ticket resolves when that node's whole stack is present, normally
 when it lands.
 
@@ -506,8 +495,7 @@ part of why this is 1.0.
 3. **Node verification:** all ordinary configured verify steps with normal path
    applicability; no separate implicit agent check
    ([node lifecycle](../docs/integration-tree.md#collect-verify-and-land)).
-4. **Cascade cadence:** eager, coalesced after the active transaction, with no
-   new throttle or completeness deferral ([restacking](../docs/restacking.md#timing-and-evidence)).
+4. **Cascade cadence:** superseded by RFC 0002 §3/§8 demand-driven restacking ([restacking](../docs/restacking.md#timing-and-evidence)).
 5. **Defaults:** leaf auto, node consent, whether or not a node has opened
    ([landing policy](../docs/landing-policy.md)).
 6. **Incomplete consent:** refused with open children named; move remaining

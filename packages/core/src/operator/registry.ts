@@ -1,3 +1,4 @@
+import { requestNodeRestack } from './restack'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets } from './tickets'
@@ -571,6 +572,21 @@ export const TOOLS: readonly ToolEntry[] = [
         },
         contentBase64: Buffer.from(artifact.content).toString('base64'),
       }
+    },
+  ),
+  defineTool(
+    'builds.restack',
+    'Request a node restack onto its parent. Paused or blocked nodes retain demand until normal safety gates permit execution; refuses leaves, unopened and terminal nodes.',
+    buildDetailInput,
+    '{slug, request, coalesced, waiting}: a durable request receipt; execution is asynchronous.',
+    async (raw, ctx) => {
+      const input = raw as { repo: string; slug: string }
+      return requestNodeRestack({
+        store: ctx.store,
+        ...input,
+        user: attributed(ctx),
+        ...(ctx.via ? { via: ctx.via } : {}),
+      })
     },
   ),
   defineTool(

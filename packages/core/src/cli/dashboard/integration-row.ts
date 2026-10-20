@@ -13,6 +13,7 @@ import { nodeLandingPolicyDisplay } from './landing-display'
 
 /** Shared list progress and five integration steps. */
 export interface IntegrationRow {
+  parentDistance?: string
   destination: string
   children:
     | { known: false }
@@ -91,6 +92,7 @@ export function projectIntegrationRow(
           : undefined
   return {
     destination,
+    parentDistance: nodeParentDistance(state),
     openChildren,
     children: known
       ? {
@@ -226,4 +228,21 @@ export function integrationBarCells(landed: number, building: number, queued: nu
     .sort((a, b) => b.remainder - a.remainder || a.i - b.i)
   for (const part of order.slice(0, remaining)) cells[part.i]! += 1
   return cells
+}
+
+export function nodeParentDistance(state: BuildState): string {
+  const node = state.nodeRestack
+  const distance = node?.distance
+  const count =
+    distance &&
+    distance.base === node?.contributionBase &&
+    distance.branch === state.baseBranch &&
+    distance.parent === (node?.observedParent?.sha ?? state.nodeComparison?.parentSha)
+      ? distance.count
+      : null
+  return count === null
+    ? 'parent distance unknown'
+    : count === 0
+      ? 'parent current'
+      : `parent ${count} commit${count === 1 ? '' : 's'} ahead`
 }

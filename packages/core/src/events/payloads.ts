@@ -321,6 +321,34 @@ export const eventPayloadSchemas = {
     parent: z.string().min(1),
     sha: z.string().min(1),
   }),
+  'node.restack-requested': z
+    .strictObject({
+      id: z.string().min(1),
+      reason: z.enum(['operator', 'presence']),
+      branch: z.string().min(1),
+      parent: z.string().min(1),
+      dependent: ticketRefSchema.optional(),
+      identities: z.array(z.string()).optional(),
+    })
+    .refine(
+      (request) =>
+        request.reason !== 'presence' ||
+        (request.dependent !== undefined &&
+          request.identities !== undefined &&
+          request.identities.length > 0),
+      'presence demand requires a dependent ticket and nonempty identities',
+    ),
+  'node.restack-satisfied': z.strictObject({
+    id: z.string().min(1),
+    parent: z.string().min(1),
+    outcome: z.enum(['covered', 'destination-changed']),
+  }),
+  'node.parent-distance': z.strictObject({
+    base: z.string().min(1),
+    parent: z.string().min(1),
+    branch: z.string().min(1),
+    count: z.number().int().nonnegative().nullable(),
+  }),
   'node.parent-requested': parentChange,
   'node.parent-accepted': parentChange,
   'node.parent-pr-retargeted': z.strictObject({ id: z.string().min(1), base: z.string().min(1) }),
@@ -339,6 +367,7 @@ export const eventPayloadSchemas = {
   'node.writer-reserved': z.strictObject({
     id: z.string().min(1),
     operation: z.enum(['restack', 'landing']),
+    requests: z.array(z.string().min(1)).optional(),
     expected: z.string().min(1),
     parent: z.string().min(1),
     oldBase: z.string().min(1),
@@ -402,6 +431,7 @@ export const eventPayloadSchemas = {
   }),
   'node.inventory': z.strictObject({
     head: z.string().min(1),
+    base: z.string().min(1).optional(),
     builds: z.array(z.string()),
     contributions: z.array(z.string()).optional(),
     foreign: z.array(z.string()),

@@ -111,7 +111,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   starts no agent; conflicts enter `reconcile`, then verification. The leaf
   terminates **merged** or **closed**. See the [replay reference](references/restacking.md).
 
-Integration builds use collect → verify → land → close, with descendant cascade,
+Integration builds use collect → verify → land → close, with demand-driven node restacking,
 repair children and source-aware reconcile as needed. Their exact-head/parent
 verification differs from clean waiting leaf rewrites. See the
 [node lifecycle](references/integration-tree.md#collect-verify-and-land).
@@ -1403,7 +1403,8 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
-Integration list rows name the destination and show children landed out of the
+Integration list rows show parent commit distance (current or unknown when appropriate),
+name the destination and show children landed out of the
 known total, with the remainder split into building and queued. Cancelled
 children are excluded. Missing or diagnostic-bearing observations show
 `children unknown`; a successful empty enumeration shows `no children yet`.
@@ -1611,6 +1612,7 @@ to the build's event log and apply the same write-time checks.
 | Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
 | Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Consent to landing | `ab land <slug> [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
+| Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
 | Hold landing | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
@@ -2278,3 +2280,12 @@ unavailable for uninstrumented adapters. Attribution retains at most ten builds
 ordered by descending count then build name; repository requests are unattributed.
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
+
+### Requesting node freshness
+
+`ab restack <node>` and `builds.restack {repo, slug}` record durable demand.
+Paused or blocked nodes wait for normal safety gates; leaves, terminal nodes
+and unopened nodes are refused. Collecting nodes may intentionally trail their
+parent; both dashboards show its commit distance, current, or unknown.
+See [restacking timing and recovery](references/restacking.md) for the five
+automatic and explicit demand points, minimal presence paths and upgrade behavior.

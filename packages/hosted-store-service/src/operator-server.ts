@@ -24,6 +24,8 @@ import {
   bulkControlRequestSchema,
   bulkControlRepository,
   BulkWalkError,
+  RouteRefusalError,
+  requestNodeRestack,
   controlBuild,
   openOperatorTickets,
   controlHarvestRun,
@@ -665,6 +667,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
           },
         })
       }
+      if (req.method === 'POST' && rest[2] === 'restack' && rest.length === 3) {
+        return json(200, await requestNodeRestack({ store: opts.store, repo, slug, user }))
+      }
       if (req.method === 'POST' && rest[2] === 'control' && rest.length === 3) {
         const request = await body(req, buildControlRequestSchema)
         await requireRouteBuild(repo, slug)
@@ -767,6 +772,12 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         } catch (error) {
           if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
           if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
+          if (error instanceof RouteRefusalError)
+            return failure(
+              error.refusal.kind === 'not-found' ? 404 : 409,
+              error.refusal.kind,
+              error.refusal.error,
+            )
           if (error instanceof TicketRevisionConflict)
             return failure(409, 'conflict', error.message)
           if (error instanceof TicketRevisionUnsupported)
