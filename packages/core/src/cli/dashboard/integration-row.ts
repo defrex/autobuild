@@ -71,22 +71,24 @@ export function projectIntegrationRow(
     ...(qualifier ? { qualifier } : {}),
   })
   const conflicted = state.nodeRestack?.conflict || (restack.active && restack.replay?.conflicted)
-  const alert: IntegrationRow['alert'] = conflicted
-    ? {
-        tone: 'red',
-        text: `restack onto ${destination} conflicted — open the detail view for files`,
-      }
-    : failure
+  const alert: IntegrationRow['alert'] = state.janitor?.attention
+    ? { tone: 'red', text: `Janitor failing: ${state.janitor.message}` }
+    : conflicted
       ? {
           tone: 'red',
-          text: `${failure.step} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`,
+          text: `restack onto ${destination} conflicted — open the detail view for files`,
         }
-      : ready && mode === 'consent' && state.landing?.command?.kind !== 'land'
+      : failure
         ? {
-            tone: 'yellow',
-            text: `ready to land into ${destination} — press l, or ab land ${record.slug}`,
+            tone: 'red',
+            text: `${failure.step} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`,
           }
-        : undefined
+        : ready && mode === 'consent' && state.landing?.command?.kind !== 'land'
+          ? {
+              tone: 'yellow',
+              text: `ready to land into ${destination} — press l, or ab land ${record.slug}`,
+            }
+          : undefined
   return {
     destination,
     openChildren,

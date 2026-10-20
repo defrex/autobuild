@@ -189,11 +189,13 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'unit failed',
       'ready to land into',
       'NODE-3',
+      'Janitor failing: forge publication unavailable',
     ],
   },
 
   {
     id: 'integration-narrow',
+    forbids: ['Janitor failing:'],
     scenario: 'integration',
     columns: 70,
     rows: 110,
@@ -1419,6 +1421,11 @@ async function capturePaint(
   const happyHarness = spec.scenario === 'happy'
   const originalHeartbeatRepo = harness.store.heartbeatRepo.bind(harness.store)
   const originalClaimRepoLease = harness.store.claimRepoLease.bind(harness.store)
+  // Synthetic rows intentionally provoke many independent failures. Their
+  // durable receipts advance the stepping clock; retain ownership throughout
+  // this synchronous capture pass without changing production lease timing.
+  harness.store.claimRepoLease = (repo, holder, ttl) =>
+    originalClaimRepoLease(repo, holder, ttl * 10)
   let repoLeaseClaims = 0
   if (happyHarness) {
     await harness.store.ensureRepo(harness.origin)
@@ -1429,7 +1436,7 @@ async function capturePaint(
       // Only the loop's initial claim succeeds; current-lease ticks no longer
       // re-claim. A later claim is the adopting HarvestRunner re-acquiring
       // after its deliberately lost heartbeat.
-      return repoLeaseClaims === 1 ? originalClaimRepoLease(repo, holder, ttl) : false
+      return repoLeaseClaims === 1 ? originalClaimRepoLease(repo, holder, ttl * 10) : false
     }
   }
 
@@ -1542,6 +1549,7 @@ async function capturePaint(
   })
 
   harness.forge.readiness = priorReadiness
+  harness.store.claimRepoLease = originalClaimRepoLease
   if (happyHarness) {
     harness.store.heartbeatRepo = originalHeartbeatRepo
     harness.store.claimRepoLease = originalClaimRepoLease
@@ -1614,6 +1622,29 @@ export async function captureDashboardFrames(
             : spec.scenario === 'integration'
               ? integrationHarness
               : mixedHarness
+      if (spec.id === 'integration-wide') {
+        await harness.store.append('integration-unknown', {
+          actor: DISPATCHER,
+          type: 'build.janitor-attempt-failed',
+          payload: {
+            firstFailureAt: '2026-07-15T11:45:00.000Z',
+            attempt: 8,
+            message: 'forge publication unavailable',
+            nextAttemptAt: '2027-01-01T00:00:00.000Z',
+          },
+        })
+        await harness.store.append('integration-unknown', {
+          actor: DISPATCHER,
+          type: 'build.janitor-failing',
+          payload: { message: 'forge publication unavailable' },
+        })
+      }
+      if (spec.id === 'integration-narrow')
+        await harness.store.append('integration-unknown', {
+          actor: DISPATCHER,
+          type: 'build.janitor-recovered',
+          payload: {},
+        })
       const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,

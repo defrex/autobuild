@@ -161,6 +161,8 @@ describe('parseConfig — complete flattened surface', () => {
         maxReviewRounds: 4,
         harvestThreshold: 7,
         harvestMaxDrift: 9,
+        janitorFailureAttentionSeconds: 600,
+        janitorBackoffMaxSeconds: 300,
       },
       tickets: {
         source: 'file',
@@ -216,6 +218,8 @@ describe('parseConfig — defaults', () => {
         maxReviewRounds: 6,
         harvestThreshold: 5,
         harvestMaxDrift: 3,
+        janitorFailureAttentionSeconds: 600,
+        janitorBackoffMaxSeconds: 300,
       },
       tickets: { source: 'file', readyState: 'ready' },
       orchestrator: {
@@ -748,6 +752,8 @@ skill = "ab-verify-e2e"
       maxReviewRounds: 6,
       harvestThreshold: 5,
       harvestMaxDrift: 3,
+      janitorFailureAttentionSeconds: 600,
+      janitorBackoffMaxSeconds: 300,
     })
   })
 })

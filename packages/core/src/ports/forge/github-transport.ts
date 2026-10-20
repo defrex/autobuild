@@ -7,6 +7,7 @@
  * shelling `gh`.
  */
 import { z } from 'zod'
+import { ForgeFailure, isForgeFailure } from '../forge-failure'
 import { spawnExec } from '../workspace/git-worktree'
 
 export interface GitHubRequestOpts {
@@ -370,12 +371,31 @@ export function githubTokenSource(
 
 /** Documented primary and secondary limits; permission failures are ordinary errors. */
 export function githubRateLimitUntil(error: unknown, now: number): string | undefined {
+  if (isForgeFailure(error) && error.details.kind === 'rate-limited') return error.details.resetAt
   if (!(error instanceof GitHubApiError)) return undefined
+  const limitedEnvelope = z
+    .object({
+      errors: z.array(
+        z
+          .object({
+            type: z.string().optional(),
+            extensions: z.object({ code: z.string().optional() }).passthrough().optional(),
+          })
+          .passthrough(),
+      ),
+    })
+    .safeParse(error.body)
+  const rateLimited =
+    limitedEnvelope.success &&
+    limitedEnvelope.data.errors.some(
+      (e) => e.type === 'RATE_LIMITED' || e.extensions?.code === 'RATE_LIMITED',
+    )
   if (
     error.status !== 429 &&
     !(
-      error.status === 403 &&
-      (error.headers['x-ratelimit-remaining'] === '0' ||
+      (error.status === 403 || error.status === 200) &&
+      (rateLimited ||
+        error.headers['x-ratelimit-remaining'] === '0' ||
         /rate limit|secondary.*limit|content.creation.*limit/i.test(error.message))
     )
   )
@@ -395,4 +415,27 @@ export function githubRateLimitUntil(error: unknown, now: number): string | unde
       Number.isFinite(reset) ? reset : 0,
     ),
   ).toISOString()
+}
+
+/** Preserve ordinary errors; only documented limits and retryable transport failures opt in. */
+export function classifyGitHubFailure(error: unknown, now = Date.now()): unknown {
+  if (isForgeFailure(error)) return error
+  const resetAt = githubRateLimitUntil(error, now)
+  const message = error instanceof Error ? error.message : String(error)
+  if (resetAt) return new ForgeFailure(message, { kind: 'rate-limited', resetAt })
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+  if (
+    (error instanceof GitHubApiError && error.status >= 500) ||
+    (error instanceof TypeError && /fetch|network|socket|connection/i.test(message)) ||
+    [
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'UND_ERR_CONNECT_TIMEOUT',
+    ].includes(String(code))
+  )
+    return new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })
+  return error
 }

@@ -125,6 +125,7 @@ describe('ab repository status', () => {
   test('human output labels the repository and every dispatcher setting', () => {
     const status = projectRepositoryStatus(REPO, [])
     expect(renderRepositoryStatus(status)).toEqual([
+      'forge requests: unavailable',
       `repository: ${REPO}`,
       'dispatcher: absent — no dispatcher holds the repository',
       'intake: ON',

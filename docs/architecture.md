@@ -1057,7 +1057,12 @@ validates issuance, durable lifecycle bindings and the 60-second terminal grace;
 `machine-auth.ts` authenticates these signed version-2 grants as delegated
 principals. `remote-store-server.ts` enforces resource mutations before deposits,
 including body-selected and addressed-stream resources. Operator routes reject
-these principals. Ticket routes deny build grants and allow harvest grants only the reads and
+these principals. Build-runner and build-phase grants may append only the
+kernel's `dispatcher.forge-degraded` repository fact, in their own project,
+so runner/CLI guards can record a newly observed rate limit and wait for
+durable dispatcher recovery. This exception grants no repository administration,
+recovery, lease, or other journal writes. The agent-visible build-scoped Store
+still denies repository writes. Ticket routes deny build grants and allow harvest grants only the reads and
 runner filing operations they require. Ticket sources and assets are partitioned
 by the authenticated project.
 
@@ -1318,3 +1323,28 @@ recovery. Interrupted and continuation transcripts remain separate artifacts;
 logical totals sum known segment usage once and preserve every transcript ref.
 Unknown crash usage is not fabricated. Pause interrupts live turns and retains
 the suspension cause through continuation.
+
+## Forge failure recovery
+
+Janitor failures are durable per-build episodes. Eligible failures retry after
+30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
+Skipped polls preserve the episode across restart. After
+`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
+notifies default watchers and appears on the build row. A successful attempt
+clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+
+A classified forge rate limit records repository degradation with `resetAt`.
+Forge work waits during cooldown; passing the deadline permits a recovery
+request, and only success clears degradation. A further limit extends cooldown.
+Native landing application failures keep candidate-specific retry eligibility,
+including automatic decisions without a human command. Retries recheck consent,
+holds, verification and the exact candidate. Uncertain enables remain pending
+until cancellation can be confirmed after cooldown. Publication retries reuse
+cancellation receipts only when the forge confirms the same disabled state for
+the same candidate and publication operation.
+
+Tick telemetry counts provider wire requests, including failures. Counts are
+unavailable for uninstrumented adapters. Attribution retains at most ten builds
+ordered by descending count then build name; repository requests are unattributed.
+Repository status names a hotspot only when one build makes at least two requests
+and more than half of attributed requests. Telemetry never controls workflow.
