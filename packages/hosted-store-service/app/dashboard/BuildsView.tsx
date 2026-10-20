@@ -962,7 +962,9 @@ function BuildDetail({
                     style={{ display: 'flex', flexWrap: 'nowrap', gap: '1ch' }}
                     key={`${child.source}:${displayText(child.id)}`}
                   >
-                    <span style={{ flexShrink: 0 }}>{displayText(child.id)}</span>
+                    <span style={{ flexShrink: 0, maxWidth: '40%', overflowWrap: 'anywhere' }}>
+                      {displayText(child.id)}
+                    </span>
                     <span
                       style={{
                         flex: 1,
@@ -976,7 +978,7 @@ function BuildDetail({
                       {displayText(child.title)}
                     </span>
                     <span
-                      style={{ flexShrink: 0 }}
+                      style={{ flexShrink: 0, maxWidth: '40%', overflowWrap: 'anywhere' }}
                       className={child.landed ? 'ok' : child.state === 'queued' ? 'slack' : 'live'}
                     >
                       {displayText(child.state)}
