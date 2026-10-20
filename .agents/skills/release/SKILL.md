@@ -42,7 +42,7 @@ rather than discovering them through a failed run:
   if not). The command refuses before running any gate otherwise, because the
   final stage publishes every non-private workspace package to npm.
 - `CHANGELOG.md` has exactly one `## Unreleased` heading with at least one
-  entry beneath it. An empty section is a hard refusal.
+  pending entry, either beneath it or in `.changelog/<PR-number>.md`.
 
 ## Running it
 
@@ -90,9 +90,9 @@ Every published package uses `--tag <channel>`; the stable `latest` tag stays
 at the last stable release. GitHub receives `--prerelease --latest=false`.
 
 The same preflight, peer-floor guard, gates, summary, lock refresh and smoke
-checks run. A prerelease still requires nonempty Unreleased entries. Its
+checks run. A prerelease requires pending entries from either source. Its
 GitHub notes contain those current entries under the version/date heading,
-with the optional summary. It leaves CHANGELOG.md, README.md, hosted deployment
+with the optional summary. It leaves fragments, CHANGELOG.md, README.md, hosted deployment
 pins and hosted documentation byte-identical. Its commit contains only workspace
 manifests and bun.lock when the refresh changes it. Recovery commands preserve
 the channel and GitHub flags; run them exactly as printed.
@@ -160,3 +160,12 @@ is saved exactly:
 bun add -d --exact @defrex/autobuild@beta
 bun add -d --exact @defrex/autobuild@1.0.0-beta.0
 ```
+
+Build entries live in `.changelog/<PR-number>.md`; nobody edits Unreleased by
+hand for a build. Existing Unreleased entries remain compatibility inputs for
+the next stable cut. Releases combine both sources, newest numeric PR first,
+reject duplicate PR representations, and preserve legacy prose afterward.
+Stable releases delete consumed fragments in the release commit and leave
+Unreleased empty. Dry-run reports each planned deletion without changing files.
+Prereleases preserve all fragment and changelog bytes and quote every pending
+entry in their notes and summary input. Pre-push rollback restores fragments.

@@ -1,3 +1,4 @@
+import { collectPendingChangelog } from './changelog-fragments'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -850,7 +851,8 @@ export async function runRelease(
       `HEAD is on branch "${branch || '(detached)'}"; release from configured base branch "${config.baseBranch}"`,
     )
   }
-  const entries = unreleasedEntries(changelogText)
+  const pending = await collectPendingChangelog(root, changelogText)
+  const entries = pending.entries
   if (await localTagExists(run, root, tag))
     throw new Error(`target tag ${tag} already exists locally`)
 
@@ -933,7 +935,7 @@ export async function runRelease(
   const summary = await generateSummary(run, root, entries, output)
   const date = today()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
-  const changelog = renderReleasedChangelog(changelogText, tag, date, summary)
+  const changelog = renderReleasedChangelog(pending.content, tag, date, summary)
   const manifestCandidates = workspaceManifests.map((entry) => ({
     path: entry.path,
     content: replacePackageVersion(entry.text, version),
@@ -977,6 +979,7 @@ export async function runRelease(
   output.log(`Summary: ${summary ?? '[omitted; Claude did not return usable prose]'}`)
 
   if (arguments_.dryRun) {
+    if (!policy.prerelease) for (const path of pending.paths) output.log(`Delete ${path}`)
     output.log('DRY RUN — no files, commits, tags, pushes, or GitHub releases will be created.')
     for (const candidate of manifestCandidates) {
       printCandidate(output, candidate.path, candidate.content)
@@ -1034,12 +1037,16 @@ export async function runRelease(
       )
       lockfileChanged = lockStatus.stdout.trim() !== ''
     }
+    if (!policy.prerelease) {
+      for (const path of pending.paths) await rm(resolve(root, path))
+    }
     const releasePaths = [
+      ...(!policy.prerelease ? pending.paths : []),
       ...manifestCandidates.map((entry) => entry.path),
       ...(lockfileChanged ? ['bun.lock'] : []),
     ]
     await git(run, root, ['diff', '--check'], 'release candidates failed git diff --check')
-    await git(run, root, ['add', '--', ...releasePaths], 'could not stage release files')
+    await git(run, root, ['add', '-A', '--', ...releasePaths], 'could not stage release files')
     const staged = await git(
       run,
       root,
