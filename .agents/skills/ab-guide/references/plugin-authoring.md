@@ -19,7 +19,7 @@ paths are not API.
 |---|---|---|---|
 | `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, stable external creation-key projection, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
 | `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
-| `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. |
+| `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair; preserve unknown unpublished work. |
 | `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
 
 Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
@@ -36,8 +36,19 @@ fall back to merging, ordinary pushes, archive branches or tags. Older forge
 plugins remain loadable and receive an actionable refusal at reconcile time.
 Remote workspace providers additionally need trusted `WorkspacePublication.rewrite`
 after guest execution teardown; ordinary `publish` cannot publish a restack.
-A local-ref acknowledgement has its own `localExpected` guard, separate from
-the authoritative remote lease when another writer advanced the remote branch.
+Every publication succeeds only after authoritative branch-head readback equals
+its frozen intended SHA, including recovery after a failed push. Remote-backed
+local refs are caches: set them unconditionally after confirmation, fetching the
+advertised ref if objects are missing, without resetting checkout files.
+`localExpected` is historical input only. Local-git's shared ref database remains
+authoritative and keeps CAS. Ordinary `pushBranch(workspacePath, branch, sha?)`
+receives the frozen SHA from kernel callers and remains fast-forward only;
+legacy callers may omit SHA to select HEAD. Implement `confirmPublication`
+to inspect the authoritative head and refresh caches only on an exact SHA match;
+kernel callers refuse adapters without it before attempting a push. Hosted `WorkspacePublication` must
+provide authoritative `isPublished` and confirm after writing, as well as before
+retrying. Missing inspection fails actionably. Unconfirmed candidate ancestry
+never proves publication.
 
 Plugin API 1.3 adds the optional AgentRunner failure `cause` and the
 `exhaustion-failure` shared-contract scenario. Legacy failures without `cause`

@@ -530,39 +530,17 @@ for (const local of [true, false]) {
       expect(
         (await store.getEvents(BUILD)).some((event) => event.type === 'reconcile.rewritten'),
       ).toBe(false)
+      // The failed durable receipt cannot be reconstructed from ancestry.
       expect(await publishRestack(deps, intent)).toEqual({
         kind: 'lease-mismatch',
         actual: observed,
-        rewritten: true,
       })
-      const receipts = (await store.getEvents(BUILD)).filter(
-        (event) => event.type === 'reconcile.rewritten',
+      expect(
+        (await store.getEvents(BUILD)).filter((e) => e.type === 'reconcile.rewritten'),
+      ).toHaveLength(0)
+      expect((await store.getEvents(BUILD)).some((e) => e.type === 'reconcile.completed')).toBe(
+        false,
       )
-      expect(receipts).toHaveLength(1)
-      expect(receipts[0]!.payload).toMatchObject({
-        oldHead: old,
-        headSha: candidate,
-        targetBase: target,
-        observedHead: observed,
-      })
-      const { readBuildFacts, readBuildSelector } = await import('../store/reduced-reads')
-      expect(await readBuildSelector(store, BUILD, 'publishedBranchHead')).toBe(observed)
-      expect((await readBuildFacts(store, BUILD)).value.recoveryCheckpoint).toBe(observed)
-      expect(await readBuildSelector(store, BUILD, 'verifyDiffBase')).toBe(base)
-      expect((await readBuildFacts(store, BUILD)).value.state.pr?.headSha).toBe(observed)
-      expect(
-        (await store.getEvents(BUILD)).some((event) => event.type === 'reconcile.completed'),
-      ).toBe(false)
-      // Retrying the intent must retain the same receipt without claiming the
-      // archived candidate is still the branch's current head.
-      expect(await publishRestack(deps, intent)).toEqual({
-        kind: 'lease-mismatch',
-        actual: observed,
-        rewritten: true,
-      })
-      expect(
-        (await store.getEvents(BUILD)).filter((event) => event.type === 'reconcile.rewritten'),
-      ).toHaveLength(1)
       const archive = `refs/autobuild/archive/${BUILD}/${candidate}`
       if (local) expect(await git(['show', `${archive}:build-change`])).toBe('build-change')
       else expect(await git(['ls-remote', 'origin', archive])).toContain(candidate)

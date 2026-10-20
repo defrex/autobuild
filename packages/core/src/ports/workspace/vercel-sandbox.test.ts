@@ -263,7 +263,7 @@ function runtimeReferenceFixtures() {
 
 function harness(
   options: {
-    publishedSha?: string | null
+    publishedSha?: string | null | (() => string | null)
     existingSha?: string | null
     provisionRuntimes?: boolean
     runtimeReferences?: () => ReturnType<typeof runtimeReferenceFixtures>
@@ -343,7 +343,9 @@ function harness(
             : buildBranch
               ? options.publishedSha === undefined
                 ? SHA
-                : options.publishedSha
+                : typeof options.publishedSha === 'function'
+                  ? options.publishedSha()
+                  : options.publishedSha
               : null
       return {
         stdout: sha === null ? '' : `${sha}\t${ref}\n`,
@@ -2334,7 +2336,8 @@ describe('VercelSandboxProvider', () => {
   })
 
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
-    const h = harness()
+    let reads = 0
+    const h = harness({ publishedSha: () => (++reads === 1 ? null : SHA) })
     const workspace = await h.provider.provision({
       repo: '/repo',
       baseBranch: 'main',
@@ -2356,7 +2359,7 @@ describe('VercelSandboxProvider', () => {
   })
 
   test('restores the normal policy when push fails and rejects mismatched remote heads', async () => {
-    const failed = harness()
+    const failed = harness({ publishedSha: null })
     const workspace = await failed.provider.provision({
       repo: '/repo',
       baseBranch: 'main',

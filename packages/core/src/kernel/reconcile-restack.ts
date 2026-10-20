@@ -247,7 +247,15 @@ export async function prepareRestack(
         intent?.type === 'reconcile.publish-intended' ? intent.payload.headSha : undefined
       const basedOnCandidate =
         candidate !== undefined &&
-        (await git(deps, ['merge-base', '--is-ancestor', candidate, observed], true)).exitCode === 0
+        (observed === candidate ||
+          (events.some(
+            (e) =>
+              e.type === 'reconcile.rewritten' &&
+              e.payload.id === prior.payload.id &&
+              e.payload.headSha === candidate,
+          ) &&
+            (await git(deps, ['merge-base', '--is-ancestor', candidate, observed], true))
+              .exitCode === 0))
       if (
         !basedOnCandidate &&
         (await git(deps, ['merge-base', '--is-ancestor', prior.payload.oldHead, observed], true))

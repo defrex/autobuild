@@ -232,11 +232,7 @@ export async function landIntoNode(
         destinationRef: `refs/autobuild/reconcile/${deps.slug}/landing-readback`,
       })
       if (observed !== active.expected) {
-        const contains = await deps.exec(
-          ['git', 'merge-base', '--is-ancestor', active.parent, observed],
-          { cwd: workspacePath },
-        )
-        if (contains.exitCode === 0) {
+        if (observed === active.parent) {
           await append({
             actor: KERNEL,
             type: 'node.rewritten',
@@ -417,12 +413,7 @@ export async function settleClosedNode(deps: {
         branch: deps.branch,
         destinationRef: `refs/autobuild/reconcile/${slug}/closed-readback`,
       })
-      landed =
-        (
-          await deps.exec(['git', 'merge-base', '--is-ancestor', active.parent, actual], {
-            cwd: workspacePath,
-          })
-        ).exitCode === 0
+      landed = actual === active.parent
       if (landed)
         await append({
           actor: KERNEL,

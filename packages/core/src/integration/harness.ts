@@ -474,8 +474,8 @@ export async function makeHarness(opts: {
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
   })
   const recordPush = forge.pushBranch.bind(forge)
-  forge.pushBranch = async (cwd, branch) => {
-    await recordPush(cwd, branch)
+  forge.pushBranch = async (cwd, branch, sha) => {
+    await recordPush(cwd, branch, sha)
     await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
   }
   forge.rewrite = gitRewrite(spawnExec, false)

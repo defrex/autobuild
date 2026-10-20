@@ -1,3 +1,4 @@
+import { publishBranch, remoteBranchHead, refreshBranchCache } from '../forge/git-rewrite'
 /**
  * Workspace adapter: git worktrees (SPEC §3.2). The worktree is disposable
  * scratch (§7); the branch is the build's durable code and travels through
@@ -228,32 +229,6 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     throw new GitError(['-C', repo, ...args], result)
   }
 
-  /** Reconcile a stale local build ref from the ref updated by a successful
-   * Forge push. Both ancestry checks and the expected-old update make this a
-   * normal fast-forward that cannot overwrite divergent or concurrent work. */
-  private async recoverPublishedBranch(
-    repo: string,
-    branch: string,
-    localSha: string,
-  ): Promise<string> {
-    const branchRef = `refs/heads/${branch}`
-    const publishedRef = `refs/remotes/origin/${branch}`
-    const publishedSha = await this.resolveOptionalCommit(repo, publishedRef)
-    if (!publishedSha || publishedSha === localSha) return localSha
-
-    if (await this.isAncestor(repo, localSha, publishedSha)) {
-      await this.gitOrThrow(repo, ['update-ref', branchRef, publishedSha, localSha])
-      return publishedSha
-    }
-
-    if (await this.isAncestor(repo, publishedSha, localSha)) return localSha
-
-    throw new Error(
-      `cannot recover ${branchRef}: local tip ${localSha} and published ` +
-        `${publishedRef} tip ${publishedSha} have diverged; refusing to rewrite either ref`,
-    )
-  }
-
   /** Attach the one detached registration this provider owns. The published
    * ref must first have made its HEAD exactly the durable branch tip; an
    * arbitrary detached commit is never adopted or discarded. */
@@ -346,6 +321,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     repo: string
     baseBranch: string
     branch: string
+    publication?: { sha: string; cacheHeads: string[] }
   }): Promise<WorkspaceProvisionResult> {
     const { repo, baseBranch, branch } = opts
     // Fails with git's stderr for a missing path or a non-repo directory.
@@ -373,14 +349,41 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
 
     const branchRef = `refs/heads/${branch}`
-    const localSha = await this.resolveOptionalCommit(repo, branchRef)
+    let localSha = await this.resolveOptionalCommit(repo, branchRef)
+    if (
+      !localSha &&
+      opts.publication &&
+      (await remoteBranchHead(this.exec, repo, branch)) === opts.publication.sha
+    ) {
+      await refreshBranchCache(this.exec, repo, branch, opts.publication.sha)
+      localSha = opts.publication.sha
+    }
     if (localSha) {
       // A branch attached outside this provider's root is not ours to repair
       // or reuse. The ordinary worktree-add/checkout error below remains the
       // non-destructive diagnostic for that unsupported registration.
-      const sha = worktrees.branchAttached
-        ? localSha
-        : await this.recoverPublishedBranch(repo, branch, localSha)
+      let sha = localSha
+      const proof = opts.publication
+      if (
+        !worktrees.branchAttached &&
+        proof &&
+        proof.sha !== localSha &&
+        proof.cacheHeads.includes(localSha)
+      ) {
+        // A detached unknown result is live unpublished work, even if the
+        // public branch cache is stale. Refuse before mutating that cache.
+        if (worktrees.detached) {
+          const detached = await this.resolveCommit(worktrees.detached.path, 'HEAD')
+          if (detached !== proof.sha)
+            throw new Error(
+              `detached HEAD ${detached} does not match durable publication ${proof.sha}; refusing to discard either commit`,
+            )
+        }
+        if ((await remoteBranchHead(this.exec, repo, branch)) === proof.sha) {
+          await refreshBranchCache(this.exec, repo, branch, proof.sha)
+          sha = proof.sha
+        }
+      }
 
       if (worktrees.detached) {
         if (worktrees.branchAttached) {
@@ -406,9 +409,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         }
       }
 
-      // Resume (§15.6-C): rematerialize only after the local branch has been
-      // monotonically reconciled with any push-updated publication evidence.
-      // This path performs no fetch and no remote write.
+      // Resume from retained work. Tracking refs cannot authorize replacing it;
+      // only a recorded publication confirmed above can refresh a stale cache.
       await this.gitOrThrow(repo, ['worktree', 'add', worktreePath, branch])
       this.repos.set(worktreePath, repo)
       return {
@@ -1017,13 +1019,9 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
     const ref = resolve(input.ref)
     if (await this.hasOriginRemote(ref)) {
-      const result = await this.git(ref, ['ls-remote', 'origin', `refs/heads/${input.branch}`])
-      if (result.exitCode !== 0) {
-        throw new GitError(['-C', ref, 'ls-remote', 'origin', `refs/heads/${input.branch}`], result)
-      }
-      return result.stdout
-        .split('\n')
-        .some((line) => line.trim() === `${input.sha}\trefs/heads/${input.branch}`)
+      const head = await remoteBranchHead(this.exec, ref, input.branch)
+      if (head === input.sha) await refreshBranchCache(this.exec, ref, input.branch, input.sha)
+      return head === input.sha
     }
     // No origin remote (local-git-forge deployments, where a local finalize
     // performs no network push): compare the branch locally. Linked
@@ -1037,16 +1035,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     GitWorktreeProvider.assertPublicationInput(input)
     const ref = resolve(input.ref)
     if (await this.hasOriginRemote(ref)) {
-      const args = [
-        '-C',
-        ref,
-        'push',
-        '--no-verify',
-        'origin',
-        `${input.sha}:refs/heads/${input.branch}`,
-      ]
-      const result = await this.exec(['git', ...args], {})
-      if (result.exitCode !== 0) throw new GitError(args, result)
+      await publishBranch(this.exec, ref, input.branch, input.sha)
       return
     }
     // Local equivalent of the finalize push for deployments without an
@@ -1063,7 +1052,12 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       }
     }
     const args = ['-C', ref, 'update-ref', `refs/heads/${input.branch}`, input.sha]
-    const result = await this.git(ref, ['update-ref', `refs/heads/${input.branch}`, input.sha])
+    const result = await this.git(ref, [
+      'update-ref',
+      `refs/heads/${input.branch}`,
+      input.sha,
+      existing ?? '0'.repeat(input.sha.length),
+    ])
     if (result.exitCode !== 0) throw new GitError(args, result)
   }
 }

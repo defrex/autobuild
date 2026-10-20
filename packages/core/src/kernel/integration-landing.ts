@@ -58,10 +58,7 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
           deps.destination,
           `refs/autobuild/reconcile/${slug}/readback`,
         )
-        const contains = await exec(['git', 'merge-base', '--is-ancestor', existing.head, actual], {
-          cwd: workspacePath,
-        })
-        if (contains.exitCode === 0) landed = existing.head
+        if (actual === existing.head) landed = existing.head
       }
     }
     const abandon = async (reason: string) => {

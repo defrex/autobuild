@@ -488,6 +488,10 @@ describe('ab done — implement', () => {
         storeRef: 'local',
         runId: 'test',
         publication: {
+          isPublished: async ({ sha, branch }) =>
+            (await runGit(['ls-remote', 'origin', `refs/heads/${branch}`], workspace)).startsWith(
+              sha,
+            ),
           publish: async ({ sha, branch }) => {
             await runGit(['push', '-q', 'origin', `${sha}:refs/heads/${branch}`], workspace)
           },
@@ -596,20 +600,17 @@ describe('ab done — implement', () => {
     expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
   })
 
-  test('an unavailable target fails the review boundary before push or deposit', async () => {
+  test('an unavailable target cannot change the recorded review boundary', async () => {
     await runGit(['update-ref', '-d', 'refs/heads/main'], remote)
     const deps = implementDeps()
     const notes = await stash('missing-target-notes.md', 'must not be deposited\n')
 
-    await expect(done(deps, { notes })).rejects.toThrow(
-      /cannot establish implementation review boundary: git fetch .*refs\/heads\/main.*exited 128/,
-    )
-    expect(deps.forge.pushes).toEqual([])
-    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
-    expect(await eventTypes()).not.toContain('implement.completed')
+    const event = await done(deps, { notes })
+    expect(event.payload).toMatchObject({ commits: { base: implementationBase } })
+    expect(await eventTypes()).toContain('implement.completed')
   })
 
-  test('an unrelated target with no common ancestor fails closed', async () => {
+  test('an unrelated rewritten target cannot change the recorded review boundary', async () => {
     const unrelated = join(tmp, 'unrelated-target')
     await mkdir(unrelated)
     await runGit(['init', '-q', '-b', 'main'], unrelated)
@@ -619,15 +620,12 @@ describe('ab done — implement', () => {
     const deps = implementDeps()
     const notes = await stash('unrelated-target-notes.md', 'must not be deposited\n')
 
-    await expect(done(deps, { notes })).rejects.toThrow(
-      /cannot establish implementation review boundary: git merge-base --all .* found no common ancestor/,
-    )
-    expect(deps.forge.pushes).toEqual([])
-    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
-    expect(await eventTypes()).not.toContain('implement.completed')
+    const event = await done(deps, { notes })
+    expect(event.payload).toMatchObject({ commits: { base: implementationBase } })
+    expect(await eventTypes()).toContain('implement.completed')
   })
 
-  test('multiple best merge-bases are rejected rather than chosen arbitrarily', async () => {
+  test('review does not compute a destination merge-base', async () => {
     const deps = implementDeps()
     const other = await runGit(['rev-parse', 'HEAD'], workspace)
     const realExec = deps.exec
@@ -646,12 +644,9 @@ describe('ab done — implement', () => {
     }
     const notes = await stash('ambiguous-base-notes.md', 'must not be deposited\n')
 
-    await expect(done(deps, { notes })).rejects.toThrow(
-      /cannot establish implementation review boundary: .*expected exactly one merge-base, found 2/,
-    )
-    expect(deps.forge.pushes).toEqual([])
-    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
-    expect(await eventTypes()).not.toContain('implement.completed')
+    const event = await done(deps, { notes })
+    expect(event.payload).toMatchObject({ commits: { base: implementationBase } })
+    expect(await eventTypes()).toContain('implement.completed')
   })
 
   test('a dirty worktree is rejected, listing the offending files', async () => {
@@ -772,7 +767,7 @@ describe('ab done — implement', () => {
     expect(await eventTypes()).not.toContain('implement.completed')
   })
 
-  test('refreshes a resumed round to the target history the branch absorbed', async () => {
+  test('retains its recorded boundary when a resumed branch absorbs target history', async () => {
     const deps = implementDeps()
     const notes = await stash('notes.md', 'implemented rate limiting\n')
     const firstHead = await runGit(['rev-parse', 'HEAD'], workspace)
@@ -806,7 +801,7 @@ describe('ab done — implement', () => {
         base: { source: 'existing', sha: firstHead },
       },
     })
-    const targetShas = await advanceTarget([
+    await advanceTarget([
       {
         file: 'target-one.ts',
         content: 'export const targetOne = true\n',
@@ -818,7 +813,6 @@ describe('ab done — implement', () => {
         message: 'target: second landed change',
       },
     ])
-    const newestTarget = targetShas.at(-1)!
     const incorporatedRef = 'refs/autobuild/test/incorporated-target'
     await runGit(
       [
@@ -853,7 +847,7 @@ describe('ab done — implement', () => {
 
     expect(second.payload).toEqual({
       round: 2,
-      commits: { base: newestTarget, head: secondHead },
+      commits: { base: implementationBase, head: secondHead },
       artifact: { kind: 'implement-notes', rev: 1 },
     })
     expect(deps.forge.pushes).toEqual([
@@ -861,19 +855,19 @@ describe('ab done — implement', () => {
       { workspacePath: workspace, branch: BRANCH },
     ])
     const focusedSubjects = await runGit(
-      ['log', '--reverse', '--format=%s', `${newestTarget}..${secondHead}`],
+      ['log', '--reverse', '--format=%s', `${implementationBase}..${secondHead}`],
       workspace,
     )
     expect(focusedSubjects).toContain('feature work')
     expect(focusedSubjects).toContain('merge target history')
     expect(focusedSubjects).toContain('feature follow-up')
-    expect(focusedSubjects).not.toContain('target: first landed change')
-    expect(focusedSubjects).not.toContain('target: second landed change')
+    expect(focusedSubjects).toContain('target: first landed change')
+    expect(focusedSubjects).toContain('target: second landed change')
     expect(
       (await store.getEvents(BUILD))
         .filter((event) => event.type === 'implement.completed')
         .map((event) => event.payload.commits.base),
-    ).toEqual([implementationBase, newestTarget])
+    ).toEqual([implementationBase, implementationBase])
     expect(await runGit(['rev-parse', 'main'], workspace)).toBe(staleLocalMain)
     expect(
       await runGit(
@@ -987,11 +981,47 @@ describe('ab done — implement', () => {
       .then(() => null)
       .catch((reason: unknown) => reason as Error)
 
-    expect(error?.message).toContain(`HEAD:refs/heads/${BRANCH}`)
+    expect(error?.message).toContain(`publication did not confirm`)
     expect(error?.message).toContain('non-fast-forward')
     expect(await remoteBranchHead(remote)).toBe(divergentHead)
     expect(await eventTypes()).not.toContain('implement.completed')
     expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+  })
+
+  test('local readback failure writes no terminal request and same-session retry adopts the exact remote head', async () => {
+    await commitFile(workspace, 'retry.ts', 'retry work', 'new publication')
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    const branchBase = await runGit(['rev-parse', `refs/heads/${BRANCH}`], workspace)
+    await runGit(['checkout', '--detach', head], workspace)
+    let pushed = false
+    let rejectReadback = true
+    let pushes = 0
+    const realExec = implementDeps().exec
+    const forge = new GitHubForge({
+      exec: async (cmd, opts) => {
+        if (pushed && rejectReadback && cmd[1] === 'ls-remote')
+          return { exitCode: 1, stdout: '', stderr: 'readback offline' }
+        const result = await realExec(cmd, opts)
+        if (cmd[1] === 'push') {
+          pushed = true
+          pushes++
+        }
+        return result
+      },
+    })
+    const deps = { ...implementDeps(), forge }
+    const notes = await stash('readback-notes.md', 'retry same session')
+    await expect(done(deps, { notes })).rejects.toThrow('readback offline')
+    expect(await eventTypes()).not.toContain('publication.requested')
+    expect(await eventTypes()).not.toContain('implement.completed')
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+    await runGit(['update-ref', `refs/heads/${BRANCH}`, implementationBase], workspace)
+    rejectReadback = false
+    const completed = await done(deps, { notes })
+    expect(completed.type).toBe('implement.completed')
+    expect(pushes).toBe(1)
+    expect(await runGit(['rev-parse', `refs/heads/${BRANCH}`], workspace)).toBe(head)
+    expect(branchBase).toBe(head)
   })
 
   test('push failure leaves NO event and NO notes artifact (push happens first)', async () => {

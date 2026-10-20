@@ -255,6 +255,7 @@ describe('GitWorktreeProvider', () => {
       repo,
       baseBranch: 'main',
       branch,
+      publication: { sha: publishedSha, cacheHeads: [localSha] },
     })
 
     expect(recovered.path).toBe(handle.path)
@@ -288,6 +289,7 @@ describe('GitWorktreeProvider', () => {
       repo,
       baseBranch: 'main',
       branch,
+      publication: { sha: publishedSha, cacheHeads: [localSha] },
     })
 
     expect(recovered.path).toBe(handle.path)
@@ -330,7 +332,7 @@ describe('GitWorktreeProvider', () => {
     )
   })
 
-  test('published recovery rejects divergent local and remote-tracking tips without rewriting either', async () => {
+  test('ordinary resume preserves divergent unpublished work without trusting tracking refs', async () => {
     const branch = 'ab/divergent-recovery'
     const branchRef = `refs/heads/${branch}`
     const publishedRef = `refs/remotes/origin/${branch}`
@@ -346,24 +348,21 @@ describe('GitWorktreeProvider', () => {
     )
     await provider.release(handle)
 
-    const error = await new GitWorktreeProvider({ root })
-      .provision({ repo, baseBranch: 'main', branch })
-      .then(() => null)
-      .catch((failure: unknown) => failure as Error)
-
-    expect(error?.message).toContain('have diverged')
-    expect(error?.message).toContain(branchRef)
-    expect(error?.message).toContain(publishedRef)
+    const recovered = await new GitWorktreeProvider({ root }).provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+    })
+    expect(recovered.base).toEqual({ source: 'existing', sha: divergentSha })
     expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(divergentSha)
     expect(await run(['git', 'rev-parse', publishedRef], repo)).toBe(publishedSha)
-    expect(existsSync(handle.path)).toBe(false)
   })
 
   test('registered detached recovery refuses an unpublished detached commit', async () => {
     const branch = 'ab/unpublished-detached'
     const branchRef = `refs/heads/${branch}`
     const handle = await provider.provision({ repo, baseBranch: 'main', branch })
-    const { publishedSha } = await publishDetachedCommit(repo, handle.path, branch)
+    const { localSha, publishedSha } = await publishDetachedCommit(repo, handle.path, branch)
     const unpublishedSha = await commitFile(
       handle.path,
       'unpublished.ts',
@@ -372,18 +371,23 @@ describe('GitWorktreeProvider', () => {
     )
 
     const error = await new GitWorktreeProvider({ root })
-      .provision({ repo, baseBranch: 'main', branch })
+      .provision({
+        repo,
+        baseBranch: 'main',
+        branch,
+        publication: { sha: publishedSha, cacheHeads: [localSha] },
+      })
       .then(() => null)
       .catch((failure: unknown) => failure as Error)
 
     expect(error?.message).toContain('does not match durable')
     expect(error?.message).toContain('refusing to discard either commit')
-    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(publishedSha)
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(localSha)
     expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(unpublishedSha)
     expect(await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], handle.path)).toBe('HEAD')
   })
 
-  test('published recovery uses an expected old ref and preserves a concurrent advance', async () => {
+  test('confirmed publication refreshes the cache without an expected-old guard', async () => {
     const branch = 'ab/concurrent-recovery'
     const branchRef = `refs/heads/${branch}`
     const handle = await provider.provision({ repo, baseBranch: 'main', branch })
@@ -417,18 +421,23 @@ describe('GitWorktreeProvider', () => {
     }
 
     const error = await new GitWorktreeProvider({ root, exec: raceExec })
-      .provision({ repo, baseBranch: 'main', branch })
+      .provision({
+        repo,
+        baseBranch: 'main',
+        branch,
+        publication: { sha: publishedSha, cacheHeads: [localSha] },
+      })
       .then(() => null)
       .catch((failure: unknown) => failure as Error)
 
     expect(raced).toBe(true)
-    expect(attemptedUpdate?.slice(-3)).toEqual([branchRef, publishedSha, localSha])
-    expect(error?.message).toMatch(/cannot lock ref|expected/i)
-    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(concurrentSha)
+    expect(attemptedUpdate?.slice(-2)).toEqual([branchRef, publishedSha])
+    expect(error).toBeNull()
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(publishedSha)
     expect(await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo)).toBe(
       publishedSha,
     )
-    expect(existsSync(handle.path)).toBe(false)
+    expect(existsSync(handle.path)).toBe(true)
   })
 
   test('release/re-provision reuses the branch tip without fetching a moved origin (§15.6-C)', async () => {

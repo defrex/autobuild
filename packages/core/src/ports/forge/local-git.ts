@@ -246,7 +246,12 @@ export class LocalGitForge implements Forge {
     return records.sort((a, b) => a.number - b.number)
   }
 
-  async pushBranch(workspacePath: string, branch: string): Promise<void> {
+  async confirmPublication(workspacePath: string, branch: string, sha: string): Promise<boolean> {
+    await this.assertRef(`refs/heads/${branch}`, workspacePath)
+    return (await this.sha(`refs/heads/${branch}`, workspacePath)) === sha
+  }
+
+  async pushBranch(workspacePath: string, branch: string, intended?: string): Promise<void> {
     const ref = `refs/heads/${branch}`
     await this.assertRef(ref, workspacePath)
     const symbolic = await this.command(
@@ -262,7 +267,7 @@ export class LocalGitForge implements Forge {
       this.sha('HEAD', workspacePath),
       this.sha(ref, workspacePath),
     ])
-    if (head !== published) {
+    if (head !== published || (intended !== undefined && published !== intended)) {
       throw new Error(`local-git branch ${ref} does not resolve to workspace HEAD ${head}`)
     }
   }

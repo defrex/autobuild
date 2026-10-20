@@ -24,6 +24,20 @@ export interface PublicationSettlementDeps {
   clock?: Clock
 }
 
+/** Hosted guests have a separate ref database. Refresh a real dispatcher cache
+ * too, when this deployment retains one; origin-only dispatchers have none. */
+async function confirmDispatcherCache(
+  deps: PublicationSettlementDeps,
+  branch: string,
+  sha: string,
+) {
+  if (!deps.forge.confirmPublication) return
+  const repository = await deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: deps.workspacePath })
+  if (repository.exitCode !== 0 || !repository.stdout.trim()) return
+  if (!(await deps.forge.confirmPublication(deps.workspacePath, branch, sha)))
+    throw new Error(`dispatcher publication readback did not confirm ${sha}`)
+}
+
 /** Settle one durable request after the caller has observed environment
  * completion and released its exact execution lease. External effects precede
  * completion facts, making every crash gap safely retryable.
@@ -84,6 +98,8 @@ export async function settlePendingPublication(
       localExpected: transaction.localBranchHead,
       archives,
     })
+    if (result.kind === 'published')
+      await confirmDispatcherCache(deps, request.payload.branch, request.payload.sha)
     const latest = (await readBuildFacts(deps.store, slug)).value
     if (
       (result.kind === 'published' || result.rewritten === true) &&
@@ -157,6 +173,8 @@ export async function settlePendingPublication(
       localExpected: transaction.localBranchHead,
       archives,
     })
+    if (result.kind === 'published')
+      await confirmDispatcherCache(deps, request.payload.branch, request.payload.sha)
     const history = (await readBuildFacts(deps.store, slug)).value.reconcileHistory
     if (
       (result.kind === 'published' || result.rewritten === true) &&
@@ -210,10 +228,17 @@ export async function settlePendingPublication(
   // Consulted for every uncompleted request, not only abandoned ones: a guest
   // that pushed its branch before dying is owed its completion fact, not a
   // re-push or a loss record.
-  const alreadyPublished =
-    publication.isPublished !== undefined
-      ? await publication.isPublished({ sha: request.payload.sha, branch: request.payload.branch })
-      : false
+  if (!publication.isPublished)
+    throw new Error(
+      'workspace provider lacks authoritative publication inspection; upgrade the provider',
+    )
+  const probe = () =>
+    publication.isPublished!({
+      ref: events.workspace?.ref,
+      sha: request.payload.sha,
+      branch: request.payload.branch,
+    })
+  const alreadyPublished = await probe()
   if (abandoned && !alreadyPublished) {
     // Last-chance backstop (AUT-328): the workspace is gone with this request
     // uncompleted. Record the loss durably (deduped per request) instead of
@@ -251,7 +276,13 @@ export async function settlePendingPublication(
       if (ref === undefined)
         throw new Error(`build ${slug} has a publication request but no open workspace`)
       await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
-      await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+      try {
+        await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+      } catch (error) {
+        if (!(await probe())) throw error
+      }
+      if (!(await probe()))
+        throw new Error(`publication readback did not confirm ${request.payload.sha}`)
     }
   } catch (error) {
     if (error instanceof MixedVersionDeferral) return
@@ -274,6 +305,7 @@ export async function settlePendingPublication(
     })
     return
   }
+  await confirmDispatcherCache(deps, request.payload.branch, request.payload.sha)
   events = (await readBuildFacts(deps.store, slug)).value
   if (events.publication.requestCompleted(request)) return
 

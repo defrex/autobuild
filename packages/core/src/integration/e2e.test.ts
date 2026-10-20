@@ -688,7 +688,7 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   expect(reduceBuild(events).prState).toBe('open')
 }, 30_000)
 
-test('a1. code review excludes multiple target commits absorbed after branch cut', async () => {
+test('a1. code review keeps its recorded cut when implementation absorbs target history', async () => {
   const handlers = happyHandlers()
   const happyImplement = handlers.implement
   if (happyImplement === undefined) throw new Error('happy implement handler missing')
@@ -776,7 +776,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     commitRange?: { base: string; head: string }
   }
   const completed = ofType(await h.events(SLUG), 'implement.completed')[0]!
-  expect(completed.payload.commits.base).toBe(newestTarget)
+  expect(completed.payload.commits.base).toBe(branchCut)
   expect(context.commitRange).toEqual(completed.payload.commits)
   const focusedLog = await git(
     [
@@ -787,9 +787,9 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     ],
     provisioned.payload.ref,
   )
-  expect(focusedLog).toBe('implement: rate limiting r1')
-  expect(focusedLog).not.toContain('target: first post-cut change')
-  expect(focusedLog).not.toContain('target: second post-cut change')
+  expect(focusedLog).toContain('implement: rate limiting r1')
+  expect(focusedLog).toContain('target: first post-cut change')
+  expect(focusedLog).toContain('target: second post-cut change')
   expect(
     await git(
       ['log', '--reverse', '--format=%s', `${branchCut}..${completed.payload.commits.head}`],

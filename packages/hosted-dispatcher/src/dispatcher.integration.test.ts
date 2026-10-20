@@ -319,8 +319,8 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   const fakeForge = new FakeForge()
   fakeForge.rewrite = gitRewrite(spawnExec, false)
   const recordPush = fakeForge.pushBranch.bind(fakeForge)
-  fakeForge.pushBranch = async (cwd, branch) => {
-    await recordPush(cwd, branch)
+  fakeForge.pushBranch = async (cwd, branch, sha) => {
+    await recordPush(cwd, branch, sha)
     await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
   }
   const guestRemote = await initGuestRemote(tmp)

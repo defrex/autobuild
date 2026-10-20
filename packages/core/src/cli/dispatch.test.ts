@@ -185,8 +185,8 @@ async function makeFixture(
   const store = new MemoryBuildStore({ clock })
   const forge = new FakeForge()
   const recordPush = forge.pushBranch.bind(forge)
-  forge.pushBranch = async (cwd, branch) => {
-    await recordPush(cwd, branch)
+  forge.pushBranch = async (cwd, branch, sha) => {
+    await recordPush(cwd, branch, sha)
     await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
   }
   forge.rewrite = gitRewrite(spawnExec, false)

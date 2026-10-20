@@ -349,6 +349,9 @@ export interface WorkspaceProvider {
     repo: string
     baseBranch: string
     branch: string
+    /** Confirmed publication and known stale cache tips, from durable facts.
+     * Providers must preserve unknown unpublished work during ordinary resume. */
+    publication?: { sha: string; cacheHeads: string[] }
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */
@@ -541,8 +544,11 @@ export interface Forge {
   readonly name: string
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting
-  /** Publish the workspace's current HEAD to this remote destination branch. */
-  pushBranch(workspacePath: string, branch: string): Promise<void>
+  /** Publish this exact SHA (HEAD for legacy callers); success requires authoritative readback. */
+  /** Exact authoritative observation, refreshing remote-backed caches only on a match.
+   * Missing capability refuses kernel publication before attempting a write. */
+  confirmPublication?(workspacePath: string, branch: string, sha: string): Promise<boolean>
+  pushBranch(workspacePath: string, branch: string, sha?: string): Promise<void>
   openPr(opts: {
     workspacePath: string
     head: string
