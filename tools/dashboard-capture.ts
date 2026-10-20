@@ -1,3 +1,4 @@
+import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
@@ -44,6 +45,7 @@ type CaptureScenario = 'mixed' | 'happy' | 'integration'
 
 export interface FrameSpec {
   selection?: DashboardModel['selection']
+  nativeSessions?: boolean
   forgeReadiness?: boolean
   id: string
   scenario: CaptureScenario
@@ -230,6 +232,15 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 20,
     transcript: { slug: 'complete-dashboard-evidence', sessionId: 's_unicode_capture' },
     requires: ['Transcript  complete-dashboard-evidence', `Agent: ${UNICODE_EVIDENCE}`],
+  },
+  {
+    id: 'native-sessions',
+    scenario: 'mixed',
+    columns: 120,
+    rows: 35,
+    nativeSessions: true,
+    detail: { slug: 'plan-blocked-dashboard', scroll: Number.MAX_SAFE_INTEGER },
+    requires: ['suspended', 'resumed'],
   },
   {
     id: 'session-live',
@@ -1352,6 +1363,9 @@ async function capturePaint(
         // provenance stable just like the scripted clock and repository name.
         builds: model.builds.map((build) => ({
           ...build,
+          ...(spec.nativeSessions && build.slug === spec.detail?.slug
+            ? { sessions: nativeSessionCapture() }
+            : {}),
           ...(build.pipelineSource
             ? { pipelineSource: { ...build.pipelineSource, commit: 'capture-source' } }
             : {}),

@@ -334,6 +334,7 @@ export const artifactGetResponseSchema = z.union([
 // ── Atomic deposits (see module header) ──────────────────────────────────────
 
 export const depositsBodySchema = z.object({
+  expectedSeq: z.number().int().nonnegative().optional(),
   artifacts: z.array(putArtifactBodySchema),
   event: eventWriteWireSchema,
 })

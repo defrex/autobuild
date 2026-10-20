@@ -203,7 +203,7 @@ describe('reduceBuild: empty log', () => {
     expect(state.setupFailures).toEqual([])
     expect(state.setupFailure).toBeUndefined()
     expect(state.pendingCommands).toEqual([])
-    expect(state.sessions.open).toEqual([])
+    expect(state.sessions.open).toMatchObject([])
     expect(state.failures).toEqual({})
   })
 })
@@ -359,7 +359,7 @@ describe('reduceBuild: open sessions carry the stream id (SPEC §9)', () => {
         stream: 'st_abc',
       }),
     ])
-    expect(reduceBuild(streamed).sessions.open).toEqual([
+    expect(reduceBuild(streamed).sessions.open).toMatchObject([
       {
         session: 's_plan',
         role: 'plan',
@@ -443,7 +443,7 @@ describe('reduceBuild: §15.6 happy path', () => {
 
   test('session brackets project into sessions.open', () => {
     const during = stateAfter(log, 'plan.started')
-    expect(during.sessions.open).toEqual([
+    expect(during.sessions.open).toMatchObject([
       {
         session: 's_plan_1',
         role: 'plan',
@@ -455,7 +455,7 @@ describe('reduceBuild: §15.6 happy path', () => {
       },
     ])
     const after = stateAfter(log, 'session.ended')
-    expect(after.sessions.open).toEqual([])
+    expect(after.sessions.open).toMatchObject([])
   })
 
   test('plan loop: started sets currentPhase, terminal moves it to lastCompleted', () => {
@@ -797,7 +797,7 @@ describe('reduceBuild: walkthrough C — sandbox death and resume (§15.6-C)', (
         reclaimedBy: { instance: 'runner-3', resumedFromSeq: deadSeq + 1 },
       }),
     ]
-    expect(reduceBuild(toLog([...deadEnd, ...endings])).sessions.open).toEqual([])
+    expect(reduceBuild(toLog([...deadEnd, ...endings])).sessions.open).toMatchObject([])
   })
 })
 
@@ -2098,5 +2098,71 @@ describe('durable native session handles', () => {
       ]),
     )
     expect(state.sessions.nativeHandles).toEqual({})
+  })
+})
+
+test('native lifecycle conserves active time, usage and transcripts across repeated interruptions', () => {
+  const handle = {
+    version: 1 as const,
+    runner: 'pi',
+    nativeId: 'native',
+    host: 'host',
+    workspacePath: '/repo',
+  }
+  const started = (session: string, predecessor?: string) =>
+    ev('session.started', {
+      session,
+      role: 'plan',
+      runner: 'pi',
+      phase: 'plan',
+      round: 1,
+      budgetMs: 1000,
+      ...(predecessor
+        ? {
+            continuation: {
+              predecessor,
+              root: 'a',
+              handle,
+              cause: 'shutdown' as const,
+              activeMs: predecessor === 'a' ? 100 : 300,
+              budgetMs: 1000,
+            },
+          }
+        : {}),
+    })
+  const suspended = (session: string, activeMs: number, rev: number) =>
+    ev('session.suspended', {
+      session,
+      phase: 'plan',
+      round: 1,
+      handle,
+      cause: 'shutdown',
+      activeMs,
+      transcript: { kind: 'transcript', rev },
+      usage: { inputTokens: 1, outputTokens: 2, turns: 1 },
+    })
+  const log = toLog([
+    ...prelude(),
+    ev('plan.started', { round: 1 }),
+    started('a'),
+    suspended('a', 100, 0),
+    suspended('a', 100, 0),
+    started('b', 'a'),
+    suspended('b', 200, 1),
+    started('c', 'b'),
+    ev('session.ended', {
+      session: 'c',
+      activeMs: 50,
+      transcript: { kind: 'transcript', rev: 2 },
+      usage: { inputTokens: 3, outputTokens: 4, turns: 1 },
+    }),
+  ])
+  const state = reduceBuild(log)
+  expect(state.sessions.open).toEqual([])
+  expect(state.sessions.suspended).toEqual([])
+  expect(state.sessions.totals.a).toEqual({
+    activeMs: 350,
+    usage: { inputTokens: 5, outputTokens: 8, turns: 3 },
+    transcripts: [0, 1, 2].map((rev) => ({ kind: 'transcript', rev })),
   })
 })

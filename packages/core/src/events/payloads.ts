@@ -694,6 +694,18 @@ export const eventPayloadSchemas = {
 
   // ── Sessions (every agent run is bracketed by these) ──────────────────────
   'session.started': z.strictObject({
+    /** Write-ahead continuation intent; independent of native acceptance. */
+    continuation: z
+      .strictObject({
+        predecessor: z.string().min(1),
+        root: z.string().min(1),
+        handle: nativeSessionHandleSchema,
+        cause: z.enum(['shutdown', 'runner-loss']),
+        activeMs: z.number().nonnegative(),
+        budgetMs: z.number().positive(),
+      })
+      .optional(),
+    budgetMs: z.number().positive().optional(),
     session: z.string().min(1),
     role: z.string().min(1),
     runner: z.string().min(1),
@@ -708,6 +720,35 @@ export const eventPayloadSchemas = {
     /** Present only when this target substituted for the preceding failed one. */
     substitution: providerSubstitutionSchema.optional(),
   }),
+  'session.suspended': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round: round.optional(),
+    handle: nativeSessionHandleSchema,
+    cause: z.literal('shutdown'),
+    activeMs: z.number().nonnegative(),
+    transcript: artifactRefSchema,
+    usage: z
+      .strictObject({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        turns: z.number().int().nonnegative(),
+      })
+      .optional(),
+  }),
+  'session.resumed': z.strictObject({
+    session: z.string().min(1),
+    predecessor: z.string().min(1),
+    root: z.string().min(1),
+    handle: nativeSessionHandleSchema,
+    cause: z.enum(['shutdown', 'runner-loss']),
+    stale: z.boolean(),
+  }),
+  'session.resume-fallback': z.strictObject({
+    session: z.string().min(1),
+    stale: z.boolean().optional(),
+    reason: z.string().min(1),
+  }),
   'session.native-handle-recorded': z.strictObject({
     session: z.string().min(1),
     phase: phaseSchema,
@@ -718,6 +759,7 @@ export const eventPayloadSchemas = {
     /** Ordinary completion retains the historical transcript-bearing shape. */
     z.strictObject({
       session: z.string().min(1),
+      activeMs: z.number().nonnegative().optional(),
       transcript: artifactRefSchema,
       usage: z.strictObject({
         inputTokens: z.number().int().nonnegative(),

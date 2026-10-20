@@ -355,3 +355,148 @@ skill = "must-never-launch"
     await rm(tmp, { recursive: true, force: true })
   }
 })
+
+test('a real local child suspends on shutdown and a new child resumes the native session without resetting workspace files', async () => {
+  const { signalProcessGroup } = await import('./process-group')
+  const { chmod, writeFile, readFile } = await import('node:fs/promises')
+  const tmp = await mkdtemp(join(tmpdir(), 'ab-native-child-'))
+  const workspace = join(tmp, 'workspace')
+  const nativeState = join(tmp, 'native')
+  const bin = join(tmp, 'bin')
+  const stateRoot = join(tmp, 'store')
+  const slug = 'native-child'
+  const store = openLocalStore(stateRoot)
+  const children: Array<ReturnType<typeof Bun.spawn>> = []
+  try {
+    await Promise.all([mkdir(workspace), mkdir(nativeState), mkdir(bin)])
+    const executable = join(bin, 'codex')
+    await writeFile(
+      executable,
+      `#!/bin/sh\nexec '${process.execPath}' '${new URL('../ports/runner/native-cli-fixture.ts', import.meta.url).pathname}' "$@"\n`,
+    )
+    await chmod(executable, 0o755)
+    const git = (args: string[]) => {
+      const result = Bun.spawnSync(['git', ...args], { cwd: workspace })
+      if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr))
+    }
+    git(['init', '-q'])
+    await writeFile(join(workspace, 'committed.txt'), 'committed work')
+    git(['add', 'committed.txt'])
+    git([
+      '-c',
+      'user.name=Capture',
+      '-c',
+      'user.email=capture@example.test',
+      'commit',
+      '-qm',
+      'preserve work',
+    ])
+    await writeFile(join(workspace, 'uncommitted.txt'), 'work in flight')
+    await store.createBuild({ slug, repo: tmp, branch: `ab/${slug}` })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: tmp,
+        baseBranch: 'main',
+        ticket: { source: 'file', id: 'NATIVE', title: 'Native continuation' },
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        path: workspace,
+        localPath: workspace,
+        branch: `ab/${slug}`,
+        base: { source: 'remote', sha: 'base' },
+      },
+    })
+    const spec = await store.putArtifact(slug, { kind: 'spec', content: '# Continue native work' })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'spec.imported',
+      payload: {
+        artifact: { kind: 'spec', rev: spec.revision },
+        ticket: { source: 'file', id: 'NATIVE', title: 'Native continuation' },
+      },
+    })
+    const config = parseConfig(
+      `forge = "local-git"\n[roles.default]\nruntime = "codex"\n[tickets]\nsource = "file"\nreadyState = "ready"\n`,
+    )
+    await store.putArtifact(slug, {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(config),
+    })
+    const start = (instance: string) => {
+      const child = Bun.spawn(
+        [process.execPath, new URL('../../../../bin/ab-build-runner.ts', import.meta.url).pathname],
+        {
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            AB_NATIVE_FIXTURE_PROVIDER: 'codex',
+            AB_NATIVE_FIXTURE_STATE: nativeState,
+            AB_NATIVE_FIXTURE_RELEASE: join(tmp, 'never-release'),
+            [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
+              slug,
+              instance,
+              storeRef: stateRoot,
+              workspaceRef: workspace,
+              supervision: { kind: 'local-parent', parentPid: process.pid },
+            }),
+          },
+          detached: true,
+          stdin: 'ignore',
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      )
+      children.push(child)
+      return child
+    }
+    const waitForEvent = async (type: AbEvent['type']) => {
+      const deadline = Date.now() + 8000
+      for (;;) {
+        const event = (await store.getEvents(slug)).find((e) => e.type === type)
+        if (event) return event
+        if (Date.now() > deadline)
+          throw new Error(`missing ${type}: ${JSON.stringify(await store.getEvents(slug))}`)
+        await Bun.sleep(20)
+      }
+    }
+    const first = start('child-1')
+    const identity = await waitForEvent('session.native-handle-recorded')
+    const stoppedAt = Date.now()
+    signalProcessGroup(first.pid, 'SIGINT')
+    signalProcessGroup(first.pid, 'SIGTERM')
+    await first.exited
+    expect(Date.now() - stoppedAt).toBeLessThan(5000)
+    const suspension = await waitForEvent('session.suspended')
+    expect(suspension.type).toBe('session.suspended')
+    await store.releaseLease(slug, 'child-1')
+    const second = start('child-2')
+    const acceptance = await waitForEvent('session.resumed')
+    if (identity.type !== 'session.native-handle-recorded' || acceptance.type !== 'session.resumed')
+      throw new Error('wrong events')
+    expect(acceptance.payload.handle.nativeId).toBe(identity.payload.handle.nativeId)
+    expect((await store.getEvents(slug)).filter((e) => e.type === 'plan.started')).toHaveLength(1)
+    signalProcessGroup(second.pid, 'SIGTERM')
+    await second.exited
+    expect(await readFile(join(workspace, 'committed.txt'), 'utf8')).toBe('committed work')
+    expect(await readFile(join(workspace, 'uncommitted.txt'), 'utf8')).toBe('work in flight')
+    const log = await store.getEvents(slug)
+    expect(log.filter((e) => e.type === 'session.suspended')).toHaveLength(2)
+    expect(log.filter((e) => e.type === 'phase.failed')).toHaveLength(0)
+  } finally {
+    for (const child of children)
+      if (child.exitCode === null) {
+        child.kill('SIGKILL')
+        await child.exited
+      }
+    await store.close()
+    await rm(tmp, { recursive: true, force: true })
+  }
+}, 25000)

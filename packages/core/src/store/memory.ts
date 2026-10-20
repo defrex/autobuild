@@ -463,6 +463,78 @@ export class MemoryBuildStore implements BuildStore {
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
+  async appendWithArtifactsIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    const state = this.state(slug)
+    // Prepare phase — validate every input and store the blobs *before*
+    // touching build state, mirroring the SQLite adapter: an invalid input
+    // mid-bundle persists nothing, and orphaned blobs are harmless because
+    // they are content-addressed (D6, §8.5).
+    validateExpectedSeq(expectedSeq)
+    const prepared: { kind: string; blobRef: string; metadata: Record<string, unknown> }[] = []
+    for (const artifact of artifacts) {
+      if (!artifact.kind) throw new Error('artifact kind is required')
+      const bytes = toBytes(artifact.content)
+      const blobRef = contentHash(bytes)
+      await this.blobs.put(blobRef, bytes)
+      prepared.push({
+        kind: artifact.kind,
+        blobRef,
+        metadata: structuredClone(artifact.metadata ?? {}),
+      })
+    }
+    // Commit phase — fully synchronous (no await), so no interleaved writer
+    // can slip between revision assignment, event validation, and the
+    // deposits landing: "there is no state where an artifact exists without
+    // its event or vice versa" (D6, §8.5). Everything is validated before
+    // the first mutation, so no rollback path exists to get wrong.
+    //
+    // Ordering invariant (AUT-322): event validation precedes any retention
+    // prune — validation runs before the deposit loop below, and the per-kind
+    // prune happens inside that loop after the deposit, so a same-kind batch
+    // whose prune scope covers a sibling never deletes that sibling before
+    // the batch's event is validated.
+    if (state.events.length !== expectedSeq) return null
+    const ts = this.now()
+    const nextRev = new Map<string, number>()
+    const deposited: ArtifactMeta[] = prepared.map((p) => {
+      const revision =
+        nextRev.get(p.kind) ?? MemoryBuildStore.nextRevision(state.artifacts.get(p.kind))
+      nextRev.set(p.kind, revision + 1)
+      return {
+        build: slug,
+        kind: p.kind,
+        revision,
+        blobRef: p.blobRef,
+        metadata: p.metadata,
+        createdAt: ts,
+      }
+    })
+    const validated = validateEventWrite(makeEvent(structuredClone(deposited)))
+    for (const meta of deposited) {
+      const revs = state.artifacts.get(meta.kind) ?? []
+      revs.push(meta)
+      state.artifacts.set(meta.kind, revs)
+      this.pruneBuildKind(state, meta.kind)
+    }
+    const envelope = {
+      build: slug,
+      seq: state.events.length + 1,
+      ts,
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    } as EventEnvelope<T>
+    state.events.push(structuredClone(envelope) as AbEvent)
+    this.advanceRepo(state.record.repo)
+    state.record.updatedAt = ts
+    return { event: envelope, artifacts: structuredClone(deposited) }
+  }
+
   async getEvents(
     slug: string,
     sinceSeq = 0,
