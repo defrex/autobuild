@@ -80,6 +80,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'capacity-wide',
     'integration-wide',
     'post-reconcile-policy',
     'headline-happy-wide',
@@ -118,7 +119,15 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id === 'headline-happy-wide' || frame.id === 'website-hero') {
+    if (frame.id === 'capacity-wide') {
+      expect(frame.model.capacity).toEqual({
+        configured: 4,
+        occupied: 5,
+        effective: 5,
+        borrowingNodes: ['queue-conflict'],
+      })
+      expect(frame.text).toContain('descendant-held slots')
+    } else if (frame.id === 'headline-happy-wide' || frame.id === 'website-hero') {
       expect(frame.text).toContain('AUT-131')
       expect(frame.text).toContain('AUT-129')
       expect(frame.text).toContain('AUT-133')
@@ -174,6 +183,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     }
     if (
       frame.id !== 'integration-wide' &&
+      frame.id !== 'capacity-wide' &&
       frame.id !== 'post-reconcile-policy' &&
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&

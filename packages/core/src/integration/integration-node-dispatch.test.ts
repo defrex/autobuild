@@ -272,6 +272,185 @@ test('node conflict runner resolves the source build with its own spec and plan'
   }
 }, 30_000)
 
+for (const waiting of ['blocked', 'paused'] as const)
+  test(`capacity five launches an answered existing node conflict with three ${waiting} descendants`, async () => {
+    const { git, commitAll } = await import('./harness')
+    const { join } = await import('node:path')
+    let sourceSlug = ''
+    let ownerSlug = ''
+    let sourceSpec = ''
+    let resolved = 0
+    const h = await makeHarness({
+      localGitForge: true,
+      configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 5'),
+      handlers: {
+        ...happyHandlers(),
+        reconcile: async (cli) => {
+          await cli.run(['context'])
+          const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+          expect(manifest.nodeChange).toMatchObject({
+            owner: ownerSlug,
+            build: sourceSlug,
+            foreign: false,
+          })
+          expect(await Bun.file(join(cli.ws, '.ab/spec.md')).text()).toBe(sourceSpec)
+          expect(await Bun.file(join(cli.ws, '.ab/plan.md')).text()).toContain('Add rate-limit.txt')
+          await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve root and source intent\n')
+          await git(['add', 'rate-limit.txt'], cli.ws)
+          await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
+          await Bun.write(join(cli.ws, '.ab/reconcile-notes.md'), 'Preserved both sides.\n')
+          await cli.run(['done', '--notes', join(cli.ws, '.ab/reconcile-notes.md')])
+          resolved++
+        },
+      },
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Node owner' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Child source' }), target: 'NODE' },
+      ],
+    })
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const owner = records.find((r) => r.ticket?.id === 'NODE')!
+      const source = records.find((r) => r.ticket?.id === 'CHILD')!
+      sourceSpec = new TextDecoder().decode(
+        (await h.store.getArtifact(source.slug, 'spec'))!.content,
+      )
+      sourceSlug = source.slug
+      ownerSlug = owner.slug
+      await h.runLatest()
+      const child = reduceBuild(await h.events(source.slug))
+      await h.forgeAdapter.squashMerge(h.origin, child.pr!.number, child.pr!.headSha, {
+        buildSlug: source.slug,
+      })
+      await h.dispatcher.tick()
+      h.tickets.add({
+        ...readyTicket('OPEN', { title: 'Keep node collecting' }),
+        state: 'Backlog',
+        target: 'NODE',
+      })
+      h.tickets.add(readyTicket('BUSY', { title: 'Occupy the runner slot' }))
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const busy = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'BUSY')!
+      await h.store.append(busy.slug, {
+        actor: { kind: 'kernel' },
+        type: 'runner.attached',
+        payload: { instance: 'unrelated-runner', host: 'test' },
+      })
+      await Bun.write(join(h.origin, 'rate-limit.txt'), 'new root behavior\n')
+      await commitAll(h.origin, 'Root conflicts with source')
+      // Two unrelated running builds and three blocked descendants fill all five slots.
+      const { DISPATCHER: actor } = await import('../events/envelope')
+      for (const [index, target] of [undefined, owner.slug, owner.slug, owner.slug].entries()) {
+        const slug = `capacity-holder-${index}`
+        await h.store.createBuild({
+          slug,
+          repo: h.origin,
+          ticket: { source: 'fake', id: slug },
+          created: {
+            actor,
+            type: 'build.created',
+            payload: {
+              repo: h.origin,
+              baseBranch: target ? owner.branch! : 'main',
+              ticket: { source: 'fake', id: slug },
+              ...(target ? { target: { build: target, ticket: owner.ticket! } } : {}),
+            },
+          },
+        })
+        await h.store.append(slug, {
+          actor: { kind: 'kernel' },
+          type: 'runner.attached',
+          payload: { instance: slug, host: 'test' },
+        })
+      }
+      await h.dispatcher.tick()
+      const conflictState = reduceBuild(await h.events(owner.slug))
+      expect(conflictState.nodeRestack?.conflict).toBeDefined()
+      expect(h.launched.filter((entry) => entry.slug === owner.slug)).toHaveLength(0)
+      for (let index = 1; index <= 3; index++) {
+        if (waiting === 'paused')
+          await h.store.append(`capacity-holder-${index}`, {
+            actor,
+            type: 'build.paused',
+            payload: {},
+          })
+        else
+          await h.store.append(`capacity-holder-${index}`, {
+            actor: { kind: 'kernel' },
+            type: 'escalation.raised',
+            payload: {
+              id: `blocked-${index}`,
+              source: 'agent',
+              phase: 'implement',
+              question: 'Waiting on the node restack',
+            },
+          })
+      }
+      await h.store.append(owner.slug, {
+        actor: { kind: 'kernel' },
+        type: 'escalation.raised',
+        payload: {
+          id: 'node-guidance',
+          source: 'agent',
+          phase: 'reconcile',
+          question: 'Resolve the source conflict?',
+        },
+      })
+      await h.store.append(owner.slug, {
+        actor: { kind: 'human', user: 'test' },
+        type: 'escalation.answered',
+        payload: {
+          id: 'node-guidance',
+          answer: 'Preserve both intents',
+          resolution: 'guidance',
+        },
+      })
+      h.tickets.add(readyTicket('COMPETITOR', { title: 'New ticket must wait' }))
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(
+        (await h.store.listBuilds()).some((record) => record.ticket?.id === 'COMPETITOR'),
+      ).toBe(false)
+      const nodeRunner = h.launched.find((entry) => entry.slug === owner.slug)!
+      expect(nodeRunner).toBeDefined()
+      await nodeRunner.runner.run()
+      await h.store.releaseLease(nodeRunner.slug, nodeRunner.instance)
+      expect(resolved).toBe(1)
+      // A dead local supervisor can leave execution.started after the resolver
+      // receipt; no provider command id exists to settle it out of process.
+      const { readBuildFacts } = await import('../store/reduced-reads')
+      const { DISPATCHER } = await import('../events/envelope')
+      const facts = (await readBuildFacts(h.store, owner.slug)).value
+      await h.store.append(owner.slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: {
+          instance: 'crashed-local',
+          provider: 'git-worktree',
+          workspaceRef: facts.workspace!.ref,
+        },
+      })
+      h.clock.advance(120_000)
+      expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+      expect((await readBuildFacts(h.store, owner.slug)).value.open).toBeNull()
+      expect(ofType(await h.events(owner.slug), 'execution.ended').at(-1)?.payload.outcome).toBe(
+        'lost',
+      )
+      const state = reduceBuild(await h.events(owner.slug))
+      expect(state.nodeRestack?.active).toBeUndefined()
+      expect(state.nodeRestack?.inventory?.builds).toContain(source.slug)
+      expect(await git(['show', `${owner.branch}:rate-limit.txt`], h.origin)).toBe(
+        'preserve root and source intent',
+      )
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+
 test('node-target consent lands the canonical leaf without native auto-merge', async () => {
   const { git } = await import('./harness')
   const { humanActor } = await import('../events/envelope')

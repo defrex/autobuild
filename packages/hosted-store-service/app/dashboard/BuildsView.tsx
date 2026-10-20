@@ -5,6 +5,7 @@ import type {
   OperatorBuildControlRequest,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
+  capacityExplanation,
   pauseResumeHelp,
   buildActionAvailability,
   landingPolicyDisplay,
@@ -301,9 +302,13 @@ export function DispatcherControls({
           |
         </span>
       </span>
-      <span className="control-item fact-item">
+      <span
+        className="control-item fact-item"
+        data-borrowing={model.capacity?.borrowingNodes.length ? '' : undefined}
+      >
         <span>
           active {model.active.current}/{model.active.limit}
+          {capacityExplanation(model.capacity)}
         </span>
         <span className="sep" aria-hidden>
           |

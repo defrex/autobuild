@@ -1,3 +1,11 @@
+import {
+  dispatchCapacity,
+  type DispatchCapacity,
+  type CapacityBuild,
+} from '../kernel/dispatch-capacity'
+import { configSchema } from '../config/schema'
+import type { BuildStore } from '../store/types'
+import { readBuildFacts } from '../store/reduced-reads'
 import { forgeReadinessWarnings, reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 import {
@@ -19,6 +27,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  capacity?: DispatchCapacity
   warningLines?: string[]
   dispatcher: DispatcherLiveness
   ticketSourceDegradation?: TicketSourceDegradation
@@ -151,6 +160,11 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `ticket source ${active.source}: ${active.cause} (${active.operation}) — ${active.message}${'resetAt' in active ? `; reset ${active.resetAt}` : ''}`,
         ]),
     `repository: ${status.repo}`,
+    ...(status.capacity
+      ? [
+          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}`,
+        ]
+      : []),
     ...(status.warningLines ?? []),
     `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
     ...(status.dispatcher.expiredHolder
@@ -182,6 +196,42 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   ]
 }
 
+/** Capacity is optional when no held dispatcher has a retrievable configuration. */
+export async function readRepositoryCapacity(
+  store: BuildStore,
+  repo: string,
+  facts: RepositoryReadFacts,
+  dispatcher: DispatcherLiveness,
+  now: Date,
+): Promise<DispatchCapacity | undefined> {
+  if (
+    dispatcher.state === 'held' &&
+    facts.status?.effectiveConfig &&
+    facts.status.run === dispatcher.holder?.run
+  ) {
+    const ref = facts.status.effectiveConfig
+    const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
+    if (artifact) {
+      const config = configSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
+      const builds: CapacityBuild[] = []
+      const records = await store.listBuildsForRepo(repo)
+      const digests = await store.getRepoBuildDigests(repo)
+      for (const record of records) {
+        if (digests.get(record.slug)?.terminal) continue
+        const build = (await readBuildFacts(store, record.slug)).value
+        builds.push({
+          record,
+          state: build.state,
+          workspace: build.workspace !== null,
+          provisioning: build.provisionMarker !== undefined,
+        })
+      }
+      return dispatchCapacity(builds, config.capacity, now)
+    }
+  }
+  return undefined
+}
+
 /**
  * `ab repository status` — read the durable dispatcher controls without
  * creating a repository stream or starting any dispatcher work.
@@ -191,11 +241,16 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
     // A fresh store has no repository row. Do not call ensureRepo: this query's
     // empty-stream defaults must remain a genuinely read-only operation.
     const { dispatcher } = await readDispatcherLiveness(store, repo, opts.now?.())
-    const status = repositoryStatusFromFacts(
+    const facts = (await readRepositoryFacts(store, repo)).value
+    const status = repositoryStatusFromFacts(repo, facts, dispatcher)
+    const capacity = await readRepositoryCapacity(
+      store,
       repo,
-      (await readRepositoryFacts(store, repo)).value,
+      facts,
       dispatcher,
+      opts.now?.() ?? new Date(),
     )
+    if (capacity) status.capacity = capacity
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))
       return
