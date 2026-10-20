@@ -1,12 +1,16 @@
 import type { Forge } from '../ports/types'
 import { isForgeFailure } from '../ports/forge-failure'
-import { withForgeRequestGate, forgeRequestGateActive } from '../ports/forge-request-context'
+import {
+  withForgeRequestGate,
+  forgeRequestGateActive,
+  ForgeRequestDeferred,
+} from '../ports/forge-request-context'
 import type { BuildStore } from '../store/types'
 import { readForgeHealth } from '../store/reduced-reads'
 import { KERNEL } from '../events/envelope'
 
 /** Scheduling signal, never a failed attempt. */
-export class ForgeCooldown extends Error {}
+export class ForgeCooldown extends ForgeRequestDeferred {}
 
 /** Receiver bindings and optional plugin capabilities survive the wrapper.
  * Only trusted kernel composition receives the repository Store authority. */

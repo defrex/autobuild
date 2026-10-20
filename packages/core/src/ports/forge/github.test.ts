@@ -2378,3 +2378,28 @@ test('wire observers count failed requests and retain concurrent build context',
   await forge.getPrState('/ws', 1)
   expect(seen).toHaveLength(2)
 })
+
+test('a cooldown established between wire calls remains a scheduling deferral', async () => {
+  const { withForgeRequestGate, ForgeRequestDeferred } = await import('../forge-request-context')
+  const deferred = new ForgeRequestDeferred('another process recorded cooldown')
+  let calls = 0
+  const forge = new GitHubForge({
+    repository: 'acme/app',
+    transport: async () => {
+      calls++
+      return { status: 200, headers: {}, json: {} }
+    },
+  })
+  await expect(
+    withForgeRequestGate(
+      {
+        before: async () => {
+          throw deferred
+        },
+        failed: async () => {},
+      },
+      () => forge.setAutoMerge('/ws', 1, true),
+    ),
+  ).rejects.toBe(deferred)
+  expect(calls).toBe(0)
+})

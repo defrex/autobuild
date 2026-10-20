@@ -1,5 +1,9 @@
 import { isForgeFailure, type ForgeRequestObserver } from '../forge-failure'
-import { forgeRequestContext, guardedForgeRequest } from '../forge-request-context'
+import {
+  forgeRequestContext,
+  guardedForgeRequest,
+  ForgeRequestDeferred,
+} from '../forge-request-context'
 import { inspectGitHubReadiness } from './github-readiness'
 import type { ForgeReadinessInput } from './readiness'
 import { gitRewrite } from './git-rewrite'
@@ -601,7 +605,7 @@ export class GitHubForge implements Forge {
       })
       return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       throw new Error(redact(error instanceof Error ? error.message : String(error)))
     }
   }
@@ -856,7 +860,7 @@ export class GitHubForge implements Forge {
       )
       return { number: created.number, url: created.html_url, headSha: created.head.sha }
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (error instanceof GitHubApiError && error.status === 422) {
         const raced = await probe()
         if (raced) return raced
@@ -1122,7 +1126,7 @@ export class GitHubForge implements Forge {
     try {
       await this.request('PATCH', prPath, { body: { state: 'closed' } })
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       closeError = error
     }
     // Re-read even after a mutation failure: GitHub may have merged the PR in
@@ -1143,14 +1147,14 @@ export class GitHubForge implements Forge {
     try {
       await this.request('GET', `${repoPath}/git/ref/heads/${branch}`)
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (error instanceof GitHubApiError && error.status === 404) return // idempotent
       throw error
     }
     try {
       await this.request('DELETE', `${repoPath}/git/refs/heads/${branch}`)
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       // A probe/delete race (branch deleted elsewhere) is still a success.
       if (error instanceof GitHubApiError && error.status === 404) return
       throw error
@@ -1235,7 +1239,7 @@ export class GitHubForge implements Forge {
             protection.required_pull_request_reviews !== null)
       }
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       classicError = errorMessage(error)
     }
 
@@ -1273,7 +1277,7 @@ export class GitHubForge implements Forge {
             (rule) => rule.type === 'pull_request' || CONTROLLED_WRITE_RULE_TYPES.has(rule.type),
           ))
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (
         rulesPagesRead === 0 &&
         error instanceof GitHubApiError &&
@@ -1515,7 +1519,7 @@ export class GitHubForge implements Forge {
           throw new Error(disposition.reason)
       }
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       return {
         kind: 'deferred',
         reason: {
@@ -1722,7 +1726,7 @@ export class GitHubForge implements Forge {
           await this.request('PATCH', `${root}/issues/comments/${match.id}`, { body: { body } })
           return
         } catch (error) {
-          if (isForgeFailure(error)) throw error
+          if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
           if (!(error instanceof GitHubApiError) || error.status !== 404 || scan !== 0) throw error
         }
       }
@@ -1769,7 +1773,7 @@ export class GitHubForge implements Forge {
     try {
       return await adopt()
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (!(error instanceof GitHubApiError && error.status === 404)) throw error
     }
     try {
@@ -1787,7 +1791,7 @@ export class GitHubForge implements Forge {
       )
       return result.object.sha
     } catch (error) {
-      if (isForgeFailure(error)) throw error
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (!(error instanceof GitHubApiError && error.status === 422)) throw error
       return adopt()
     }

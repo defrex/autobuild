@@ -30,3 +30,6 @@ export async function guardedForgeRequest<T>(work: () => Promise<T>): Promise<T>
 
 /** Observers from another concurrent operation cannot prove this probe succeeded. */
 export const forgeRequestGateActive = (gate: object): boolean => gates.getStore() === gate
+
+/** Internal scheduling deferral; adapters must not turn it into a policy refusal. */
+export class ForgeRequestDeferred extends Error {}
