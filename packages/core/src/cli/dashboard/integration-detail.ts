@@ -20,6 +20,7 @@ export interface IntegrationChild {
   landed: boolean
 }
 export interface IntegrationDetail {
+  parentDistance?: string
   destination: string
   branch: string
   restack: string
@@ -114,6 +115,7 @@ export function projectIntegrationDetail(
     (restack.active && restack.replay?.conflicted ? restack.replay : undefined)
   const mode = nodeLandingPolicyDisplay(state, config.landing)
   return {
+    parentDistance: row.parentDistance,
     destination: `${row.destination}${state.target ? '' : ' (the configured base branch)'}`,
     branch: record.branch ?? state.nodeOpening?.branch ?? 'unknown branch',
     restack: conflict

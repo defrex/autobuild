@@ -311,6 +311,11 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   const store = new MemoryBuildStore()
   await store.createBuild(sampleBuildInput('a'))
   await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.append('a', {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['one'] },
+  })
   await store.claimNodeWriter('a', 'holder', 60_000)
   const forge: import('../ports/types').Forge = new FakeForge()
   Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, true) })
@@ -401,6 +406,11 @@ for (const [boundary, local] of [
     const store = new MemoryBuildStore()
     await store.createBuild(sampleBuildInput('a'))
     await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.append('a', {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['one'] },
+    })
     await store.claimNodeWriter('a', 'first', 60_000)
     const forge: import('../ports/types').Forge = new FakeForge()
     Object.defineProperty(forge, 'rewrite', { value: gitRewrite(deps.exec, local) })
@@ -425,6 +435,24 @@ for (const [boundary, local] of [
     }
     await store.releaseNodeWriter('a', 'first')
     await store.claimNodeWriter('a', 'replacement', 60_000)
+    // A pre-upgrade reservation finishes even after fresh completeness demand disappears.
+    await store.append('a', {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: ['later-child'], diagnostics: [], contributions: ['one'] },
+    })
+    await store.append('a', {
+      actor: DISPATCHER,
+      type: 'node.restack-requested',
+      payload: {
+        id: 'newer-demand',
+        reason: 'presence',
+        branch: 'main',
+        parent,
+        dependent: { source: 'fake', id: 'LATER' },
+        identities: ['build:later'],
+      },
+    })
     // A later observation does not change the transaction already in flight.
     forge.snapshotBase = async () => {
       throw new Error('must not resample a reserved transaction')
@@ -440,6 +468,7 @@ for (const [boundary, local] of [
     expect(writes.filter((e) => e.type === 'node.writer-reserved')).toHaveLength(1)
     expect(writes.filter((e) => e.type === 'node.writer-settled')).toHaveLength(1)
     expect(state.contributionBase).toBe(parent)
+    expect(state.requests?.['newer-demand']?.identities).toEqual(['build:later'])
     expect(state.inventory?.builds).toEqual(['one'])
     expect(state.inventory?.foreign).toHaveLength(1)
     if (local) expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
@@ -525,6 +554,11 @@ for (const race of ['lease-takeover', 'revision-change'] as const) {
     const store = new MemoryBuildStore({ clock })
     await store.createBuild(sampleBuildInput('a'))
     await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.append('a', {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['one'] },
+    })
     await store.claimNodeWriter('a', 'old-holder', 60_000)
     const rewrite = gitRewrite(deps.exec, true)
     let ready = false
@@ -661,6 +695,11 @@ test('a real conflicted transaction records NUL-delimited filenames including sp
   const store = new MemoryBuildStore()
   await store.createBuild(sampleBuildInput('a'))
   await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.append('a', {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['one'] },
+  })
   await store.claimNodeWriter('a', 'holder', 60_000)
   const forge: import('../ports/types').Forge = new FakeForge()
   const { gitRewrite } = await import('../ports/forge/git-rewrite')

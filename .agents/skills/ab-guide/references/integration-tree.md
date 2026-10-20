@@ -15,7 +15,7 @@ build generation supplies evidence; ambiguous or unavailable evidence leaves the
 dependent queued. Confirmed landing SHA reachability can prove presence without
 a trailer, and a landed node transports its whole owned contribution. Empty
 completed nodes contribute nothing. Sibling work waits for landing into the common
-ancestor and cascade; same-node landings satisfy presence directly.
+ancestor and demand the minimal restack path; same-node landings satisfy presence directly.
 
 ## Choosing a destination
 
@@ -149,7 +149,7 @@ children retain their frozen destination.
 `--no-target` moves it to the root. Omitted fields preserve existing values;
 `--kind work` resets kind when valid. Only owned contributions replay onto the
 new parent, then the same PR is retargeted. Empty and same-head moves need no
-new commit or PR. Descendants follow through the normal cascade.
+new commit or PR. Descendants restack only on their own demand.
 
 The request is durable before the provider write. Source readback accepts the
 new effective ancestry; branch publication, PR retargeting and completion have
@@ -184,3 +184,11 @@ metadata carries source/id, optional title and contribution build identity;
 `node.item-conflicted.files` and conflicted `restack.replayed.files` retain paths.
 Older events remain readable, with explicit unavailable titles/files. Display
 metadata never changes completeness or landing eligibility.
+
+## Demand-driven parent freshness
+
+Collecting nodes may intentionally trail their parent. They refresh before
+verification and landing, for queued dependency presence, on operator request,
+and after accepted re-parenting. Descendants need independent demand; presence
+requests follow only the minimal proven ancestor path. See
+[restacking](restacking.md#timing-and-evidence) for timing, requests and distance.

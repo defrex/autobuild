@@ -78,8 +78,8 @@ an open or aborted node, or ambiguous newest build generations remain queued.
 Older successful generations are never substituted for the newest build.
 
 - Same node: the blocking change lands directly into the target.
-- Ancestor: the change lands into an ancestor, then the cascade restacks the target.
-- Sibling: the blocking node lands into their common ancestor, then the cascade reaches the target.
+- Ancestor: the change lands into an ancestor, then presence demand restacks only the required path to the target.
+- Sibling: the blocking node lands into their common ancestor, then presence demand reaches the target through the minimal ancestor path.
 - Descendant: the blocking node lands into the dependent's target ancestor.
 
 Blockers that never had a build, and repositories without nodes, retain the

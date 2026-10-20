@@ -603,6 +603,18 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       'may not control its own build.',
     ]),
   },
+  {
+    name: 'restack',
+    audience: 'human',
+    summary: 'Request a node restack onto its current parent.',
+    detail: page([
+      'Usage: ab restack <node> [--store <ref>]',
+      '',
+      'Records durable demand, coalescing repeated pending requests.',
+      'Paused or blocked nodes wait for normal safety gates. Leaves, terminal nodes',
+      'and nodes without an open branch are refused. This command is sessionless.',
+    ]),
+  },
   ...(['hold', 'land'] as const).map((name) => ({
     name,
     audience: 'human' as const,

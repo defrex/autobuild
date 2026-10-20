@@ -1,3 +1,5 @@
+import { requestNodeRestack } from '../operator/restack'
+import { withSessionlessStore } from './store-opening'
 import { abLandings } from './landings'
 import { readBuildFacts } from '../store/reduced-reads'
 import { preparePinnedAssets } from '../store/ticket-assets'
@@ -112,6 +114,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'wait',
   'mcp',
   'repository',
+  'restack',
   'pause',
   'resume',
   'hold',
@@ -1043,6 +1046,40 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       })
+    }
+
+    case 'restack': {
+      const usage = 'usage: ab restack <node> [--store <ref>]'
+      const parsed = parseArgs(rest, { store: 'value' }, usage)
+      if (parsed.positionals.length !== 1) throw new Error(usage)
+      if (
+        deps.processEnv?.AB_SESSION?.trim() &&
+        deps.processEnv?.AB_BUILD?.trim() === parsed.positionals[0]
+      )
+        throw new Error(
+          'cannot restack a node from its own phase session (AB_SESSION/AB_BUILD conflict)',
+        )
+      if (!deps.exec) throw new Error('restack requires an exec seam')
+      const result = await withSessionlessStore(
+        {
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          ...(stringFlag(parsed, 'store') ? { storeRef: stringFlag(parsed, 'store') } : {}),
+          ...(deps.openStore ? { openStore: deps.openStore } : {}),
+        },
+        ({ store, repo }) =>
+          requestNodeRestack({
+            store,
+            repo,
+            slug: parsed.positionals[0]!,
+            user: deps.processEnv?.USER?.trim() || deps.processEnv?.USERNAME?.trim() || 'operator',
+          }),
+      )
+      deps.stdout(
+        `restack requested for ${result.slug}${result.waiting ? '; waiting for normal safety gates' : ''}`,
+      )
+      return 0
     }
 
     case 'abort': {

@@ -1,3 +1,4 @@
+import { requestNodeRestack } from '../operator/restack'
 import { Dispatcher } from '../processes/dispatcher'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { expect, test } from 'bun:test'
@@ -43,7 +44,7 @@ async function fixture() {
   return { h, ticks, node, foreign, ctx }
 }
 
-test('move to another node and root retains own history, excludes old parent and cascades nested nodes', async () => {
+test('move to another node and root retains own history, excludes old parent and leaves nested nodes idle until demanded', async () => {
   const { h, ticks, node, foreign, ctx } = await fixture()
   try {
     const oldParent = await foreign('P', 'parent-only')
@@ -67,6 +68,9 @@ test('move to another node and root retains own history, excludes old parent and
       q.branch!,
     )
     expect(await git(['show', `${a.branch}:owned`], h.origin)).toBe('owned')
+    expect(ofType(await h.events(b.slug), 'node.writer-reserved')).toHaveLength(0)
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: b.slug, user: 'operator' })
+    await ticks()
     expect(await git(['show', `${b.branch}:owned`], h.origin)).toBe('owned')
     expect(await git(['rev-list', a.branch!], h.origin)).not.toContain(oldParent)
     expect(await git(['rev-list', b.branch!], h.origin)).not.toContain(oldParent)
@@ -463,7 +467,7 @@ test('reparent retries head-CAS contention and retains a concurrent node-owned c
 }, 30_000)
 
 for (const mode of ['missing', 'throwing'] as const)
-  test(`tracker ${mode} reads withhold a move while ordinary nested cascade continues`, async () => {
+  test(`tracker ${mode} reads withhold a move while independently demanded nested restacks continue`, async () => {
     const { h, node, foreign, ticks } = await fixture()
     try {
       const a = node('A'),
@@ -483,7 +487,15 @@ for (const mode of ['missing', 'throwing'] as const)
       const report = await h.dispatcher.tick()
       expect(report.janitorFailed).toBe(0)
       expect(report.janitorDiagnostics.join(' ')).toContain('ticket target observation failed')
-      await ticks()
+      for (const record of [a, b]) {
+        await requestNodeRestack({
+          store: h.store,
+          repo: h.origin,
+          slug: record.slug,
+          user: 'operator',
+        })
+        await ticks()
+      }
       for (const record of [a, b]) {
         expect(await git(['merge-base', '--is-ancestor', parent, record.branch!], h.origin)).toBe(
           '',
