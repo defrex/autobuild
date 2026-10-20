@@ -1858,7 +1858,9 @@ With no slugs the repository journal is included; named watches add it with
 
 The default watch reports actionable conditions only:
 
-- Build `escalation.raised`, `phase.deferral-escalated`, or `build.merge-decision`: a finalized open PR
+- Build `escalation.raised` or `phase.deferral-escalated`: an operator answer
+  is required. A read deferral asks for CLI/store repair before retry or guidance.
+- Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
   authorized landings awaiting application are silent. One merge decision is reported per build/PR.
