@@ -23,3 +23,6 @@ export type {
   TranscriptTurn,
   TranscriptUsage,
 } from '../cli/dashboard/transcript'
+
+export type { IntegrationDetail, IntegrationChild } from '../cli/dashboard/integration-detail'
+export { displayText } from '../cli/dashboard/cells'

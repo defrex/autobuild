@@ -210,7 +210,7 @@ export async function replayNodeChange(
 ): Promise<
   | { kind: 'dropped'; head: string; reason: 'upstream-identity' | 'upstream-commit' }
   | { kind: 'replayed'; head: string }
-  | { kind: 'conflict'; base: string }
+  | { kind: 'conflict'; base: string; files: string[] }
 > {
   assertSafeNodeReplay(inputs)
   const change = inputs.changes[index]
@@ -256,7 +256,11 @@ export async function replayNodeChange(
     true,
   )
   if (result.exitCode !== 0) {
-    if ((await output(deps, ['ls-files', '-u'])) !== '') return { kind: 'conflict', base }
+    const files = (await git(deps, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
+      .split('\0')
+      .filter(Boolean)
+      .sort()
+    if (files.length) return { kind: 'conflict', base, files }
     const pending = await git(deps, ['rev-parse', '--verify', 'CHERRY_PICK_HEAD'], true)
     if (
       pending.exitCode !== 0 ||

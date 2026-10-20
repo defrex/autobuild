@@ -376,6 +376,7 @@ export const eventPayloadSchemas = {
     dropReason: z.enum(['upstream-identity', 'upstream-commit']).optional(),
   }),
   'node.item-conflicted': z.strictObject({
+    files: z.array(z.string()).optional(),
     id: z.string().min(1),
     index: z.number().int().nonnegative(),
     base: z.string().min(1),
@@ -410,6 +411,16 @@ export const eventPayloadSchemas = {
     openChildren: z.array(z.string()),
     diagnostics: z.array(z.string()),
     contributions: z.array(z.string()),
+    children: z
+      .array(
+        z.strictObject({
+          source: z.string(),
+          id: z.string(),
+          title: z.string().optional(),
+          builds: z.array(z.string()).optional(),
+        }),
+      )
+      .optional(),
   }),
   'integration.prepared': z.strictObject({
     id: z.string().min(1),
@@ -913,7 +924,11 @@ export const eventPayloadSchemas = {
   }),
   'target.moved': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
   'restack.prepared': leafRestackSchema,
-  'restack.replayed': z.strictObject({ id: z.string().min(1), conflicted: z.boolean() }),
+  'restack.replayed': z.strictObject({
+    id: z.string().min(1),
+    conflicted: z.boolean(),
+    files: z.array(z.string()).optional(),
+  }),
   'restack.publish-intended': leafRestackSchema.extend({ headSha: gitOid }),
   'restack.rewritten': leafRestackSchema.extend({
     headSha: gitOid,
@@ -937,7 +952,11 @@ export const eventPayloadSchemas = {
     request: z.number().int().positive(),
     actual: gitOid.nullable(),
   }),
-  'reconcile.replayed': z.strictObject({ id: z.string().min(1), conflicted: z.boolean() }),
+  'reconcile.replayed': z.strictObject({
+    id: z.string().min(1),
+    conflicted: z.boolean(),
+    files: z.array(z.string()).optional(),
+  }),
   'reconcile.publish-intended': reconcileTransactionSchema.extend({
     headSha: gitOid,
     conflicted: z.boolean(),

@@ -155,6 +155,35 @@ function models(): WebFixtureModels {
             steps: [{ label: 'land', state: 'pending', qualifier: 'consent' }],
           },
         }),
+        ...['integration-with-pr', 'queue-conflict', 'queue-failed', 'queue-ready-node'].map(
+          (slug) =>
+            build({
+              slug,
+              kind: 'integration',
+              integrationRow: {
+                destination: 'main',
+                openChildren: ['A', 'B'],
+                children: { known: true, landed: 1, building: 2, queued: 0, total: 3 },
+                verified: false,
+                steps: [],
+              },
+              integrationDetail: {
+                destination: 'main',
+                branch: 'ab-node/node',
+                restack: 'idle',
+                conflictFiles: ['src/a file.ts'],
+                membershipKnown: true,
+                diagnostics: [],
+                children: [
+                  { source: 'fake', id: 'A', title: 'Work A', state: 'implement', landed: false },
+                  { source: 'fake', id: 'B', title: 'Work B', state: 'code-review', landed: false },
+                ],
+                verification: 'unit failed — file a repair child targeting node',
+                verifySteps: [{ step: 'unit', outcome: 'fail' }],
+                landing: 'consent — press l, or ab land node',
+              },
+            }),
+        ),
         build({
           slug: 'integration-progress',
           kind: 'integration',

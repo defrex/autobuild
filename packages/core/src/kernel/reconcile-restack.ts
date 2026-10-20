@@ -488,7 +488,18 @@ async function continuePreparation(
   await replayAppend(deps, {
     actor: KERNEL,
     type: 'reconcile.replayed',
-    payload: { id: transaction.id, conflicted },
+    payload: {
+      id: transaction.id,
+      conflicted,
+      ...(conflicted
+        ? {
+            files: (await git(deps, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
+              .split('\0')
+              .filter(Boolean)
+              .sort(),
+          }
+        : {}),
+    },
   })
 }
 
