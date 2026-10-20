@@ -1133,3 +1133,63 @@ test('operator dashboard recovers every forge failure from the journal after rou
   expect(JSON.stringify(response)).toContain('Enable squash')
   expect(JSON.stringify(response)).toContain('Enable rebase')
 })
+
+test('operator integration counts agree with terminal polling without completed history reads', async () => {
+  const { DashboardBuildPollCache } = await import('../cli/dashboard/poll')
+  const store = new MemoryBuildStore({ clock })
+  const cfg = config(4, 5)
+  await publishRun(store, 'integration-run', cfg)
+  const ticket = { source: 'file', id: 'NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    ticket,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: REPO, ticket, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  await store.append('node', {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: ['CHILD'], contributions: ['landed'], diagnostics: [] },
+  })
+  await store.createBuild({
+    slug: 'child',
+    repo: REPO,
+    ticket: { source: 'file', id: 'CHILD' },
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        ticket: { source: 'file', id: 'CHILD' },
+        kind: 'work',
+        baseBranch: 'ab-node/node',
+        target: { ticket, build: 'node' },
+      },
+    },
+  })
+  const cache = new DashboardBuildPollCache(store, REPO, cfg)
+  for (const started of [false, true]) {
+    if (started)
+      await store.append('child', {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'child', host: 'test' },
+      })
+    const terminal = await cache.refresh()
+    const operator = await getOperatorDashboard({ store, repo: REPO, clock })
+    const expected = terminal.builds.find((b) => b.slug === 'node')!.integrationRow!
+    expect(operator.model.builds.find((b) => b.slug === 'node')!.integrationRow).toEqual(expected)
+    expect(expected.children).toMatchObject({
+      known: true,
+      building: started ? 1 : 0,
+      queued: started ? 0 : 1,
+    })
+  }
+  const detail = await getOperatorBuild({ store, repo: REPO, slug: 'node', now: clock() })
+  expect(detail.dashboardRow!.tree!.children).toEqual(['CHILD'])
+  expect(detail.dashboardRow!.steps.map((s) => s.label)).toContain('merge')
+})

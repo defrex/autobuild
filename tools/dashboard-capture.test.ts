@@ -82,6 +82,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
     'capacity-wide',
     'integration-wide',
+    'integration-narrow',
     'post-reconcile-policy',
     'headline-happy-wide',
     'website-hero',
@@ -139,11 +140,15 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Forge rebase')
       expect(frame.text).toContain('Allow squash merging')
       expect(frame.text).toContain('Allow rebase merging')
-    } else if (frame.id === 'integration-wide') {
+    } else if (frame.id.startsWith('integration-')) {
       expect(frame.text).toContain('active 2/4')
       expect(frame.text).not.toContain('QUEUE-5')
       expect(frame.text).toContain('integration')
-      expect(frame.text).toContain('target')
+      expect(frame.text).toContain('8/11 landed')
+      expect(frame.text).toContain('2 building')
+      expect(frame.text).toContain('1 queued')
+      expect(frame.text).toContain('unit failed')
+      expect(frame.text).toContain('ready to land into')
       expect(frame.text).toContain('empty')
     } else if (frame.id === 'post-reconcile-policy') {
       // Capacity clock reads must not move established policy-frame timings.

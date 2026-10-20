@@ -1,3 +1,4 @@
+import { enrichIntegrationRows } from './integration-row'
 import type { CapacityBuild } from '../../kernel/dispatch-capacity'
 import {
   openBuildWorkspaceReducer,
@@ -287,6 +288,11 @@ export class DashboardBuildPollCache {
       if (entry.build !== null) builds.push(entry.build)
     }
     builds.sort((a, b) => a.slug.localeCompare(b.slug))
-    return { revision: this.committedRevision, builds, states, capacityBuilds }
+    return {
+      revision: this.committedRevision,
+      builds: enrichIntegrationRows(builds),
+      states,
+      capacityBuilds,
+    }
   }
 }

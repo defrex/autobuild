@@ -120,9 +120,31 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
   {
     id: 'integration-wide',
     width: 1440,
-    height: 1000,
-    requires: ['integration', 'target', 'empty', 'NODE-3'],
+    height: 2300,
+    requires: [
+      'integration into',
+      'landed',
+      'building',
+      'queued',
+      'children unknown',
+      'unit failed',
+      'ready to land into',
+      'NODE-3',
+    ],
   },
+  {
+    id: 'integration-narrow',
+    width: 390,
+    height: 4400,
+    requires: ['integration into', 'unit failed', 'ready to land into', 'land(consent)'],
+  },
+  {
+    id: 'integration-dimmed',
+    width: 1440,
+    height: 2500,
+    requires: ['integration into', 'unit failed', 'ready to land into'],
+  },
+
   {
     id: 'builds-post-reconcile-policy-wide',
     width: 1440,
@@ -600,6 +622,15 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       const capacity = models.capacity ?? models.integration
       return shell(builds(capacity), { model: capacity })
     }
+    case 'integration-dimmed':
+      return shell(
+        builds(models.integration, {
+          detailOpen: true,
+          selection: { kind: 'build', slug: 'integration-empty' },
+        }),
+        { model: models.integration },
+      )
+    case 'integration-narrow':
     case 'integration-wide':
       return shell(builds(models.integration), { model: models.integration })
     case 'builds-loading-wide':
@@ -1055,7 +1086,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
   try {
     const capture = await captureDashboardFrames({
       workspacePath: workspace,
-      consentQueueFixtures: false,
+      consentQueueFixtures: true,
     })
     return {
       forgeReadiness: frameModel(capture, 'forge-readiness-wide'),
