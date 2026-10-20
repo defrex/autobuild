@@ -2752,7 +2752,14 @@ async function runPipelineFallbackScenario(
   handlers.implement = async (cli) => {
     markImplementStarted()
     await implementGate
-    return implement(cli)
+    const result = await implement(cli)
+    // This config-publication scenario requires the terminal-winning order.
+    await fx.store.append((await fx.store.listBuilds())[0]!.slug, {
+      actor: humanActor('operator'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    return result
   }
   const clock = manualClock()
   const fx = await makeFixture(
@@ -2813,14 +2820,7 @@ async function runPipelineFallbackScenario(
           await implementStarted
           slug = (await fx.store.listBuilds())[0]?.slug
           await writeFile(join(fx.checkout, 'autobuild.toml'), baseWithPostgres)
-          // Park the build at the next boundary so the paused+resume cycle
-          // forces a SECOND launch (a fresh publishBuildConfig) — the whole
-          // pipeline otherwise runs in one execution with a single deposit.
-          await fx.store.append(slug!, {
-            actor: humanActor('operator'),
-            type: 'build.pause-requested',
-            payload: {},
-          })
+          // The handler pauses after its terminal to force a second launch.
           releaseImplement()
           return
         }
@@ -10702,14 +10702,15 @@ for (const selected of [false, true]) {
       await git(['add', 'autobuild.toml'], cli.ws)
       await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
       // The kernel has already replayed the change on the captured base.
+      const notes = join(cli.ws, '.ab/reconcile-notes.md')
+      await writeFile(notes, 'Merged current base configuration.\n')
+      await cli.run(['done', '--notes', notes])
+      // Pin this test to the terminal-winning order of the pause race.
       await fx.store.append(slug!, {
         actor: humanActor('operator'),
         type: 'build.pause-requested',
         payload: {},
       })
-      const notes = join(cli.ws, '.ab/reconcile-notes.md')
-      await writeFile(notes, 'Merged current base configuration.\n')
-      await cli.run(['done', '--notes', notes])
     }
     try {
       await abDispatch({

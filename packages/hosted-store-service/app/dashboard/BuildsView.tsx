@@ -5,6 +5,7 @@ import type {
   OperatorBuildControlRequest,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
+  pauseResumeHelp,
   buildActionAvailability,
   landingPolicyDisplay,
   type DashboardBuild,
@@ -765,6 +766,7 @@ function BuildDetail({
 
       <section className="section">
         <h3>Actions</h3>
+        {buildActionAvailability(build).primary && <p className="dim">{pauseResumeHelp}</p>}
         {confirmingAbort && (
           <p className="message alert" id={abortConfirmationId} role="status">
             <span aria-hidden>! </span>abort {build.slug}? Enter confirms, Esc cancels
@@ -963,6 +965,8 @@ function BuildDetail({
                 <span>runtime {session.runtime}</span>
                 {session.model !== undefined && <span>model {session.model}</span>}
                 <span>{session.status}</span>
+                {session.cause && <span>cause {session.cause}</span>}
+                {session.fallbackReason && <span>fresh session: {session.fallbackReason}</span>}
                 {session.reclaimedBy && (
                   <span className="slack">
                     by {session.reclaimedBy.instance} at resume boundary{' '}

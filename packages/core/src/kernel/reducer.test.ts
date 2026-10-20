@@ -2166,3 +2166,51 @@ test('native lifecycle conserves active time, usage and transcripts across repea
     transcripts: [0, 1, 2].map((rev) => ({ kind: 'transcript', rev })),
   })
 })
+
+test('handle-free pause suspension replays incrementally and preserves an observed identity', () => {
+  const handle = {
+    version: 1 as const,
+    runner: 'pi',
+    nativeId: 'native',
+    host: 'host',
+    workspacePath: '/repo',
+  }
+  for (const observed of [false, true]) {
+    const log = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('session.started', {
+        session: 'paused',
+        role: 'plan',
+        runner: 'pi',
+        phase: 'plan',
+        round: 1,
+      }),
+      ...(observed
+        ? [
+            ev('session.native-handle-recorded', {
+              session: 'paused',
+              phase: 'plan',
+              round: 1,
+              handle,
+            }),
+          ]
+        : []),
+      ev('session.suspended', {
+        session: 'paused',
+        phase: 'plan',
+        round: 1,
+        cause: 'pause',
+        activeMs: 42,
+        transcript: { kind: 'transcript', rev: 0 },
+      }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.sessions.open).toEqual([])
+    expect(state.sessions.suspended[0]).toMatchObject({
+      suspensionCause: 'pause',
+      suspendedActiveMs: 42,
+    })
+    expect(state.sessions.suspended[0]!.nativeHandle).toEqual(observed ? handle : undefined)
+  }
+})
