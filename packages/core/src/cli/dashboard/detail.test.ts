@@ -220,3 +220,33 @@ test('suspended and resumed segments retain separate usage and transcript naviga
   })
   expect(sessions[1]).toMatchObject({ status: 'resumed', predecessor: 'old', root: 'old' })
 })
+
+test('pause cause and remote fallback remain visible on the suspended session', () => {
+  const [session] = projectSessions([
+    event(1, 'session.started', {
+      session: 'remote',
+      role: 'plan',
+      runner: 'pi',
+      phase: 'plan',
+      round: 1,
+    }),
+    event(2, 'session.suspended', {
+      session: 'remote',
+      phase: 'plan',
+      round: 1,
+      cause: 'pause',
+      activeMs: 20,
+      transcript: { kind: 'transcript', rev: 0 },
+    }),
+    event(3, 'session.resume-fallback', {
+      session: 'remote',
+      reason: 'workspace-not-local-git-worktree',
+    }),
+  ])
+  expect(session).toMatchObject({
+    status: 'suspended',
+    cause: 'pause',
+    fallbackReason: 'workspace-not-local-git-worktree',
+    transcript: { kind: 'transcript', rev: 0 },
+  })
+})

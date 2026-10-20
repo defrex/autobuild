@@ -18,7 +18,8 @@ export interface DashboardSession {
   status: 'open' | 'ended' | 'reclaimed' | 'suspended' | 'resumed'
   predecessor?: string
   root?: string
-  cause?: 'shutdown' | 'runner-loss'
+  cause?: 'shutdown' | 'pause' | 'runner-loss'
+  fallbackReason?: string
   usage?: SessionUsage
   transcript?: { kind: string; rev: number }
   reclaimedBy?: { instance: string; resumedFromSeq: number }
@@ -90,6 +91,11 @@ export function projectSessions(
       }
       sessions.push(session)
       open.set(session.id, session)
+      continue
+    }
+    if (event.type === 'session.resume-fallback' && !event.payload.stale) {
+      const current = sessions.find((s) => s.id === event.payload.session)
+      if (current) current.fallbackReason = event.payload.reason
       continue
     }
     if (event.type === 'session.resumed') {
