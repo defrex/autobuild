@@ -1,3 +1,4 @@
+export { capacityExplanation } from '../kernel/dispatch-capacity'
 export { landingPolicyDisplay } from '../cli/dashboard/landing-display'
 export {
   pauseResumeHelp,

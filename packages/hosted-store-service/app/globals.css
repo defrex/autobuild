@@ -262,6 +262,16 @@ h3 {
   column-gap: 1ch;
   margin-right: -1ch;
 }
+/* Borrowed capacity adds prose; let it follow the character grid on phones. */
+.control-item[data-borrowing] {
+  flex-shrink: 1;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.control-item[data-borrowing] > span:first-child {
+  min-width: 0;
+}
 /* A toggle word and its ON/OFF state belong together: one natural space. */
 .control-item.toggle {
   column-gap: 1ch;
