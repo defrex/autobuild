@@ -5928,6 +5928,76 @@ describe('native suspension and continuation', () => {
     expect(journal.messages[0]).toContain('Re-check the worktree')
   })
 
+  for (const countermanded of [false, true]) {
+    test(`pause before session.started is ${countermanded ? 'countermanded by resume' : 'honored without waiting for the phase'}`, async () => {
+      const shutdown = new AbortController()
+      const h = await makeHarness({
+        nativeSessions: true,
+        workspaceProvider: 'git-worktree',
+        shutdownSignal: shutdown.signal,
+        handlers: countermanded
+          ? happyHandlers
+          : (store) => ({
+              ...happyHandlers(store),
+              'ab-plan': async () => {
+                await new Promise(() => {})
+                return defaultTurnResult()
+              },
+            }),
+      })
+      const append = h.store.append.bind(h.store)
+      let injected = false
+      h.store.append = async (slug, event) => {
+        if (!injected && event.type === 'session.started') {
+          injected = true
+          await append(slug, {
+            actor: humanActor('operator'),
+            type: 'build.pause-requested',
+            payload: {},
+          })
+          if (countermanded) {
+            await append(slug, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+          }
+        }
+        return append(slug, event)
+      }
+      const running = h.br.run()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('pre-session pause did not settle')), 1000)
+      })
+      try {
+        const state = await Promise.race([running, deadline])
+        const log = await h.store.getEvents(SLUG)
+        expect(ofType(log, 'build.pause-requested')[0]!.seq).toBeLessThan(
+          ofType(log, 'session.started')[0]!.seq,
+        )
+        expect(ofType(log, 'phase.failed')).toHaveLength(0)
+        if (countermanded) {
+          expect(ofType(log, 'session.suspended')).toHaveLength(0)
+          expect(ofType(log, 'build.paused')).toHaveLength(0)
+          expect(ofType(log, 'plan.completed')).toHaveLength(1)
+        } else {
+          expect(state.status).toBe('paused')
+          expect(ofType(log, 'session.suspended')).toHaveLength(1)
+          expect(ofType(log, 'session.suspended')[0]!.payload.cause).toBe('pause')
+          expect(ofType(log, 'plan.completed')).toHaveLength(0)
+          expect(ofType(log, 'build.paused')[0]!.seq).toBeGreaterThan(
+            ofType(log, 'session.suspended')[0]!.seq,
+          )
+        }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+        shutdown.abort()
+        await running
+      }
+    })
+  }
+
   test('pause suspends promptly and resumes the same native session', async () => {
     let observed!: () => void
     const ready = new Promise<void>((r) => {

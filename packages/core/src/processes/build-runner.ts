@@ -2695,8 +2695,8 @@ export class BuildRunner {
           controller.abort(new Error('build paused by operator'))
         })
         .catch(() => {
-          // The subscription has already delivered this request. Retry the
-          // authoritative read so one transient failure cannot lose the stop.
+          // Retry the authoritative read so one transient failure cannot lose
+          // a stop, including a request preceding the subscription boundary.
           if (closed || controller.signal.aborted) return
           const timer = setTimeout(() => {
             pauseRetries.delete(timer)
@@ -2712,6 +2712,9 @@ export class BuildRunner {
         controller.abort(new Error(`build ${slug} aborted by operator`))
       }
     })
+    // A pause may have landed after phase selection but before this bracket.
+    // Arm future delivery first, then check the current durable command too.
+    interruptForPause()
     const schedule = this.deps.opts?.scheduleSessionBudget ?? defaultSessionBudgetScheduler
     const cancelTimer = schedule(() => {
       if (!controller.signal.aborted) {
