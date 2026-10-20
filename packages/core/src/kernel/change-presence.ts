@@ -37,7 +37,7 @@ export function missingChanges(
   return required.filter((id) => !available.has(id))
 }
 
-function originalForeign(sha: string, aliases: Map<string, string>): string {
+export function originalForeign(sha: string, aliases: Map<string, string>): string {
   const seen = new Set<string>()
   while (aliases.has(sha) && aliases.get(sha) !== sha) {
     if (seen.has(sha)) throw new Error('cyclic foreign identity evidence')
@@ -94,6 +94,7 @@ export async function observePresence(
   head: string,
   landings: LandingEvidence[],
   aliases = new Map<string, string>(),
+  includeForeign = false,
 ): Promise<ChangeIdentity[]> {
   const commits = await history(git, [head])
   const proofs: ChangeIdentity[] = []
@@ -107,7 +108,8 @@ export async function observePresence(
     for (const build of buildTrailers(commit.message)) result.push(`build:${build}`)
     const foreign: ChangeIdentity = `foreign:${originalForeign(commit.sha, aliases)}`
     proofs.push(foreign, `foreign:${commit.sha}`)
-    if (aliases.has(commit.sha) || relevantForeign.has(foreign)) result.push(foreign)
+    if (includeForeign || aliases.has(commit.sha) || relevantForeign.has(foreign))
+      result.push(foreign)
   }
   return expandLandings(result, proofs, landings)
 }

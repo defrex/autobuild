@@ -31,25 +31,31 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
     )
     if (local && result.exitCode === 1) return null
     if (result.exitCode !== 0) throw new Error(`cannot read ${ref}: ${result.stderr}`)
-    const sha = result.stdout.trim().split(/\s+/)[0]
-    if (!sha) return null
-    object(sha)
-    return sha
+    if (local) {
+      const sha = result.stdout.trim()
+      object(sha)
+      return sha
+    }
+    return parseRemoteHead(result.stdout, ref)
   }
   return {
     async fastForward(input) {
       object(input.expected)
       object(input.sha)
       if (!isValidGitBranchName(input.branch)) throw new Error('invalid fast-forward destination')
+      const ref = `refs/heads/${input.branch}`
+      const actual = await read(input.workspacePath, ref)
+      if (actual === input.sha) {
+        if (!local) await refreshBranchCache(exec, input.workspacePath, input.branch, input.sha)
+        return { kind: 'published' }
+      }
+      if (actual !== input.expected) return { kind: 'lease-mismatch', actual }
       const ancestry = await git(
         input.workspacePath,
         ['merge-base', '--is-ancestor', input.expected, input.sha],
         true,
       )
       if (ancestry.exitCode !== 0) throw new Error('publication is not a fast-forward')
-      const ref = `refs/heads/${input.branch}`
-      const actual = await read(input.workspacePath, ref)
-      if (actual !== input.expected) return { kind: 'lease-mismatch', actual }
       const result = await git(
         input.workspacePath,
         local
@@ -63,9 +69,16 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
             ],
         true,
       )
-      if (result.exitCode !== 0)
-        return { kind: 'lease-mismatch', actual: await read(input.workspacePath, ref) }
-      return { kind: 'published' }
+      const after = await read(input.workspacePath, ref)
+      if (after === input.sha) {
+        if (!local) await refreshBranchCache(exec, input.workspacePath, input.branch, input.sha)
+        return { kind: 'published' }
+      }
+      return {
+        kind: 'lease-mismatch',
+        actual: after,
+        ...(result.exitCode === 0 ? { rewritten: true } : {}),
+      }
     },
     async snapshot(input) {
       const ref = branchRef(input.branch)
@@ -138,18 +151,7 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
       const actual = await read(input.workspacePath, ref)
       async function acknowledge(): Promise<RewriteResult> {
         if (!local) {
-          const localHead = await git(
-            input.workspacePath,
-            ['rev-parse', '--verify', '--quiet', ref],
-            true,
-          )
-          if (localHead.exitCode === 0 && localHead.stdout.trim() !== input.sha)
-            await git(input.workspacePath, [
-              'update-ref',
-              ref,
-              input.sha,
-              input.localExpected ?? input.expected,
-            ])
+          await refreshBranchCache(exec, input.workspacePath, input.branch, input.sha)
         }
         // Replay stays detached until the guarded branch update is confirmed.
         // Reattach only its exact workspace result; explicit-source callers may
@@ -160,48 +162,6 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
         return { kind: 'published' }
       }
       async function mismatch(observed: string | null): Promise<RewriteResult> {
-        // Recover the effect-before-receipt window from immutable intent inputs
-        // and branch ancestry. The candidate must be newly introduced, not an
-        // ancestor already present in the expected old history.
-        if (
-          observed !== null &&
-          input.sha !== input.expected &&
-          (await git(input.workspacePath, ['cat-file', '-e', `${input.sha}^{commit}`], true))
-            .exitCode === 0 &&
-          (await git(input.workspacePath, ['cat-file', '-e', `${input.expected}^{commit}`], true))
-            .exitCode === 0
-        ) {
-          if (
-            !local &&
-            (await git(input.workspacePath, ['cat-file', '-e', `${observed}^{commit}`], true))
-              .exitCode !== 0
-          ) {
-            const fetchedRef = `refs/autobuild/reconcile/${input.branch.replace(/^(?:ab|ab-node)\//, '')}/rewrite-observed`
-            await git(input.workspacePath, [
-              'fetch',
-              '--no-tags',
-              '--no-write-fetch-head',
-              'origin',
-              `+${ref}:${fetchedRef}`,
-            ])
-            observed = (
-              await git(input.workspacePath, ['rev-parse', '--verify', `${fetchedRef}^{commit}`])
-            ).stdout.trim()
-            object(observed)
-          }
-          const introduced = await git(
-            input.workspacePath,
-            ['merge-base', '--is-ancestor', input.sha, input.expected],
-            true,
-          )
-          const retained = await git(
-            input.workspacePath,
-            ['merge-base', '--is-ancestor', input.sha, observed],
-            true,
-          )
-          if (introduced.exitCode === 1 && retained.exitCode === 0)
-            return { kind: 'lease-mismatch', actual: observed, rewritten: true }
-        }
         return { kind: 'lease-mismatch', actual: observed }
       }
       if (actual === input.sha) return acknowledge()
@@ -229,4 +189,72 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
       )
     },
   }
+}
+
+/** A successful transport read is either an exact advertised ref or absence. */
+export function parseRemoteHead(stdout: string, ref: string): string | null {
+  const lines = stdout.trim() === '' ? [] : stdout.trim().split('\n')
+  if (lines.length === 0) return null
+  if (lines.length !== 1) throw new Error(`ambiguous remote head for ${ref}`)
+  const fields = lines[0]!.split(/\s+/)
+  if (fields.length !== 2 || fields[1] !== ref || !oid.test(fields[0]!))
+    throw new Error(`invalid remote head for ${ref}`)
+  return fields[0]!
+}
+
+export async function remoteBranchHead(
+  exec: Exec,
+  cwd: string,
+  branch: string,
+): Promise<string | null> {
+  if (!isValidGitBranchName(branch)) throw new Error('invalid publication branch')
+  const ref = `refs/heads/${branch}`
+  const result = await exec(['git', 'ls-remote', '--refs', 'origin', ref], { cwd })
+  if (result.exitCode !== 0) throw new Error(`cannot read ${ref}: ${result.stderr}`)
+  return parseRemoteHead(result.stdout, ref)
+}
+
+/** Confirmed remote-backed refs are caches; never touch checkout contents. */
+export async function refreshBranchCache(
+  exec: Exec,
+  cwd: string,
+  branch: string,
+  sha: string,
+): Promise<void> {
+  object(sha)
+  if (!isValidGitBranchName(branch)) throw new Error('invalid publication branch')
+  const run = async (args: string[]) => {
+    const result = await exec(['git', ...args], { cwd })
+    if (result.exitCode !== 0)
+      throw new Error(`publication cache ${args.join(' ')} failed: ${result.stderr}`)
+  }
+  if ((await exec(['git', 'cat-file', '-e', `${sha}^{commit}`], { cwd })).exitCode !== 0)
+    await run([
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--refmap=',
+      'origin',
+      `refs/heads/${branch}`,
+    ])
+  await run(['update-ref', `refs/heads/${branch}`, sha])
+}
+
+/** Ordinary publication is fast-forward only, with exact frozen input and readback. */
+export async function publishBranch(
+  exec: Exec,
+  cwd: string,
+  branch: string,
+  intended?: string,
+): Promise<void> {
+  const sha =
+    intended ??
+    (await exec(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], { cwd })).stdout.trim()
+  object(sha)
+  if ((await remoteBranchHead(exec, cwd, branch)) !== sha) {
+    const result = await exec(['git', 'push', 'origin', `${sha}:refs/heads/${branch}`], { cwd })
+    if ((await remoteBranchHead(exec, cwd, branch)) !== sha)
+      throw new Error(`publication did not confirm ${sha}: ${result.stderr}`)
+  }
+  await refreshBranchCache(exec, cwd, branch, sha)
 }

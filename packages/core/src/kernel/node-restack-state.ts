@@ -72,11 +72,15 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         break
       case 'node.opened':
         state.contributionBase ??= event.payload.sha
+        state.contributionBoundaries ??= {}
+        state.contributionBoundaries[event.payload.sha] = event.payload.sha
         break
       case 'node.writer-reserved':
         if (state.active) throw new Error('node writer already reserved')
         state.reservedSeq = event.seq
         state.active = event.payload
+        state.contributionBoundaries ??= {}
+        state.contributionBoundaries[event.payload.expected] = event.payload.oldBase
         state.items = []
         break
       case 'node.item-prepared':
@@ -137,6 +141,24 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           state.active.operation === 'restack'
             ? state.active.parent
             : (state.contributionBase ?? state.active.oldBase)
+        // A confirmed guarded write establishes aliases even if overtaken
+        // before readback. It cannot promote the active contribution base.
+        if (state.active.operation === 'restack') {
+          state.foreignAliases ??= {}
+          const dropped = new Set(state.droppedIdentities ?? [])
+          for (const item of state.items) {
+            const change = state.active.changes[item.index]
+            if (change && item.dropped)
+              dropped.add(
+                change.build === undefined
+                  ? `foreign:${state.foreignAliases[change.sha] ?? change.sha}`
+                  : `build:${change.build}`,
+              )
+            if (change && change.build === undefined && !item.dropped)
+              state.foreignAliases[item.head] = state.foreignAliases[change.sha] ?? change.sha
+          }
+          state.droppedIdentities = [...dropped].sort()
+        }
         state.rewritten = event.payload
         break
       case 'node.writer-settled':
@@ -145,20 +167,6 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         if (event.payload.outcome === 'completed') {
           if (!state.rewritten) throw new Error('node completion requires a confirmed rewrite')
           if (state.active.operation === 'restack') {
-            state.foreignAliases ??= {}
-            const dropped = new Set(state.droppedIdentities ?? [])
-            for (const item of state.items) {
-              const change = state.active.changes[item.index]
-              if (change && item.dropped)
-                dropped.add(
-                  change.build === undefined
-                    ? `foreign:${state.foreignAliases[change.sha] ?? change.sha}`
-                    : `build:${change.build}`,
-                )
-              if (change && change.build === undefined && !item.dropped)
-                state.foreignAliases[item.head] = state.foreignAliases[change.sha] ?? change.sha
-            }
-            state.droppedIdentities = [...dropped].sort()
             if (state.parentChange) state.parentReplay = state.parentChange.id
             state.contributionBase = state.active.parent
           }
@@ -176,7 +184,10 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
       case 'node.inventory':
         if (state.contributionBase !== undefined) {
           state.contributionBoundaries ??= {}
-          state.contributionBoundaries[event.payload.head] = state.contributionBase
+          state.contributionBoundaries[event.payload.head] =
+            state.active?.operation === 'restack' && state.rewritten?.head === event.payload.head
+              ? state.active.parent
+              : state.contributionBase
         }
         state.inventory = event.payload
         break
@@ -184,7 +195,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 5,
+  version: 6,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

@@ -47,7 +47,9 @@ publish, collapse the node, choose another item, or rewrite the public branch.
    Legacy tracked scratch may be inherited unchanged from either input; do not
    author scratch changes as part of resolution.
 5. Run `ab done --notes <notesPath>`. The kernel validates, archives recorded
-   evidence, and publishes with an exact expected-head lease. If the branch
+   evidence, and publishes with an exact expected-head lease. Exact forge
+   readback confirms publication; local refs are caches. Candidate ancestry alone
+   cannot establish an unconfirmed write or contribution boundary. If the branch
    changed, it prepares another replay of the observed complete contribution
    onto the same frozen base. Read context again, inspect and resolve that replay,
    run checks, update notes, then retry completion. Never push yourself.

@@ -2408,19 +2408,29 @@ describe('finalize post-step publication', () => {
     await expectFailureTolerance(h, 'remote rejected finalize push')
   })
 
+  test('local finalize readback failure records the failed step without a pending publication', async () => {
+    const forge = new FakeForge()
+    forge.confirmPublication = async () => false
+    const h = await readyHarness({
+      forge,
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+    })
+    await h.br.step()
+    await expectFailureTolerance(h, 'publication readback did not confirm')
+    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toHaveLength(0)
+  })
+
   test('retries an already-pushed local descendant when the completion checkpoint was lost', async () => {
     const h = await readyHarness({
       finalizeHeads: [FINALIZE_HEAD],
       finalizeAncestors: [true],
     })
     // Models a crash after Forge.pushBranch and before finalize.step-completed.
-    await h.forge.pushBranch(h.workspacePath, BRANCH)
+    await h.forge.pushBranch(h.workspacePath, BRANCH, FINALIZE_HEAD)
 
     await h.br.step()
-    expect(h.forge.pushes).toEqual([
-      { workspacePath: h.workspacePath, branch: BRANCH },
-      { workspacePath: h.workspacePath, branch: BRANCH },
-    ])
+    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
     expect(
       ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload,
     ).toMatchObject({ ok: true, headSha: FINALIZE_HEAD })

@@ -1,6 +1,7 @@
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
-import { readBuildFacts } from '../store/reduced-reads'
+import { observePresence, presenceInputs } from './change-presence'
+import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 import type { EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
@@ -12,6 +13,7 @@ import {
   assertSafeNodeReplay,
   replayNodeChange,
   nodeInventory,
+  history,
 } from './node-restack'
 
 export interface NodeTransactionDeps extends RestackDeps {
@@ -49,25 +51,50 @@ export async function runNodeTransaction(
     revision = written.seq
     return written
   }
+  const record = await deps.store.getBuild(deps.slug)
+  if (!record) throw new Error('missing node build')
+  const records = await deps.store.listBuildsForRepo(record.repo)
+  const digests = await readBuildDigests(deps.store, record.repo)
+  const entries = records.flatMap((record) => {
+    const digest = digests.get(record.slug)
+    return digest ? [{ record, digest }] : []
+  })
+  const evidence = await presenceInputs(
+    { buildFacts: async (slug) => (await readBuildFacts(deps.store, slug)).value },
+    entries,
+    [deps.slug],
+  )
   let node = state.nodeRestack
   if (!node?.active) {
-    const oldBase = node?.contributionBase ?? state.nodeOpened?.sha
-    if (!oldBase) throw new Error('node has no durable contribution boundary')
+    if (!node?.contributionBase && !state.nodeOpened?.sha)
+      throw new Error('node has no durable contribution boundary')
     const destinationRef = `refs/autobuild/reconcile/${deps.slug}/${input.id}/node`
     const expected = await rewrite.snapshot({
       workspacePath: deps.workspacePath,
       branch: input.branch,
       destinationRef,
     })
+    // Locate a recorded source mapping in this sampled head's first-parent
+    // history. The extension is validated by prepareNodeReplay; the current
+    // mutable destination never supplies an ownership boundary.
+    const boundaries = node?.contributionBoundaries ?? {}
+    const source =
+      boundaries[expected] === undefined
+        ? (await history(deps, [expected], ['--first-parent'])).find(
+            (commit) => boundaries[commit.sha] !== undefined,
+          )?.sha
+        : expected
+    const oldBase = source ? boundaries[source]! : state.nodeOpened?.sha
+    if (!oldBase) throw new Error('node source provenance unavailable; operator review required')
     const parent = await snapshotParent(deps, input.parentBranch, `${destinationRef}-parent-head`)
-    if (parent === oldBase && !node?.parentChange) {
+    if (parent === oldBase && oldBase === node?.contributionBase && !node?.parentChange) {
       if (node?.inventory?.head === expected) return 'idle'
       const inventory = await nodeInventory(deps, expected, oldBase)
       if (JSON.stringify(inventory) !== JSON.stringify(node?.inventory))
         await append({ actor: KERNEL, type: 'node.inventory', payload: inventory })
       return 'idle'
     }
-    const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent })
+    const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent }, evidence)
     // Preserve frozen source objects before the reservation can survive a
     // workspace loss. Archives also retain the previous boundary's history.
     await authority(deps)
@@ -121,6 +148,12 @@ export async function runNodeTransaction(
   }
   const frozen = { ...active, oldHead: active.expected }
   assertSafeNodeReplay(frozen)
+  const replayEvidence = {
+    ...evidence,
+    upstream: new Set(
+      await observePresence(deps, active.parent, evidence.landings, evidence.aliases, true),
+    ),
+  }
   // A retained prefix is restored before it is used, even if its original
   // workspace and all unreferenced Git objects have disappeared.
   await rewrite.archive({
@@ -145,7 +178,7 @@ export async function runNodeTransaction(
       type: 'node.item-prepared',
       payload: { id: active.id, index, base },
     })
-    const result = await replayNodeChange(deps, frozen, index, base)
+    const result = await replayNodeChange(deps, frozen, index, base, replayEvidence)
     if (result.kind === 'conflict') {
       await append({
         actor: KERNEL,
@@ -198,6 +231,18 @@ export async function runNodeTransaction(
     type: 'node.rewritten',
     payload: { id: active.id, previous: active.expected, head },
   })
+  if (result.kind === 'lease-mismatch') {
+    await append({
+      actor: KERNEL,
+      type: 'node.writer-settled',
+      payload: {
+        id: active.id,
+        outcome: 'contended',
+        actual: result.actual,
+      },
+    })
+    return 'contended'
+  }
   await append({
     actor: KERNEL,
     type: 'node.inventory',

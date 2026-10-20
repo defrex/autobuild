@@ -35,8 +35,10 @@ You never push — the push is plumbing that happens when you finish.
    reach the store only through this flag; the file is never committed.
 
    `ab done` requires a **clean worktree** (everything committed) and the
-   notes deposit. In a local workspace it validates, pushes the branch, and
-   completes the phase. In a remote workspace it records one publication
+   notes deposit. In a local workspace it validates the recorded contribution boundary, pushes
+   the frozen HEAD SHA, confirms the authoritative branch head, and completes
+   the phase. Push/readback failures write no completion or pending publication
+   request; fix the failure and retry in the same session. In a remote workspace it records one publication
    request and parks while the dispatcher publishes and records completion;
    **do not run `ab done` again** after that success message. It is your only
    terminal command besides `ab escalate`. If it reports a validation error,

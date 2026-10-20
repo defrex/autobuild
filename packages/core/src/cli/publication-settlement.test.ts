@@ -84,6 +84,8 @@ async function seed(options: { workspace?: boolean; attachments?: boolean } = {}
       store,
       storeRef: 'https://store.example.test',
       publication: {
+        isPublished: async (input) =>
+          published.some((p) => p.sha === input.sha && p.branch === input.branch),
         publish: async (input) => {
           published.push(input)
         },
@@ -147,7 +149,7 @@ describe('settlePendingPublication', () => {
     h.store.failCompletion = true
     await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('injected append crash')
     await settlePendingPublication(h.deps, SLUG)
-    expect(h.published).toHaveLength(2)
+    expect(h.published).toHaveLength(1)
     expect(
       (await h.store.getEvents(SLUG)).filter((e) => e.type === 'implement.completed'),
     ).toHaveLength(1)
@@ -205,7 +207,7 @@ describe('settlePendingPublication', () => {
 
     await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(/injected append crash/)
     await settlePendingPublication(h.deps, SLUG)
-    expect(h.published).toHaveLength(2)
+    expect(h.published).toHaveLength(1)
     expect(
       (await h.store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
     ).toHaveLength(1)
@@ -341,6 +343,7 @@ describe('settlePendingPublication', () => {
     const h = await seed()
     let attempts = 0
     h.deps.publication = {
+      isPublished: async () => false,
       publish: async () => {
         attempts += 1
         throw new Error('branch rejected')
@@ -525,6 +528,8 @@ describe('settlePendingPublication', () => {
       store,
       storeRef: 'https://store.example.test',
       publication: {
+        isPublished: async (input) =>
+          published.some((p) => p.sha === input.sha && p.branch === input.branch),
         publish: async (input) => {
           published.push(input)
         },
@@ -625,6 +630,8 @@ describe('settlePendingPublication', () => {
       store,
       storeRef: 'https://store.example.test',
       publication: {
+        isPublished: async (input) =>
+          published.some((p) => p.sha === input.sha && p.branch === input.branch),
         publish: async (input) => {
           published.push(input)
         },
@@ -970,3 +977,33 @@ test('trusted publication records an overtaken successful rewrite without comple
   expect(await readBuildSelector(h.store, SLUG, 'publishedBranchHead')).toBe(observed)
   expect(await readBuildSelector(h.store, SLUG, 'verifyDiffBase')).toBe(BASE)
 })
+
+for (const failure of ['different-head', 'read-error'] as const) {
+  test(`hosted completion requires after-write authoritative readback: ${failure}`, async () => {
+    const h = await seed()
+    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    h.deps.publication!.isPublished = async () => {
+      if (h.published.length && failure === 'read-error') throw new Error('inspection offline')
+      return false
+    }
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(
+      failure === 'read-error' ? 'inspection offline' : 'publication readback did not confirm',
+    )
+    expect(h.published).toHaveLength(1)
+    expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'implement.completed')).toBe(
+      false,
+    )
+  })
+}

@@ -1671,6 +1671,7 @@ export class Dispatcher {
         branch: input.branch,
         ...(priorGenerations > 0 || input.generation > 0
           ? {
+              publication: await this.confirmedWorkspacePublication(events, slug),
               revision: events.state.integration?.cycle?.head ?? this.recoveryCheckpoint(events),
               generation: Math.max(priorGenerations, input.generation),
             }
@@ -3267,6 +3268,11 @@ export class Dispatcher {
     }
   }
 
+  private async confirmedWorkspacePublication(events: CurrentBuildFacts, slug: string) {
+    const sha = await readBuildSelector(this.store, slug, 'publishedBranchHead')
+    return sha === undefined ? undefined : { sha, cacheHeads: events.gitTips }
+  }
+
   private recoveryCheckpoint(events: CurrentBuildFacts): string | undefined {
     return events.recoveryCheckpoint
   }
@@ -3644,6 +3650,7 @@ export class Dispatcher {
           branch: record.branch ?? `ab/${record.slug}`,
           ...(priorGenerations > 0
             ? {
+                publication: await this.confirmedWorkspacePublication(events, record.slug),
                 revision: events.state.integration?.cycle?.head ?? this.recoveryCheckpoint(events),
                 generation: priorGenerations,
               }
@@ -4997,7 +5004,15 @@ export class Dispatcher {
       return comparison
     }
     const comparison = await observe()
-    if (comparison.ahead === 0) return
+    // Branch comparison is telemetry, never contribution provenance: a
+    // rewritten parent can make inherited siblings appear "ahead". Only the
+    // inventory of this exact source head proves that the node owns work.
+    const inventory = state.nodeRestack?.inventory
+    if (
+      inventory?.head !== comparison.headSha ||
+      !((inventory.contributions?.length ?? 0) + inventory.foreign.length)
+    )
+      return
     let pr: Awaited<ReturnType<typeof forge.openPr>>
     try {
       pr = await forge.openPr({
@@ -5008,7 +5023,11 @@ export class Dispatcher {
         body: `Integration build ${record.slug}. Target: ${state.target?.ticket.id ?? state.baseBranch}. Human landing required.`,
       })
     } catch (error) {
-      if (error instanceof NoCommitsBetweenBranchesError && (await observe()).ahead === 0) return
+      if (
+        error instanceof NoCommitsBetweenBranchesError &&
+        (await observe()).headSha === comparison.parentSha
+      )
+        return
       throw error
     }
     await this.store.append(record.slug, { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
@@ -5054,8 +5073,12 @@ export class Dispatcher {
           const head = pr.headSha
           const base =
             state.nodeRestack?.contributionBoundaries?.[head] ??
-            state.nodeRestack?.contributionBase ??
-            state.nodeOpened?.sha
+            (state.nodeRestack?.inventory?.head === head
+              ? state.nodeRestack.contributionBase
+              : undefined) ??
+            (state.nodeRestack?.contributionBase === state.nodeOpened?.sha
+              ? state.nodeOpened?.sha
+              : undefined)
           if (!head || !base) throw new Error('missing node contribution source range')
           // Fetch retained objects when the kernel repository has not seen
           // this source head (including remote guest publication).

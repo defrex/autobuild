@@ -828,10 +828,11 @@ test('a scoped implement terminal routes publication through the configured plug
   )
   await writeFile(
     join(tmp, 'forge-plugin.ts'),
-    `import { appendFileSync } from 'node:fs'\n` +
+    `import { appendFileSync } from 'node:fs'\nlet published\n` +
       `export default { name: 'recording-forge', apiVersion: '^1.0.0', forges: { recording: ({ env }) => ({\n` +
       `  name: 'recording',\n` +
-      `  pushBranch: async (_workspace, branch) => { appendFileSync(env['FORGE_MARKER'], 'push:' + branch + '\\n') },\n` +
+      `  confirmPublication: async (_workspace, _branch, sha) => published === sha,\n` +
+      `  pushBranch: async (_workspace, branch, sha) => { published = sha; appendFileSync(env['FORGE_MARKER'], 'push:' + branch + '\\n') },\n` +
       `  openPr: async () => ({ number: 1, url: 'https://example.test/pr/1', headSha: 'head' }),\n` +
       `  getPrState: async () => ({ state: 'open', mergeable: null }),\n` +
       `  setAutoMerge: async () => ({ kind: 'applied' }),\n` +

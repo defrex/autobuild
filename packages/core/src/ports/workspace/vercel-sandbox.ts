@@ -1,4 +1,4 @@
-import { gitRewrite } from '../forge/git-rewrite'
+import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
 import type { ExecutionLaunchAuth } from './build-execution'
 import { createHash } from 'node:crypto'
@@ -2515,21 +2515,26 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo)
   }
 
-  private async remoteBranchHead(branch: string, label: string): Promise<string | null> {
+  private async remoteBranchHead(branch: string, _label: string): Promise<string | null> {
     if (this.options.remoteBranchHead !== undefined) {
-      return (await this.options.remoteBranchHead(branch)) ?? null
+      const head = (await this.options.remoteBranchHead(branch)) ?? null
+      if (head !== null && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head))
+        throw new Error('invalid authoritative remote branch head')
+      return head
     }
-    return oneSha(
+    return parseRemoteHead(
       await execOrThrow(
         this.exec,
-        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${branch}`],
+        ['git', 'ls-remote', '--refs', 'origin', `refs/heads/${branch}`],
         this.options.repo,
       ),
-      label,
+      `refs/heads/${branch}`,
     )
   }
 
   private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
+    // Inspection must not resume a stopped persistent guest. Publication owns
+    // its cache refresh before teardown; recovery needs only forge readback.
     const head = await this.remoteBranchHead(input.branch, `published branch ${input.branch}`)
     return head === input.sha
   }
@@ -2636,17 +2641,28 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           sha: input.sha,
         })
       }
-      await commandOrThrow(sandbox, {
-        cmd: 'git',
-        args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
-        cwd: VERCEL_WORKSPACE_PATH,
-      })
-      await sandbox.stop({ signal: this.operationSignal() })
+      if (!(await this.isPublished(input))) {
+        try {
+          await commandOrThrow(sandbox, {
+            cmd: 'git',
+            args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
+            cwd: VERCEL_WORKSPACE_PATH,
+          })
+        } catch (error) {
+          if (!(await this.isPublished(input))) throw error
+        }
+      }
       // Post-push verification without host git: the injected branch-head
       // reader (origin mode) or the host ls-remote fallback answers.
       const published = await this.remoteBranchHead(input.branch, 'published branch')
       if (published !== input.sha)
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
+      await commandOrThrow(sandbox, {
+        cmd: 'git',
+        args: ['update-ref', `refs/heads/${input.branch}`, input.sha],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      await sandbox.stop({ signal: this.operationSignal() })
     } finally {
       try {
         await sandbox.update({ networkPolicy: normal }, { signal: this.operationSignal() })
