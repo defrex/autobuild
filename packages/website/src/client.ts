@@ -1,5 +1,6 @@
 import { bindDispatcherMotion } from './dispatcher-motion'
 import { bindIntakeMotion } from './intake-motion'
+import { bindDocs } from './docs-client'
 import { bindSiteHeader } from './site-header-client'
 import { bindIntegrationMotion } from './integration-motion'
 import { bindPipelineMotion } from './pipeline-motion'
@@ -86,6 +87,7 @@ function bindCopy(button: HTMLButtonElement): void {
 
 if (typeof document !== 'undefined') {
   bindSiteHeader()
+  bindDocs()
   bindPipelineMotion()
   bindIntegrationMotion()
   bindDispatcherMotion()
