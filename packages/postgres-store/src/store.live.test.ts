@@ -1005,6 +1005,9 @@ if (testUrl)
           types: ['build.pause-requested'],
           writerVersions: [pause.compatibility!.writerVersion],
           legacyVersionUnavailable: false,
+          decisiveTypes: ['build.pause-requested'],
+          decisiveWriterVersions: [pause.compatibility!.writerVersion],
+          decisiveLegacyVersionUnavailable: false,
         }
         expect(older.entry.validate(olderAcc)).toBe(true)
         const installOlder = () =>
