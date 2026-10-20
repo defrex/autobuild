@@ -462,7 +462,8 @@ a.dim {
   overflow-wrap: anywhere;
 }
 .docs article h1 {
-  margin: 0 0 24px;
+  margin: 0;
+  min-width: 0;
   font-size: 40px;
   line-height: 48px;
 }
@@ -850,5 +851,57 @@ svg[data-integration-active] > path {
   }
   svg[data-sequence-state="active"] > path {
     stroke: #55b8b8;
+  }
+}
+
+.docs-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.docs-copy {
+  flex-shrink: 0;
+  min-height: 40px;
+  min-width: calc(16ch + 20px);
+  box-sizing: border-box;
+  padding: 8px;
+  border: 2px solid #e6e6e6;
+  border-radius: 0;
+  background: #000000;
+  color: #e6e6e6;
+  font:
+    700 14px / 20px "JetBrains Mono",
+    monospace;
+  cursor: pointer;
+}
+.docs-copy:hover {
+  color: #55b8b8;
+  border-color: #55b8b8;
+}
+.docs-copy:active {
+  background: #e6e6e6;
+  color: #000000;
+}
+.docs-copy:disabled {
+  cursor: wait;
+}
+.docs-copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 719px) {
+  .docs-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .docs-copy {
+    min-height: 44px;
   }
 }
