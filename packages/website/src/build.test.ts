@@ -3,7 +3,6 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
-import { copyText } from './client'
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
 
 const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
@@ -25,23 +24,6 @@ function textOf(html: string): string[] {
     .filter((t) => t.length > 0)
 }
 
-/** The page or the reference without its hero dashboard figure. */
-function withoutHeroFigure(html: string): string {
-  return html
-    .replace(
-      /<div class="scroll desk-only" style="background: #141414;[\s\S]*?<\/div><\/div>\n/,
-      '',
-    )
-    .replace(
-      /<div class="phone-only" role="img" aria-label="Terminal dashboard[\s\S]*?<\/div><\/div>\n/,
-      '',
-    )
-    .replace(
-      /<div class="scroll" tabindex="0" role="region"[^>]*><pre class="frame">[\s\S]*?<\/pre><\/div>/,
-      '',
-    )
-}
-
 const tmp: string[] = []
 afterAll(async () => {
   for (const dir of tmp) await rm(dir, { recursive: true, force: true })
@@ -61,15 +43,13 @@ describe('static site', () => {
     ])
   })
 
-  test('copy matches the design reference word for word, except the hero frame', async () => {
-    // The reference draws the hero dashboard by hand; the page shows the real
-    // captured frame instead, so both figures are set aside before comparing.
+  test('copy matches the design reference word for word', async () => {
     const { 'index.html': html } = await buildFiles()
     const updatedReference = (await readFile(REFERENCE, 'utf8'))
-      .replaceAll('bun add -g @defrex/autobuild', 'bun add -d --exact @defrex/autobuild')
+      .replaceAll('bun add -g @defrex/autobuild', INSTALL_COMMAND)
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
-    const reference = textOf(withoutHeroFigure(updatedReference))
+    const reference = textOf(updatedReference)
     expect(
       html.match(/<a href="\/docs\/seams\/">Explore the infrastructure seams<\/a>/g),
     ).toHaveLength(1)
@@ -85,7 +65,7 @@ describe('static site', () => {
       .replace('<a href="/docs/tickets/">Read about tickets and intake</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(words(textOf(withoutHeroFigure(landing)))).toEqual(words(reference))
+    expect(words(textOf(landing))).toEqual(words(reference))
   })
 
   test('four figures are static drawings with capture IDs and no motion', async () => {
@@ -100,11 +80,20 @@ describe('static site', () => {
     expect(js.replaceAll(SITE_URL, '')).not.toMatch(/https?:\/\//)
   })
 
-  test('the hero offers one Docs call to action beside the install command', async () => {
+  test('the hero offers one Docs action, then the getting-started commands', async () => {
     const { 'index.html': html } = await buildFiles()
-    const hero = html.match(/<div class="hero">[\s\S]*?<\/div><\/div>/)![0]
-    expect(hero.match(/<a class="btn"/g)).toHaveLength(1)
-    expect(hero).toContain('<a class="btn" href="/docs/">Docs</a>')
+    const first = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
+    expect(first.match(/<a class="btn"/g)).toHaveLength(1)
+    expect(first).toContain('<a class="btn" href="/docs/">Docs</a>')
+    expect(first).not.toContain('class="frame"')
+    expect(first).not.toContain('data-copy')
+    const terminal = (section: string): string =>
+      section.match(
+        /<div class="terminal">(?:<div class="cmd">[\s\S]*?<\/span><\/div>){4}<\/div>/,
+      )![0]
+    const last = html.slice(html.lastIndexOf('<section'))
+    expect(terminal(first)).toBe(terminal(last))
+    expect(terminal(first)).toContain(`<b>${INSTALL_COMMAND}</b>`)
   })
 
   test('core guides have one ordinary link in their matching landing sections', async () => {
@@ -126,16 +115,6 @@ describe('static site', () => {
     }
   })
 
-  test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
-    const { 'index.html': html } = await buildFiles()
-    const hero = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
-    expect(hero).toContain('<pre class="frame">')
-    expect(hero).toContain('AUT-131')
-    expect(hero).toContain('[&gt;] implement(9m17s)')
-    expect(hero).not.toContain('phone-only')
-    expect(hero).not.toContain('\x1b')
-  })
-
   test('structure: one h1, h2 per section, initial seam state, links', async () => {
     const { 'index.html': html } = await buildFiles()
     expect(html.match(/<h1[ >]/g)).toHaveLength(1)
@@ -145,7 +124,7 @@ describe('static site', () => {
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(8)
     expect(html).toContain('fully local')
-    expect(html).toContain('bun add -d --exact @defrex/autobuild')
+    expect(html).toContain('bun add -D @defrex/autobuild')
     expect(html).toContain('bun ab init')
     expect(html).toContain('bun ab dispatch')
   })
@@ -239,35 +218,5 @@ describe('knob motion', () => {
     expect(reduced).toMatch(/\.knob\s*{[^}]*transition:\s*none/)
     expect(html).toMatch(/class="knob" style="left: [^"]*"/)
     expect(html).not.toMatch(/class="knob"[^>]*(animation|transition)/)
-  })
-})
-
-describe('copy control', () => {
-  test('copies the install command', async () => {
-    const written: string[] = []
-    const clipboard = {
-      writeText: async (t: string) => {
-        written.push(t)
-      },
-    }
-    expect(await copyText(clipboard, INSTALL_COMMAND)).toBe(true)
-    expect(written).toEqual(['bun add -d --exact @defrex/autobuild'])
-  })
-
-  test('a refused or missing clipboard does not throw', async () => {
-    expect(await copyText({ writeText: () => Promise.reject(new Error('denied')) }, 'x')).toBe(
-      false,
-    )
-    expect(
-      await copyText(
-        {
-          writeText: () => {
-            throw new Error('sync')
-          },
-        },
-        'x',
-      ),
-    ).toBe(false)
-    expect(await copyText(undefined, 'x')).toBe(false)
   })
 })
