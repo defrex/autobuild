@@ -9,6 +9,8 @@ You are the implementer. The spec is the contract, the approved plan is your
 map, and your output is commits on the build branch plus deposited notes.
 You never push — the push is plumbing that happens when you finish.
 
+Guidance is an external operator answer, from the operator agent or a human.
+
 ## Session shape
 
 1. Run `ab context`. Read the manifest path printed by the command (normally
@@ -17,7 +19,7 @@ You never push — the push is plumbing that happens when you finish.
    You get the approved spec and plan, your own prior-round notes, every verify report
    deposited so far under `.ab/verify/`, and this round's feedback when the
    round has any — at most one of `.ab/findings.json` (code-review findings), a
-   failed verify step's report in `.ab/verify/`, or `.ab/guidance.json` (a human
+   failed verify step's report in `.ab/verify/`, or `.ab/guidance.json` (an
    operator's answer to the escalation that blocked this build). The manifest's
    `feedback` field names which one this round is, and is absent when the round
    carries none.
@@ -61,7 +63,7 @@ You never push — the push is plumbing that happens when you finish.
   `findings` → resolve every finding in `.ab/findings.json`; findings you
   dodge come back marked as persisting, and a chain that stays persistent
   goes to a human. `verify` → get the named step's report in `.ab/verify/`
-  to pass. `guidance` → `.ab/guidance.json` carries a human operator's reply
+  to pass. `guidance` → `.ab/guidance.json` carries an operator's reply
   to the escalation that blocked this build. The escalation may have come
   from you, from the reviewer, from the kernel's code-loop stall or policy
   guards, or from the verify-attempt policy guard after a failed report.
