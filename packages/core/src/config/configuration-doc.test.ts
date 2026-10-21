@@ -1,7 +1,7 @@
 /**
  * Human configuration-reference drift guards.
  *
- * Field names are structural table rows scoped to their own Markdown section;
+ * Field names are generated blocks scoped to their owning Markdown section;
  * loose substring checks would let ordinary prose accidentally satisfy the
  * contract. Every TOML fence is also classified and parsed, so examples cannot
  * drift into a shape the shipped loader rejects.
@@ -13,26 +13,18 @@ import { readFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import {
   type RuntimeProvisioningEntry,
-  finalizeAgentStepSchema,
-  finalizeCheckStepSchema,
   imageHostSchema,
   orchestratorSchema,
   orchestratorSandboxSchema,
-  landingRuleSchema,
-  policySchema,
-  prSchema,
-  roleSchema,
-  ticketsInputSchema,
   TOP_LEVEL_KEYS,
   TOP_LEVEL_SCALARS,
   TOP_LEVEL_TABLES,
-  verifyAgentStepSchema,
-  verifyCheckStepSchema,
   vercelSandboxConfigSchema,
   runtimeProvisioningEntrySchema,
-  workspaceSchema,
 } from './schema'
 import { parseConfig } from './load'
+import { configurationReference } from './reference'
+import { rewriteConfigurationReference } from '../../../../tools/configuration-reference'
 import { CONFIG_RELOAD_CLASSIFICATION, RESTART_REQUIRED_CONFIG_PATHS } from './live'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -396,15 +388,7 @@ function openMapEnumeration(summary: string): string[] {
   )
 }
 
-function unique(fields: readonly string[]): string[] {
-  return [...new Set(fields)]
-}
-
-/**
- * Explicit mapping is intentional. A new root table must be added here before
- * it can receive documentation coverage; transformed/open-map sections cannot
- * be traversed safely through Zod internals.
- */
+/** Owning prose sections remain explicit; accepted fields come from the schema walker. */
 const TABLE_HEADINGS: Record<string, string> = {
   landing: '`[[landing]]`',
   store: '`[store]`',
@@ -419,51 +403,23 @@ const TABLE_HEADINGS: Record<string, string> = {
   orchestrator: '`[orchestrator]`',
 }
 
-const TABLE_FIELDS: Record<string, string[]> = {
-  landing: Object.keys(landingRuleSchema.shape),
-  store: ['url'],
-  pr: Object.keys(prSchema.shape),
-  workspace: Object.keys(workspaceSchema.shape),
-  // Open map: command names are repository-defined.
-  commands: [],
-  // The transformed sections hide `steps`; strict variant schemas own the
-  // remaining accepted fields.
-  verify: unique([
-    'steps',
-    ...Object.keys(verifyCheckStepSchema.shape),
-    ...Object.keys(verifyAgentStepSchema.shape),
-  ]),
-  finalize: unique([
-    'steps',
-    ...Object.keys(finalizeCheckStepSchema.shape),
-    ...Object.keys(finalizeAgentStepSchema.shape),
-  ]),
-  // Open role names all contain this one strict shape.
-  roles: Object.keys(roleSchema.shape),
-  policy: Object.keys(policySchema.shape),
-  tickets: Object.keys(ticketsInputSchema.shape),
-  // Derived like the strict-shape entries above: a schema field added without
-  // a matching doc row fails the coverage loop rather than passing silently.
-  orchestrator: Object.keys(orchestratorSchema.shape),
-}
-
 function tableSection(table: string): string | undefined {
   const heading = TABLE_HEADINGS[table]
   return heading === undefined ? undefined : headingSection(doc, 2, heading)
 }
 
-function expectRows(
+function expectFieldBlocks(
   location: string,
   section: string | undefined,
   fields: readonly string[],
 ): void {
   expect(section, `${location} section is missing`).toBeDefined()
   const missing = fields.filter(
-    (field) => !new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm').test(section ?? ''),
+    (field) => !new RegExp(`^#### \`${escapeRegex(field)}\``, 'm').test(section ?? ''),
   )
   expect(
     missing,
-    `${location} is missing structural field rows for: ${missing.join(', ')}`,
+    `${location} is missing generated field blocks for: ${missing.join(', ')}`,
   ).toEqual([])
 }
 
@@ -496,15 +452,17 @@ function hasTicketsTable(source: string): boolean {
 describe('Vercel runtime provisioning documentation', () => {
   test('covers every built-in and nested provisioning field structurally', () => {
     const section = headingSection(doc, 3, 'Vercel Sandbox')
-    expectRows(
+    expectFieldBlocks(
       'docs/configuration.md Vercel Sandbox',
       section,
-      Object.keys(vercelSandboxConfigSchema.shape),
+      Object.keys(vercelSandboxConfigSchema.shape).map((key) => `workspace.config.${key}`),
     )
-    expectRows(
+    expectFieldBlocks(
       'docs/configuration.md runtime provisioning',
       section,
-      Object.keys(runtimeProvisioningEntrySchema.shape),
+      Object.keys(runtimeProvisioningEntrySchema.shape).map(
+        (key) => `workspace.config.runtimeProvisioning.<name>.${key}`,
+      ),
     )
     expect(section).toContain('@earendil-works/pi-coding-agent@0.84.4')
     expect(section).toContain('AI_GATEWAY_API_KEY')
@@ -755,44 +713,47 @@ describe('docs/configuration.md — schema coverage', () => {
   test('the explicit scalar/table maps cover exactly the root schema', () => {
     expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual([...TOP_LEVEL_KEYS].sort())
     expect(Object.keys(TABLE_HEADINGS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
-    expect(Object.keys(TABLE_FIELDS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
   })
 
-  test('documents every root scalar as a row in Root scalars', () => {
-    expectRows(
+  test('documents every root scalar as a generated field block in Root scalars', () => {
+    expectFieldBlocks(
       'docs/configuration.md / Root scalars',
       headingSection(doc, 2, 'Root scalars'),
       TOP_LEVEL_SCALARS,
     )
   })
 
-  test('gives every top-level table an exact section and every field its own row', () => {
+  test('gives every top-level table an exact section and every input field its own block', () => {
     for (const table of TOP_LEVEL_TABLES) {
-      expectRows(
+      expectFieldBlocks(
         `docs/configuration.md / [${table}]`,
         tableSection(table),
-        TABLE_FIELDS[table] ?? [],
+        configurationReference()[table]!.map((field) => field.path),
       )
     }
-    expect(tableSection('commands')).toMatch(/^\| `<name>` \|/m)
+    expect(tableSection('commands')).toContain('#### `commands.<name>`')
   })
 
   test('keeps the orchestrator row sets exact per table, in doc and guide', () => {
-    // AUT-588: the section-level assertion above spans both tables of the
-    // orchestrator section — the `[orchestrator]` field table and the
-    // `[orchestrator.sandbox]` fields table — so a row lost from one table
-    // but still present in the other satisfies it. That is exactly how the
-    // `sandbox` pointer row drifted into the subtable's table unnoticed.
-    // This guard asserts each table's exact field-name row set, per surface:
-    // moving, dropping, or inventing a row in either table of either surface
-    // fails, and the two doc sources are machine-checked to agree on which
-    // table carries which row. Set equality at the field-name level (not
-    // full row text) keeps column-vocabulary drift between the doc and the
-    // guide from causing false failures.
+    // AUT-588: keep parent and sandbox field sets separate. The generated
+    // page is checked byte-for-byte; the guide retains independent row guards.
+    const generated = configurationReference().orchestrator!
+    const immediateChildren = (parent: string) =>
+      generated
+        .map((field) => field.path)
+        .filter(
+          (path) => path.startsWith(`${parent}.`) && !path.slice(parent.length + 1).includes('.'),
+        )
+        .map((path) => path.slice(parent.length + 1))
+        .sort()
+    expect(immediateChildren('orchestrator')).toEqual(Object.keys(orchestratorSchema.shape).sort())
+    expect(immediateChildren('orchestrator.sandbox')).toEqual(
+      Object.keys(orchestratorSandboxSchema.shape).sort(),
+    )
+    expect(rewriteConfigurationReference(doc)).toBe(doc)
     const orchestratorRows = Object.keys(orchestratorSchema.shape)
     const sandboxRows = Object.keys(orchestratorSandboxSchema.shape)
     const surfaces = [
-      ['docs/configuration.md', tableSection('orchestrator')],
       ['skills/guide/SKILL.md', headingSection(guide, 3, '`[orchestrator]`')],
     ] as const
 
@@ -862,10 +823,10 @@ describe('docs/configuration.md — schema coverage', () => {
   })
 
   test('documents every nested [pr.imageHost] field structurally', () => {
-    expectRows(
+    expectFieldBlocks(
       'docs/configuration.md / [pr.imageHost]',
       headingSection(doc, 3, '`[pr.imageHost]`'),
-      Object.keys(imageHostSchema.shape),
+      Object.keys(imageHostSchema.shape).map((key) => `pr.imageHost.${key}`),
     )
   })
 
