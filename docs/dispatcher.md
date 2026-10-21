@@ -31,13 +31,13 @@ State is reduced from events. A snapshot is only a cache that can be regenerated
 
 Running dispatch again recovers actionable current work from durable state. The runner reads the recorded phase, completed boundaries, artifacts, and feedback rather than needing a process or conversation to have survived. A replacement sandbox can resume the same build.
 
-Recovery does not erase a human gate. An unanswered escalation stays parked until an operator records an answer. Pending operator commands and other actionable work can still proceed; restarting the dispatcher does not grant permission or reset an exhausted budget.
+Recovery does not erase a human gate. An unanswered escalation stays parked until you or your agent record an answer. Pending operator commands and other actionable work can still proceed; restarting the dispatcher does not grant permission or reset an exhausted budget.
 
 
-## The operator stays outside
+## The operator agent stays outside
 
-The operator can be a human or an external coding agent acting as orchestrator. It files and grooms tickets, watches builds, answers escalations, and manages landing consent. Locally it uses the CLI; an agent connected over MCP can use the corresponding operator tools.
+Your operator agent is an external coding agent that files and grooms tickets, watches builds, answers escalations, and manages landing consent. You set its direction and handle decisions that need your judgment. Locally your agent uses the CLI; connected over MCP, it can use the corresponding operator tools.
 
-Autobuild does not host or start that orchestrator agent. It runs the build pipeline and exposes durable state and controls for the operator to use. The operator's chat is separate from the build's paper trail.
+Autobuild does not host or start that orchestrator agent. It runs the build pipeline and exposes durable state and controls for your agent to use. Your agent's chat is separate from the build's paper trail.
 
 Read the [architecture map](architecture.md), [operator API reference](operator-api.md), and [integration-tree reference](integration-tree.md) for the process and control boundaries. Follow [one build end to end](builds.md) for the phases inside a runner.
