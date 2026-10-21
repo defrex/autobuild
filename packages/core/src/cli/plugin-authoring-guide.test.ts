@@ -61,6 +61,7 @@ describe('plugin authoring guide', () => {
     ])
     expect(guide).toContain('[`references/plugin-authoring.md`](references/plugin-authoring.md)')
     expect((await lstat(REFERENCE)).isFile()).toBe(true)
+    expect(await readFile(join(DIST_ROOT, 'docs/plugin-authoring.md'), 'utf8')).toBe(reference)
 
     const dualRootGuidance = [
       'Repository-path specifiers resolve from the config-bearing root, which is the immutable build worktree in scoped phases.',
