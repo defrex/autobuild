@@ -145,9 +145,9 @@ do not extend it, and do not cite SPEC §7.1.2 as current design.
 
 ## Self-hosting dispatcher updates
 
-This repository's long-lived dispatcher keeps the code it started with, while
-fresh runners and agents load the repository-root checkout. Restart promptly
-after merges that change the kernel, event catalog, or reducers. Inspect the
+This repository's long-lived dispatcher keeps the code it started with, and
+fresh runners and agent sessions load that generation's immutable cached
+runtime. Restart promptly after merges that change the kernel, event catalog, or reducers. Inspect the
 actual changed files to decide whether a merge needs a restart.
 
 **Maintainers only:** stop the foreground dispatcher with Ctrl-C, or send

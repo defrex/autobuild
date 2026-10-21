@@ -1,3 +1,5 @@
+import { cachedRuntime, validateRuntime } from '../../cli/dispatch-runtime-cache'
+import { dirname } from 'node:path'
 /**
  * The Autobuild distribution archive installed into guests.
  *
@@ -371,6 +373,11 @@ export async function defaultDistributionArchive(
   hasBun: () => boolean = hasBunExecutable,
   fetchImpl: RegistryFetch = registryFetch,
 ): Promise<Uint8Array> {
+  const runtime = await cachedRuntime(distributionRoot())
+  if (runtime) {
+    await validateRuntime(runtime)
+    return new Uint8Array(await readFile(join(dirname(runtime.root), 'distribution.tgz')))
+  }
   const prebuilt = await findPrebuiltDistributionArchive(env)
   if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))
   if (await fileExists(join(distributionRoot(), '.git'))) {
