@@ -2861,7 +2861,10 @@ export class BuildRunner {
     if (handle) {
       try {
         const owner = producer?.[1].runner ?? this.deps.runtimes[started.payload.runner]!.runner
-        const transcript = await this.boundedCleanup(owner.end(handle))
+        const transcript =
+          cause === 'shutdown'
+            ? await owner.end(handle)
+            : await this.boundedCleanup(owner.end(handle))
         content = transcript?.content
         usage = value?.result?.usage ?? (producer ? undefined : transcript?.metadata.usage)
       } catch {

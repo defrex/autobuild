@@ -1653,8 +1653,10 @@ abort: abort returns the ticket to Triage.
 
 Abort accepts queued, running, paused, or blocked builds. A live turn receives a
 cancellation signal and the runner acknowledges the request. Its execution
-supervisor gracefully stops and reaps the complete process tree, force-terminating
-it after the bounded stop delay when necessary, and only then releases the lease.
+supervisor signals the local runner leader and waits for it to finish persistence
+and exit, then reaps remaining descendants with bounded TERM-then-KILL cleanup.
+Only then does it release the lease. Graceful dispatcher shutdown likewise waits
+for runner suspension without a wall-clock force-exit deadline.
 The dispatcher defers cleanup while that lease is live, then performs the
 checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
 delete the exact remote and local build branches, preserve existing ticket labels

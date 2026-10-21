@@ -468,7 +468,7 @@ appends transcriptless reclaimed `session.ended` facts for unrelated open
 sessions before `runner.attached` cites that same boundary. Partial closure is
 retry-safe; historical orphan-only logs keep their
 old projection until an actual takeover records those facts. The supervisor
-rechecks kernel-child liveness at the force boundary
+waits for graceful kernel-child teardown without a force-kill deadline
 and projects the same normal, forced, or abnormal result (with available
 process/error detail) that the repository run-stopped evidence records. Ordinary
 kernel teardown stops and reaps all build groups. Every build-child terminal
@@ -1324,8 +1324,10 @@ SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
 with cause `shutdown`, the native handle, active milliseconds, partial transcript
 and any known incremental usage. A terminal fact that lands first prevents
 suspension; suspension fences the old session's terminal credentials permanently.
-The process supervisor retains its existing bounded force-stop path if provider
-cleanup or persistence cannot complete.
+Graceful shutdown waits for provider cleanup and durable suspension without a
+wall-clock force-exit deadline. Only after the runner leader exits does bounded
+process-group cleanup reap remaining descendants. Abnormal parent loss retains
+the detached reaper recovery path.
 
 On attachment the runner retains an eligible current phase/round session and
 records takeover. Matching host, workspace and runtime permit native resume;

@@ -1563,8 +1563,10 @@ SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
 with cause `shutdown`, the native handle, active milliseconds, partial transcript
 and any known incremental usage. A terminal fact that lands first prevents
 suspension; suspension fences the old session's terminal credentials permanently.
-The process supervisor retains its existing bounded force-stop path if provider
-cleanup or persistence cannot complete.
+Graceful shutdown waits for provider cleanup and durable suspension without a
+wall-clock force-exit deadline. Only after the runner leader exits does bounded
+process-group cleanup reap remaining descendants. Abnormal parent loss retains
+the detached reaper recovery path.
 
 On attachment the runner retains an eligible current phase/round session and
 records takeover. Matching host, workspace and runtime permit native resume;
@@ -2897,8 +2899,10 @@ build-owned Store state. The kernel claims each execution's durable lease before
 launch and releases that exact holder only after completion; the child renews it.
 The lease remains the cross-process recovery and workspace-teardown gate (the
 in-memory guard is deliberately not durable: a dead process's memory disappears
-with it). Ordinary dispatcher shutdown gracefully signals each local process
-group, escalates the whole group after the bounded stop delay, and reaps it.
+with it). Ordinary dispatcher shutdown gracefully signals each local runner leader and
+waits for it to finish suspension and exit. It then reaps remaining descendants
+with bounded TERM-then-KILL process-group cleanup. The frontend waits for kernel
+teardown without a wall-clock force-kill deadline.
 Before every build-child terminal path exits — natural success or failure,
 SIGINT/SIGTERM, or immutable-parent watchdog death — it launches one detached
 group reaper while the leader still pins the group's identity. That owner
