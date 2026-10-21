@@ -239,8 +239,8 @@ describe('dispatch child supervision', () => {
     const supervisor = supervisorFixture(store, child)
 
     const stopping = supervisor.stop()
-    await entered
     child.finish(0)
+    await entered
     releaseRead()
     await stopping
     const result = await supervisor.completed
@@ -254,29 +254,17 @@ describe('dispatch child supervision', () => {
     expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
   })
 
-  test('a stuck child outside a tick is killed once and records one forced stop', async () => {
+  test('a closed tick does not authorize killing a kernel persisting suspension', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')
-    const child = fakeSubprocess((signal) => {
-      if (signal === 'SIGKILL') child.finish(137, 'SIGKILL')
-    })
+    const child = fakeSubprocess()
     const supervisor = supervisorFixture(store, child)
-
-    await supervisor.stop()
-    const result = await supervisor.completed
-
-    const stopped = (await store.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(child.kills).toEqual(['SIGINT', 'SIGKILL'])
-    expect(result).toEqual({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
-    expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toEqual({
-      run: 'run-1',
-      outcome: 'forced',
-      exitCode: 137,
-      signal: 'SIGKILL',
-    })
+    const stopping = supervisor.stop()
+    await Bun.sleep(15)
+    expect(child.kills).toEqual(['SIGINT'])
+    child.finish(0)
+    await stopping
+    expect(await supervisor.completed).toEqual({ outcome: 'normal', exitCode: 0 })
   })
 
   test('timeout never kills an open ticket-claim tick', async () => {
@@ -589,7 +577,7 @@ test('metadata open boundary prevents forced termination without any journal sta
   await stopping
 })
 
-test('finished idle telemetry overrides historical open starts for safe termination', async () => {
+test('finished idle telemetry still waits for suspension', async () => {
   const { emptyTickReport } = await import('../processes/dispatcher')
   const {
     queued,
@@ -614,8 +602,11 @@ test('finished idle telemetry overrides historical open starts for safe terminat
     if (signal === 'SIGKILL') child.finish(137, signal)
   })
   const supervisor = supervisorFixture(store, child)
-  await supervisor.stop()
-  expect(child.kills).toEqual(['SIGINT', 'SIGKILL'])
+  const stopping = supervisor.stop()
+  await Bun.sleep(15)
+  expect(child.kills).toEqual(['SIGINT'])
+  child.finish(0)
+  await stopping
 })
 
 test('failed telemetry read never authorizes forced termination', async () => {

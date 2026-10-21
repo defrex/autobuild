@@ -1,4 +1,5 @@
 import { migrationIdentity, ticketMigrationsReducer } from '../kernel/ticket-migrations'
+import { launchContext } from './dispatch-launch-contract'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
@@ -122,13 +123,13 @@ export interface DispatchFrontendOptions {
  * BuildStore, immutable repository identity, clock, and child supervision. */
 export class DispatchFrontend {
   private readonly standbyResolver: StandbyIdentityResolver
-  private readonly runId = crypto.randomUUID()
+  private readonly runId: string
   private readonly clock: Clock
   private readonly region: LiveRegion
   private readonly keyboard
   private child: DispatchChildHandle | undefined
   private readonly repositoryFeed: DispatchRepositoryFeed
-  private dispatchStatus: DispatchStatus = reduceDispatchStatus([], this.runId)
+  private dispatchStatus: DispatchStatus
   private eventRefreshTail: Promise<void> = Promise.resolve()
   private cache: DashboardBuildPollCache | undefined
   private config: Config | undefined
@@ -157,6 +158,8 @@ export class DispatchFrontend {
   private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
+    this.runId = launchContext(opts.env)?.run ?? crypto.randomUUID()
+    this.dispatchStatus = reduceDispatchStatus([], this.runId)
     this.reader = presentationReader(opts.store, () => this.refresh?.admitted ?? true)
     this.clock = opts.clock ?? systemClock
     this.repositoryFeed = new DispatchRepositoryFeed(this.reader, opts.repo, this.clock)

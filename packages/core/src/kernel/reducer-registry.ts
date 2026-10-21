@@ -1,4 +1,5 @@
 import { ticketMigrationsReducer } from './ticket-migrations'
+import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
@@ -98,6 +99,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     covers: [],
   },
   dispatcherRunFacts: { reducer: dispatcherRunFactsReducer('run-a'), covers: [] },
+  dispatchUpgrade: { reducer: dispatchUpgradeReducer, covers: [] },
   repositoryAttention: { reducer: repositoryAttentionReducer, covers: [] },
   repositoryReadFacts: { reducer: repositoryReadFactsReducer, covers: [] },
   buildStreamSeed: { reducer: buildStreamSeedReducer, covers: [] },
@@ -216,6 +218,7 @@ const repositoryValues = new Set([
   'ticketMigrations',
   'forgeHealthValue',
   'repositoryReadFacts',
+  'dispatchUpgrade',
   'dispatcherRunFacts',
   'repositoryAttention',
   'effectiveConfig',

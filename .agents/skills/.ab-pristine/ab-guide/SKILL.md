@@ -216,7 +216,20 @@ The distinctions that change an administrator's answer:
   dependencies offline into `.autobuild/runtime/`. The generation's frontend,
   kernel, later local runners and agent PATH CLI execute from that immutable
   root. The launcher owns no Store/lease and uses only the versioned v1 process
-  contract; no automatic handoff is implemented, so upgrades require a restart.
+  contract. Automatic upgrades default on: the kernel checks immediately and every
+  60 seconds, resolving a declared Autobuild dependency and Bun lock from the same
+  authoritative base-branch commit. Unpinned repositories reread the original
+  installation pathname, retained across handoffs. Feature branches and checkout
+  pins never choose the target. Preparation validates an exact runtime in isolation;
+  failures retain the current generation and raise repository attention, suppressed
+  for the same input until metadata changes or a fresh operator launch. Cutover
+  suspends all live local build sessions and waits for their durable writes before
+  exiting. Eligible native handles resume; other sessions record a reasoned fresh
+  fallback. Local harvest is interrupted and rerun through existing recovery.
+  A runtime-owned journal reader gives the launcher its own durable handoff;
+  generations run sequentially and completion requires successor ownership.
+  `[upgrade] automatic = false` disables preparation/cutover. Manual restart is
+  required when disabled or when the launcher contract changes.
   Current, distinct previous, held and live-process runtimes survive pruning.
   Cached Bun entries disable auto-install and explicitly pin a neutral compiler
   config. Third-party files remain as installed. `--plain`/non-TTY run directly
@@ -1036,6 +1049,22 @@ repository, so a later publish updates the same PR's head. A publication is a
 repository-journal fact naming the operator, the session, the branch, the
 commit, and the PR; a refused or failed attempt is journaled too.
 
+### `[upgrade]`
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `automatic` | `true` | Check and adopt changed runtime targets automatically. |
+
+`[upgrade] automatic` is a strict boolean, defaults to `true`, and hot-reloads.
+Resident checkout dispatchers check every 60 seconds, independently of tick cadence.
+Exact changed targets can include downgrades. Missing or inconsistent declared-pin
+metadata never falls back to installed mode. Source tracking, overlapping
+generations and rollback are deferred. `--once`, origin/hosted and direct hot
+presentation modes bypass automatic adoption. Operator stop wins over cutover.
+Repository status exposes per-run upgrade target, failure and handoff facts;
+`dispatcher.upgrade-failed` is actionable attention. Unrelated base commits do not
+retry an unchanged failed target. No registry credentials belong in these facts.
+
 ## Setup and upgrades
 
 For 0.x upgrades, first read the [migration reference](references/migration-1.0.md):
@@ -1176,6 +1205,10 @@ cannot snapshot the worktree's Git index, it warns and declines to stage. A
 staging or commit failure restores that exact pre-attempt index and reports the
 original Git failure without touching merged worktree files. The report's
 existing exit code is unchanged; upgrade never pushes or rewrites history.
+With automatic upgrades enabled, pinned dispatchers adopt the changed version
+once the commit reaches the configured base branch. Installed-mode dispatchers
+follow their original installation when its version changes. A skill-only merge
+does not itself change a runtime version.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -1656,8 +1689,10 @@ abort: abort returns the ticket to Triage.
 
 Abort accepts queued, running, paused, or blocked builds. A live turn receives a
 cancellation signal and the runner acknowledges the request. Its execution
-supervisor gracefully stops and reaps the complete process tree, force-terminating
-it after the bounded stop delay when necessary, and only then releases the lease.
+supervisor signals the local runner leader and waits for it to finish persistence
+and exit, then reaps remaining descendants with bounded TERM-then-KILL cleanup.
+Only then does it release the lease. Graceful dispatcher shutdown likewise waits
+for runner suspension without a wall-clock force-exit deadline.
 The dispatcher defers cleanup while that lease is live, then performs the
 checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
 delete the exact remote and local build branches, preserve existing ticket labels
@@ -1913,7 +1948,7 @@ The default watch reports actionable conditions only:
   authorized landings awaiting application are silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,

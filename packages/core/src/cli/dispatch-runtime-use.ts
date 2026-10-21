@@ -277,23 +277,37 @@ export function claimRuntimeForProcess(root: string, extension?: string): void {
   })
 }
 
-export function reservePreparedRuntime(cache: string, id: string): void {
+export function reservePreparedRuntime(cache: string, id: string, owner = process.pid): void {
   locked(cache, (state) => {
-    state.claims[`preparing-${process.pid}-${id}`] = {
+    state.claims[`preparing-${owner}-${id}`] = {
       id,
-      process: { pid: process.pid, start: identity(process.pid), host: localHost },
+      process: { pid: owner, start: identity(owner), host: localHost },
     }
   })
 }
-export function releasePreparedRuntime(root: string): void {
+export function releasePreparedRuntime(root: string, owner = process.pid): void {
   const runtime = ownCachedRuntime(root)
   if (runtime)
     locked(runtime.cache, (state) => {
-      delete state.claims[`preparing-${process.pid}-${runtime.id}`]
+      delete state.claims[`preparing-${owner}-${runtime.id}`]
     })
 }
 
 /** Synchronous, short filesystem mutations only; shared with spawn and prune. */
 export function mutateRuntimeCache<T>(cache: string, operation: () => T): T {
   return locked(cache, operation)
+}
+
+/** Validate and reserve an existing candidate in the same pruning critical section. */
+export function reserveExistingRuntime(root: string): boolean {
+  const cache = dirname(dirname(root))
+  return locked(cache, (state) => {
+    const runtime = ownCachedRuntime(root)
+    if (!runtime || runtime.cache !== cache) return false
+    state.claims[`preparing-${process.pid}-${runtime.id}`] = {
+      id: runtime.id,
+      process: { pid: process.pid, start: identity(process.pid), host: localHost },
+    }
+    return true
+  })
 }

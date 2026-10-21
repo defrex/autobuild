@@ -2203,6 +2203,64 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         }
       }
 
+      test('upgrade handoffs and failures remain run-scoped through reduced reads', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/upgrades'
+          await store.ensureRepo(repo)
+          const identity = {
+            correlation: 'upgrade',
+            run: 'old',
+            lineage: 'launcher',
+            from: {
+              version: '1.0.0',
+              commit: 'unknown',
+              source: { kind: 'package' as const, location: '/old' },
+            },
+            target: {
+              mode: 'pinned' as const,
+              key: 'two',
+              version: '2.0.0',
+              source: 'main',
+              base: 'main',
+              sha: 'a'.repeat(40),
+            },
+          }
+          const handoff = {
+            ...identity,
+            to: { ...identity.from, version: '2.0.0' },
+            root: '/cache',
+            cacheId: 'candidate',
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.upgrade-detected',
+            payload: identity,
+          })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.handoff-started',
+            payload: handoff,
+          })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.upgrade-failed',
+            payload: { ...identity, run: 'foreign', reason: 'registry unavailable' },
+          })
+          const first = (await readRepositoryFacts(store, repo)).value.upgrades
+          expect(first.runs.old?.handoff?.payload).toEqual(handoff)
+          expect(first.runs.old?.completed).toBeUndefined()
+          expect(first.runs.foreign?.failure?.payload.reason).toBe('registry unavailable')
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.handoff-completed',
+            payload: { ...handoff, successor: 'new' },
+          })
+          const next = (await readRepositoryFacts(store, repo)).value.upgrades
+          expect(next.runs.old?.completed?.payload.successor).toBe('new')
+          expect(next.runs.foreign?.failure).toBeDefined()
+        })
+      })
+
       test('latest-only scans stay bounded across scans, runs and repositories', async () => {
         await withStore(factory, undefined, async (store) => {
           for (const repo of ['acme/scans', 'acme/foreign-scans']) await store.ensureRepo(repo)

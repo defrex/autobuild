@@ -34,6 +34,26 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
  * the event types it does not read, so every reducer is fed every corpus and
  * the union of the shapes it reaches is fingerprinted. */
 function corpora(): unknown[][] {
+  const identity = {
+    correlation: 'upgrade',
+    run: 'run-a',
+    lineage: 'launcher',
+    from: { version: '1', commit: 'unknown', source: { kind: 'package', location: '/old' } },
+    target: {
+      mode: 'pinned',
+      key: 'target',
+      version: '2',
+      source: 'main',
+      base: 'main',
+      sha: 'a'.repeat(40),
+    },
+  }
+  const handoff = {
+    ...identity,
+    to: { ...identity.from, version: '2' },
+    root: '/cache',
+    cacheId: 'id',
+  }
   return [
     [
       {
@@ -41,6 +61,29 @@ function corpora(): unknown[][] {
         payload: { identity: 'migration', from: 'linear', to: 'file', mapping: { N: 'NODE' } },
         seq: 1,
       },
+    ],
+    [
+      {
+        type: 'dispatcher.upgrade-detected',
+        seq: 1,
+        ts: '2026-10-21T00:00:00Z',
+        payload: identity,
+      },
+      {
+        type: 'dispatcher.upgrade-failed',
+        seq: 2,
+        ts: '2026-10-21T00:00:01Z',
+        payload: { ...identity, reason: 'unavailable' },
+      },
+      { type: 'dispatcher.handoff-started', seq: 3, ts: '2026-10-21T00:00:02Z', payload: handoff },
+      {
+        type: 'dispatcher.handoff-completed',
+        seq: 4,
+        ts: '2026-10-21T00:00:03Z',
+        payload: { ...handoff, successor: 'run-b' },
+      },
+    ],
+    [
       {
         type: 'runner.attached',
         seq: 1,
@@ -228,6 +271,7 @@ describe('reducer registry', () => {
         "dispatchFrontend": 3,
         "dispatchSettings": 1,
         "dispatchStatus": 3,
+        "dispatchUpgrade": 1,
         "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
         "executionNoProgress": 5,
@@ -258,7 +302,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 22,
+        "repositoryReadFacts": 23,
         "repositoryStateEvents": 5,
         "sandboxStates": 1,
         "session": 1,

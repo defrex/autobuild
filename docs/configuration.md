@@ -223,6 +223,7 @@ These fields hot-reload:
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
+| `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
@@ -2066,5 +2067,53 @@ Resident checkout dispatch runs from an immutable generation snapshot under the
 main checkout's `.autobuild/runtime/` cache. Configuration and plugin selection
 still use the checkout. A launcher freezes the currently installed distribution
 and production dependencies offline; all later local runners and agent CLIs use
-that same snapshot. Upgrades require a restart. `--once`, origin mode and hosted
-cron retain their direct execution paths. This adds no configuration keys.
+that same snapshot. Automatic adoption is enabled by default through `[upgrade]`
+below; a manual restart is required when automatic upgrades are disabled or the
+launcher contract changes. `--once`, origin mode and hosted cron retain their
+direct execution paths.
+
+## `[upgrade]`
+
+`[upgrade]` is a strict, hot-reloaded table:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `automatic` | `true` | Check and adopt changed runtime targets automatically. |
+
+
+<!-- config-fragment -->
+```toml
+[upgrade]
+automatic = true
+```
+
+`automatic` defaults to true, including for older saved configuration. Resident
+checkout dispatchers check immediately and every **60 seconds**, independently
+of ticket scans. A dependency or devDependency declaration of
+`@defrex/autobuild` on the authoritative forge base branch selects **pinned**
+mode. Manifest and `bun.lock` must agree at the same commit. Working-tree pins,
+feature branches and stale tracking refs never select a runtime. Unsupported or
+missing declared-dependency metadata raises attention rather than switching modes.
+Without a declaration, **installed** mode rereads the original installation
+pathname across handoffs. Source commit tracking remains deferred.
+
+An exact changed target, including a downgrade, is prepared in the immutable
+runtime cache without updating the operator's installation. A successful cutover
+settles the open claim tick, suspends every local build session, waits for its
+stream and suspension writes, exits the old generation, then starts the successor.
+Native resume applies where eligible; other sessions record `session.resume-fallback`
+with a reason. Local harvest follows existing clean-stop interruption and rerun
+recovery. Remote supervised runners retain detach/recovery behavior.
+
+Repository status exposes per-run target, handoff and failure details. Upgrade
+failure is repository attention, naming the target and reason. Resolution/install
+failure leaves the running generation active and suppresses the same failed input
+until metadata changes or a fresh operator launch. Unrelated base advances do not
+retry failed installs. Operator stop always wins over replacement startup.
+
+Set `automatic = false` to cancel pending preparation and retain manual restart
+behavior. A launcher contract change also requires a manual restart. `--once`,
+origin/hosted dispatch and direct development presentation modes do not auto-upgrade.
+`ab upgrade` still updates the pin/installation and merges skills locally, commits
+when eligible, and never pushes. Pinned dispatchers follow after that commit
+reaches the base branch; installed-mode dispatchers follow their replaced install.

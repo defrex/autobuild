@@ -118,6 +118,27 @@ const restartRequiredConfigPathsSchema = z
     })
   })
 
+const upgradeTargetSchema = z.strictObject({
+  mode: z.enum(['pinned', 'installed']),
+  key: z.string().min(1),
+  source: z.string().min(1),
+  version: z.string().optional(),
+  base: z.string().optional(),
+  sha: z.string().optional(),
+})
+const upgradeIdentitySchema = z.strictObject({
+  correlation: z.string().min(1),
+  run: dispatchRun,
+  lineage: z.string().min(1),
+  from: runtimeIdentitySchema,
+  target: upgradeTargetSchema,
+})
+const handoffSchema = upgradeIdentitySchema.extend({
+  to: runtimeIdentitySchema,
+  root: z.string().min(1),
+  cacheId: z.string().min(1),
+})
+
 export const harvestEventPayloadSchemas = {
   // Repository-wide operator control. Requests are human commands; paused /
   // resumed are kernel acknowledgements made only at workflow boundaries.
@@ -387,6 +408,10 @@ export const dispatcherStatusEventPayloadSchemas = {
   }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
+  'dispatcher.upgrade-detected': upgradeIdentitySchema,
+  'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
+  'dispatcher.handoff-started': handoffSchema,
+  'dispatcher.handoff-completed': handoffSchema.extend({ successor: dispatchRun }),
   'dispatcher.runtime-recorded': z.strictObject({
     run: dispatchRun,
     startedSeq: z.number().int().positive(),
@@ -675,6 +700,10 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.reset': ['human'],
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
+  'dispatcher.upgrade-detected': ['dispatcher'],
+  'dispatcher.upgrade-failed': ['dispatcher'],
+  'dispatcher.handoff-started': ['dispatcher'],
+  'dispatcher.handoff-completed': ['dispatcher'],
   'dispatcher.runtime-recorded': ['dispatcher'],
   'dispatcher.run-started': ['dispatcher'],
   'dispatcher.stop-requested': ['dispatcher'],
