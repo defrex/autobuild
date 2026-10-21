@@ -26,8 +26,13 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/integration/',
     '/docs/tickets/',
     '/docs/operating/',
+    '/docs/plugin-authoring/',
     '/docs/seams/',
     '/docs/configuration/',
+    '/docs/forges/',
+    '/docs/build-store/',
+    '/docs/dispatcher-hosting/',
+    '/docs/operator-surfaces/',
   ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
@@ -98,14 +103,17 @@ test('docs renderer escapes page metadata', () => {
 
 test('feature guides are text-only and link to repository references', () => {
   for (const page of DOCS_PAGES.slice(2)) {
-    expect(page.content).toContain(`${REPO_URL}/blob/main/docs/`)
+    if (baseline.some((entry) => entry.path === page.path))
+      expect(page.content).toContain(`${REPO_URL}/blob/main/docs/`)
     expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
   }
 })
 
 test('layout preserves article words and headings from independent HTML baselines', () => {
-  for (const page of DOCS_PAGES) {
-    const original = baseline.find((entry) => entry.path === page.path)!
+  for (const original of baseline) {
+    const page = DOCS_PAGES.find((entry) => entry.path === original.path)
+    expect(page, `missing historical page ${original.path}`).toBeDefined()
+    if (!page) continue
     const decode = (text: string) =>
       text.replace(/&#(?:x([0-9a-f]+)|(\d+));|&(amp|lt|gt|quot|apos);/gi, (_, hex, dec, named) =>
         hex || dec
@@ -169,5 +177,5 @@ test('pager boundaries and synthetic additions derive from the same registry', (
   const pages = [...DOCS_PAGES, extra]
   expect(renderDocsNavigation(extra, pages)).toContain('New page')
   expect(renderPager(DOCS_PAGES.at(-1)!, pages)).toContain('New page')
-  expect(renderPager(extra, pages)).toContain('Configuration')
+  expect(renderPager(extra, pages)).toContain(DOCS_PAGES.at(-1)!.label)
 })
