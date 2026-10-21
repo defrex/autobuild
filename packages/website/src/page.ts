@@ -23,19 +23,19 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
 // The same four commands open the page below the hero and close it.
 const startTerminal = `<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'bun ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'bun ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div>`
 
-const hero = `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><a class="btn" href="/docs/">Docs</a></div></div>${startTerminal}</section>`
+const hero = `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p></div>${startTerminal}<div class="actions links"><a class="btn" href="/docs/">Documentation</a><a class="btn ghost" href="${REPO_URL}">GitHub</a></div></section>`
 
-const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}<p><a href="/docs/builds/">Follow one build end to end</a></p>${pipelineDiagram()}</section>`
+const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}${pipelineDiagram()}</section>`
 
-const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}<p><a href="/docs/dispatcher/">Read about the dispatcher</a></p>${dispatcherDiagram()}${dispatcherLegend()}</section>`
+const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}${dispatcherDiagram()}${dispatcherLegend()}</section>`
 
-const integration = `<section class="section">${intro('autobuild · integration', 'Build together, land together', 'Builds land into a node’s branch and sibling work restacks onto its new head. Once the node is complete and verified, it lands into its parent under your landing policy.')}<p><a href="/docs/integration/">Read about the integration tree</a></p>${integrationDiagram()}</section>`
+const integration = `<section class="section">${intro('autobuild · integration', 'Build together, land together', 'Builds land into a node’s branch and sibling work restacks onto its new head. Once the node is complete and verified, it lands into its parent under your landing policy.')}${integrationDiagram()}</section>`
 
-const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}<p><a href="/docs/seams/">Explore the infrastructure seams</a></p></section>`
+const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}</section>`
 
 const throughput = `<section class="section">${intro('autobuild · throughput', 'Built for throughput, not latency', 'One build may take longer than a chat with an agent. The trade is far more changes landing every day, and with much greater reliability.', 'why')}<div class="two"><div class="point"><b>File it and walk away</b><p>Nothing in the pipeline waits on you. You don't approve tool calls, paste errors back, or watch a terminal.</p></div><div class="point"><b>As many builds as you can groom</b><p>Builds run side by side, each in its own workspace, up to the limit you set. Your attention stops being the ceiling.</p></div></div></section>`
 
-const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}<p><a href="/docs/tickets/">Read about tickets and intake</a></p>${intakeDiagram()}</section>`
+const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}${intakeDiagram()}</section>`
 
 const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}${startTerminal}<div class="actions links"><a class="btn" href="/docs/getting-started/">Getting started</a><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
