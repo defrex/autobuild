@@ -29,6 +29,10 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/operating/',
     '/docs/seams/',
     '/docs/configuration/',
+    '/docs/cli/',
+    '/docs/upgrading/',
+    '/docs/troubleshooting/',
+    '/docs/glossary/',
   ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
@@ -105,8 +109,10 @@ test('feature guides are text-only and link to repository references', () => {
 })
 
 test('layout preserves article words and headings from independent HTML baselines', () => {
-  for (const page of DOCS_PAGES) {
-    const original = baseline.find((entry) => entry.path === page.path)!
+  for (const original of baseline) {
+    const page = DOCS_PAGES.find((entry) => entry.path === original.path)
+    expect(page).toBeDefined()
+    if (!page) throw new Error(`Missing baseline page: ${original.path}`)
     const decode = (text: string) =>
       text.replace(/&#(?:x([0-9a-f]+)|(\d+));|&(amp|lt|gt|quot|apos);/gi, (_, hex, dec, named) =>
         hex || dec
@@ -127,6 +133,11 @@ test('layout preserves article words and headings from independent HTML baseline
     ).toEqual(original.code)
     for (const key of ['path', 'label', 'title', 'group', 'description'] as const)
       expect(page[key]).toBe(original[key])
+  }
+})
+
+test('every discovered article preserves rendering, headings, and shared navigation', () => {
+  for (const page of DOCS_PAGES) {
     const html = renderDocsPage(page, DOCS_PAGES)
     const article = html.split('aria-atomic="true"></span>')[1]!.split('</article>')[0]!
     expect(article).toBe(prepareHeadings(page.content).html)
@@ -170,5 +181,5 @@ test('pager boundaries and synthetic additions derive from the same registry', (
   const pages = [...DOCS_PAGES, extra]
   expect(renderDocsNavigation(extra, pages)).toContain('New page')
   expect(renderPager(DOCS_PAGES.at(-1)!, pages)).toContain('New page')
-  expect(renderPager(extra, pages)).toContain('Configuration')
+  expect(renderPager(extra, pages)).toContain(DOCS_PAGES.at(-1)!.label)
 })
