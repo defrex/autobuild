@@ -31,7 +31,7 @@ const DISPATCHER_DESCRIPTION =
   'The dispatcher takes ready tickets and starts one build-runner per ticket. Each runner shows its progress cells, writes through the ab CLI to the build store, and sends phase events to the build store.'
 
 const INTAKE_DESCRIPTION =
-  'Customer support, meetings, telemetry and errors, and build observations all feed the PM agent. The PM agent sends tickets to the autobuild dispatcher. Escalations return from the dispatcher to the PM agent, which answers them itself. The PM agent and you are linked both ways, for only the real product calls.'
+  'Customer support, meetings, telemetry and errors, and build observations all feed the operator agent. It sends tickets to the autobuild dispatcher. Escalations return from the dispatcher to the operator agent, which answers them itself. The operator agent and you are linked both ways, for only the real product calls.'
 
 export function pipelineDiagram(): string {
   const connectors = [
@@ -313,7 +313,7 @@ export function intakeDiagram(): string {
       width: 272,
       height: 112,
       border: COLOR.live,
-      html: `<b style="font-size: 20px; line-height: 28px">PM agent</b><br><span style="color: ${COLOR.live}">persistent memory</span><br><span style="color: ${COLOR.slack}">any agent harness</span>`,
+      html: `<b style="font-size: 20px; line-height: 28px">operator agent</b><br><span style="color: ${COLOR.live}">persistent memory</span><br><span style="color: ${COLOR.slack}">any agent harness</span>`,
     }),
     node({
       left: 848,
@@ -378,7 +378,7 @@ function intakePhone(): string {
       width: 200,
       height: 112,
       border: COLOR.live,
-      html: `<b style="font-size: 20px; line-height: 28px">PM agent</b><br><span style="color: ${COLOR.live}">persistent memory</span><br><span style="color: ${COLOR.slack}">any agent harness</span>`,
+      html: `<b style="font-size: 20px; line-height: 28px">operator agent</b><br><span style="color: ${COLOR.live}">persistent memory</span><br><span style="color: ${COLOR.slack}">any agent harness</span>`,
     }),
     plainNode(270, 208, 88, 48, 'you'),
     node({
