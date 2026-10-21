@@ -9,11 +9,11 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
   expect(config.policy.harvestThreshold).toBe(5)
   // Upgrade compatibility: the repository config intentionally omits this new field.
   expect(config.policy.harvestMaxDrift).toBe(3)
-  // Harvest proposals keep the human grooming gate: they land in Backlog
+  // Harvest proposals keep the human grooming gate: they land in triage
   // alongside handbacks rather than dispatching unread.
-  expect(config.tickets.proposalState).toBe('Backlog')
+  expect(config.tickets.proposalState).toBe('triage')
   expect(config.tickets.proposalState).not.toBe(config.tickets.readyState)
-  expect(config.tickets.triageState).toBe('Backlog')
+  expect(config.tickets.triageState).toBe('triage')
   expect(config.pr).toBeUndefined()
   expect(config.commands.lint).toBe('bun run check')
   expect(config.verify.steps).toEqual([

@@ -1,3 +1,4 @@
+import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { reconcileHead } from '../kernel/reconcile-head'
 /**
  * End-to-end seam tests (SPEC §15.6 walkthroughs as LIVE scenarios, §8.7,
@@ -79,6 +80,7 @@ const HAPPY_PREFIX = [
   'dispatch.comment-posted',
   'target.moved',
   'runner.attached',
+  'runner.runtime-recorded',
   'plan.started',
   'session.started',
   'plan.completed',
@@ -159,6 +161,12 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
 
   const events = await h.events(SLUG)
   expect(typesOf(events)).toEqual(HAPPY_PREFIX)
+  const attached = ofType(events, 'runner.attached')[0]!
+  expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
+    instance: attached.payload.instance,
+    attachedSeq: attached.seq,
+    runtime: RUNTIME_IDENTITY,
+  })
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 
   // Rule-boundary payloads.
@@ -1589,6 +1597,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'dispatch.comment-posted',
     'target.moved',
     'runner.attached',
+    'runner.runtime-recorded',
     'plan.started',
     'session.started',
     'plan.completed',
@@ -1788,6 +1797,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'dispatch.comment-posted',
     'target.moved',
     'runner.attached',
+    'runner.runtime-recorded',
     'plan.started',
     'session.started',
     'plan.completed',
@@ -1856,6 +1866,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   events = await h.events(SLUG)
   expect(typesOf(events).slice(resumedFrom)).toEqual([
     'runner.attached',
+    'runner.runtime-recorded',
     'implement.started', // r4, guidance as authoritative feedback
     'session.started',
     'implement.completed',

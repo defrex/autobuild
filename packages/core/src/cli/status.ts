@@ -1,3 +1,5 @@
+import { buildReadFactsReducer } from '../kernel/read-facts'
+import { formatRuntimeIdentity } from '../events/runtime'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, type TreeProjection } from './dashboard/tree'
@@ -150,6 +152,7 @@ export type BuildDecisionProjection =
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
+  runnerAttaches: import('../kernel/read-facts').RunnerAttach[]
   tree?: TreeProjection
   /** Immutable policy provenance and durable command/native application state. */
   landing?: BuildState['landing']
@@ -303,6 +306,7 @@ export function detail(
     record,
     {
       state: reduceBuild(events),
+      runnerAttaches: buildReadFactsReducer.reduce(events).runnerAttaches,
       log: indexLog(events),
       observations: events
         .filter((event) => event.type === 'observation.recorded')
@@ -319,7 +323,9 @@ export function detail(
 export function detailFromFacts(
   record: BuildRecord,
   facts: Pick<BuildFacts, 'state' | 'open'> &
-    Partial<Pick<BuildFacts, 'log'>> & { observations: BuildState['observations'] },
+    Partial<Pick<BuildFacts, 'log' | 'runnerAttaches'>> & {
+      observations: BuildState['observations']
+    },
   now: Date,
   events?: AbEvent[],
   decision?: BuildDecisionProjection,
@@ -354,6 +360,7 @@ export function detailFromFacts(
     }))
   return {
     ...summary,
+    runnerAttaches: facts.runnerAttaches ?? [],
     ...(facts.log ? { tree: projectTree(record, state, facts.log.restack) } : {}),
     autoMerge: autoMergeDisplay(state),
     ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
@@ -550,6 +557,10 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
 /** Labeled sections, each omitted when absent ("when each is available"). */
 export function renderDetail(d: BuildDetail, now: Date): string[] {
   const lines: string[] = [`build ${d.slug}`]
+  for (const attach of d.runnerAttaches)
+    lines.push(
+      `  runner attach #${attach.seq}: ${attach.instance}; host ${attach.host}; ${attach.ts}; ${formatRuntimeIdentity(attach.runtime)}`,
+    )
   if (d.compatibility)
     lines.push(
       `  newer facts: ${d.compatibility.unknownFacts} (${d.compatibility.decisiveFacts} decisive)`,
