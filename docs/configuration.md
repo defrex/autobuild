@@ -81,7 +81,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
-| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
+| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated signed-in user email allowlist; matching is case-insensitive. |
 | `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
@@ -293,7 +293,7 @@ Autobuild does not install them.
 
 Every configured specifier string must be unique. An exact repeat fails schema
 validation before any plugin resolves or evaluates; the diagnostic identifies
-the repeated value and both list positions and tells the operator to remove or
+the repeated value and both list positions and tells you to remove or
 deduplicate the entry. Distinct specifier strings remain separate declarations.
 Each module must default-export a strict manifest with a plugin name, a semver
 range in `apiVersion`, and optional `ticketSources`, `agentRuntimes`,
@@ -683,7 +683,7 @@ store's supported client window). Immediately
 before every build-child launch, the adapter verifies the
 provisioned absolute Bun executable and every referenced runtime again. A
 failure names the runtime, selecting role/alternate, stage, and provisioning
-field, launches no child, and instructs the operator to fix/reprovision. This
+field, launches no child, and instructs you to fix/reprovision. This
 fails closed for stale marked snapshots. Runtime installation is deliberately
 separate from `[commands].setup`, which starts inside the runner and cannot make
 the runtime available before the first agent session. Branch publication is
@@ -1207,7 +1207,7 @@ Optional. Every field receives its own default. All are positive integers except
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
 | `maxInfrastructureAttempts` | `3` | positive integer | Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
-| `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
+| `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. Your operator agent may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `janitorFailureAttentionSeconds` | `600` | positive integer | Consecutive janitor failure duration before build attention. |
 | `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
@@ -1483,7 +1483,7 @@ restart-classified as a whole.
 | `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
 | `model` | — | nonblank string, required when `enabled = true` | Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential. |
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under (`ORCHESTRATOR_ROUTE_LIMIT_SECONDS`, the same number the operator route pins as `maxDuration`). |
-| `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until the operator answers. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
+| `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until you answer. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
 | `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the default attention set — the build events `ab watch` filters on by default plus the repository-journal events `ab watch` follows) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
 | `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
 
@@ -1675,7 +1675,9 @@ their reasons. The setup agent reads the installed guide reference, derives
 commands and verification from the actual repository, chooses pipeline roles,
 configures ticket workflow and environment-only credentials, arranges suitable
 end-to-end verification (authoring a repository-owned agent verifier when
-needed), and leaves one groomed dispatchable ticket.
+needed), and completes `bun ab init --validate`, fixing failures and reviewing
+warnings. You then start `bun ab dispatch` and open your operator agent with
+`ab-operate` loaded to create, groom, and shepherd the first ticket.
 
 After installation, init reports `autobuild.toml: written|skipped`, counts all
 skill outcomes, names attention-worthy local edits, and prints runtime probe
@@ -1725,7 +1727,7 @@ the default path likewise carries its pre-update Git baseline through that
 handoff. If a replacement child receives the handoff marker without that
 baseline — possible when an older parent launches a newer child — it suppresses
 the entire automatic commit, names the cross-version compatibility reason, and
-leaves all upgrade-owned changes uncommitted for the operator. Skill-upgrade
+leaves all upgrade-owned changes uncommitted for you. Skill-upgrade
 results and the merge-derived exit status remain unchanged. Upgrade likewise
 suppresses the whole commit and names why when any skill or Claude discovery
 path conflicts, an owned path was already dirty, the target is not a Git
@@ -1807,7 +1809,7 @@ lines. A missing or unreadable file is a no-op. Any key already present in the
 real process environment—even an empty string—wins over `.env`.
 
 Variables such as `AB_BUILD`, `AB_PHASE`, `AB_SESSION`, and the harvest-session
-identity tuple are runner-owned ambient authorization. Operators should not
+identity tuple are runner-owned ambient authorization. You should not
 set or copy them into `.env`; the runner stamps them for each session.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
@@ -1820,12 +1822,12 @@ repository's ordinary Git identity, as resolved for a plain `git commit`; the
 landing is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
 resolve that identity, the PR remains open and `ab build status <slug>` names
 `user.name` / `user.email` setup commands; dispatcher ticks retry automatically
-after the operator configures them. A dirty checked-out base does not by itself
+after you configure them. A dirty checked-out base does not by itself
 block the landing: tracked and untracked work on paths untouched by the squash
 survives.
-If the squash would overwrite operator work, the PR remains open, `ab build
+If the squash would overwrite your work, the PR remains open, `ab build
 status <slug>` shows a path-bearing observation, and later dispatcher ticks retry
-automatically after the operator commits, stashes, or discards the collision;
+automatically after you commit, stash, or discard the collision;
 Autobuild never mutates that work. Inspect an open local change with `git diff
 main...ab/<slug>`. It has no review web UI and no image-hosting capability; attached artifacts use
 the existing text-download projection.
