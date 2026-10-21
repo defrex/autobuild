@@ -17,9 +17,6 @@ import { COLOR, esc } from './svg'
  * the state it encodes.
  */
 
-export const HERO_FRAME_DESCRIPTION =
-  'The ab dispatch dashboard showing five builds and a harvest run'
-
 /** Terminal hue → site token. Blue carries no state in the design system, so
  * the ticket id reads in ink, as it does on the web dashboard. */
 const HUE: Record<Foreground, string | undefined> = {
@@ -58,10 +55,4 @@ export function frameText(lines: readonly string[]): string[] {
 export function frameHtml(lines: readonly string[]): string {
   const parsed = parseFrame(lines, WEBSITE_HERO_COLUMNS)
   return parsed.map((line) => line.runs.map(runHtml).join('')).join('\n')
-}
-
-/** The hero figure: the frame in a well that scrolls sideways inside itself
- * on any viewport narrower than its cells. */
-export function heroFrame(text: string): string {
-  return `<div class="scroll" tabindex="0" role="region" aria-label="${esc(HERO_FRAME_DESCRIPTION)}"><pre class="frame">${frameHtml(frameLines(text))}</pre></div>`
 }
