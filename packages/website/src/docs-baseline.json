@@ -57,12 +57,12 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "c5391cc122892184c98abe1842123b5106cb402d1fe628debee7ed844904d688",
+    "textHash": "b068ca3dec52fefa53de4153921a8e61471c5d9dd04d74428f5e3d77913de623",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
       "Resume the work, not the chat",
-      "The operator stays outside"
+      "The operator agent stays outside"
     ],
     "code": []
   },
@@ -142,7 +142,7 @@
     "title": "Working with your operator agent",
     "group": "guides",
     "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
-    "textHash": "354c8dfbf7db623f6dc6a2bd7d792443e1d3dd9e6fe6ef53b0d7d3e6a01163af",
+    "textHash": "fc58259b5a16ef511373949cf73775ffd5f534478057c778182da0b668cdf6da",
     "headings": [
       "Choose a harness",
       "Give the agent memory",

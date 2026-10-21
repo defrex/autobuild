@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { constants } from 'node:fs'
 import { access, readFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
+import { readDistSkills } from '../packages/core/src/cli/init'
 import { loadConfig } from '../packages/core/src/config/load'
 import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
 import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-applicability'
@@ -61,6 +62,7 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
     'dashboard',
     'web-dashboard',
     'website',
+    'docs',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
   expect(config.verify.stepConfigs.postgres).toEqual({
@@ -134,4 +136,59 @@ test('verify-website is an unprefixed repo-local skill with a Claude symlink', a
   )
   const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
   expect(skill).toMatch(/^name: verify-website$/m)
+})
+
+test('docs gate covers product surfaces and excludes repository configuration', async () => {
+  const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
+  const step = config.verify.stepConfigs.docs!
+  const paths = [
+    'packages/core/src/**',
+    'packages/hosted-dispatcher/src/**',
+    'packages/hosted-store-service/src/**',
+    'packages/hosted-store-service/app/**',
+    'packages/postgres-store/src/**',
+    'packages/vercel-sandbox/src/**',
+    'packages/website/**',
+    'bin/**',
+    'skills/**',
+    'templates/**',
+    'SPEC.md',
+    'README.md',
+    'docs/**',
+  ]
+  expect(step).toEqual({ kind: 'agent', skill: 'verify-docs', paths })
+  const rule = { kind: 'paths' as const, step: 'docs', paths }
+  for (const path of paths.map((path) => path.replace('**', 'example.ts'))) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
+    // Deleted paths and both rename sides use the same changed-path evidence.
+    expect(evaluateVerifyApplicability(rule, [path, 'tools/renamed.ts']).applies).toBe(true)
+    expect(evaluateVerifyApplicability(rule, ['tools/old.ts', path]).applies).toBe(true)
+  }
+  for (const path of [
+    'tools/check.ts',
+    'autobuild.toml',
+    'AGENTS.md',
+    '.agents/skills/verify-docs/SKILL.md',
+    '.claude/skills/verify-docs',
+    'packages/web-dashboard-capture/src/index.ts',
+  ]) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
+  }
+  const link = join(REPO_ROOT, '.claude/skills/verify-docs')
+  expect(await realpath(link)).toBe(await realpath(join(REPO_ROOT, '.agents/skills/verify-docs')))
+  const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
+  expect(skill).toMatch(/^name: verify-docs$/m)
+  expect(skill).toMatch(/^disable-model-invocation: true$/m)
+  for (const instruction of [
+    'ab context',
+    'commitRange.base',
+    'commitRange.head',
+    'git diff <base>..<head>',
+    'ab verdict pass --notes .ab/docs-verify-report.md',
+    'ab verdict fail --report .ab/docs-verify-report.md',
+  ])
+    expect(skill).toContain(instruction)
+  expect(
+    (await readDistSkills(REPO_ROOT)).some((skill) => skill.installName === 'verify-docs'),
+  ).toBe(false)
 })
