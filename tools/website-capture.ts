@@ -87,6 +87,16 @@ export function discoverFrames(files: CaptureFiles): WebsiteFrame[] {
           remote: false,
         }))
       : []),
+    ...(Object.hasOwn(files, 'docs/seams/index.html')
+      ? [1440, 390].map((width) => ({
+          id: `docs-seams-remote-${width}`,
+          page: 'docs/seams/index.html',
+          kind: 'docs' as const,
+          motion: 'reduce' as const,
+          width,
+          remote: true,
+        }))
+      : []),
     ...Object.keys(files)
       .filter((p) => p.startsWith('docs/') && p.endsWith('.html'))
       .sort()
