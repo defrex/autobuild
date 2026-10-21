@@ -31,7 +31,7 @@ export async function buildFiles(): Promise<SiteFiles> {
   const [output] = bundle.outputs
   return {
     ...Object.fromEntries(DOCS_PAGES.map((page) => [page.file, renderDocsPage(page)])),
-    'index.html': renderPage({ heroFrame: await heroFrameText() }),
+    'index.html': renderPage(),
     'site.css': await Bun.file(join(SRC, 'styles.css')).text(),
     'site.js': await (output as Bun.BuildArtifact).text(),
     'og.png': new Uint8Array(await Bun.file(join(SRC, 'og.png')).arrayBuffer()),
