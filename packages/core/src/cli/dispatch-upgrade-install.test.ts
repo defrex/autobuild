@@ -204,3 +204,78 @@ test('registry staging receipts still validate URL and integrity values', () => 
     validateUpgradeLockReceipt(authoritative, [...receipt.slice(0, -1), 'sha512-different']),
   ).toThrow('installed integrity contradicts authoritative lock')
 })
+
+test('source installation publishes exact provenance atomically, reuses a validated cache and rejects corruption and abort', async () => {
+  const { sourceCommand, sourceContent } = await import('./dispatch-upgrade-source')
+  const { captureRuntimeIdentity } = await import('../runtime-identity')
+  const root = await mkdtemp(join(tmpdir(), 'ab-source-install-'))
+  const repo = join(root, 'repo')
+  await mkdir(join(repo, 'bin/agent'), { recursive: true })
+  await mkdir(join(repo, 'packages/core/src/cli'), { recursive: true })
+  await writeFile(
+    join(repo, 'package.json'),
+    JSON.stringify({
+      name: '@defrex/autobuild',
+      version: '1.0.0',
+      files: ['bin', 'packages'],
+      bin: 'bin/ab.ts',
+      scripts: { prepare: 'touch MUST-NOT-RUN' },
+      dependencies: { semver: '7.7.4' },
+    }),
+  )
+  await writeFile(join(repo, 'bin/ab.ts'), 'console.log("autobuild 1.0.0")')
+  await writeFile(join(repo, 'bin/agent/ab'), '#!/bin/sh\n')
+  for (const name of [
+    'ab-dispatch-generation.ts',
+    'ab-dispatch-kernel.ts',
+    'ab-build-runner.ts',
+    'ab-harvest-runner.ts',
+    'ab-process-group-reaper.ts',
+  ])
+    await writeFile(
+      join(repo, 'bin', name),
+      name === 'ab-dispatch-generation.ts'
+        ? 'console.log(JSON.stringify({version:1,handoff:null}))'
+        : 'export {}',
+    )
+  await writeFile(
+    join(repo, 'packages/core/src/cli/dispatch-launch-contract.ts'),
+    'export const DISPATCH_LAUNCH_VERSION = 1\n',
+  )
+  await writeFile(join(repo, 'packages/core/src/cli/dispatch-handoff.ts'), 'export {}')
+  await sourceCommand([process.execPath, 'install', '--ignore-scripts'], repo)
+  const git = (...args: string[]) => sourceCommand(['git', ...args], repo)
+  await git('init', '-b', 'main')
+  await git('config', 'user.name', 'Test')
+  await git('config', 'user.email', 'test@example.com')
+  await git('add', 'bin', 'packages', 'package.json', 'bun.lock')
+  await git('commit', '-m', 'source')
+  const sha = (await git('rev-parse', 'HEAD')).trim()
+  const content = await sourceContent(repo, '/source-repository')
+  const target = {
+    mode: 'source' as const,
+    source: '/source-repository',
+    base: 'main',
+    sha,
+    ...content,
+  }
+  const input = { target, checkout: repo, signal: new AbortController().signal, env: process.env }
+  let runtime: Awaited<ReturnType<typeof prepareUpgrade>> | undefined
+  try {
+    runtime = await prepareUpgrade(input)
+    expect(captureRuntimeIdentity(runtime.root).commit).toBe(sha)
+    expect(await Bun.file(join(repo, 'MUST-NOT-RUN')).exists()).toBe(false)
+    const before = await readFile(join(runtime.root, 'package.json'), 'utf8')
+    releasePreparedRuntime(runtime.root)
+    const again = await prepareUpgrade(input)
+    expect(again.root).toBe(runtime.root)
+    expect(await readFile(join(runtime.root, 'package.json'), 'utf8')).toBe(before)
+    releasePreparedRuntime(again.root)
+    await expect(prepareUpgrade({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+    await writeFile(join(runtime.root, 'bin/ab.ts'), 'corrupt')
+    await expect(prepareUpgrade(input)).rejects.toThrow('corrupt completed runtime')
+  } finally {
+    if (runtime) releasePreparedRuntime(runtime.root)
+    await rm(root, { recursive: true, force: true })
+  }
+})

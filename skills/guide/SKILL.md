@@ -218,8 +218,18 @@ The distinctions that change an administrator's answer:
   contract. Automatic upgrades default on: the kernel checks immediately and every
   60 seconds, resolving a declared Autobuild dependency and Bun lock from the same
   authoritative base-branch commit. Unpinned repositories reread the original
-  installation pathname, retained across handoffs. Feature branches and checkout
-  pins never choose the target. Preparation validates an exact runtime in isolation;
+  installation pathname, retained across handoffs. Launching from a source root
+  sharing the dispatched repository's Git common directory selects source mode
+  first; that eligibility and the initial packaged baseline stay frozen across
+  successors. Source mode follows the forge-authoritative base commit, exported
+  into private cache staging with a frozen-lockfile, script-free dependency
+  install. The immutable runtime records the exact commit. Adoption compares
+  actual packaged contents and production-reachable lock records, so same-version
+  changes adopt while excluded-file and unrelated workspace-lock advances do not.
+  Shipped documentation counts as packaged content. The advisory successful
+  target-resolution fact exposes mode/base/SHA independently of the running
+  commit and earlier failures or handoffs; identical polls append nothing.
+  Feature branches and checkout pins never choose the target. Preparation validates an exact runtime in isolation;
   failures retain the current generation and raise repository attention, suppressed
   for the same input until metadata changes or a fresh operator launch. Cutover
   suspends all live local build sessions and waits for their durable writes before
@@ -1055,10 +1065,12 @@ commit, and the PR; a refused or failed attempt is journaled too.
 `[upgrade] automatic` is a strict boolean, defaults to `true`, and hot-reloads.
 Resident checkout dispatchers check every 60 seconds, independently of tick cadence.
 Exact changed targets can include downgrades. Missing or inconsistent declared-pin
-metadata never falls back to installed mode. Source tracking, overlapping
-generations and rollback are deferred. `--once`, origin/hosted and direct hot
+metadata never falls back to installed mode. Self-hosting source launches follow
+the authoritative base commit using packaged-content and production-lock equality,
+without modifying operator or build worktrees. Equal-content advances still record
+the latest resolved target SHA. Overlapping generations and rollback are deferred. `--once`, origin/hosted and direct hot
 presentation modes bypass automatic adoption. Operator stop wins over cutover.
-Repository status exposes per-run upgrade target, failure and handoff facts;
+Repository status exposes per-run resolved target, upgrade, failure and handoff facts;
 `dispatcher.upgrade-failed` is actionable attention. Unrelated base commits do not
 retry an unchanged failed target. No registry credentials belong in these facts.
 
@@ -1204,8 +1216,10 @@ original Git failure without touching merged worktree files. The report's
 existing exit code is unchanged; upgrade never pushes or rewrites history.
 With automatic upgrades enabled, pinned dispatchers adopt the changed version
 once the commit reaches the configured base branch. Installed-mode dispatchers
-follow their original installation when its version changes. A skill-only merge
-does not itself change a runtime version.
+follow their original installation when its version changes. Source-mode
+dispatchers follow packaged changes merged to the base, including canonical skills
+shipped by that distribution, without requiring a version bump. A consuming
+repository's vendored-skill-only merge does not change the installed runtime.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line

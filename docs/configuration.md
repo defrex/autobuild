@@ -2085,7 +2085,20 @@ mode. Manifest and `bun.lock` must agree at the same commit. Working-tree pins,
 feature branches and stale tracking refs never select a runtime. Unsupported or
 missing declared-dependency metadata raises attention rather than switching modes.
 Without a declaration, **installed** mode rereads the original installation
-pathname across handoffs. Source commit tracking remains deferred.
+pathname across handoffs. A launch from a source root sharing the dispatched
+repository's Git common directory selects **source** mode first. The launcher
+freezes that eligibility and the initial packaged-content baseline across
+successors; changing the operator checkout cannot change what a generation runs.
+Source targets use the forge-authoritative base commit. Installation exports that
+exact commit into private cache staging, requires the committed Bun lock, and runs
+`bun install --frozen-lockfile --ignore-scripts --no-progress`. The immutable
+cached distribution records that commit and follows normal cache pruning.
+
+Source equality compares actual packed contents and production-reachable lock
+records, including nested dependencies, rather than version or SHA. An excluded
+RFC, website or test change does not hand off; documentation included by the
+package's files rules does. Unrelated workspace lock records do not trigger an
+upgrade. Unsupported reachable dependency metadata raises attention.
 
 An exact changed target, including a downgrade, is prepared in the immutable
 runtime cache without updating the operator's installation. A successful cutover
@@ -2095,7 +2108,11 @@ Native resume applies where eligible; other sessions record `session.resume-fall
 with a reason. Local harvest follows existing clean-stop interruption and rerun
 recovery. Remote supervised runners retain detach/recovery behavior.
 
-Repository status exposes per-run target, handoff and failure details. Upgrade
+Repository status exposes per-run resolved target, handoff and failure details.
+`dispatcher.upgrade-target-resolved` records the first successful resolution and
+later changed observations, including equal-content advances. Its source mode,
+base and target SHA remain visible separately from the running commit and earlier
+handoff/failure facts. Repeated identical polls append no resolution facts. Upgrade
 failure is repository attention, naming the target and reason. Resolution/install
 failure leaves the running generation active and suppresses the same failed input
 until metadata changes or a fresh operator launch. Unrelated base advances do not
@@ -2107,3 +2124,5 @@ origin/hosted dispatch and direct development presentation modes do not auto-upg
 `ab upgrade` still updates the pin/installation and merges skills locally, commits
 when eligible, and never pushes. Pinned dispatchers follow after that commit
 reaches the base branch; installed-mode dispatchers follow their replaced install.
+Source-mode dispatchers follow changes to packaged inputs merged to the base,
+including shipped canonical skills, without a version bump.
