@@ -811,6 +811,7 @@ function commaList(value: string): string[] {
 }
 
 interface TicketCliOpts extends TicketCommandOpts {
+  signal?: AbortSignal
   /** Required because the `list` subcommand can produce record diagnostics. */
   stderr: (line: string) => void
 }
@@ -834,6 +835,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
           repo,
           dir,
           print: opts.stdout,
+          signal: opts.signal,
         }),
       )
       return
