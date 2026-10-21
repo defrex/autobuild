@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, symlink, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -260,4 +261,52 @@ exec "$AB_TEST_REAL_BUN" "$@"
   })
   const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
   expect(code, stderr).toBe(0)
+}, 30000)
+
+test('a separate pruner cannot cross a spawn boundary before its live claim is published', async () => {
+  const { source, checkout } = await fixture()
+  const old = await prepareRuntime(source, checkout)
+  activateRuntime(old.root)
+  await file(join(source, 'packages/core/src/value.ts'), 'next')
+  const next = await prepareRuntime(source, checkout)
+  activateRuntime(next.root)
+  await file(join(source, 'packages/core/src/value.ts'), 'current')
+  const current = await prepareRuntime(source, checkout)
+  activateRuntime(current.root)
+  for (const runtime of [old, next, current]) releasePreparedRuntime(runtime.root)
+  const ready = join(checkout, 'pruner-ready')
+  const script = `import {writeFileSync} from 'node:fs'; import {pruneRuntimes} from ${JSON.stringify(join(import.meta.dir, 'dispatch-runtime-use.ts'))}; writeFileSync(${JSON.stringify(ready)},'ready'); pruneRuntimes(${JSON.stringify(dirname(dirname(old.root)))});`
+  let pruner: ReturnType<typeof Bun.spawn> | undefined
+  const use = spawnUsingRuntime(old.root, () => {
+    // This callback executes under the pruning lock. The second process reaches
+    // its barrier before the child exists; no timing-based scheduling is needed.
+    pruner = Bun.spawn([process.execPath, '--no-install', '--eval', script], {
+      cwd: checkout,
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
+    const deadline = Date.now() + 10000
+    while (!existsSync(ready)) {
+      if (Date.now() > deadline) throw new Error('pruner failed to reach spawn barrier')
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+    return Bun.spawn([process.execPath, '-e', 'setInterval(()=>{},1000)'], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
+  })
+  try {
+    expect(await pruner!.exited).toBe(0)
+    await validateRuntime(old)
+  } finally {
+    use.child.kill()
+    await use.child.exited
+    use.release()
+    if (pruner?.exitCode === null) {
+      pruner.kill()
+      await pruner.exited
+    }
+  }
+  pruneRuntimes(dirname(dirname(old.root)))
+  await expect(validateRuntime(old)).rejects.toThrow()
 }, 30000)
