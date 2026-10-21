@@ -368,9 +368,11 @@ test('website applicability includes all website inputs and capture tooling', as
 
 test('real built docs are discovered at desktop and phone widths', async () => {
   const frames = discoverFrames({ ...(await buildFiles()) }).filter(
-    (frame) => frame.kind === 'docs' && !frame.id.startsWith('docs-builds-'),
+    (frame) => frame.kind === 'docs' && !frame.id.startsWith('docs-builds-') && !frame.remote,
   )
   expect(frames.map((frame) => [frame.page, frame.width])).toEqual([
+    ['docs/agent-runtimes/index.html', 1440],
+    ['docs/agent-runtimes/index.html', 390],
     ['docs/build-store/index.html', 1440],
     ['docs/build-store/index.html', 390],
     ['docs/builds/index.html', 1440],
@@ -399,10 +401,14 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     ['docs/seams/index.html', 390],
     ['docs/skills/index.html', 1440],
     ['docs/skills/index.html', 390],
+    ['docs/ticket-sources/index.html', 1440],
+    ['docs/ticket-sources/index.html', 390],
     ['docs/tickets/index.html', 1440],
     ['docs/tickets/index.html', 390],
     ['docs/verification/index.html', 1440],
     ['docs/verification/index.html', 390],
+    ['docs/workspaces/index.html', 1440],
+    ['docs/workspaces/index.html', 390],
   ])
 })
 
@@ -563,3 +569,15 @@ test('new Markdown page flows through output, navigation, pager and both real ca
     await rm(root, { recursive: true, force: true })
   }
 }, 120_000)
+
+test('seams overview captures the remote interaction at both widths', async () => {
+  const frames = discoverFrames({ ...(await buildFiles()) })
+  expect(
+    frames
+      .filter((frame) => frame.kind === 'docs' && frame.remote)
+      .map((frame) => [frame.page, frame.width]),
+  ).toEqual([
+    ['docs/seams/index.html', 1440],
+    ['docs/seams/index.html', 390],
+  ])
+})

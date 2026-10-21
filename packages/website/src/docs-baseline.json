@@ -87,7 +87,7 @@
     "title": "Tickets are the interface",
     "group": "concepts",
     "description": "Choose a ticket source, groom buildable specs, and admit proposed work through the ready gate.",
-    "textHash": "16cb49ba0309b7152420da37284cd001443ea35b859a695d3ccb5899e32a2232",
+    "textHash": "c90fb3262d3ca7f5bde8dc0610c5d484a6766a30fe1645033260c3ad3f2b69d0",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -167,7 +167,7 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "0ee3ea8e524764d65989a059b3d43db84cd280354753dc0cb3b663353acbc77b",
+    "textHash": "820d9cd9a77d9bedf5886575b855319614cd03b1bbf3c7c2910060b906514b78",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",
