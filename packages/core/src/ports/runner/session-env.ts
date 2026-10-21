@@ -25,6 +25,7 @@ export function sessionEnv(
   delete env.AB_TICKET_URL
   delete env.AB_TOKEN
   Object.assign(env, scoped)
+  delete env.AB_DISPATCH_GENERATION
 
   const inheritedPath = env.PATH
   const inheritedEntries =

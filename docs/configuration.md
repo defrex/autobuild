@@ -2051,3 +2051,10 @@ execution and unchanged-base progress budgets retain their existing accounting.
 
 Default `ab watch` and `ab wait --for attention` include
 `phase.deferral-escalated`; explicit event filters replace the default set.
+
+Resident checkout dispatch runs from an immutable generation snapshot under the
+main checkout's `.autobuild/runtime/` cache. Configuration and plugin selection
+still use the checkout. A launcher freezes the currently installed distribution
+and production dependencies offline; all later local runners and agent CLIs use
+that same snapshot. Upgrades require a restart. `--once`, origin mode and hosted
+cron retain their direct execution paths. This adds no configuration keys.

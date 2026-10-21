@@ -1,3 +1,4 @@
+import { snapshotPlugin } from './runtime-snapshot'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -241,7 +242,9 @@ export async function attemptPlugin(
   const located = { ...initial, resolved, ...(resolvedFrom !== undefined ? { resolvedFrom } : {}) }
   let namespace: Record<string, unknown>
   try {
-    namespace = (await import(importUrl(resolved))) as Record<string, unknown>
+    namespace = (await import(
+      importUrl(await snapshotPlugin(resolved, resolutionKind === 'repo-path'))
+    )) as Record<string, unknown>
   } catch (error) {
     return failed(
       located,

@@ -1,3 +1,6 @@
+import { bunRuntimeArguments } from '../cli/runtime-spawn'
+import { spawnUsingRuntime } from '../cli/dispatch-runtime-use'
+import { distributionRoot } from '../distribution'
 import { distributionPath } from '../distribution'
 import { DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS } from './process-group'
 
@@ -20,16 +23,20 @@ export function launchProcessGroupReaper(
   options: ProcessGroupReaperOptions,
   spawn: typeof Bun.spawn = Bun.spawn,
 ): number {
-  const child = spawn([process.execPath, distributionPath('bin', 'ab-process-group-reaper.ts')], {
-    env: {
-      ...process.env,
-      [PROCESS_GROUP_REAPER_OPTIONS_ENV]: JSON.stringify(options),
-    },
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-    detached: true,
-  })
+  const { child, release } = spawnUsingRuntime(distributionRoot(), () =>
+    spawn(bunRuntimeArguments(distributionPath('bin', 'ab-process-group-reaper.ts')), {
+      env: {
+        ...process.env,
+        AB_DISPATCH_GENERATION: undefined,
+        [PROCESS_GROUP_REAPER_OPTIONS_ENV]: JSON.stringify(options),
+      },
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+      detached: true,
+    }),
+  )
+  void child.exited.finally(release)
   child.unref()
   return child.pid
 }
