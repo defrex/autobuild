@@ -1,3 +1,4 @@
+import { runtimeIdentitySchema } from './runtime'
 import { nativeSessionHandleSchema } from './native-session'
 /**
  * The event vocabulary (SPEC §15.3), frozen as schemas — this closes open
@@ -518,6 +519,11 @@ export const eventPayloadSchemas = {
     }),
   }),
   'build.completed': z.strictObject({ outcome: buildOutcomeSchema }),
+  'runner.runtime-recorded': z.strictObject({
+    instance: z.string().min(1),
+    attachedSeq: z.number().int().positive(),
+    runtime: runtimeIdentitySchema,
+  }),
   'runner.attached': z.strictObject({
     instance: z.string().min(1),
     host: z.string().min(1),

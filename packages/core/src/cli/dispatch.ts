@@ -1,5 +1,5 @@
 import { migrationIdentity } from '../kernel/ticket-migrations'
-import { formatDispatcherError } from '../runtime-identity'
+import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
 import { guardForge } from '../kernel/guarded-forge'
@@ -4508,7 +4508,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     })
   }
 
-  await view.appendRepoWithArtifacts(
+  const started = await view.appendRepoWithArtifacts(
     state.repo,
     [
       {
@@ -4534,8 +4534,14 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     },
   )
 
-  const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
   try {
+    await view.appendRepo(state.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.runtime-recorded',
+      payload: { run: runId, startedSeq: started.event.seq, runtime: RUNTIME_IDENTITY },
+    })
+
+    const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
     await loop.run()
     const stopRequest =
       resolvedOpts.kernelRunId && resolvedOpts.signal?.aborted

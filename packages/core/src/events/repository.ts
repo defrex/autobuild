@@ -1,3 +1,4 @@
+import { runtimeIdentitySchema } from './runtime'
 import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
 import { hardReadinessKeys } from '../ports/forge/readiness'
 /**
@@ -386,6 +387,11 @@ export const dispatcherStatusEventPayloadSchemas = {
   }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
+  'dispatcher.runtime-recorded': z.strictObject({
+    run: dispatchRun,
+    startedSeq: z.number().int().positive(),
+    runtime: runtimeIdentitySchema,
+  }),
   'dispatcher.run-started': z.strictObject({
     run: dispatchRun,
     pid: z.number().int().positive(),
@@ -669,6 +675,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.reset': ['human'],
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
+  'dispatcher.runtime-recorded': ['dispatcher'],
   'dispatcher.run-started': ['dispatcher'],
   'dispatcher.stop-requested': ['dispatcher'],
   'dispatcher.run-stopped': ['dispatcher'],

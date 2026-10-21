@@ -701,5 +701,9 @@
   "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/readFrame::reduce": {
     "kind": "reduction",
     "reason": "Pure frontend presentation fold over the cursor-bounded retained repository feed, which persists its own snapshot and includes durable migration facts; no additional Store read or kernel state decision."
+  },
+  "packages/core/src/cli/status.ts::detail::reduce": {
+    "kind": "reduction",
+    "reason": "Pure whole-log build-detail reference projection, shared with persisted attach history; production status uses detailFromFacts and persisted reduced reads."
   }
 }

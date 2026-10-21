@@ -1786,7 +1786,8 @@ object including the canonical `repo`, and `--store` follows the usual explicit
 flag > `AB_STORE` > `[store] url` >
 repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
-and starts no dispatcher work.
+and starts no dispatcher work. Dispatcher identity includes the held run’s recorded
+runtime; historical starts without metadata display `runtime unrecorded`.
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
@@ -1810,6 +1811,10 @@ or `--all` before concluding a build doesn't exist.
 **`ab build status <slug>`** details one build: unresolved escalations, open
 sessions, chronological durable observations, verify progress for the current
 cycle, PR lifecycle, latest event, durable progress age, heartbeat, and lease.
+Every runner attach appears chronologically with its recorded runtime (version,
+commit, source kind/location), or `runtime unrecorded` for historical attaches;
+JSON exposes nullable runtime in `runnerAttaches`. Phases belong to the preceding
+attach boundary.
 For an open PR, the current work-owner decision reads the build-owned
 configuration from the store's deposited `build-runner-effective-config`
 artifact — deposited at every runner launch and refreshed on effective-config
@@ -1955,7 +1960,8 @@ cursor from a different repository or store is rejected.
 
 Dispatcher liveness is also visible through `ab repository status --json`:
 `dispatcher.holder` identifies the unexpired repository lease owner, independently
-of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
+of `latestRun`. Each run includes its recorded `runtime` (version, commit, and
+source kind/location), or null for unrecorded historical starts. Heartbeat age measures attributable renewals; tick age measures
 actual tick completion. Successful unchanged ticks leave no journal pair; bounded,
 lease-fenced repository telemetry still records each actual completion and its
 outcome. Last-tick age refreshes independently of the event cursor and never uses

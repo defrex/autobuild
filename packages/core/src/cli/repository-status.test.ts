@@ -554,3 +554,42 @@ test('repository status renders available outcome categories on failed tick tele
     'forge requests: 5; REST primary 1; REST 304 2; GraphQL 1 (5 unattributed)',
   )
 })
+
+test('human and JSON repository status expose the held runtime and legacy unrecorded state', async () => {
+  const clock = () => new Date('2026-10-21T12:00:00Z')
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  const start = await store.appendRepo(REPO, {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'owner',
+      pid: 123,
+      host: 'host',
+      effectiveConfig: { kind: 'config', rev: 0 },
+      roleWarnings: [],
+    },
+  })
+  await store.claimRepoLease(REPO, 'owner', 60000)
+  const legacy = options(store, { now: clock })
+  await abRepositoryStatus(legacy)
+  expect(legacy.output.join('\n')).toContain('runtime unrecorded')
+  const runtime = {
+    version: '1.0.0',
+    commit: 'a'.repeat(40),
+    source: { kind: 'source' as const, location: '/distribution' },
+  }
+  await store.appendRepo(REPO, {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.runtime-recorded',
+    payload: { run: 'owner', startedSeq: start.seq, runtime },
+  })
+  const human = options(store, { now: clock })
+  await abRepositoryStatus(human)
+  expect(human.output.join('\n')).toContain(
+    `autobuild 1.0.0; commit ${runtime.commit}; source /distribution`,
+  )
+  const json = options(store, { now: clock, json: true })
+  await abRepositoryStatus(json)
+  expect(JSON.parse(json.output.join('\n')).dispatcher.holder.runtime).toEqual(runtime)
+})

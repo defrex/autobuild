@@ -1,4 +1,5 @@
 import { reportIntegrationFailures } from '../kernel/integration-attention'
+import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { hostname } from 'node:os'
@@ -936,7 +937,7 @@ export class BuildRunner {
         },
       } satisfies EventWrite<'session.ended'>)
     }
-    await store.append(slug, {
+    const attached = await store.append(slug, {
       actor: KERNEL,
       type: 'runner.attached',
       payload: {
@@ -945,6 +946,11 @@ export class BuildRunner {
         ...(resumedFromSeq > 0 ? { resumedFromSeq } : {}),
       },
     } satisfies EventWrite<'runner.attached'>)
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.runtime-recorded',
+      payload: { instance, attachedSeq: attached.seq, runtime: RUNTIME_IDENTITY },
+    })
   }
 
   /**
