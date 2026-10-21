@@ -415,3 +415,20 @@ Maintainer design decisions, made interactively on the integration branch:
 by the terminal, so the copy comparison needs no hero exclusion. The four
 landing references were refreshed from this capture.
 
+## Hero actions below the commands; no inline docs links (2026-10-21)
+
+Maintainer design decisions, made interactively on the integration branch:
+
+- **Hero order.** Headline, lead, the getting-started terminal, then the
+  actions. That's the same shape as the closing section.
+- **Two hero actions.** An outlined "Documentation" button to `/docs/`, then
+  a ghost "GitHub" button to the repository. The ghost button keeps the
+  `.btn` box with a transparent 2px border, sets its label in `slack`, and
+  turns `live` on hover. This supersedes the single Docs action above.
+- **No inline docs links.** The pipeline, dispatcher, integration, seams and
+  intake sections no longer end in a text link to their guide. The masthead
+  and the hero carry the way into the docs.
+
+`reference.html` carries the same hero order and buttons. The four landing
+references were refreshed from this capture.
+
