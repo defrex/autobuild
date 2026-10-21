@@ -47,7 +47,7 @@ copies. Edit docs first and synchronize all three guide copies in the same
 commit. Publication metadata is part of those bytes; guide-only references do
 not need a public counterpart.
 
-The hero is the real `ab dispatch` dashboard: `packages/website/src/hero-frame.txt` holds the exact colored lines the terminal dashboard painted for the scripted `website-hero` capture, and the page renders them as preformatted HTML with each terminal color mapped to its design token. `bun run capture:website-hero` regenerates the file from the capture, and `bun run check` fails when it is stale.
+The hero opens on the getting-started commands: the headline and lead, then the install, `ab init`, `ab dispatch` and `/ab-spec` command block that the page repeats in its closing section, then the Documentation and GitHub links. The homepage no longer renders a dashboard frame. `packages/website/src/hero-frame.txt` still holds the exact colored lines the terminal dashboard painted for the scripted `website-hero` capture, and it now backs only the Open Graph card below. `bun run capture:website-hero` regenerates the file from the capture, and `bun run check` fails when it is stale.
 
 Shared links preview through Open Graph and Twitter card tags in each page head, pointing at `og.png`, a 1200×630 card drawn from the same frame in the site's own styles. `bun run capture:website-og` screenshots it with a local Chromium into `packages/website/src/og.png`; rerun it after changing the headline, the hero frame, or the styles, and look at the result, since font rasterization differs between machines and nothing checks the bytes. The canonical origin every absolute URL is built from is `SITE_URL` in `packages/website/src/constants.ts`.
 
