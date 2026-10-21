@@ -1063,7 +1063,10 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   steps, independently chooses pipeline role runtimes/models, configures the
   ticket source and environment-only credentials, arranges repository-specific
   end-to-end verification (authoring a repository-owned agent verifier when
-  judgment is warranted), and files one groomed dispatchable ticket.
+  judgment is warranted), and completes `bun ab init --validate`, fixing failures
+  and reviewing warnings. The human then starts `bun ab dispatch` and opens
+  their operator agent with `ab-operate` to create, groom, and shepherd the
+  first ticket.
 - It never overwrites config once the file exists, even with `--force`; a rerun
   launches or prints a prompt that asks the agent to review and improve it.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
