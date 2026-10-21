@@ -60,10 +60,10 @@ test('native plugin closures share frozen SDK values across ESM, CJS, delayed im
         if(value.PluginApiCompatibilityError !== core.PluginApiCompatibilityError || value.VERCEL_SANDBOX_CAPABILITIES !== core.VERCEL_SANDBOX_CAPABILITIES) throw new Error('duplicate core identity');
       }
       if(!p.helper.path.startsWith(${JSON.stringify(runtime.root)}) || p.asset !== 'copied asset' || copied === ${JSON.stringify(entry)}) throw new Error('mutable filename or lost asset');
-      const vercel=await snapshotPlugin(${JSON.stringify(join(distributionRoot(), 'packages/vercel-sandbox/src/index.ts'))},false);
+      const vercel=await snapshotPlugin(${JSON.stringify(Bun.resolveSync('@defrex/autobuild-vercel-sandbox', distributionRoot()))},false);
       const v=await import(vercel);
       if(v.default.workspaceProviders['vercel-sandbox'].capabilities !== core.VERCEL_SANDBOX_CAPABILITIES) throw new Error('shipped plugin identity');
-      const postgres=await snapshotPlugin(${JSON.stringify(join(distributionRoot(), 'packages/postgres-store/src/index.ts'))},false);
+      const postgres=await snapshotPlugin(${JSON.stringify(Bun.resolveSync('@defrex/autobuild-postgres-store', distributionRoot()))},false);
       if(typeof (await import(postgres)).PostgresBuildStore !== 'function') throw new Error('postgres missing');
       for(const [base,name] of [[vercel,'@vercel/sandbox'],[postgres,'@vercel/blob'],[postgres,'@aws-sdk/client-s3']]) {
         const path=Bun.resolveSync(name,base.slice(0,base.lastIndexOf('/')));
