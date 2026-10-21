@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "6adcca29edd5a4544891be042fc3df2b7817cbea22d41f80a6a0a3cf9af8f70c",
+    "textHash": "5a901644eb45fb7a5fca772dfff3a2a95436066b982192719cd4dac6863dc983",
     "headings": [
       "From a ticket to a change",
       "Agents judge; code moves the build",
@@ -197,7 +197,7 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "98f7ad2652731c4b859c5ef5ae3bfa243ee78378bb3328a58b680a6167f219d7",
+    "textHash": "ca38a90f3f3129ec2e4453f3ea8a31e9b1f028f40d6404ef08d25489f51fef19",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",
