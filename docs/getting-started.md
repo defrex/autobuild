@@ -58,6 +58,6 @@ bun ab dispatch
 
 The dispatcher claims ready work and shows a live dashboard. The README quickstart starts dispatch before grooming; either order works because the dispatcher claims ready tickets as they arrive.
 
-Each claimed work ticket gets an isolated build and moves through planning, review, implementation, verification, and PR creation. Watch the build's recorded state. When it escalates, an operator must answer the question before it can continue. Merge still follows the configured landing policy and gates.
+Each claimed work ticket gets an isolated build and moves through planning, review, implementation, verification, and PR creation. Watch the build's recorded state. When it escalates, your operator agent must record an answer to the question before it can continue. Merge still follows the configured landing policy and gates.
 
 For deeper reference, read the [configuration reference](configuration.md), [architecture map](architecture.md), and [design specification](../SPEC.md). Return to the [overview](overview.md) for the lifecycle and its limits.

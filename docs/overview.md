@@ -43,11 +43,11 @@ Autobuild fits repositories where work can be described as clear tickets and che
 
 It favors throughput over the latency of one change: independent builds can run side by side, while each still pays for planning, review, and verification. A small edit that needs an immediate answer may be better handled directly in your coding agent.
 
-It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove the operator's responsibility.
+It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove your responsibility.
 
 
 ## Using these docs
 
-Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), [tickets](tickets.md), and [Skills](skills.md) for editable agent defaults, plus [Operating](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references.
+Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), [tickets](tickets.md), and [Skills](skills.md) for editable agent defaults, plus [Operating](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references. Consult [CLI](cli.md), [Upgrading](upgrading.md), [Troubleshooting](troubleshooting.md), and the [Glossary](glossary.md) for reference.
 
 The [configuration reference](configuration.md) describes what you configure. The [spec standard](spec-standard.md) defines a buildable ticket.
