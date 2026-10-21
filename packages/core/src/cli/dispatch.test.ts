@@ -11634,7 +11634,17 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
       }),
     ).rejects.toThrow('runtime metadata unavailable')
     const events = await fx.store.getRepoEvents(fx.origin)
-    expect(events.filter((e) => e.type === 'dispatcher.run-started')).toHaveLength(1)
+    const starts = events.filter((e) => e.type === 'dispatcher.run-started')
+    expect(starts).toHaveLength(1)
+    const stops = events.filter((e) => e.type === 'dispatcher.run-stopped')
+    expect(stops).toHaveLength(1)
+    expect(stops[0]?.payload).toEqual({
+      run: starts[0]!.payload.run,
+      outcome: 'abnormal',
+      exitCode: 1,
+      error: 'runtime metadata unavailable',
+    })
+    expect(events.filter((e) => e.type === 'dispatcher.runtime-recorded')).toHaveLength(0)
     expect(events.filter((e) => e.type === 'dispatcher.tick-started')).toHaveLength(0)
     expect(await fx.store.listBuilds()).toHaveLength(0)
   } finally {

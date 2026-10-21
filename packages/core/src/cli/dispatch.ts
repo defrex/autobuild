@@ -4529,14 +4529,14 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     },
   )
 
-  await view.appendRepo(state.repo, {
-    actor: DISPATCHER,
-    type: 'dispatcher.runtime-recorded',
-    payload: { run: runId, startedSeq: started.event.seq, runtime: RUNTIME_IDENTITY },
-  })
-
-  const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
   try {
+    await view.appendRepo(state.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.runtime-recorded',
+      payload: { run: runId, startedSeq: started.event.seq, runtime: RUNTIME_IDENTITY },
+    })
+
+    const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
     await loop.run()
     const stopRequest =
       resolvedOpts.kernelRunId && resolvedOpts.signal?.aborted
