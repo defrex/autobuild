@@ -9,7 +9,7 @@ const REPO_ROOT = join(import.meta.dir, '..')
 export const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, '.ab', 'website-frames')
 
 /** Tallest page the capture will screenshot. */
-export const MAX_PAGE_HEIGHT = 12_000
+export const MAX_PAGE_HEIGHT = 32_768
 const ATTEMPTS = 2
 
 export type CaptureFiles = Record<string, string | Uint8Array<ArrayBuffer>> & {
@@ -807,7 +807,12 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
       if (problems.length > 0) {
         throw new Error(`website capture ${frame.id}: ${problems.join('; ')}`)
       }
-      const height = frame.viewportHeight ?? Math.min(probe.scrollHeight, MAX_PAGE_HEIGHT)
+      if (!frame.viewportHeight && probe.scrollHeight > MAX_PAGE_HEIGHT) {
+        throw new Error(
+          `website capture ${frame.id}: page height ${probe.scrollHeight}px exceeds complete capture limit ${MAX_PAGE_HEIGHT}px`,
+        )
+      }
+      const height = frame.viewportHeight ?? probe.scrollHeight
       const png = join(outputDir, `${frame.id}.png`)
       await attempt(`${frame.id} screenshot`, async (n) => {
         await rm(png, { force: true })
