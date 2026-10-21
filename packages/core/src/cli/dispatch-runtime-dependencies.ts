@@ -275,21 +275,15 @@ export async function standalonePluginManifest(
       const base = resolve(dirname(file), path)
       if (!inside(boundary, base))
         throw new Error(`standalone plugin import escapes its directory: ${file}: ${path}`)
-      for (const candidate of [
-        base,
-        ...['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '/index.ts', '/index.js'].map(
-          (suffix) => base + suffix,
-        ),
-      ]) {
-        try {
-          if ((await lstat(candidate)).isFile()) {
-            await visit(candidate)
-            break
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        }
+      let resolved: string
+      try {
+        // Relative-only resolution stays offline and follows Bun's native
+        // extension substitutions and directory entry rules without loading code.
+        resolved = Bun.resolveSync(path, dirname(file))
+      } catch (cause) {
+        throw new Error(`cannot resolve standalone plugin import: ${file}: ${path}`, { cause })
       }
+      await visit(resolved)
     }
   }
   await visit(entry)

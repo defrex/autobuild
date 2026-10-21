@@ -225,6 +225,44 @@ test('standalone plugins infer literal native edges without importing consumer c
   })
 })
 
+test('standalone closure follows native suffix substitutions and every supported directory index', async () => {
+  const source = await temp()
+  const edges = [
+    ['js-ts.js', 'js-ts.ts'],
+    ['js-tsx.js', 'js-tsx.tsx'],
+    ['jsx-ts.jsx', 'jsx-ts.ts'],
+    ['jsx-tsx.jsx', 'jsx-tsx.tsx'],
+    ['esm.mjs', 'esm.mts'],
+    ['common.cjs', 'common.cts'],
+    ...['ts', 'tsx', 'js', 'jsx', 'mts', 'cts', 'mjs', 'cjs'].map((extension) => [
+      `directory-${extension}`,
+      `directory-${extension}/index.${extension}`,
+    ]),
+    ['exact.js', 'exact.js'],
+  ]
+  for (const [, target] of edges)
+    await file(join(source, target!), 'throw new Error("never evaluate while scanning")')
+  await file(join(source, 'exact.ts'), 'throw new Error("must not select over exact.js")')
+  const entry = join(source, 'plugin.ts')
+  await file(entry, edges.map(([specifier]) => `import './${specifier}'`).join('\n'))
+  const files = new Set<string>()
+  await standalonePluginManifest(entry, source, files)
+  expect([...files].sort()).toEqual(
+    [entry, ...edges.map(([, target]) => join(source, target!))].sort(),
+  )
+})
+
+test('standalone closure rejects missing relative imports with importer and specifier', async () => {
+  const source = await temp()
+  const entry = join(source, 'plugin.ts')
+  const helper = join(source, 'lib/helper.ts')
+  await file(entry, "export * from './lib/helper.js'")
+  await file(helper, "export * from './missing.js'")
+  await expect(standalonePluginManifest(entry, source)).rejects.toThrow(
+    `cannot resolve standalone plugin import: ${helper}: ./missing.js`,
+  )
+})
+
 test('first preparation, reuse and code edits work with installs forbidden and an unreachable registry', async () => {
   const { source, checkout } = await fixture()
   const commands = join(await temp(), 'commands')

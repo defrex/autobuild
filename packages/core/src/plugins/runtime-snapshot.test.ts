@@ -113,24 +113,40 @@ test('root repo modules copy only reached files and dependencies and reclaim dea
     await writeFile(join(repo, 'unrelated.txt'), 'unrelated bytes')
     const { symlink } = await import('node:fs/promises')
     await symlink('/outside-consumer', join(repo, 'unrelated-link'))
+    await mkdir(join(repo, 'node_modules/@defrex'), { recursive: true })
+    await symlink(distributionRoot(), join(repo, 'node_modules/@defrex/autobuild'))
     const fifo = Bun.spawn(['mkfifo', join(repo, 'unrelated-fifo')])
     expect(await fifo.exited).toBe(0)
     await writeFile(join(repo, 'asset.txt'), 'asset')
-    await writeFile(join(repo, 'helper.ts'), 'export const value = 1')
+    await mkdir(join(repo, 'lib'), { recursive: true })
+    await writeFile(join(repo, 'lib/helper.ts'), 'export const value = 1')
+    await writeFile(join(repo, 'lib/view.tsx'), 'export const view = 2')
+    await writeFile(join(repo, 'lib/esm.mts'), 'export const esm = 3')
+    await writeFile(join(repo, 'lib/common.cts'), 'exports.common = 4')
+    await mkdir(join(repo, 'lib/directory'), { recursive: true })
+    await writeFile(join(repo, 'lib/directory/index.tsx'), 'export const directory = 5')
     await writeFile(
       join(repo, 'autobuild-plugin.ts'),
       `
-      export {value} from './helper';
+      export {value} from './lib/helper.js';
+      export {view} from './lib/view.jsx';
+      export {esm} from './lib/esm.mjs';
+      export {common} from './lib/common.cjs';
+      export {directory} from './lib/directory';
       export const asset = await Bun.file(new URL('./asset.txt', import.meta.url)).text();
       export {PluginApiCompatibilityError} from '@defrex/autobuild/plugin-sdk';
     `,
     )
+    const direct = await import(join(repo, 'autobuild-plugin.ts'))
+    expect([direct.value, direct.view, direct.esm, direct.common, direct.directory]).toEqual([
+      1, 2, 3, 4, 5,
+    ])
     const run = async () => {
       const script = `
         import {snapshotPlugin} from ${JSON.stringify(join(runtime.root, 'packages/core/src/plugins/runtime-snapshot.ts'))};
         const path = await snapshotPlugin(${JSON.stringify(join(repo, 'autobuild-plugin.ts'))}, true);
         const p = await import(path);
-        console.log(JSON.stringify({path,value:p.value,asset:p.asset}));
+        console.log(JSON.stringify({path,value:p.value,asset:p.asset,suffixes:[p.view,p.esm,p.common,p.directory]}));
       `
       const child = Bun.spawn(
         [
@@ -149,24 +165,36 @@ test('root repo modules copy only reached files and dependencies and reclaim dea
         new Response(child.stderr).text(),
       ])
       expect(code, error).toBe(0)
-      return JSON.parse(output) as { path: string; value: number; asset: string }
+      return JSON.parse(output) as {
+        path: string
+        value: number
+        asset: string
+        suffixes: number[]
+      }
     }
     const first = await run()
     const { access, readdir } = await import('node:fs/promises')
     const root = first.path.slice(0, first.path.lastIndexOf('/'))
-    expect(first).toMatchObject({ value: 1, asset: 'asset' })
+    expect(first).toMatchObject({ value: 1, asset: 'asset', suffixes: [2, 3, 4, 5] })
     expect((await readdir(root)).sort()).toEqual([
       'asset.txt',
       'autobuild-plugin.ts',
-      'helper.ts',
+      'lib',
       'node_modules',
       'package.json',
       'tsconfig.json',
     ])
+    expect((await readdir(join(root, 'lib'))).sort()).toEqual([
+      'common.cts',
+      'directory',
+      'esm.mts',
+      'helper.ts',
+      'view.tsx',
+    ])
     expect(await readdir(join(root, 'node_modules'))).toEqual(['@defrex'])
     await writeFile(join(repo, 'unrelated.txt'), 'edited unrelated bytes')
     expect((await run()).path).toBe(first.path)
-    await writeFile(join(repo, 'helper.ts'), 'export const value = 2')
+    await writeFile(join(repo, 'lib/helper.ts'), 'export const value = 2')
     const changed = await run()
     expect(changed.value).toBe(2)
     expect(changed.path).not.toBe(first.path)
