@@ -62,7 +62,7 @@ headers, or available backend.
   `Date.toISOString()` form, for example `2026-07-15T12:00:00.000Z`.
 - Event sequence numbers and artifact revisions are integers assigned by the
   server. Clients must not assign either except for the negative deposit
-  placeholders described in [Atomic deposits](#7-atomic-deposits).
+  placeholders described in [Atomic deposits](#8-atomic-deposits).
 - Optional object members are omitted, not represented as `null`, unless a
   response below explicitly specifies JSON `null`.
 - The server owns durability. Events and artifact metadata visible in a
