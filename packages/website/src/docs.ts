@@ -1,3 +1,4 @@
+import { seamSelector } from './seams-view'
 import { renderSiteHeader } from './site-header'
 import { REPO_URL, SITE_URL } from './constants'
 import { OG_HEIGHT, OG_IMAGE_ALT, OG_WIDTH } from './og'
@@ -62,7 +63,7 @@ ${renderSiteHeader('docs', nav)}
 <div class="docs-inline-toc"><button type="button" data-toc-toggle aria-expanded="true" aria-controls="docs-sections">On this page <span aria-hidden="true">▾</span></button><div id="docs-sections">${toc}</div>${docsRule()}</div>
 <div class="docs-shell">
 <nav class="docs-nav docs-sidebar" aria-label="Documentation">${nav}</nav>
-<main id="content" tabindex="-1"><article><div class="docs-eyebrow">${page.group} · ${escapeHtml(page.label.toLowerCase())}</div><div class="docs-title-row"><h1 class="headline">${escapeHtml(page.title)}</h1><button type="button" class="docs-copy" data-docs-copy data-markdown-exclude>Copy as Markdown</button></div><span class="docs-copy-status" data-copy-status data-markdown-exclude role="status" aria-live="polite" aria-atomic="true"></span>${prepared.html}</article>${docsRule()}${renderPager(page, pages)}</main>
+<main id="content" tabindex="-1"><article><div class="docs-eyebrow">${page.group} · ${escapeHtml(page.label.toLowerCase())}</div><div class="docs-title-row"><h1 class="headline">${escapeHtml(page.title)}</h1><button type="button" class="docs-copy" data-docs-copy data-markdown-exclude>Copy as Markdown</button></div><span class="docs-copy-status" data-copy-status data-markdown-exclude role="status" aria-live="polite" aria-atomic="true"></span>${prepared.html}</article>${page.path === '/docs/seams/' ? `<div data-markdown-exclude>${seamSelector()}</div>` : ''}${docsRule()}${renderPager(page, pages)}</main>
 <aside class="docs-toc docs-sidebar" aria-label="Page sections"><b>On this page</b>${toc}${docsRule()}<a href="${REPO_URL}/blob/main/${page.source}">Edit this page ↗</a><a href="#top">Back to top ↑</a></aside>
 </div>
 <footer class="docs-footer">${docsRule()}<div><span>Autobuild · Apache-2.0</span><span><a href="/">Home</a> <a href="${REPO_URL}">GitHub ↗</a></span></div></footer>
