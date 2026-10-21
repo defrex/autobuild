@@ -102,6 +102,7 @@ function parseError(toml: string, source?: string): ConfigError {
 describe('parseConfig — complete flattened surface', () => {
   test('every field lands where expected', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
+      upgrade: { automatic: true },
       landing: [],
       baseBranch: 'main',
       capacity: 3,
@@ -196,6 +197,7 @@ describe('parseConfig — defaults', () => {
 
   test('a minimal valid [tickets] yields every other default', () => {
     expect(parseConfig(READY)).toEqual({
+      upgrade: { automatic: true },
       landing: [],
       baseBranch: 'main',
       capacity: 1,
@@ -1166,7 +1168,7 @@ alternates = []
     const root = parseError(`${READY}[polcy]\nstallRounds = 3\n`)
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
-    expect(root.message).toContain('known tables: store, landing, pr, workspace, commands')
+    expect(root.message).toContain('known tables: store, upgrade, landing, pr, workspace, commands')
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')
     expect(parseError(`${READY}[roles.default]\nmdel = "x"\n`).message).toContain('"mdel"')
@@ -1428,5 +1430,13 @@ mode = "auto"
     ]) {
       expect(() => parseConfig(`${READY}\n[[landing]]\n${body}`)).toThrow('landing[0]')
     }
+  })
+})
+
+describe('automatic upgrade configuration', () => {
+  test('defaults old saved inputs, accepts opt-out and rejects unknown keys', () => {
+    expect(parseConfig(READY).upgrade.automatic).toBe(true)
+    expect(parseConfig(`${READY}\n[upgrade]\nautomatic=false\n`).upgrade.automatic).toBe(false)
+    expect(() => parseConfig(`${READY}\n[upgrade]\ninterval=1\n`)).toThrow('interval')
   })
 })

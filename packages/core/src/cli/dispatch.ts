@@ -1,3 +1,11 @@
+import { distributionRoot } from '../distribution'
+import { readDistributionIdentity } from './installation'
+import { launchContext } from './dispatch-launch-contract'
+import { DispatchUpgradeController } from './dispatch-upgrade-controller'
+import { resolveUpgradeTarget } from './dispatch-upgrade-target'
+import { prepareUpgrade } from './dispatch-upgrade-install'
+import { readDispatchUpgrade } from '../store/reduced-reads'
+import type { Handoff } from '../kernel/dispatch-upgrade'
 import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
@@ -707,6 +715,9 @@ class DispatchLoop {
   /** Process-local, persistent release notice. It never shares the replaceable
    * warning slot and is re-applied to every store projection. */
   private availableUpgrade: string | undefined
+  private upgradeController?: DispatchUpgradeController
+  private cutoverRequested = false
+  private handoffCompleted = false
   private stopUpgradeNotice: (() => void) | undefined
   /** Startup, configuration-level notices — constant for the life of the
    * process. Rendered ABOVE the transient warning line and never overwritten by
@@ -1111,6 +1122,7 @@ class DispatchLoop {
     }
 
     await this.publishActiveBuildConfigs(outcome.snapshot)
+    this.upgradeController?.changed()
     this.announce(`autobuild.toml reloaded (revision ${outcome.snapshot.revision})`)
     if (outcome.restartRequired.length > 0) {
       this.warn(
@@ -3304,7 +3316,9 @@ class DispatchLoop {
   }
 
   private get stopped(): boolean {
-    return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
+    return (
+      this.cutoverRequested || this.opts.signal?.aborted === true || this.inputStop.signal.aborted
+    )
   }
 
   /** `--once` awaits everything in `inFlight` that is not tagged
@@ -3911,6 +3925,7 @@ class DispatchLoop {
     if (this.repoLeaseHolder === undefined) {
       this.repoLeaseHolder = holder
       this.startRepoLeaseHeartbeat(holder)
+      await this.initializeAutomaticUpgrade()
     }
     return true
   }
@@ -3979,6 +3994,88 @@ class DispatchLoop {
     } catch {
       // Expiry fences an ambiguous release.
     }
+  }
+
+  private async initializeAutomaticUpgrade(): Promise<void> {
+    const launch = launchContext(this.opts.env)
+    if (!launch || this.opts.once || this.opts.repository || this.repoLeaseHolder !== this.runId)
+      return
+    const upgrades = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value
+    if (!this.handoffCompleted && launch.predecessor) {
+      const previous = upgrades.runs[launch.predecessor]
+      const handoff = previous?.handoff?.payload
+      if (
+        !handoff ||
+        previous.completed ||
+        handoff.lineage !== launch.lineage ||
+        handoff.root !== launch.runtimeRoot
+      )
+        throw new Error('successor has no matching durable handoff')
+      await this.repoView.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'dispatcher.handoff-completed',
+        payload: { ...handoff, successor: this.runId },
+      })
+      this.handoffCompleted = true
+    }
+    if (this.upgradeController) return
+    const redact = createReadinessRedactor(this.opts.env)
+    this.upgradeController = new DispatchUpgradeController({
+      run: this.runId,
+      lineage: launch.lineage!,
+      from: RUNTIME_IDENTITY,
+      runningBunTag: (await readDistributionIdentity(distributionRoot())).bunTag,
+      reservationOwner: launch.launcherPid,
+      currentKey: launch.predecessor
+        ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key
+        : undefined,
+      failedKeys: Object.values(upgrades.runs).flatMap((state) =>
+        state.failure && state.failure.payload.lineage === launch.lineage
+          ? [state.failure.payload.target.key]
+          : [],
+      ),
+      enabled: () =>
+        !this.stopped && !this.superseded && this.currentConfig().config.upgrade.automatic,
+      resolve: (signal) =>
+        resolveUpgradeTarget({
+          checkout: this.opts.targetRepo,
+          base: this.currentConfig().config.baseBranch,
+          originalInstall: launch.originalInstall!,
+          forge: this.wiring.forge,
+          exec: this.opts.exec,
+          signal,
+        }),
+      prepare: (target, signal) =>
+        prepareUpgrade({ target, checkout: this.opts.targetRepo, signal, env: this.opts.env }),
+      redact,
+      append: (event) => this.repoView.appendRepo(this.repoIdentity, event),
+      cutover: (handoff: Handoff) =>
+        this.serialize(async () => {
+          if (
+            this.stopped ||
+            this.superseded ||
+            !this.currentConfig().config.upgrade.automatic ||
+            this.repoLeaseHolder !== this.runId
+          )
+            return false
+          await this.repoView.appendRepo(this.repoIdentity, {
+            actor: DISPATCHER,
+            type: 'dispatcher.handoff-started',
+            payload: handoff,
+          })
+          this.cutoverRequested = true
+          this.inputStop.abort()
+          return true
+        }),
+    })
+    this.opts.signal?.addEventListener(
+      'abort',
+      () => {
+        void this.upgradeController?.stop()
+      },
+      { once: true },
+    )
+    this.upgradeController.start()
   }
 
   async run(): Promise<void> {
@@ -4062,6 +4159,7 @@ class DispatchLoop {
       this.startInput()
       this.startRendering()
       this.startUpgradeChecks()
+      await this.initializeAutomaticUpgrade()
       let startup = true
       while (!this.stopped && !this.superseded) {
         try {
@@ -4081,6 +4179,7 @@ class DispatchLoop {
         this.warn('dispatcher superseded by another invocation — detaching')
       }
     } finally {
+      await this.upgradeController?.stop()
       await this.stopBuildExecutions()
       await this.stopHostedHarvest()
       // Signal provisioning continuations and release their leases before
@@ -4429,7 +4528,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // is `randomIds()`, so a getter re-evaluating it would re-mint per access.
   // Everything below (startup deposits, the loop's journal payloads, both
   // lease sites) carries this one value.
-  const runId = resolvedOpts.kernelRunId ?? `${hostname()}-dispatch-${wiring.ids('inst')}`
+  const runId =
+    resolvedOpts.kernelRunId ??
+    launchContext(resolvedOpts.env)?.run ??
+    `${hostname()}-dispatch-${wiring.ids('inst')}`
   resolvedOpts.runId = runId
   // Construction eagerly validates every startup role before repository
   // settings or runner work can mutate durable state. The publisher is used

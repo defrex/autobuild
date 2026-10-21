@@ -645,6 +645,7 @@ test('repository status reads paused and unpaused stores without changing either
       latestStoppedRun: null,
     },
     sandboxes: [],
+    upgrades: { runs: {} },
     publications: [],
   })
   expect(pausedResult).toMatchObject({ code: 0, stderr: '' })
@@ -661,6 +662,7 @@ test('repository status reads paused and unpaused stores without changing either
       latestStoppedRun: null,
     },
     sandboxes: [],
+    upgrades: { runs: {} },
     publications: [],
   })
 

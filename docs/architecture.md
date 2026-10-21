@@ -431,7 +431,17 @@ frontend, kernel, local runners and agent CLI use one completed immutable root;
 `dispatch-runtime-use.ts` protects current/previous/held/live entries during
 spawn and pruning. Cached guest archives are captured at installation.
 `--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
-Upgrades still require a restart; no generation handoff is implemented.
+`dispatch-upgrade-target.ts` reads manifest and lock blobs from one authoritative
+base snapshot, or rereads the original install pathname when unpinned.
+`dispatch-upgrade-install.ts` stages and validates exact targets;
+`dispatch-upgrade-controller.ts` checks immediately and every 60 seconds, suppresses
+failed target inputs and serializes cutover with claim ticks. Upgrade/handoff facts
+are reduced by `kernel/dispatch-upgrade.ts`. The exited immutable generation's
+`dispatch-handoff.ts` reader interprets the journal for the filesystem-only launcher,
+which starts generations sequentially. Local runners finish all suspension writes
+before exit; eligible handles resume natively and others record fresh-session
+fallback. Local harvest is interrupted and rerun by existing recovery. Automatic
+upgrades can be disabled; launcher contract changes require a manual restart.
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;
@@ -468,7 +478,7 @@ appends transcriptless reclaimed `session.ended` facts for unrelated open
 sessions before `runner.attached` cites that same boundary. Partial closure is
 retry-safe; historical orphan-only logs keep their
 old projection until an actual takeover records those facts. The supervisor
-rechecks kernel-child liveness at the force boundary
+waits for graceful kernel-child teardown without a force-kill deadline
 and projects the same normal, forced, or abnormal result (with available
 process/error detail) that the repository run-stopped evidence records. Ordinary
 kernel teardown stops and reaps all build groups. Every build-child terminal
@@ -1324,8 +1334,10 @@ SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
 with cause `shutdown`, the native handle, active milliseconds, partial transcript
 and any known incremental usage. A terminal fact that lands first prevents
 suspension; suspension fences the old session's terminal credentials permanently.
-The process supervisor retains its existing bounded force-stop path if provider
-cleanup or persistence cannot complete.
+Graceful shutdown waits for provider cleanup and durable suspension without a
+wall-clock force-exit deadline. Only after the runner leader exits does bounded
+process-group cleanup reap remaining descendants. Abnormal parent loss retains
+the detached reaper recovery path.
 
 On attachment the runner retains an eligible current phase/round session and
 records takeover. Matching host, workspace and runtime permit native resume;

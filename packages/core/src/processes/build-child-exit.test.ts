@@ -237,36 +237,20 @@ await handle.completion
   }
 })
 
-test('shutdown allows persistence, retains the first signal, and shares the original group deadline', () => {
-  let now = 1000
-  let force!: () => void
-  const launches: Array<{ stopTimeoutMs: number }> = []
+test('shutdown waits for persistence without a deadline and retains the first signal', async () => {
   const exits: number[] = []
   const terminal = new BuildChildExitCoordinator({
     groupId: 123,
-    launchReaper: (opts) => {
-      launches.push(opts)
-      return 1
-    },
+    launchReaper: () => 1,
     exit: (code) => exits.push(code),
   })
-  const shutdown = new BuildChildShutdown(
-    terminal,
-    () => now,
-    (callback, delay) => {
-      expect(delay).toBe(4000)
-      force = callback
-      return () => {}
-    },
-  )
+  const shutdown = new BuildChildShutdown(terminal)
   shutdown.request(130)
   shutdown.request(143)
   expect(shutdown.signal.aborted).toBe(true)
+  await Bun.sleep(5100)
   expect(exits).toEqual([])
-  now += 4000
-  force()
-  expect(exits).toEqual([130])
-  expect(launches[0]?.stopTimeoutMs).toBe(1000)
   shutdown.finish(0)
-  expect(launches).toHaveLength(1)
-})
+  shutdown.finish(1)
+  expect(exits).toEqual([130])
+}, 10000)

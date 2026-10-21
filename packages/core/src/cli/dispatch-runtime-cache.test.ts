@@ -1,3 +1,6 @@
+import { readDistributionIdentity } from './installation'
+import { captureRuntimeIdentity } from '../runtime-identity'
+import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { existsSync } from 'node:fs'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, symlink, stat } from 'node:fs/promises'
@@ -17,6 +20,7 @@ import {
 } from './dispatch-runtime-dependencies'
 import {
   releasePreparedRuntime,
+  reservePreparedRuntime,
   activateRuntime,
   pruneRuntimes,
   retainRuntime,
@@ -348,3 +352,72 @@ test('a separate pruner cannot cross a spawn boundary before its live claim is p
   pruneRuntimes(dirname(dirname(old.root)))
   await expect(validateRuntime(old)).rejects.toThrow()
 }, 30000)
+
+test('launcher-owned candidate reservations survive generation exit and are reclaimed on launcher death', async () => {
+  const { source, checkout } = await fixture()
+  const runtime = await prepareRuntime(source, checkout)
+  const cache = dirname(dirname(runtime.root))
+  const owner = Bun.spawn([process.execPath, '--eval', 'setInterval(() => {}, 1000)'], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  try {
+    reservePreparedRuntime(cache, runtime.id, owner.pid)
+    releasePreparedRuntime(runtime.root)
+    pruneRuntimes(cache)
+    expect(existsSync(runtime.root)).toBe(true)
+    owner.kill('SIGTERM')
+    await owner.exited
+    pruneRuntimes(cache)
+    expect(existsSync(runtime.root)).toBe(false)
+  } finally {
+    if (owner.exitCode === null) {
+      owner.kill('SIGTERM')
+      await owner.exited
+    }
+  }
+})
+
+test('cached and archived forge runtimes preserve abbreviated Bun provenance for fresh-launch comparison', async () => {
+  const { source, checkout } = await fixture()
+  const tag = 'fork-owner-repo-name-a1b2c3d'
+  const manifestPath = join(source, 'package.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, bin: 'bin/ab.ts' }))
+  await writeFile(join(source, '.bun-tag'), tag)
+  const runtime = await prepareRuntime(source, checkout)
+  const extracted = await temp()
+  await Bun.$`tar -xzf ${join(dirname(runtime.root), 'distribution.tgz')} --strip-components=1 -C ${extracted}`.quiet()
+  for (const root of [runtime.root, extracted]) {
+    const installed = await readDistributionIdentity(root)
+    expect(installed.bunTag).toBe(tag)
+    expect(installed.commit).toBe('a1b2c3d')
+    const from = captureRuntimeIdentity(root)
+    expect(from.commit).toBe('unknown')
+    const controller = new DispatchUpgradeController({
+      run: 'fresh',
+      lineage: 'fresh-lineage',
+      from,
+      runningBunTag: installed.bunTag,
+      failedKeys: [],
+      enabled: () => true,
+      resolve: async () => ({
+        mode: 'pinned',
+        key: 'forge',
+        source: 'main',
+        record: ['@defrex/autobuild@github:fork-owner/repo-name#a1b2c3d', {}, tag],
+      }),
+      prepare: async () => {
+        throw new Error('unchanged forge target must not install')
+      },
+      append: async () => {
+        throw new Error('unchanged forge target must not emit upgrade facts')
+      },
+      cutover: async () => {
+        throw new Error('unchanged forge target must not cut over')
+      },
+    })
+    await controller.check()
+    await controller.stop()
+  }
+})

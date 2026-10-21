@@ -1,3 +1,4 @@
+import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { formatRuntimeIdentity } from '../events/runtime'
 import {
   dispatchCapacity,
@@ -30,6 +31,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  upgrades: DispatchUpgradeState
   capacity?: DispatchCapacity
   warningLines?: string[]
   dispatcher: DispatcherLiveness
@@ -110,6 +112,7 @@ export function projectRepositoryStatus(
       : {}),
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
+    upgrades: dispatchUpgradeReducer.reduce(events),
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...(() => {
@@ -142,6 +145,7 @@ export function repositoryStatusFromFacts(
   const warningLines = facts.status ? forgeReadinessWarnings(facts.status) : []
   return {
     repo,
+    upgrades: facts.upgrades,
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...(() => {
@@ -193,6 +197,14 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
   return [
+    ...Object.entries(status.upgrades.runs).flatMap(([run, state]) => {
+      const event = state.completed ?? state.failure ?? state.handoff ?? state.detected
+      if (!event) return []
+      const target = event.payload.target
+      return [
+        `upgrade ${run}: ${event.type.slice('dispatcher.'.length)}; ${target.mode} ${target.version ?? target.source}; source ${target.source}${target.sha ? ` at ${target.sha}` : ''}${event.type === 'dispatcher.upgrade-failed' ? `; ${event.payload.reason}` : ''}`,
+      ]
+    }),
     requests
       ? `forge requests: ${requests.total} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
       : 'forge requests: unavailable',
