@@ -41,7 +41,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "da75515e990d77aea199fcab5772b8e427a3f14ed11450e9e8edcfd8d1c089b2",
+    "textHash": "3aae5f80b0e9b82649a256b48e0f0bb83d4f69e9af8578968038580ceb60bc60",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -57,7 +57,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "c5391cc122892184c98abe1842123b5106cb402d1fe628debee7ed844904d688",
+    "textHash": "3bc20cd7223e1bcd768c71b2cee4c4008d6e1f3e889233d8d0510e610ed4d6bc",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
@@ -72,7 +72,7 @@
     "title": "Integrating related work",
     "group": "concepts",
     "description": "Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.",
-    "textHash": "86a648891950c7b525d570634aa7e1e51b8deb945248117c293813cb903ab921",
+    "textHash": "5392fba8bf6292043972a0e8aeb26b2cb76efa986898416175f7e5220d5fbc79",
     "headings": [
       "Targets form the tree",
       "One identity per leaf change",
@@ -83,16 +83,30 @@
   },
   {
     "path": "/docs/tickets/",
-    "label": "Tickets",
-    "title": "Tickets are the interface",
+    "label": "Tickets and specs",
+    "title": "Tickets and specs",
     "group": "concepts",
-    "description": "Choose a ticket source, groom buildable specs, and admit proposed work through the ready gate.",
-    "textHash": "c90fb3262d3ca7f5bde8dc0610c5d484a6766a30fe1645033260c3ad3f2b69d0",
+    "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
+    "textHash": "ce3877e7c05da20887d4e5de4078ecad9c982725ce7707217c12c6a1fe351066",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
       "Ready is a gate, not a guarantee",
-      "Intake proposes work"
+      "Work and node tickets"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/intake/",
+    "label": "Intake and harvest",
+    "title": "Intake and harvest",
+    "group": "concepts",
+    "description": "Turn outside signals and agent observations into reviewed proposals for your operator agent to triage and groom.",
+    "textHash": "a376ec2861d10808ee552197ccc1481a58ec0a7f9c646325b5ffa33fba0e657e",
+    "headings": [
+      "Sources carry proposals",
+      "Observations become reviewed tickets",
+      "Triage is the default gate"
     ],
     "code": []
   },
