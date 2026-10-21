@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "20a2ec9029b5398a4d5890325934035461216529c3cab94bb1e3df0c9dec99db",
+    "textHash": "6adcca29edd5a4544891be042fc3df2b7817cbea22d41f80a6a0a3cf9af8f70c",
     "headings": [
       "From a ticket to a change",
       "Agents judge; code moves the build",
@@ -19,15 +19,21 @@
     "label": "Getting started",
     "title": "Getting started",
     "group": "start",
-    "description": "Install Autobuild in your repository, configure it with ab init, groom a ticket, and start the dispatcher.",
-    "textHash": "d4e652fa6e5e513785533e4c5ba6d861ee95783fcc3a70da7d45011af8ecaa67",
+    "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
+    "textHash": "daa0414b0998662f75b5eadbba08eb0019353daeb9f17c3621db62291b3edd64",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
-      "3. Groom the first ticket",
-      "4. Start dispatch"
+      "3. Validate setup",
+      "4. Start dispatch",
+      "5. Ask your operator agent for the first change"
     ],
-    "code": ["bun add -D @defrex/autobuild", "bun ab init", "bun ab dispatch"]
+    "code": [
+      "bun add -D @defrex/autobuild",
+      "bun ab init",
+      "bun ab init --validate",
+      "bun ab dispatch"
+    ]
   },
   {
     "path": "/docs/builds/",
@@ -132,16 +138,20 @@
   },
   {
     "path": "/docs/operating/",
-    "label": "Operating",
-    "title": "Operating Autobuild",
+    "label": "Working with your operator agent",
+    "title": "Working with your operator agent",
     "group": "guides",
-    "description": "Watch durable progress, answer escalations, pause work, and authorize landing through the CLI or an external operator agent.",
-    "textHash": "fa49d14f63e0e9a2d91912048ccf37d9d39f87701b22b5e1756e8ece5fab67fc",
+    "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
+    "textHash": "354c8dfbf7db623f6dc6a2bd7d792443e1d3dd9e6fe6ef53b0d7d3e6a01163af",
     "headings": [
+      "Choose a harness",
+      "Give the agent memory",
+      "Give steering that sticks",
       "Watch for attention",
       "Answer and pause",
       "Authorize landing",
-      "Choose an operator surface"
+      "Choose an operator surface",
+      "An example session"
     ],
     "code": [
       "bun ab watch --json",
@@ -173,7 +183,7 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "0dbfcc57b3e7029f1dff82600d6ac5be3d0a5cc35ca7439c0eadb194a53dffc9",
+    "textHash": "98f7ad2652731c4b859c5ef5ae3bfa243ee78378bb3328a58b680a6167f219d7",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",

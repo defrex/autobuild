@@ -28,7 +28,7 @@ Capacity bounds concurrent work. Policy limits bound review rounds, retries, and
 
 ## Admission and landing
 
-Ticket settings choose the source and readiness criteria the dispatcher uses to admit work. Landing rules are ordered and first-match: predicates select automatic authorization or explicit consent for a source and destination. The [landing policy reference](landing-policy.md) describes defaults, readiness, and forge gates. See [Operating](operating.md) for consent and hold commands.
+Ticket settings choose the source and readiness criteria the dispatcher uses to admit work. Landing rules are ordered and first-match: predicates select automatic authorization or explicit consent for a source and destination. The [landing policy reference](landing-policy.md) describes defaults, readiness, and forge gates. See [Working with your operator agent](operating.md) for consent and hold commands.
 
 Build execution configuration is pinned for reproducibility, while dispatcher policy and role settings have live reload behavior. Consult the [configuration reference](configuration.md) for the boundary before changing settings during a build. Keep secrets outside committed TOML.
 
