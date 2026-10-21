@@ -4,13 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
 import {
-  DOCS_PAGES,
   renderDocsPage,
   prepareHeadings,
   renderDocsNavigation,
   renderPager,
   REPO_REFERENCES,
 } from './docs'
+import { loadDocsPages } from './docs-content'
+import baseline from './docs-baseline.json'
+const DOCS_PAGES = await loadDocsPages()
+
 import { REPO_URL, SITE_URL } from './constants'
 
 test('docs emit complete shared navigation and distinct metadata with rooted assets', async () => {
@@ -62,7 +65,7 @@ test('build writes all docs pages and cleans stale output', async () => {
     await buildSite(dir)
     expect(await Bun.file(join(dir, 'stale.html')).exists()).toBe(false)
     for (const page of DOCS_PAGES)
-      expect(await readFile(join(dir, page.file), 'utf8')).toBe(renderDocsPage(page))
+      expect(await readFile(join(dir, page.file), 'utf8')).toBe(renderDocsPage(page, DOCS_PAGES))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -85,7 +88,10 @@ test('all generated local hrefs and fragments resolve to emitted files and IDs',
 })
 
 test('docs renderer escapes page metadata', () => {
-  const html = renderDocsPage({ ...DOCS_PAGES[0]!, title: '<unsafe>"&', description: '"<text>&' })
+  const html = renderDocsPage(
+    { ...DOCS_PAGES[0]!, title: '<unsafe>"&', description: '"<text>&' },
+    DOCS_PAGES,
+  )
   expect(html).toContain('<title>&lt;unsafe&gt;&quot;&amp; · Autobuild docs</title>')
   expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
 })
@@ -97,33 +103,38 @@ test('feature guides are text-only and link to repository references', () => {
   }
 })
 
-// Baseline hashes captured from the pre-layout article strings, independent of rendered output.
-const baseline: Record<string, string> = {
-  '/docs/': '4c5ad4de703c3ed712e115a03052e016609e20e81140858e89aba7e459e4ba76',
-  '/docs/getting-started/': '22f59774aedfcc978380bb4a82708b6e0c3ef5f0b5b20edf2b2b417bae352c2a',
-  '/docs/builds/': '9501174b11a6ef474a81f347354f9a76894d731c2168936a8854b1da2d20fc93',
-  '/docs/dispatcher/': 'd4a673bf44920c1938b22428a59bc66d1c9a45fd68db6005b0508961b062d738',
-  '/docs/integration/': 'ab7d2800bb22df819550c51c6c4bb5608db28c95e239c81e122706a9281649c8',
-  '/docs/tickets/': '8e95f4b3c594335b984a3bcb63865608137ece2dadc8ef90c8569a2327b67f2b',
-  '/docs/operating/': '0e18c80f97f3fd051b9538645329c0b0bd0a11c31a4fa4f164f725ee8cc40040',
-  '/docs/seams/': '271dee8c129105b2cc597c274a3671074c4e49a685b7984b22e9ec45d8d77387',
-  '/docs/configuration/': '8d18dfa4ac50c8eed17686792ecac2ea25f5f7908158bc8a41289691fc50e982',
-}
-
-test('layout preserves every article byte except injected heading IDs', () => {
+test('layout preserves article words and headings from independent HTML baselines', () => {
   for (const page of DOCS_PAGES) {
-    expect(new Bun.CryptoHasher('sha256').update(page.content).digest('hex')).toBe(
-      baseline[page.path]!,
-    )
-    const html = renderDocsPage(page)
+    const original = baseline.find((entry) => entry.path === page.path)!
+    const decode = (text: string) =>
+      text.replace(/&#(?:x([0-9a-f]+)|(\d+));|&(amp|lt|gt|quot|apos);/gi, (_, hex, dec, named) =>
+        hex || dec
+          ? String.fromCodePoint(parseInt(hex ?? dec, hex ? 16 : 10))
+          : ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[
+              named
+            ]!,
+      )
+    const text = decode(page.content.replace(/<[^>]+>/g, ''))
+      .replace(/\s+/g, ' ')
+      .trim()
+    expect(new Bun.CryptoHasher('sha256').update(text).digest('hex')).toBe(original.textHash)
+    expect(prepareHeadings(page.content).headings.map((h) => h.label)).toEqual(original.headings)
+    expect(
+      [...page.content.matchAll(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/g)].map((m) =>
+        decode(m[1]!).replace(/\n$/, ''),
+      ),
+    ).toEqual(original.code)
+    for (const key of ['path', 'label', 'title', 'group', 'description'] as const)
+      expect(page[key]).toBe(original[key])
+    const html = renderDocsPage(page, DOCS_PAGES)
     const article = html.split('aria-atomic="true"></span>')[1]!.split('</article>')[0]!
-    expect(article.replace(/<h2 id="[^"]+">/g, '<h2>')).toBe(page.content)
+    expect(article).toBe(prepareHeadings(page.content).html)
     expect(html).toContain(`${page.group} · ${page.label.toLowerCase()}`)
-    expect(html).toContain(`${REPO_URL}/blob/main/packages/website/src/docs.ts`)
+    expect(html).toContain(`${REPO_URL}/blob/main/${page.source}`)
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])
     expect(new Set(ids).size).toBe(ids.length)
     for (const [path] of REPO_REFERENCES) expect(html).toContain(`${REPO_URL}/blob/main/${path}`)
-    const nav = renderDocsNavigation(page)
+    const nav = renderDocsNavigation(page, DOCS_PAGES)
     expect(html.split(nav)).toHaveLength(3)
     expect([...nav.matchAll(/docs-group-label">([^<]+)/g)].map((m) => m[1])).toEqual([
       'start/',
@@ -149,9 +160,9 @@ test('heading preparation preserves markup and existing anchors and avoids colli
 })
 
 test('pager boundaries and synthetic additions derive from the same registry', () => {
-  expect(renderPager(DOCS_PAGES[0]!)).not.toContain('← previous')
-  expect(renderPager(DOCS_PAGES.at(-1)!)).not.toContain('next →')
-  const middle = renderPager(DOCS_PAGES[2]!)
+  expect(renderPager(DOCS_PAGES[0]!, DOCS_PAGES)).not.toContain('← previous')
+  expect(renderPager(DOCS_PAGES.at(-1)!, DOCS_PAGES)).not.toContain('next →')
+  const middle = renderPager(DOCS_PAGES[2]!, DOCS_PAGES)
   expect(middle).toContain('Getting started')
   expect(middle).toContain('Dispatcher')
   const extra = { ...DOCS_PAGES.at(-1)!, path: '/docs/new/', label: 'New page' }
