@@ -1,4 +1,8 @@
-import { resolveTicketRef, migrationIdentity } from '../kernel/ticket-migrations'
+import {
+  resolveTicketRef,
+  migrationIdentity,
+  historicalTicketIdentity,
+} from '../kernel/ticket-migrations'
 import { nodeRestackDemand, presenceRestackPath } from '../kernel/node-restack-demand'
 import {
   deferMixedVersion,
@@ -4458,7 +4462,7 @@ export class Dispatcher {
       ready.some((ticket) => ticket.kind === 'node')
     let presence: PresenceInputs | undefined
     const migrations = this.store.repositoryFacts().ticketMigrations
-    const normalizeTicket = migrationIdentity(migrations, this.deps.tickets.name)
+    const normalizeTicket = historicalTicketIdentity(migrations, this.deps.tickets.name)
     const builtTickets = hasNodes
       ? new Set(
           treeEntries.flatMap(({ record }) =>
@@ -5573,7 +5577,10 @@ export class Dispatcher {
         inputs.entries,
         ticket.ref.source,
         id,
-        migrationIdentity(this.store.repositoryFacts().ticketMigrations, this.deps.tickets.name),
+        historicalTicketIdentity(
+          this.store.repositoryFacts().ticketMigrations,
+          this.deps.tickets.name,
+        ),
       )
       if (id === ticket.ref.id || !nodes.get(id)?.exists || build === undefined) {
         fallback.push(id)

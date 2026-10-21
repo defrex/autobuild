@@ -96,6 +96,19 @@ export function migrationIdentity(state: TicketMigrations, destination: string) 
     }
   }
 }
+/** Comparison only for all-history scans. Uncovered history remains in its
+ * original namespace and cannot alias a current-source ticket. Live claims,
+ * frozen membership and current-ticket operations must use strict resolution. */
+export function historicalTicketIdentity(state: TicketMigrations, destination: string) {
+  const identity = migrationIdentity(state, destination)
+  return (ref: TicketRef, build?: string): string => {
+    try {
+      return identity(ref, build)
+    } catch {
+      return key(ref)
+    }
+  }
+}
 export async function readTicketMigrations(
   store: BuildStore,
   repo: string,

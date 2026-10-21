@@ -38,14 +38,14 @@ export async function directMigration(opts: MigrationOptions): Promise<Migration
     throw new Error('direct migration recording requires a file destination')
   const manifest = await readMigrationManifest(opts.dir)
   const mapping: Record<string, string> = Object.create(null)
-  const exported = await inventory(new FileTicketSource({ dir: resolve(opts.dir) }))
-  if (exported.length !== Object.keys(manifest.keys).length)
-    throw new Error('export inventory differs from migration manifest')
-  for (const ticket of exported) {
-    const id = ticket.ref.id
-    const key = manifest.keys[id]
+  const exported = new FileTicketSource({ dir: resolve(opts.dir) })
+  // The manifest freezes the export inventory; the directory may now be a live
+  // tracker with additional tickets. Only the original IDs establish continuity.
+  for (const [id, key] of Object.entries(manifest.keys)) {
+    validateFileTicketId(id)
+    const ticket = await exported.get(id)
     const destination = await opts.source.get(id)
-    if (!key || ticket.creationKey !== key || destination?.creationKey !== key)
+    if (ticket?.creationKey !== key || destination?.creationKey !== key)
       throw new Error(`migration evidence mismatch for ${id}`)
     mapping[id] = id
   }

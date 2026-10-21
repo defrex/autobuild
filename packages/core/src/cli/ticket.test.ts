@@ -1130,8 +1130,67 @@ describe('runCli — ticket routing', () => {
     await target.create({ title: 'unrelated', body: '' }, { requestedId: 'OTHER' })
     manifest.keys.OTHER = 'wrong-key'
     await writeFile(path, JSON.stringify(manifest))
-    await expect(abTicket(['migration', 'record', dir], opts)).rejects.toThrow('inventory')
+    await expect(abTicket(['migration', 'record', dir], opts)).rejects.toThrow(
+      'migration evidence mismatch for OTHER',
+    )
     expect(await store.getRepoEvents(migrationRepo)).toHaveLength(1)
+  })
+
+  test('direct export recording accepts new tickets in the configured tracker and still checks every original ID', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { exportTickets } = await import('../ports/tickets/migration')
+    const { MemoryBuildStore } = await import('../store/memory')
+    const original = new FileTicketSource({ dir: join(tmp, 'old') })
+    await original.create(
+      { title: 'Exported work', body: 'body' },
+      { requestedId: 'OLD-1', idempotencyKey: 'export-key' },
+    )
+    const dir = join(tmp, 'tickets')
+    await exportTickets({ source: original, repo: 'repo', dir })
+    const manifestPath = join(dir, '.ab-migration.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    manifest.source = 'linear:repo'
+    await writeFile(manifestPath, JSON.stringify(manifest))
+    const target = new FileTicketSource({ dir })
+    await target.create({ title: 'Filed after export', body: 'new work' }, { requestedId: 'LATER' })
+    const store = new MemoryBuildStore()
+    let repo = ''
+    const ensure = store.ensureRepo.bind(store)
+    store.ensureRepo = async (id) => {
+      repo = id
+      return ensure(id)
+    }
+    const { deps } = sessionlessDeps()
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      exec: deps.exec,
+      stdout: () => {},
+      stderr: () => {},
+      openStore: () => store,
+      sourceFactory: () => target,
+    }
+    await abTicket(['migration', 'record', dir], opts)
+    await abTicket(['migration', 'record', dir], opts)
+    expect((await store.getRepoEvents(repo)).map((event) => event.payload)).toEqual([
+      { identity: manifest.identity, from: 'linear', to: 'file', mapping: { 'OLD-1': 'OLD-1' } },
+    ])
+    expect(await target.get('LATER')).not.toBeNull()
+    const path = join(dir, 'triage', 'OLD-1.md')
+    const raw = await readFile(path, 'utf8')
+    await writeFile(
+      path,
+      raw.replace('idempotencyKey = "export-key"', 'idempotencyKey = "wrong-key"'),
+    )
+    await expect(abTicket(['migration', 'record', dir], opts)).rejects.toThrow(
+      'migration evidence mismatch for OLD-1',
+    )
+    await rm(path)
+    await expect(abTicket(['migration', 'record', dir], opts)).rejects.toThrow(
+      'migration evidence mismatch for OLD-1',
+    )
+    expect(await store.getRepoEvents(repo)).toHaveLength(1)
   })
 
   test('ab ticket without a subcommand prints the complete usage and exits 1', async () => {

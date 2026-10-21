@@ -118,3 +118,26 @@ test('database and hosted preserve their existing adapter compatibility through 
     id: 'AUT-1',
   })
 })
+
+test('history scans preserve uncovered identities without relaxing current operations', async () => {
+  const { historicalTicketIdentity, migrationIdentity } = await import('./ticket-migrations')
+  const state = ticketMigrationsReducer.reduce([
+    fact('cutover', 'linear', 'file', { COVERED: 'CURRENT' }),
+  ])
+  const history = historicalTicketIdentity(state, 'file')
+  expect(history({ source: 'linear', id: 'COVERED' })).toBe(
+    history({ source: 'file', id: 'CURRENT' }),
+  )
+  expect(history({ source: 'linear', id: 'PURGED' }, 'old-build')).toBe(
+    JSON.stringify(['linear', 'PURGED']),
+  )
+  expect(history({ source: 'linear', id: 'PURGED' })).not.toBe(
+    history({ source: 'file', id: 'PURGED' }),
+  )
+  expect(() =>
+    migrationIdentity(state, 'file')({ source: 'linear', id: 'PURGED' }, 'live-build'),
+  ).toThrow('build live-build ticket linear:PURGED')
+  expect(() =>
+    resolveTicketRef(state, { source: 'linear', id: 'PURGED' }, 'file', 'cleanup-build'),
+  ).toThrow('build cleanup-build ticket linear:PURGED')
+})

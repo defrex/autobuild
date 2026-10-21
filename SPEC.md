@@ -3643,12 +3643,16 @@ Completed `ab ticket import <dir> [--store <ref>]` records a durable repository
 fact carries the stable export identity, source/destination adapter names and
 complete actual ID mapping. `ab ticket migration record <dir> [--store <ref>]`
 verifies a manifest-backed export used directly as a file source, checking every
-ID and creation key, and records the same continuity without importing.
+ID and creation key, and records the same continuity without importing. Tickets
+filed afterward in the exported tracker are allowed; only original manifest IDs
+enter that mapping.
 
 Current operations resolve historical ticket references forward through recorded
 mappings. Completeness, targeting, admission, ancestry and lifecycle writes
 retain their gates. Missing routes, uncovered IDs and inconsistent evidence fail
-closed; history is never rewritten. Preserve the BuildStore and repository,
+closed at current-ticket and frozen-membership operation boundaries; unrelated
+uncovered history does not block intake or alias current-source tickets. History
+is never rewritten. Preserve the BuildStore and repository,
 quiesce ticket writers during cutover, and resume in-flight builds after recording
 and destination validation. See [the migration procedure](docs/ticket-migration.md).
 

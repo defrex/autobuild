@@ -148,3 +148,61 @@ test('uncovered cleanup leaves no completion and retries after new durable evide
     await h.cleanup()
   }
 })
+
+test('uncovered terminal history cannot block node-targeted intake or alias current blockers', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('N', { title: 'Historical parent' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    for (const id of ['W', 'DONE']) {
+      const slug = `purged-${id.toLowerCase()}`
+      await h.store.createBuild({ slug, repo: h.origin, ticket: { source: 'fake', id } })
+      await h.store.append(slug, {
+        actor: { kind: 'dispatcher' },
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+    const destination = new FakeTicketSource([
+      {
+        ...readyTicket('NEW-N'),
+        ref: { source: 'file', id: 'NEW-N' },
+        kind: 'node',
+        state: 'Doing',
+      },
+      { ...readyTicket('DONE'), ref: { source: 'file', id: 'DONE' }, state: 'Done' },
+      {
+        ...readyTicket('W', { title: 'New work with resolved blocker', blockedBy: ['DONE'] }),
+        ref: { source: 'file', id: 'W' },
+        target: 'NEW-N',
+      },
+    ])
+    Object.defineProperty(destination, 'name', { value: 'file' })
+    await h.store.ensureRepo(h.origin)
+    await recordTicketMigration(
+      h.store,
+      h.origin,
+      { kind: 'human', user: 'operator' },
+      { identity: 'cutover', from: 'fake', to: 'file', mapping: { N: 'NEW-N' } },
+    )
+    h.dispatcher = new Dispatcher({
+      ...(h.dispatcher as unknown as { deps: DispatcherDeps }).deps,
+      tickets: destination,
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(1)
+    const work = (await h.store.listBuilds()).find(
+      (build) => build.ticket?.source === 'file' && build.ticket.id === 'W',
+    )!
+    expect(work).toBeDefined()
+    expect(reduceBuild(await h.events(work.slug)).target?.build).toBe(node.slug)
+    expect((await h.store.getBuild('purged-w'))?.ticket).toEqual({ source: 'fake', id: 'W' })
+    expect((await h.store.getBuild('purged-done'))?.ticket).toEqual({ source: 'fake', id: 'DONE' })
+  } finally {
+    await h.cleanup()
+  }
+})

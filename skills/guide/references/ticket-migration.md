@@ -83,14 +83,20 @@ ancestry, claimed target checks, lifecycle transitions and notices use that
 mapping. Historical build events and ticket references remain unchanged. Moves
 can chain across sources; mappings are never applied backward. A source switch
 alone establishes no continuity. Missing migration evidence or an uncovered ID
-fails closed and names the build and original ticket. Separate trackers with the
+fails closed and names the build and original ticket when operating on that
+build or its frozen membership. Uncovered historical builds stay in their
+original namespace during history searches; they cannot alias current tickets
+or block unrelated intake. Separate trackers with the
 same adapter name cannot be distinguished by historical references; this does
 not establish continuity between them.
 
 When using the export directory directly as the configured file tracker, run
 `ab ticket migration record /path/to/export [--store <ref>]`. This verifies the
 manifest inventory and creation keys against the destination and records identity
-mappings, without importing tickets. Preserve `.ab-migration.json` for this step;
+mappings for the original manifest IDs, without importing tickets. Additional
+tickets filed in the directory after export are allowed and are not included in
+the mapping. Every original ID must still exist with its recorded creation key.
+Preserve `.ab-migration.json` for this step;
 the tracker itself can operate without it. `.ab-import-map.json` is progress
 information, never proof of continuity. Repeating an identical recording is safe;
 conflicting evidence is refused.
