@@ -9,7 +9,13 @@ slug: ""
 
 # How Autobuild works
 
-Autobuild takes a groomed ticket through planning, implementation, review, verification, and pull request creation. It runs coding agents inside a fixed pipeline, with a separate workspace for each build. Humans decide what to build and answer escalations.
+Autobuild takes a groomed ticket through planning, implementation, review, verification, and pull request creation. It runs coding agents inside a fixed pipeline, with a separate workspace for each build. Three actors keep that work moving:
+
+- **You** decide goals, scope, tradeoffs, and how much authority to delegate. You mainly run the dispatcher and perform upgrades.
+- **Your operator agent** is an external agent that writes specs, files and grooms tickets, watches builds, answers questions within your instructions, and authorizes landing. The `ab` CLI is primarily its interface; remote agents use MCP.
+- **The dispatcher** claims ready work and runs the durable pipeline, including isolated agent sessions, checks, and publication.
+
+You mostly talk to your agent. Autobuild neither hosts nor starts that agent.
 
 
 ## From a ticket to a change
@@ -43,11 +49,11 @@ Autobuild fits repositories where work can be described as clear tickets and che
 
 It favors throughput over the latency of one change: independent builds can run side by side, while each still pays for planning, review, and verification. A small edit that needs an immediate answer may be better handled directly in your coding agent.
 
-It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove the operator's responsibility.
+It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; your agent should bring unresolved product decisions back to you.
 
 
 ## Using these docs
 
-Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), and [tickets](tickets.md), plus [Operating](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references.
+Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), and [tickets](tickets.md), plus [Working with your operator agent](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references.
 
 The [configuration reference](configuration.md) describes what you configure. The [spec standard](spec-standard.md) defines a buildable ticket.
