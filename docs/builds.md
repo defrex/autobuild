@@ -13,9 +13,9 @@ A build is one execution for one ticket, identified by a slug. A work ticket fol
 
 ## The spec is the contract
 
-Grooming establishes what to build before execution. At dispatch, Autobuild pins a conforming spec as a stored artifact. `spec` names that contract, not another agent phase. Planning, review, and verification judge the change against it.
+Your operator agent grooms the ticket with you to establish what to build before execution. At dispatch, Autobuild pins a conforming spec as a stored artifact. `spec` names that contract, not another agent phase. Planning, review, and verification judge the change against it.
 
-Ordinary execution uses the pinned spec rather than rereading mutable tracker text. If the contract needs to change, an escalation lets an operator record a revised spec and restart from planning.
+Ordinary execution uses the pinned spec rather than rereading mutable tracker text. If the contract needs to change, an escalation lets your operator agent record a deliberately revised spec under your instructions and restart from planning.
 
 
 ## Produce, then review
@@ -24,7 +24,7 @@ The planner proposes an implementation plan. A plan reviewer checks it against t
 
 Each agent phase starts in its own session. Within a review loop, the producer continues across rounds while each reviewer gets a fresh session. The spec, approved plan, implementation notes, findings, and verification reports carry context between phases as durable artifacts. A build does not depend on one agent remembering the whole conversation.
 
-Review loops have a configured review-round ceiling. They also have a stall limit: when a reviewer marks the same finding as persisting across enough rounds, deterministic code escalates the disagreement. Reaching either limit parks the build for an answer instead of spending rounds indefinitely. An operator can replace the ceiling for the parked loop and current spec revision.
+Review loops have a configured review-round ceiling. They also have a stall limit: when a reviewer marks the same finding as persisting across enough rounds, deterministic code escalates the disagreement. Reaching either limit parks the build for an answer instead of spending rounds indefinitely. Your operator agent can replace the ceiling under your instructions for the parked loop and current spec revision.
 
 
 ## Verify, then publish
@@ -38,9 +38,9 @@ A failed verifier returns the work build to implementation with its report, foll
 
 ## When a human is needed
 
-After grooming, escalations are the pipeline's human judgment gates. An unclear requirement, a persistent review disagreement, or an exhausted policy bound can park the build with a recorded question. The operator records retry guidance or an answer through the CLI or operator tools. Restarting dispatch does not answer that question, and an answer does not force success.
+After grooming, escalations are the pipeline's judgment gates. An unclear requirement, a persistent review disagreement, or an exhausted policy bound can park the build with a recorded question. Your operator agent answers bounded questions from your instructions and records retry guidance or an answer through the CLI or operator tools. It brings unresolved product decisions to you. Restarting dispatch does not answer that question, and an answer does not force success.
 
-Landing consent is a separate policy decision: repositories can require it even for a green build. Verification, forge checks, and merge gates still apply. See [integration and landing policy](integration.md).
+Your operator agent manages landing consent under your instructions. It is a separate policy decision: repositories can require it even for a green build. Verification, forge checks, and merge gates still apply. See [integration and landing policy](integration.md).
 
 
 ## The reconcile epilogue
