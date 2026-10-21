@@ -82,6 +82,16 @@ export class LocalBuildExecution implements BuildExecution {
       return exit
     })
 
+    let stopping: Promise<void> | undefined
+    const stop = (): Promise<void> =>
+      (stopping ??= (async () => {
+        // Signal only the leader: provider descendants must survive until the
+        // runner has closed streams and recorded native-session suspension.
+        if (child.exitCode === null) child.kill('SIGTERM')
+        await leaderExit
+        await reap()
+      })())
+
     return {
       pid: child.pid,
       supervision: 'local-parent',
@@ -92,13 +102,13 @@ export class LocalBuildExecution implements BuildExecution {
       },
       completion,
       stop: async () => {
-        await Promise.all([reap(), leaderExit])
+        await stop()
         return { outcome: 'confirmed' }
       },
       // A local execution cannot outlive its parent's teardown: detach is the
       // same full reap as stop (the kernel reaps local children on teardown).
       detach: async () => {
-        await Promise.all([reap(), leaderExit])
+        await stop()
       },
     }
   }

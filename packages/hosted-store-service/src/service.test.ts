@@ -199,6 +199,7 @@ describe('hosted store service', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      upgrades: { runs: {} },
       publications: [],
     })
     expect(opens).toBe(1)

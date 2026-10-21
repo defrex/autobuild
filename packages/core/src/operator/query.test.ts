@@ -300,6 +300,7 @@ describe('operator query wiring', () => {
         latestStoppedRun: null,
       },
       sandboxes: [],
+      upgrades: { runs: {} },
       publications: [],
     })
     expect(await getHarvestStatus(counting.store, REPO)).toMatchObject({
