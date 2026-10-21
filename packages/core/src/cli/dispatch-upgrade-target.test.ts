@@ -111,3 +111,32 @@ test('unrelated base advances retain a failed target identity; corrected metadat
   await h.git('push', 'origin', 'main')
   expect((await resolveUpgradeTarget(h.input)).version).toBe('0.9.0')
 })
+
+test('existing Bun forge lock records with abbreviated commits remain supported', async () => {
+  const h = await fixture()
+  await h.pin('1.0.0')
+  const dependency = 'github:fork-owner/repo-name#main'
+  const record = [
+    '@defrex/autobuild@github:fork-owner/repo-name#a1b2c3d',
+    {},
+    'fork-owner-repo-name-a1b2c3d',
+  ]
+  await writeFile(
+    join(h.repo, 'package.json'),
+    JSON.stringify({ devDependencies: { '@defrex/autobuild': dependency } }),
+  )
+  await writeFile(
+    join(h.repo, 'bun.lock'),
+    JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: { '': { devDependencies: { '@defrex/autobuild': dependency } } },
+      packages: { '@defrex/autobuild': record },
+    }),
+  )
+  await h.git('add', 'package.json', 'bun.lock')
+  await h.git('commit', '-m', 'forge pin')
+  await h.git('push', 'origin', 'main')
+  const target = await resolveUpgradeTarget(h.input)
+  expect(target.mode).toBe('pinned')
+  expect(target.record).toEqual(record)
+})

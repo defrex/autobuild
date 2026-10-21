@@ -141,7 +141,7 @@ export async function resolveUpgradeTarget(input: {
         })
       )
         throw new Error('conflicting Autobuild forge declarations')
-      if (!new RegExp(`^github:${forge.owner}/${forge.repository}#[a-f0-9]{40}$`).test(locked))
+      if (!new RegExp(`^github:${forge.owner}/${forge.repository}#[a-f0-9]{7,40}$`).test(locked))
         throw new Error('invalid locked Autobuild forge commit')
       return target
     }
