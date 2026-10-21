@@ -12,6 +12,7 @@
  * validated.
  */
 import { z } from 'zod'
+import { documentSchema, documentFields } from './reference-metadata'
 import { landingRuleSchema } from './landing'
 export { landingRuleSchema, type LandingRule } from './landing'
 import { normalizeServiceURL } from '../connection'
@@ -66,15 +67,16 @@ function stepSection<T, C>(
   compose: (steps: string[], stepConfigs: Record<string, T>, afterReconcile: boolean) => C,
   allowAfterReconcile = false,
 ) {
-  return z
+  const afterReconcileSchema = z.boolean().default(true)
+  const schema = z
     .unknown()
     .transform((input, ctx): C => {
       const stepConfigs: Record<string, T> = Object.create(null)
       let steps: string[] = []
-      let afterReconcile = true
+      let afterReconcile = afterReconcileSchema.parse(undefined)
       for (const [key, raw] of ownEntries(input, label, ctx)) {
         if (key === 'afterReconcile' && allowAfterReconcile) {
-          const parsed = z.boolean().safeParse(raw)
+          const parsed = afterReconcileSchema.safeParse(raw)
           if (parsed.success) afterReconcile = parsed.data
           else forwardIssues(parsed.error.issues, ctx, [key])
           continue
@@ -91,6 +93,26 @@ function stepSection<T, C>(
       return compose(steps, stepConfigs, afterReconcile)
     })
     .prefault({})
+  documentSchema(stepsSchema, {
+    description:
+      'Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.',
+  })
+  documentSchema(tableSchema, {
+    description:
+      'Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.',
+  })
+  documentSchema(afterReconcileSchema, {
+    description:
+      'Whether verification runs after reconciliation. A step override takes precedence.',
+  })
+  return documentSchema(schema, {
+    structure: {
+      kind: 'steps',
+      steps: stepsSchema,
+      table: tableSchema,
+      ...(allowAfterReconcile ? { afterReconcile: afterReconcileSchema } : {}),
+    },
+  })
 }
 
 // ── [pr] / [pr.imageHost] ────────────────────────────────────────────────────
@@ -98,10 +120,21 @@ function stepSection<T, C>(
 /** Optional public GitHub release used for review-window image copies.
  * Omission is intentionally `undefined`: hosting is off by default. */
 export const imageHostSchema = prImageHostSchema
+
+documentFields(imageHostSchema, {
+  provider: 'Select the GitHub release adapter.',
+  repository: 'Public repository containing the existing review release.',
+  releaseId: 'Numeric id of an existing published, mutable release.',
+})
 export type ImageHostConfig = z.infer<typeof imageHostSchema>
 
 export const prSchema = z.strictObject({
   imageHost: imageHostSchema.optional(),
+})
+
+documentFields(prSchema, {
+  imageHost:
+    'Copy attached images to a temporary public review location so they can render inline.',
 })
 export type PrConfig = z.infer<typeof prSchema>
 
@@ -120,6 +153,12 @@ export const vercelProvisioningStepSchema = z.strictObject({
   name: nonblankProvisioningString('provisioning step name'),
   command: nonblankProvisioningString('provisioning step command'),
 })
+
+documentFields(vercelProvisioningStepSchema, {
+  name: 'Unique provisioning step name. Must contain a non-whitespace character.',
+  command:
+    'Shell command executed in declaration order during provisioning. Must contain a non-whitespace character.',
+})
 export type VercelProvisioningStep = z.infer<typeof vercelProvisioningStepSchema>
 
 const vercelUniversalImageSchema = z
@@ -135,6 +174,15 @@ const vercelUniversalImageSchema = z
 export const runtimeProvisioningEntrySchema = z.strictObject({
   install: z.string().refine((value) => value.trim().length > 0, 'install must be nonblank'),
   preflight: z.string().refine((value) => value.trim().length > 0, 'preflight must be nonblank'),
+})
+
+documentFields(runtimeProvisioningEntrySchema, {
+  install: 'required nonblank shell command; use an immutable package version, digest, or commit',
+  preflight: 'required nonblank shell command; verify the expected executable and exact version',
+})
+documentSchema(runtimeProvisioningEntrySchema, {
+  description:
+    'Installation and preflight commands for an effective runtime. Every effective role or alternate runtime must have an entry.',
 })
 export type RuntimeProvisioningEntry = z.infer<typeof runtimeProvisioningEntrySchema>
 
@@ -230,6 +278,36 @@ export const vercelSandboxConfigSchema = z
       }
     }
   })
+
+documentFields(vercelSandboxConfigSchema, {
+  image: 'Managed image used to provision the workspace.',
+  vcpus:
+    'Virtual CPUs allocated to each workspace; provider account limits may further restrict allocation.',
+  timeoutSeconds:
+    'VM/session lifetime in seconds and abrupt-orphan bound. Provider plan limits also apply.',
+  operationTimeoutMs:
+    'Deadline in milliseconds for each provider acknowledgement, independent of session lifetime.',
+  snapshotExpirationSeconds:
+    'Snapshot expiration in seconds. Omission uses the provider expiration policy.',
+  region: 'Primary region; omission uses the provider region selection.',
+  failoverRegions:
+    'Ordered alternative regions used if the primary region cannot provision a workspace.',
+  environmentVariables:
+    'unique API-credential variable names copied into runtime and agent/check commands',
+  provisioning:
+    'ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique',
+  runtimeProvisioning:
+    'open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight`',
+  gitUsernameEnv:
+    'optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv`',
+  gitPasswordEnv:
+    'optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv`',
+})
+documentSchema(vercelSandboxConfigSchema, {
+  description: 'Strict Vercel workspace provisioning configuration.',
+  constraints:
+    'Environment variable and failover region lists must be unique. Failovers exclude the primary region. Provisioning names must be unique. Clone credential names must be configured together, excluded from runtime environmentVariables, and separate from Forge and Vercel credentials.',
+})
 type NormalizedVercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
 /** Direct provider construction remains source-compatible; schema-parsed
  * production config always materializes operationTimeoutMs. */
@@ -256,7 +334,21 @@ export const workspaceSchema = z.strictObject({
       '[workspace].provider must be a nonblank provider name',
     )
     .default('git-worktree'),
-  config: openMap('[workspace.config]', z.unknown(), { keys: 'any' }),
+  config: openMap(
+    '[workspace.config]',
+    documentSchema(z.unknown(), {
+      description:
+        'Plugin-owned value passed through unchanged. Builtin providers validate their own declared schema.',
+    }),
+    { keys: 'any' },
+  ),
+})
+
+documentFields(workspaceSchema, {
+  provider:
+    'Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release.',
+  config:
+    'Adapter-specific declarative configuration passed unchanged to the selected plugin factory.',
 })
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 
@@ -329,7 +421,10 @@ export const BUILTIN_WORKSPACE_PROVIDER_CONFIG: ReadonlyMap<
 // Open map of deterministic verbs the kernel may run. `setup`, `lint`,
 // `typecheck`, `test` are conventions, not required keys (§16.1).
 
-export const commandsSchema = openMap('[commands]', z.string().min(1))
+export const commandsSchema = openMap(
+  '[commands]',
+  documentSchema(z.string().min(1), { description: 'Named deterministic shell command.' }),
+)
 export type Commands = z.infer<typeof commandsSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
@@ -377,6 +472,11 @@ export const verifyPathGlobSchema = z.string().superRefine((pattern, ctx) => {
   if (message !== undefined) ctx.addIssue({ code: 'custom', message })
 })
 
+documentSchema(verifyPathGlobSchema, {
+  constraints:
+    'Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.',
+})
+
 const verifyApplicabilityShape = {
   afterReconcile: z.boolean().optional(),
   /** Any-match positive path selectors; absent means unconditional. */
@@ -397,11 +497,32 @@ export const verifyCheckStepSchema = z.strictObject({
   ...verifyApplicabilityShape,
 })
 
+documentFields(verifyCheckStepSchema, {
+  kind: 'Select the strict step variant. Fields from another variant are rejected.',
+  command:
+    'Name of an existing command in [commands]; required for check steps and forbidden for agent steps.',
+  afterReconcile:
+    'Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.',
+  paths: 'Apply only when at least one changed path matches. Available to both variants.',
+  always:
+    '`true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.',
+})
+
 export const verifyAgentStepSchema = z.strictObject({
   /** Agent-verify: skill + verdict schema (§16.1). */
   kind: z.literal('agent'),
   skill: z.string().min(1),
   ...verifyApplicabilityShape,
+})
+
+documentFields(verifyAgentStepSchema, {
+  kind: 'Select the strict step variant. Fields from another variant are rejected.',
+  skill: 'Exact installed skill name; required for agent steps and forbidden for check steps.',
+  afterReconcile:
+    'Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.',
+  paths: 'Apply only when at least one changed path matches. Available to both variants.',
+  always:
+    '`true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.',
 })
 
 export const verifyStepConfigSchema = z.discriminatedUnion('kind', [
@@ -441,10 +562,21 @@ export const finalizeCheckStepSchema = z.strictObject({
   command: z.string().min(1),
 })
 
+documentFields(finalizeCheckStepSchema, {
+  kind: 'Select the strict step variant. Fields from another variant are rejected.',
+  command:
+    'Name of an existing command in [commands]; required for check steps and forbidden for agent steps.',
+})
+
 export const finalizeAgentStepSchema = z.strictObject({
   kind: z.literal('agent'),
   /** Exact installed skill name passed to the configured runtime. */
   skill: z.string().min(1),
+})
+
+documentFields(finalizeAgentStepSchema, {
+  kind: 'Select the strict step variant. Fields from another variant are rejected.',
+  skill: 'Exact installed skill name; required for agent steps and forbidden for check steps.',
 })
 
 export const finalizeStepConfigSchema = z.discriminatedUnion('kind', [
@@ -487,6 +619,14 @@ const runtimeAxesSchema = z.strictObject({
   extensions: z.array(z.string().min(1)).optional(),
 })
 
+documentFields(runtimeAxesSchema, {
+  runtime: 'Select an agent adapter.',
+  model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
+  args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
+  extensions:
+    'Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.',
+})
+
 export const roleSchema = runtimeAxesSchema.extend({
   // Wall-clock budget for each session dispatched through this logical role.
   // Absent ⇒ inherit [roles.default], then [policy].sessionBudgetSeconds.
@@ -503,6 +643,42 @@ export const roleSchema = runtimeAxesSchema.extend({
   // list; a declared list (including []) replaces it wholesale. Each strict
   // entry overlays the concrete role's resolved primary axes.
   alternates: z.array(runtimeAxesSchema).optional(),
+})
+
+documentFields(roleSchema, {
+  runtime: 'Select an agent adapter.',
+  model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
+  args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
+  extensions:
+    'Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.',
+  sessionBudgetSeconds:
+    'Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.',
+  alternates:
+    "Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.",
+})
+documentSchema(roleSchema, {
+  description:
+    'Named role inheriting each omitted axis from roles.default. The default role must name a registered runtime.',
+})
+documentSchema(roleSchema.shape.runtime, {
+  constraints:
+    'Required on roles.default by runtime resolution; other roles inherit it. Must name a registered runtime.',
+})
+documentSchema(roleSchema.shape.model, {
+  constraints:
+    'Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.',
+})
+documentSchema(roleSchema.shape.args, {
+  constraints:
+    'Omission inherits the base list, otherwise resolves to an empty list; an explicit list replaces it.',
+})
+documentSchema(roleSchema.shape.sessionBudgetSeconds, {
+  constraints:
+    'Omission inherits roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.',
+})
+documentSchema(roleSchema.shape.alternates, {
+  constraints:
+    'Omission inherits the base alternate list, otherwise resolves to an empty list; each alternate overlays the resolved primary axes.',
 })
 export type RoleConfig = z.infer<typeof roleSchema>
 
@@ -532,6 +708,30 @@ export const policySchema = z.strictObject({
   nodeIdlePollSeconds: z.number().int().positive().default(120),
   janitorBackoffMaxSeconds: z.number().int().positive().default(300),
   harvestMaxDrift: z.number().int().nonnegative().default(3),
+})
+
+documentFields(policySchema, {
+  upgradeDrainSeconds:
+    'Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain.',
+  sessionBudgetSeconds:
+    'Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it.',
+  stallRounds: 'Escalate when the same review finding survives this many rounds.',
+  maxVerifyAttempts: 'Bound failure-driven verify \u2192 implement retry cycles.',
+  maxDispatchAttempts: 'Bound consecutive dispatch failures before human escalation.',
+  maxSetupAttempts: 'Bound consecutive workspace setup failures before human escalation.',
+  maxInfrastructureAttempts:
+    'Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget.',
+  maxReconcileAttempts:
+    'Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound.',
+  maxReviewRounds:
+    'Default bound for each plan/review and implement/review convergence loop. Your agent may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected.',
+  harvestThreshold: 'New unclaimed observation occurrences needed to start one harvest run.',
+  janitorFailureAttentionSeconds: 'Consecutive janitor failure duration before build attention.',
+  nodeIdleAfterSeconds: 'Quiet period before opened integration nodes enter idle polling.',
+  nodeIdlePollSeconds: 'Interval between idle node checks; durable activity wakes the next tick.',
+  janitorBackoffMaxSeconds: 'Cap on exponential janitor retry delay, starting at 30 seconds.',
+  harvestMaxDrift:
+    'Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.',
 })
 export type PolicyConfig = z.infer<typeof policySchema>
 
@@ -643,6 +843,65 @@ export const ticketsInputSchema = z.strictObject({
    * still tell a defaulted dir from an explicit one. */
   dir: z.string().min(1).optional(),
 })
+
+documentFields(ticketsInputSchema, {
+  url: 'Ticket service independent of [store] url and AB_STORE. Required with local builds.',
+  source: 'Select the ticket adapter after configured plugins load.',
+  readyLabels: 'Require every listed label in addition to the state gate.',
+  readyState: 'The one workflow state eligible for dispatch.',
+  readyAssignee:
+    'Require the ticket to be assigned to one Linear user, in addition to the state and label gates.',
+  teamKey: 'Backend team key such as `"ENG"`, or an existing plugin config field.',
+  claimedState: 'Workflow state entered when a ticket is claimed.',
+  doneState: 'Project completion state and merged-ticket transition.',
+  createState: 'Default state for newly created tickets when `ab ticket create` omits `--state`.',
+  triageState: 'State used for spec-gate bounces, aborts, and closed-unmerged PRs.',
+  proposalState:
+    'State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.',
+  dir: 'Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.',
+})
+documentSchema(ticketsInputSchema, {
+  constraints:
+    'readyState is required except for hosted, which resolves omission to ready. url is forbidden for file and linear; hosted URLs are normalized service URLs.',
+})
+documentSchema(ticketsInputSchema.shape.readyState, {
+  required: 'Required unless source = "hosted"; hosted omission resolves to "ready".',
+})
+documentSchema(ticketsInputSchema.shape.teamKey, {
+  required: 'Required for linear and hosted; forbidden for file; optional for plugins.',
+})
+documentSchema(ticketsInputSchema.shape.claimedState, { constraints: 'Forbidden for file.' })
+documentSchema(ticketsInputSchema.shape.dir, { constraints: 'Forbidden for linear and hosted.' })
+documentSchema(ticketsInputSchema.shape.readyAssignee, { constraints: 'Allowed only for linear.' })
+documentSchema(ticketsInputSchema.shape.readyLabels, {
+  constraints:
+    'Omission uses source readiness defaults (Linear: autobuild label; file: none). Explicit [] disables label gating.',
+})
+documentSchema(ticketsInputSchema.shape.url, {
+  constraints:
+    'Forbidden for file and linear. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.',
+})
+documentSchema(ticketsInputSchema.shape.doneState, {
+  constraints: 'Hosted resolution uses done when omitted.',
+})
+documentSchema(ticketsInputSchema.shape.claimedState, {
+  constraints:
+    'Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted.',
+})
+documentSchema(ticketsInputSchema.shape.createState, {
+  constraints: 'Omission uses the source creation state (Linear team default; file Triage).',
+})
+documentSchema(ticketsInputSchema.shape.triageState, {
+  constraints:
+    'Omission resolves to Backlog for Linear, triage for hosted, Triage for file/plugin sources.',
+})
+documentSchema(ticketsInputSchema.shape.proposalState, {
+  constraints: 'Omission uses the resolved triageState.',
+})
+documentSchema(ticketsInputSchema.shape.dir, {
+  constraints:
+    'Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.',
+})
 export const ticketsSchema = ticketsInputSchema
   .superRefine((tickets, ctx) => {
     if (tickets.source === 'hosted' && tickets.url !== undefined) {
@@ -673,6 +932,11 @@ export const ticketsSchema = ticketsInputSchema
       ? { url: normalizeServiceURL(tickets.url, 'tickets.url') }
       : {}),
   }))
+
+documentSchema(ticketsSchema, {
+  constraints:
+    'readyState is required except for hosted, whose omitted value resolves to ready. url is forbidden for file and linear; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.',
+})
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
 // ── [orchestrator] ──────────────────────────────────────────────────────────
@@ -691,6 +955,17 @@ export const orchestratorSandboxSchema = z.strictObject({
    * store, forge, ticket-provider, model, or Vercel credential name is a
    * config error. Unset means none. */
   environmentVariables: z.array(z.string().min(1)).default([]),
+})
+
+documentFields(orchestratorSandboxSchema, {
+  idleMinutes:
+    "Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it.",
+  environmentVariables:
+    'Names of non-secret host variables forwarded into the sandbox \u2014 the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.',
+})
+documentSchema(orchestratorSandboxSchema.shape.environmentVariables, {
+  constraints:
+    'When enabled, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.',
 })
 export type OrchestratorSandboxConfig = z.infer<typeof orchestratorSandboxSchema>
 
@@ -797,6 +1072,29 @@ export const orchestratorSchema = z.strictObject({
    * `ab watch` compiler. */
   wake: z.array(z.string().min(1)).optional(),
 })
+
+documentFields(orchestratorSchema, {
+  enabled:
+    'Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code \u2014 a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment.',
+  sandbox: 'Sandbox behavior knobs.',
+  model:
+    "Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential.",
+  invocationBudgetSeconds:
+    'Wall-clock budget in seconds for one turn invocation. Values above the route limit are clamped after parsing.',
+  approvals:
+    "Registry tool names whose calls suspend a turn until you answer. Empty (`[]`) means none \u2014 autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches.",
+  wake: 'The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the legacy hosted wake set including `integration.verification-failed`, independently of CLI watch defaults) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins.',
+})
+documentSchema(orchestratorSchema.shape.model, {
+  required: 'Required when orchestrator.enabled = true.',
+})
+documentSchema(orchestratorSchema.shape.invocationBudgetSeconds, {
+  constraints: `Values above ${ORCHESTRATOR_ROUTE_LIMIT_SECONDS} are clamped to that limit after parsing.`,
+})
+documentSchema(orchestratorSchema.shape.wake, {
+  constraints:
+    'Every glob must match a known build or repository-journal event. Omission inherits the legacy hosted wake set independently of CLI watch defaults; [] disables waking.',
+})
 export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
 
 // ── Whole file ───────────────────────────────────────────────────────────────
@@ -811,7 +1109,15 @@ export const storeSchema = z.strictObject({
     }
   }),
 })
-const configRootSchema = z.strictObject({
+
+documentFields(storeSchema, {
+  url: 'Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized.',
+})
+documentSchema(storeSchema.shape.url, {
+  constraints:
+    'Absolute HTTPS service URL; loopback HTTP allowed. No credentials, query or fragment. Trailing slashes normalized.',
+})
+export const configRootSchema = z.strictObject({
   store: storeSchema.optional(),
   upgrade: z.strictObject({ automatic: z.boolean().default(true) }).prefault({}),
   /** Base branch builds cut from and target (§16.1). */
@@ -856,6 +1162,38 @@ const configRootSchema = z.strictObject({
   tickets: ticketsSchema.prefault({
     source: 'file',
   } as z.input<typeof ticketsSchema>),
+})
+
+documentFields(configRootSchema, {
+  store: 'Optional remote BuildStore connection. Credentials live outside TOML.',
+  upgrade: 'Automatic dispatcher runtime target checks and adoption.',
+  baseBranch: 'Branch used to cut builds, target PRs, and merge during reconciliation.',
+  capacity:
+    'Concurrent occupied slots for this repository. Paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
+  ticketScanIntervalSeconds:
+    'Ticket-source ready scan cadence; tick spacing is the effective minimum.',
+  forge:
+    'Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names.',
+  plugins:
+    'Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes.',
+  landing: 'Ordered landing rules; the first matching rule controls consent.',
+  pr: 'Pull request review image hosting configuration.',
+  workspace: 'Workspace provider selector and provider-specific configuration.',
+  commands: 'Named shell commands used by setup and deterministic checks.',
+  verify: 'Ordered verification steps and applicability rules.',
+  finalize: 'Ordered post-PR steps. Failures are recorded without blocking the PR.',
+  roles: 'Named agent roles. The reserved default role provides inherited runtime axes.',
+  policy: 'Lifecycle budgets, retries, convergence and harvest limits.',
+  orchestrator:
+    'Operator-agent sandbox settings. This table does not start or host an operator agent.',
+  tickets:
+    'Ticket source and lifecycle vocabulary. Omitting the table supplies source=file but still requires readyState.',
+})
+documentSchema(configRootSchema.shape.upgrade.unwrap().shape.automatic, {
+  description: 'Check and adopt changed runtime targets automatically.',
+})
+documentSchema(configRootSchema.shape.plugins, {
+  constraints: 'Exact module specifiers must be unique.',
 })
 
 /** Root metadata keeps strict error prose and documentation coverage honest. */

@@ -20,9 +20,35 @@ example](#complete-example) is valid on its own.
 
 ## `[store]`
 
-| Key | Required | Values / purpose |
-|---|---|---|
-| `url` | When `[store]` exists | Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized. |
+<!-- configuration-reference:store -->
+
+#### `store`
+
+**TOML key:** `store`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Optional remote BuildStore connection. Credentials live outside TOML.
+
+**Constraints:** None beyond the input type.
+
+#### `store.url`
+
+**TOML key:** `store.url`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized.
+
+**Constraints:** Absolute HTTPS service URL; loopback HTTP allowed. No credentials, query or fragment. Trailing slashes normalized.
+
+<!-- configuration-reference:/store -->
 
 Selection is explicit `--store` > nonblank `AB_STORE` > `[store] url` > the main
 checkout's `.autobuild/`. A configured service without a user credential fails
@@ -66,7 +92,7 @@ schema is incompatible. The database
 identity needs permission to create tables during migration and to select,
 insert, and update those tables at runtime. The complete run, deployment, and
 token procedure is in the [hosted service
-guide](../packages/hosted-store-service/README.md); operator clients use the
+guide](../packages/hosted-store-service/README.md); clients use the
 separate signed-user token described by the [operator API](operator-api.md).
 
 | Variable | Required when | Values / purpose |
@@ -81,7 +107,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
-| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
+| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated sign-in email allowlist; matching is case-insensitive. |
 | `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
@@ -245,18 +271,85 @@ The dispatch process reads the main checkout because it owns repository intake.
 Scoped phase commands still read the build worktree's `autobuild.toml`; this is
 the existing build-context boundary and is not unified by hot reload.
 
+Regenerate the schema-derived field blocks with `bun run docs:configuration`.
+`bun run check` rejects drift or missing field descriptions. Prose outside the
+generated markers is maintained by hand. Defaults below are parser input defaults;
+resolver inheritance is described separately. Nested required fields are required
+when their containing table or array entry is supplied.
+
 ## Root scalars
 
 All root scalars are optional and receive defaults. They must appear before
 any table header.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
-| `ticketScanIntervalSeconds` | `60` | positive integer seconds | Ticket-source ready scan cadence; tick spacing is the effective minimum. |
-| `capacity` | `1` | positive integer | Concurrent occupied slots for this repository. Paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md). |
-| `forge` | `"github"` | nonblank string | Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names. |
-| `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
+<!-- configuration-reference:root -->
+
+#### `baseBranch`
+
+**TOML key:** `baseBranch`
+
+- **Type:** `string`
+- **Default:** `"main"`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Branch used to cut builds, target PRs, and merge during reconciliation.
+
+**Constraints:** minimum length 1
+
+#### `capacity`
+
+**TOML key:** `capacity`
+
+- **Type:** `number`
+- **Default:** `1`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Concurrent occupied slots for this repository. Paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).
+
+**Constraints:** safe integer; > 0
+
+#### `ticketScanIntervalSeconds`
+
+**TOML key:** `ticketScanIntervalSeconds`
+
+- **Type:** `number`
+- **Default:** `60`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ticket-source ready scan cadence; tick spacing is the effective minimum.
+
+**Constraints:** safe integer; > 0
+
+#### `forge`
+
+**TOML key:** `forge`
+
+- **Type:** `string`
+- **Default:** `"github"`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names.
+
+**Constraints:** forge adapter name must be nonblank
+
+#### `plugins`
+
+**TOML key:** `plugins`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes.
+
+**Constraints:** Exact module specifiers must be unique.; Each item: plugin module specifiers must be nonblank
+
+<!-- configuration-reference:/root -->
 
 Ticket-source ready scans run immediately when no completed measurement exists,
 then every
@@ -294,7 +387,7 @@ Autobuild does not install them.
 
 Every configured specifier string must be unique. An exact repeat fails schema
 validation before any plugin resolves or evaluates; the diagnostic identifies
-the repeated value and both list positions and tells the operator to remove or
+the repeated value and both list positions and asks you to remove or
 deduplicate the entry. Distinct specifier strings remain separate declarations.
 Each module must default-export a strict manifest with a plugin name, a semver
 range in `apiVersion`, and optional `ticketSources`, `agentRuntimes`,
@@ -405,7 +498,7 @@ export default {
 } satisfies AutobuildPluginManifest
 ```
 
-Use the sessionless author/operator loop from the repository checkout:
+Use the sessionless authoring loop from the repository checkout:
 
 ```sh
 ab plugin list
@@ -457,12 +550,74 @@ An ordered list of strict landing rules. Predicates within one rule are ANDed;
 the first matching rule wins. Omitted predicates match everything. With no
 matching rule, leaves default to `auto` and nodes to `consent`.
 
-| Field | Meaning |
-|---|---|
-| `into` | Optional destination: `root`, any `node`, or an exact frozen destination node ticket id. |
-| `from` | Optional source kind: `leaf` or `node`. |
-| `label` | Optional exact, case-sensitive label on the source ticket. Blank labels are invalid. |
-| `mode` | Required `auto` or `consent`. |
+<!-- configuration-reference:landing -->
+
+#### `landing`
+
+**TOML key:** `landing`
+
+- **Type:** `array of strict table`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ordered landing rules; the first matching rule controls consent.
+
+**Constraints:** None beyond the input type.
+
+#### `landing[].into`
+
+**TOML key:** `landing[].into`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Optional destination: `root`, any `node`, or an exact frozen destination node ticket id.
+
+**Constraints:** into must be root, node, or a nonblank node ticket id
+
+#### `landing[].from`
+
+**TOML key:** `landing[].from`
+
+- **Type:** `"leaf" | "node"`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Restrict this rule to one source build kind; omission matches all kinds.
+
+**Constraints:** None beyond the input type.
+
+#### `landing[].label`
+
+**TOML key:** `landing[].label`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Optional exact, case-sensitive label on the source ticket. Blank labels are invalid.
+
+**Constraints:** label must be nonblank (labels match exactly, including case)
+
+#### `landing[].mode`
+
+**TOML key:** `landing[].mode`
+
+- **Type:** `"auto" | "consent"`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Choose automatic landing or require recorded consent.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/landing -->
 
 For example, put a rule with `into = "root"` and `mode = "consent"`
 before a catch-all rule with `mode = "auto"` to request consent only at the
@@ -482,20 +637,84 @@ See [worked landing configurations and forge requirements](landing-policy.md),
 Optional. Omitting the table leaves attachment hosting off; attached artifacts
 still receive exact BuildStore download commands in the PR summary.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `imageHost` | omitted (off) | optional `[pr.imageHost]` table | Copy attached images to a temporary public review location so they can render inline. |
+<!-- configuration-reference:pr -->
+
+#### `pr`
+
+**TOML key:** `pr`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Pull request review image hosting configuration.
+
+**Constraints:** None beyond the input type.
+
+#### `pr.imageHost`
+
+**TOML key:** `pr.imageHost`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Copy attached images to a temporary public review location so they can render inline.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/pr -->
 
 ### `[pr.imageHost]`
+
+<!-- configuration-reference:pr-imageHost -->
+
+#### `pr.imageHost.provider`
+
+**TOML key:** `pr.imageHost.provider`
+
+- **Type:** `"github-release"`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select the GitHub release adapter.
+
+**Constraints:** None beyond the input type.
+
+#### `pr.imageHost.repository`
+
+**TOML key:** `pr.imageHost.repository`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Public repository containing the existing review release.
+
+**Constraints:** matches /^[^/\s]+\/[^/\s]+$/
+
+#### `pr.imageHost.releaseId`
+
+**TOML key:** `pr.imageHost.releaseId`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Numeric id of an existing published, mutable release.
+
+**Constraints:** safe integer; > 0
+
+<!-- configuration-reference:/pr-imageHost -->
 
 This optional nested table selects the one shipped image-host adapter. If the
 table exists, all three fields are required.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `provider` | — | required literal `"github-release"` | Select the GitHub release adapter. |
-| `repository` | — | required exact nonblank `owner/repo` pair | Public repository containing the existing review release. |
-| `releaseId` | — | required positive integer | Numeric id of an existing published, mutable release. |
 
 <!-- config-fragment:image-host -->
 ```toml
@@ -537,10 +756,61 @@ never pruned.
 Optional. Omission preserves the shipped git-worktree behavior. The surrounding
 table is strict; only the explicit nested `config` table is plugin-owned.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `provider` | `"git-worktree"` | nonblank builtin or plugin-registered name | Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release. |
-| `config` | `{}` | nested open table; must be empty for `git-worktree` | Adapter-specific declarative configuration passed unchanged to the selected plugin factory. |
+<!-- configuration-reference:workspace -->
+
+#### `workspace`
+
+**TOML key:** `workspace`
+
+- **Type:** `strict table`
+- **Default:** `{} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Workspace provider selector and provider-specific configuration.
+
+**Constraints:** None beyond the input type.
+
+#### `workspace.provider`
+
+**TOML key:** `workspace.provider`
+
+- **Type:** `string`
+- **Default:** `"git-worktree"`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release.
+
+**Constraints:** [workspace].provider must be a nonblank provider name
+
+#### `workspace.config`
+
+**TOML key:** `workspace.config`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Adapter-specific declarative configuration passed unchanged to the selected plugin factory.
+
+**Constraints:** Entry names: any; provider = "git-worktree": [workspace.config] is not supported by the builtin "git-worktree" provider — remove it or select a plugin workspace provider
+
+#### `workspace.config.<name>`
+
+**TOML key:** `workspace.config.<name>`
+
+- **Type:** `plugin-owned TOML value`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Plugin-owned value passed through unchanged. Builtin providers validate their own declared schema.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/workspace -->
 
 <!-- config-fragment:workspace -->
 ```toml
@@ -596,20 +866,243 @@ install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent
 preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
-| Vercel field | Default | Constraints |
-|---|---:|---|
-| `image` | `vercel/sandbox/universal:latest` | `vercel/sandbox/universal`, a tag such as `:latest`, or a `@sha256:<64 hex digits>` digest |
-| `vcpus` | `4` | integer 1–32 (account limits may be lower) |
-| `timeoutSeconds` | — | required, integer 60–86400; VM/session lifetime and abrupt-orphan bound; Hobby currently permits at most 2700 |
-| `operationTimeoutMs` | `30000` | integer 1000–300000; deadline for each provider acknowledgement, not session lifetime |
-| `snapshotExpirationSeconds` | — | optional integer 300–2592000; snapshots created for this environment expire after this duration instead of the provider default (30 days); recommended 86400 (24h) |
-| `region` | Vercel default | nonempty region |
-| `failoverRegions` | `[]` | unique and different from `region` |
-| `environmentVariables` | `[]` | unique API-credential variable names copied into runtime and agent/check commands |
-| `provisioning` | `[]` | ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique |
-| `runtimeProvisioning` | `{}` | open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight` |
-| `gitUsernameEnv` | — | optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv` |
-| `gitPasswordEnv` | — | optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv` |
+<!-- configuration-reference:workspace-vercel-sandbox -->
+
+#### `workspace.config`
+
+**TOML key:** `workspace.config`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Strict Vercel workspace provisioning configuration.
+
+**Constraints:** Environment variable and failover region lists must be unique. Failovers exclude the primary region. Provisioning names must be unique. Clone credential names must be configured together, excluded from runtime environmentVariables, and separate from Forge and Vercel credentials.
+
+#### `workspace.config.image`
+
+**TOML key:** `workspace.config.image`
+
+- **Type:** `string`
+- **Default:** `"vercel/sandbox/universal:latest"`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Managed image used to provision the workspace.
+
+**Constraints:** Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters
+
+#### `workspace.config.vcpus`
+
+**TOML key:** `workspace.config.vcpus`
+
+- **Type:** `number`
+- **Default:** `4`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Virtual CPUs allocated to each workspace; provider account limits may further restrict allocation.
+
+**Constraints:** safe integer; ≥ 1; ≤ 32
+
+#### `workspace.config.timeoutSeconds`
+
+**TOML key:** `workspace.config.timeoutSeconds`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** VM/session lifetime in seconds and abrupt-orphan bound. Provider plan limits also apply.
+
+**Constraints:** safe integer; ≥ 60; ≤ 86400
+
+#### `workspace.config.operationTimeoutMs`
+
+**TOML key:** `workspace.config.operationTimeoutMs`
+
+- **Type:** `number`
+- **Default:** `30000`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Deadline in milliseconds for each provider acknowledgement, independent of session lifetime.
+
+**Constraints:** safe integer; ≥ 1000; ≤ 300000
+
+#### `workspace.config.snapshotExpirationSeconds`
+
+**TOML key:** `workspace.config.snapshotExpirationSeconds`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Snapshot expiration in seconds. Omission uses the provider expiration policy.
+
+**Constraints:** safe integer; ≥ 300; ≤ 2592000
+
+#### `workspace.config.region`
+
+**TOML key:** `workspace.config.region`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Primary region; omission uses the provider region selection.
+
+**Constraints:** minimum length 1
+
+#### `workspace.config.failoverRegions`
+
+**TOML key:** `workspace.config.failoverRegions`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Ordered alternative regions used if the primary region cannot provision a workspace.
+
+**Constraints:** Each item: minimum length 1
+
+#### `workspace.config.environmentVariables`
+
+**TOML key:** `workspace.config.environmentVariables`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** unique API-credential variable names copied into runtime and agent/check commands
+
+**Constraints:** Each item: matches /^[A-Za-z_][A-Za-z0-9_]*$/
+
+#### `workspace.config.provisioning`
+
+**TOML key:** `workspace.config.provisioning`
+
+- **Type:** `array of strict table`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique
+
+**Constraints:** None beyond the input type.
+
+#### `workspace.config.provisioning[].name`
+
+**TOML key:** `workspace.config.provisioning[].name`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Unique provisioning step name. Must contain a non-whitespace character.
+
+**Constraints:** provisioning step name must be nonblank
+
+#### `workspace.config.provisioning[].command`
+
+**TOML key:** `workspace.config.provisioning[].command`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Shell command executed in declaration order during provisioning. Must contain a non-whitespace character.
+
+**Constraints:** provisioning step command must be nonblank
+
+#### `workspace.config.runtimeProvisioning`
+
+**TOML key:** `workspace.config.runtimeProvisioning`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight`
+
+**Constraints:** Entry names: nonblank
+
+#### `workspace.config.runtimeProvisioning.<name>`
+
+**TOML key:** `workspace.config.runtimeProvisioning.<name>`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Installation and preflight commands for an effective runtime. Every effective role or alternate runtime must have an entry.
+
+**Constraints:** None beyond the input type.
+
+#### `workspace.config.runtimeProvisioning.<name>.install`
+
+**TOML key:** `workspace.config.runtimeProvisioning.<name>.install`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** required nonblank shell command; use an immutable package version, digest, or commit
+
+**Constraints:** install must be nonblank
+
+#### `workspace.config.runtimeProvisioning.<name>.preflight`
+
+**TOML key:** `workspace.config.runtimeProvisioning.<name>.preflight`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** required nonblank shell command; verify the expected executable and exact version
+
+**Constraints:** preflight must be nonblank
+
+#### `workspace.config.gitUsernameEnv`
+
+**TOML key:** `workspace.config.gitUsernameEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv`
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/
+
+#### `workspace.config.gitPasswordEnv`
+
+**TOML key:** `workspace.config.gitPasswordEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv`
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/
+
+<!-- configuration-reference:/workspace-vercel-sandbox -->
 
 `snapshotExpirationSeconds` is a billing safety net: snapshot cleanup normally
 purges on release, but a crash that loses the workspace before cleanup can
@@ -621,10 +1114,6 @@ purpose.
 
 Each `[workspace.config.runtimeProvisioning.<runtime>]` entry is strict:
 
-| Runtime provisioning field | Constraints |
-|---|---|
-| `install` | required nonblank shell command; use an immutable package version, digest, or commit |
-| `preflight` | required nonblank shell command; verify the expected executable and exact version |
 
 Runtime names are not a built-in enum. Plugin registrations work with the same
 map, for example `[workspace.config.runtimeProvisioning.opencode]` with a pinned
@@ -686,7 +1175,7 @@ store's supported client window). Immediately
 before every build-child launch, the adapter verifies the
 provisioned absolute Bun executable and every referenced runtime again. A
 failure names the runtime, selecting role/alternate, stage, and provisioning
-field, launches no child, and instructs the operator to fix/reprovision. This
+field, launches no child, and asks you to fix/reprovision. This
 fails closed for stale marked snapshots. Runtime installation is deliberately
 separate from `[commands].setup`, which starts inside the runner and cannot make
 the runtime available before the first agent session. Branch publication is
@@ -783,9 +1272,35 @@ An optional open map of repository-defined names to shell strings. Its default
 is `{}`. `setup`, `lint`, `type-check`, and `test` are conventions, not fixed
 schema fields.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `<name>` | — | nonempty key and nonempty shell string | Name a deterministic verb for setup or a check step. |
+<!-- configuration-reference:commands -->
+
+#### `commands`
+
+**TOML key:** `commands`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Named shell commands used by setup and deterministic checks.
+
+**Constraints:** Entry names: nonempty
+
+#### `commands.<name>`
+
+**TOML key:** `commands.<name>`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Named deterministic shell command.
+
+**Constraints:** minimum length 1
+
+<!-- configuration-reference:/commands -->
 
 <!-- config-fragment:commands -->
 ```toml
@@ -842,15 +1357,191 @@ There are two strict step variants:
 - `kind = "agent"` runs the exact configured skill, which terminates with an
   `ab verdict` of `pass`, `fail`, or `skip`.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `steps` | `[]` | array of nonempty step names | Canonical execution order. |
-| `kind` | — | required `"check"` or `"agent"` | Select the strict step variant. |
-| `command` | — | required for check; nonempty key in `[commands]` | Deterministic shell verb to run. Forbidden for agent steps. |
-| `skill` | — | required for agent; nonempty string | Exact installed verifier skill. Forbidden for check steps. |
-| `paths` | omitted (unconditional) | optional nonempty array of positive repository-relative globs | Apply only when at least one changed path matches. Available to both variants. |
-| `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
-| `always` | omitted (`false`) | optional boolean | `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants. |
+<!-- configuration-reference:verify -->
+
+#### `verify`
+
+**TOML key:** `verify`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Ordered verification steps and applicability rules.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.steps`
+
+**TOML key:** `verify.steps`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.
+
+**Constraints:** Each item: minimum length 1
+
+#### `verify.afterReconcile`
+
+**TOML key:** `verify.afterReconcile`
+
+- **Type:** `boolean`
+- **Default:** `true`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Whether verification runs after reconciliation. A step override takes precedence.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>`
+
+**TOML key:** `verify.<step>`
+
+- **Type:** `strict table | strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.kind` (kind = "check")
+
+**TOML key:** `verify.<step>.kind`
+
+- **Type:** `"check"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Select the strict step variant. Fields from another variant are rejected.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.command` (kind = "check")
+
+**TOML key:** `verify.<step>.command`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
+
+**Constraints:** minimum length 1
+
+#### `verify.<step>.afterReconcile` (kind = "check")
+
+**TOML key:** `verify.<step>.afterReconcile`
+
+- **Type:** `boolean`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.paths` (kind = "check")
+
+**TOML key:** `verify.<step>.paths`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Apply only when at least one changed path matches. Available to both variants.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
+#### `verify.<step>.always` (kind = "check")
+
+**TOML key:** `verify.<step>.always`
+
+- **Type:** `boolean`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.kind` (kind = "agent")
+
+**TOML key:** `verify.<step>.kind`
+
+- **Type:** `"agent"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Select the strict step variant. Fields from another variant are rejected.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.skill` (kind = "agent")
+
+**TOML key:** `verify.<step>.skill`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
+
+**Constraints:** minimum length 1
+
+#### `verify.<step>.afterReconcile` (kind = "agent")
+
+**TOML key:** `verify.<step>.afterReconcile`
+
+- **Type:** `boolean`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
+
+**Constraints:** None beyond the input type.
+
+#### `verify.<step>.paths` (kind = "agent")
+
+**TOML key:** `verify.<step>.paths`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Apply only when at least one changed path matches. Available to both variants.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
+#### `verify.<step>.always` (kind = "agent")
+
+**TOML key:** `verify.<step>.always`
+
+- **Type:** `boolean`
+- **Default:** `omitted`
+- **Required:** Optional when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/verify -->
 
 <!-- config-fragment:verify -->
 ```toml
@@ -982,12 +1673,100 @@ and every table must be listed.
 Finalize has a smaller strict union. Verify-only `paths` and `always` fields
 are errors.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `steps` | `[]` | array of nonempty step names | Ordered post-PR actions. |
-| `kind` | — | required `"check"` or `"agent"` | Select deterministic command or agent action. |
-| `command` | — | required for check; nonempty key in `[commands]` | Run the mapped command with no agent session. |
-| `skill` | — | required for agent; nonempty string | Exact installed skill; no prefix is inferred. |
+<!-- configuration-reference:finalize -->
+
+#### `finalize`
+
+**TOML key:** `finalize`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Ordered post-PR steps. Failures are recorded without blocking the PR.
+
+**Constraints:** None beyond the input type.
+
+#### `finalize.steps`
+
+**TOML key:** `finalize.steps`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.
+
+**Constraints:** Each item: minimum length 1
+
+#### `finalize.<step>`
+
+**TOML key:** `finalize.<step>`
+
+- **Type:** `strict table | strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
+
+**Constraints:** None beyond the input type.
+
+#### `finalize.<step>.kind` (kind = "check")
+
+**TOML key:** `finalize.<step>.kind`
+
+- **Type:** `"check"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Select the strict step variant. Fields from another variant are rejected.
+
+**Constraints:** None beyond the input type.
+
+#### `finalize.<step>.command` (kind = "check")
+
+**TOML key:** `finalize.<step>.command`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
+
+**Constraints:** minimum length 1
+
+#### `finalize.<step>.kind` (kind = "agent")
+
+**TOML key:** `finalize.<step>.kind`
+
+- **Type:** `"agent"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Select the strict step variant. Fields from another variant are rejected.
+
+**Constraints:** None beyond the input type.
+
+#### `finalize.<step>.skill` (kind = "agent")
+
+**TOML key:** `finalize.<step>.skill`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
+
+**Constraints:** minimum length 1
+
+<!-- configuration-reference:/finalize -->
 
 <!-- config-fragment:finalize -->
 ```toml
@@ -1058,14 +1837,165 @@ inherit independently. The reserved
 role, and is never dispatched itself. Missing it fails eagerly before any
 session starts, with a copyable table and all registered runtime names.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
-| `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
-| `args` | inherited; otherwise `[]` | optional array of nonempty strings; `[]` allowed | Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list. |
-| `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`. |
-| `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target. |
-| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op. |
+<!-- configuration-reference:roles -->
+
+#### `roles`
+
+**TOML key:** `roles`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named agent roles. The reserved default role provides inherited runtime axes.
+
+**Constraints:** Entry names: nonempty
+
+#### `roles.<name>`
+
+**TOML key:** `roles.<name>`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named role inheriting each omitted axis from roles.default. The default role must name a registered runtime.
+
+**Constraints:** None beyond the input type.
+
+#### `roles.<name>.runtime`
+
+**TOML key:** `roles.<name>.runtime`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select an agent adapter.
+
+**Constraints:** minimum length 1; Required on roles.default by runtime resolution; other roles inherit it. Must name a registered runtime.
+
+#### `roles.<name>.model`
+
+**TOML key:** `roles.<name>.model`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+
+**Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
+
+#### `roles.<name>.args`
+
+**TOML key:** `roles.<name>.args`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
+
+**Constraints:** Omission inherits the base list, otherwise resolves to an empty list; an explicit list replaces it.; Each item: minimum length 1
+
+#### `roles.<name>.extensions`
+
+**TOML key:** `roles.<name>.extensions`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
+
+**Constraints:** Each item: minimum length 1
+
+#### `roles.<name>.sessionBudgetSeconds`
+
+**TOML key:** `roles.<name>.sessionBudgetSeconds`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
+
+**Constraints:** safe integer; > 0; Omission inherits roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.
+
+#### `roles.<name>.alternates`
+
+**TOML key:** `roles.<name>.alternates`
+
+- **Type:** `array of strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.
+
+**Constraints:** Omission inherits the base alternate list, otherwise resolves to an empty list; each alternate overlays the resolved primary axes.
+
+#### `roles.<name>.alternates[].runtime`
+
+**TOML key:** `roles.<name>.alternates[].runtime`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select an agent adapter.
+
+**Constraints:** minimum length 1; Required on roles.default by runtime resolution; other roles inherit it. Must name a registered runtime.
+
+#### `roles.<name>.alternates[].model`
+
+**TOML key:** `roles.<name>.alternates[].model`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+
+**Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
+
+#### `roles.<name>.alternates[].args`
+
+**TOML key:** `roles.<name>.alternates[].args`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
+
+**Constraints:** Each item: minimum length 1
+
+#### `roles.<name>.alternates[].extensions`
+
+**TOML key:** `roles.<name>.alternates[].extensions`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
+
+**Constraints:** Each item: minimum length 1
+
+<!-- configuration-reference:/roles -->
 
 <!-- config-fragment:roles -->
 ```toml
@@ -1127,7 +2057,7 @@ ids. Pi ids remain provider-qualified—including the independent
 `--no-extensions` to disable ambient package discovery and loads the Autobuild
 bridge explicitly. Repeatable `--extension <path>` tokens in `args` supplement
 that setup and expose every tool registered by that explicitly loaded extension;
-without them, no operator-installed extension loads. A plugin may declare
+without them, no user-installed extension loads. A plugin may declare
 optional tool-free one-shot completion for `slug` and `upgrade`; absence keeps
 each caller's existing fail-safe behavior. Role `args` apply to those one-shots
 too. Effective arguments are recorded on session-start facts.
@@ -1188,7 +2118,7 @@ alternate because it is kernel policy, not a provider failure. The ordinary
 phase-attempt guard retries from the primary and raises an answerable policy
 escalation when exhausted. Operator cancellation does not disable the captured
 deadline: a cooperative adapter still returns promptly, while an adapter that
-ignores cancellation is released when the deadline arrives. If operator abort
+ignores cancellation is released when the deadline arrives. If your agent aborts
 arrived first, that release stays an abort control outcome, starts no alternate,
 and records no `phase.failed`. A typed terminal deposited before either boundary
 remains authoritative. Agent finalize post-step expiry instead records that
@@ -1201,23 +2131,217 @@ this setting.
 Optional. Every field receives its own default. All are positive integers except
 `harvestMaxDrift`, which is nonnegative so zero can disable that trigger.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `upgradeDrainSeconds` | `900` | positive integer | Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain. |
-| `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it. |
-| `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
-| `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
-| `maxDispatchAttempts` | `3` | positive integer | Bound consecutive dispatch failures before human escalation. |
-| `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
-| `maxInfrastructureAttempts` | `3` | positive integer | Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget. |
-| `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
-| `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
-| `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
-| `janitorFailureAttentionSeconds` | `600` | positive integer | Consecutive janitor failure duration before build attention. |
-| `nodeIdleAfterSeconds` | `600` | positive integer | Quiet period before opened integration nodes enter idle polling. |
-| `nodeIdlePollSeconds` | `120` | positive integer | Interval between idle node checks; durable activity wakes the next tick. |
-| `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
-| `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
+<!-- configuration-reference:policy -->
+
+#### `policy`
+
+**TOML key:** `policy`
+
+- **Type:** `strict table`
+- **Default:** `{} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Lifecycle budgets, retries, convergence and harvest limits.
+
+**Constraints:** None beyond the input type.
+
+#### `policy.upgradeDrainSeconds`
+
+**TOML key:** `policy.upgradeDrainSeconds`
+
+- **Type:** `number`
+- **Default:** `900`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.sessionBudgetSeconds`
+
+**TOML key:** `policy.sessionBudgetSeconds`
+
+- **Type:** `number`
+- **Default:** `3600`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.stallRounds`
+
+**TOML key:** `policy.stallRounds`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Escalate when the same review finding survives this many rounds.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxVerifyAttempts`
+
+**TOML key:** `policy.maxVerifyAttempts`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Bound failure-driven verify → implement retry cycles.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxDispatchAttempts`
+
+**TOML key:** `policy.maxDispatchAttempts`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Bound consecutive dispatch failures before human escalation.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxSetupAttempts`
+
+**TOML key:** `policy.maxSetupAttempts`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Bound consecutive workspace setup failures before human escalation.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxInfrastructureAttempts`
+
+**TOML key:** `policy.maxInfrastructureAttempts`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxReconcileAttempts`
+
+**TOML key:** `policy.maxReconcileAttempts`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.maxReviewRounds`
+
+**TOML key:** `policy.maxReviewRounds`
+
+- **Type:** `number`
+- **Default:** `6`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Default bound for each plan/review and implement/review convergence loop. Your agent may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.harvestThreshold`
+
+**TOML key:** `policy.harvestThreshold`
+
+- **Type:** `number`
+- **Default:** `5`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** New unclaimed observation occurrences needed to start one harvest run.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.janitorFailureAttentionSeconds`
+
+**TOML key:** `policy.janitorFailureAttentionSeconds`
+
+- **Type:** `number`
+- **Default:** `600`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Consecutive janitor failure duration before build attention.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.nodeIdleAfterSeconds`
+
+**TOML key:** `policy.nodeIdleAfterSeconds`
+
+- **Type:** `number`
+- **Default:** `600`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Quiet period before opened integration nodes enter idle polling.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.nodeIdlePollSeconds`
+
+**TOML key:** `policy.nodeIdlePollSeconds`
+
+- **Type:** `number`
+- **Default:** `120`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Interval between idle node checks; durable activity wakes the next tick.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.janitorBackoffMaxSeconds`
+
+**TOML key:** `policy.janitorBackoffMaxSeconds`
+
+- **Type:** `number`
+- **Default:** `300`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Cap on exponential janitor retry delay, starting at 30 seconds.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.harvestMaxDrift`
+
+**TOML key:** `policy.harvestMaxDrift`
+
+- **Type:** `number`
+- **Default:** `3`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.
+
+**Constraints:** safe integer; ≥ 0
+
+<!-- configuration-reference:/policy -->
 
 Dispatch failures share a `[policy].maxDispatchAttempts` budget (default 3) across
 create, workspace, spec, comment, and launch stages. Exhaustion raises one
@@ -1308,20 +2432,178 @@ Required in practice: `readyState` deliberately has no default, so omitting the
 table fails at `tickets.readyState` rather than allowing tickets from every
 state. Within a present table, `source` is required; hosted tickets default `readyState` to `ready`. Other sources require it.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `source` | — | required nonblank builtin or plugin registration name | Select the ticket adapter after configured plugins load. |
-| `readyLabels` | source-aware | optional array of nonempty strings; `[]` allowed | Require every listed label in addition to the state gate. |
-| `url` | selected build service | HTTPS service URL; HTTP allowed on loopback; no credentials, query or fragment; hosted only | Ticket service independent of [store] url and AB_STORE. Required with local builds. |
-| `readyState` | hosted: `"ready"` | nonblank string; required for other sources | The one workflow state eligible for dispatch. |
-| `readyAssignee` | — | optional; `"me"` or an email address; Linear only (rejected for file, hosted, and plugin sources) | Require the ticket to be assigned to one Linear user, in addition to the state and label gates. |
-| `teamKey` | — | required for Linear and hosted; forbidden for file; optional for plugins | Backend team key such as `"ENG"`, or an existing plugin config field. |
-| `claimedState` | `"In Progress"` for direct Linear; `"doing"` for hosted | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
-| `doneState` | hosted: `"done"` | optional nonblank string; hosted | Project completion state and merged-ticket transition. |
-| `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
-| `triageState` | Linear: `"Backlog"`; hosted: `"triage"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
-| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
-| `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
+<!-- configuration-reference:tickets -->
+
+#### `tickets`
+
+**TOML key:** `tickets`
+
+- **Type:** `strict table`
+- **Default:** `{"source":"file"} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Mixed: see individual fields for dispatcher reload behavior. A running invocation keeps its captured values.
+
+**Description:** Ticket source and lifecycle vocabulary. Omitting the table supplies source=file but still requires readyState.
+
+**Constraints:** readyState is required except for hosted, whose omitted value resolves to ready. url is forbidden for file and linear; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.
+
+#### `tickets.url`
+
+**TOML key:** `tickets.url`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ticket service independent of [store] url and AB_STORE. Required with local builds.
+
+**Constraints:** Forbidden for file and linear. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.
+
+#### `tickets.source`
+
+**TOML key:** `tickets.source`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Select the ticket adapter after configured plugins load.
+
+**Constraints:** [tickets].source must be a nonblank builtin or plugin ticket source name
+
+#### `tickets.readyLabels`
+
+**TOML key:** `tickets.readyLabels`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Require every listed label in addition to the state gate.
+
+**Constraints:** Omission uses source readiness defaults (Linear: autobuild label; file: none). Explicit [] disables label gating.; Each item: minimum length 1
+
+#### `tickets.readyState`
+
+**TOML key:** `tickets.readyState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required unless source = "hosted"; hosted omission resolves to "ready".
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** The one workflow state eligible for dispatch.
+
+**Constraints:** [tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").
+
+#### `tickets.readyAssignee`
+
+**TOML key:** `tickets.readyAssignee`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Require the ticket to be assigned to one Linear user, in addition to the state and label gates.
+
+**Constraints:** [tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com"); Allowed only for linear.
+
+#### `tickets.teamKey`
+
+**TOML key:** `tickets.teamKey`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required for linear and hosted; forbidden for file; optional for plugins.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Backend team key such as `"ENG"`, or an existing plugin config field.
+
+**Constraints:** minimum length 1
+
+#### `tickets.claimedState`
+
+**TOML key:** `tickets.claimedState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Workflow state entered when a ticket is claimed.
+
+**Constraints:** minimum length 1; state must be nonblank; Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted.
+
+#### `tickets.doneState`
+
+**TOML key:** `tickets.doneState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Project completion state and merged-ticket transition.
+
+**Constraints:** minimum length 1; state must be nonblank; Hosted resolution uses done when omitted.
+
+#### `tickets.createState`
+
+**TOML key:** `tickets.createState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Default state for newly created tickets when `ab ticket create` omits `--state`.
+
+**Constraints:** minimum length 1; state must be nonblank; Omission uses the source creation state (Linear team default; file Triage).
+
+#### `tickets.triageState`
+
+**TOML key:** `tickets.triageState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** State used for spec-gate bounces, aborts, and closed-unmerged PRs.
+
+**Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted, Triage for file/plugin sources.
+
+#### `tickets.proposalState`
+
+**TOML key:** `tickets.proposalState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.
+
+**Constraints:** minimum length 1; state must be nonblank; Omission uses the resolved triageState.
+
+#### `tickets.dir`
+
+**TOML key:** `tickets.dir`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.
+
+**Constraints:** minimum length 1; Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.
+
+<!-- configuration-reference:/tickets -->
 
 `readyAssignee = "me"` resolves to the Linear user who owns `LINEAR_API_KEY`,
 so one committed value makes each person's local dispatcher take only the work
@@ -1478,27 +2760,135 @@ Set `COMPANY_TICKET_TOKEN` in the environment, never in this table.
 
 ## `[orchestrator]`
 
-Gates the operator-agent feature (AUT-340, AUT-342): the per-operator sandbox
+Gates the operator-agent feature (AUT-340, AUT-342): the per-user sandbox
 environments the `sandbox.*` registry tools drive, and — when the embedded
-orchestrator is enabled — the turn runner that answers operator sessions and
+orchestrator is enabled — the turn runner that answers your sessions and
 wakes on build events. The table is closed to unknown keys and
 restart-classified as a whole.
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
-| `model` | — | nonblank string, required when `enabled = true` | Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential. |
-| `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under (`ORCHESTRATOR_ROUTE_LIMIT_SECONDS`, the same number the operator route pins as `maxDuration`). |
-| `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until the operator answers. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
-| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the legacy hosted wake set including `integration.verification-failed`, independently of CLI watch defaults) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
-| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
+<!-- configuration-reference:orchestrator -->
+
+#### `orchestrator`
+
+**TOML key:** `orchestrator`
+
+- **Type:** `strict table`
+- **Default:** `{} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Operator-agent sandbox settings. This table does not start or host an operator agent.
+
+**Constraints:** None beyond the input type.
+
+#### `orchestrator.enabled`
+
+**TOML key:** `orchestrator.enabled`
+
+- **Type:** `boolean`
+- **Default:** `false`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment.
+
+**Constraints:** None beyond the input type.
+
+#### `orchestrator.sandbox`
+
+**TOML key:** `orchestrator.sandbox`
+
+- **Type:** `strict table`
+- **Default:** `{} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Sandbox behavior knobs.
+
+**Constraints:** None beyond the input type.
+
+#### `orchestrator.sandbox.idleMinutes`
+
+**TOML key:** `orchestrator.sandbox.idleMinutes`
+
+- **Type:** `number`
+- **Default:** `30`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it.
+
+**Constraints:** safe integer; > 0
+
+#### `orchestrator.sandbox.environmentVariables`
+
+**TOML key:** `orchestrator.sandbox.environmentVariables`
+
+- **Type:** `array of string`
+- **Default:** `[]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.
+
+**Constraints:** When enabled, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.; Each item: minimum length 1
+
+#### `orchestrator.model`
+
+**TOML key:** `orchestrator.model`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when orchestrator.enabled = true.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential.
+
+**Constraints:** minimum length 1
+
+#### `orchestrator.invocationBudgetSeconds`
+
+**TOML key:** `orchestrator.invocationBudgetSeconds`
+
+- **Type:** `number`
+- **Default:** `240`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Wall-clock budget in seconds for one turn invocation. Values above the route limit are clamped after parsing.
+
+**Constraints:** safe integer; > 0; Values above 300 are clamped to that limit after parsing.
+
+#### `orchestrator.approvals`
+
+**TOML key:** `orchestrator.approvals`
+
+- **Type:** `array of string`
+- **Default:** `["builds.control:abort","builds.control:discard","builds.answer:revise-spec","sandbox.publish","tickets.move:ready"]`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** Registry tool names whose calls suspend a turn until you answer. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches.
+
+**Constraints:** Each item: matches /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
+
+#### `orchestrator.wake`
+
+**TOML key:** `orchestrator.wake`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+
+**Description:** The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the legacy hosted wake set including `integration.verification-failed`, independently of CLI watch defaults) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins.
+
+**Constraints:** Every glob must match a known build or repository-journal event. Omission inherits the legacy hosted wake set independently of CLI watch defaults; [] disables waking.; Each item: minimum length 1
+
+<!-- configuration-reference:/orchestrator -->
 
 `[orchestrator.sandbox]` fields:
 
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
-| `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
 
 The credential-free rule is structural: the environment receives no store,
 forge, ticket-provider, or model credential, and naming any of `AB_STORE`,
@@ -1517,9 +2907,9 @@ re-checks both sets after plugins load, before any infrastructure is
 provisioned. Tool bounds:
 `sandbox.exec` waits at most 300 seconds; stdout and stderr are each truncated
 at 65,536 bytes with a `[truncated by autobuild: output exceeded 65536 bytes]`
-marker; `sandbox.reset` and archiving an operator's last session are
+marker; `sandbox.reset` and archiving your last session are
 destructive (reset re-provisions from the current base head); there is at most
-one environment per operator and repository.
+one environment per user and repository.
 
 <!-- config-fragment:orchestrator -->
 ```toml
@@ -1551,7 +2941,7 @@ header (or an explicit `VERCEL_OIDC_TOKEN`, which takes precedence, or the
 durable `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple, which
 needs no header); the tick path inherits the dispatcher's already-forwarded
 token. Every serving path derives the same deterministic environment name per
-(repository origin, operator), so an operator's environment is one
+(repository origin, user), so your environment is one
 environment per repository no matter which binding drove it, and the guest
 still receives no credential. Serving stays gated exactly as locally: the
 effective `[orchestrator].enabled`, the registry's closed-table filtering,
@@ -1731,7 +3121,7 @@ the default path likewise carries its pre-update Git baseline through that
 handoff. If a replacement child receives the handoff marker without that
 baseline — possible when an older parent launches a newer child — it suppresses
 the entire automatic commit, names the cross-version compatibility reason, and
-leaves all upgrade-owned changes uncommitted for the operator. Skill-upgrade
+leaves all upgrade-owned changes uncommitted for you. Skill-upgrade
 results and the merge-derived exit status remain unchanged. Upgrade likewise
 suppresses the whole commit and names why when any skill or Claude discovery
 path conflicts, an owned path was already dirty, the target is not a Git
@@ -1765,7 +3155,7 @@ either retirement.
 
 ## Durable settings outside TOML
 
-Three repository-wide operator choices intentionally live as facts in the
+Three repository-wide choices intentionally live as facts in the
 BuildStore repository journal, not in `autobuild.toml`. They are latest-write
 wins, survive process restarts, and are sampled by every dispatcher on its
 poll. Editing TOML cannot change them.
@@ -1826,12 +3216,12 @@ repository's ordinary Git identity, as resolved for a plain `git commit`; the
 landing is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
 resolve that identity, the PR remains open and `ab build status <slug>` names
 `user.name` / `user.email` setup commands; dispatcher ticks retry automatically
-after the operator configures them. A dirty checked-out base does not by itself
+after you configure them. A dirty checked-out base does not by itself
 block the landing: tracked and untracked work on paths untouched by the squash
 survives.
-If the squash would overwrite operator work, the PR remains open, `ab build
+If the squash would overwrite your work, the PR remains open, `ab build
 status <slug>` shows a path-bearing observation, and later dispatcher ticks retry
-automatically after the operator commits, stashes, or discards the collision;
+automatically after you commit, stash, or discard the collision;
 Autobuild never mutates that work. Inspect an open local change with `git diff
 main...ab/<slug>`. It has no review web UI and no image-hosting capability; attached artifacts use
 the existing text-download projection.
@@ -2023,9 +3413,9 @@ There is no durable native-effect reservation protocol. An undesired forge
 landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
 state with no enable in flight or indeterminate means a deliberate human forge
 landing, which supplies consent. Record whether it overrode a hold: an unheld
-human landing needs no operator attention; overriding a hold is informational.
+human landing needs no attention from your agent; overriding a hold is informational.
 If native auto-merge was armed, or an enable was in flight or indeterminate,
-record a possible stale-enable landing as contrary to policy and raise operator
+record a possible stale-enable landing as contrary to policy and notify your agent
 attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
 ### Failure budgets and own-build read deferrals
@@ -2079,9 +3469,35 @@ direct execution paths.
 
 `[upgrade]` is a strict, hot-reloaded table:
 
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `automatic` | `true` | Check and adopt changed runtime targets automatically. |
+<!-- configuration-reference:upgrade -->
+
+#### `upgrade`
+
+**TOML key:** `upgrade`
+
+- **Type:** `strict table`
+- **Default:** `{} (input supplied on omission; nested defaults apply)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Automatic dispatcher runtime target checks and adoption.
+
+**Constraints:** None beyond the input type.
+
+#### `upgrade.automatic`
+
+**TOML key:** `upgrade.automatic`
+
+- **Type:** `boolean`
+- **Default:** `true`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Check and adopt changed runtime targets automatically.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/upgrade -->
 
 
 <!-- config-fragment -->
