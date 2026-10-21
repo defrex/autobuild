@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { documentFields } from './reference-metadata'
 
 /** Ordered dispatcher-owned policy; omitted predicates are wildcards. */
 export const landingRuleSchema = z.strictObject({
@@ -20,3 +21,10 @@ export const landingRuleSchema = z.strictObject({
   mode: z.enum(['auto', 'consent']),
 })
 export type LandingRule = z.infer<typeof landingRuleSchema>
+
+documentFields(landingRuleSchema, {
+  into: 'Optional destination: `root`, any `node`, or an exact frozen destination node ticket id.',
+  from: 'Restrict this rule to one source build kind; omission matches all kinds.',
+  label: 'Optional exact, case-sensitive label on the source ticket. Blank labels are invalid.',
+  mode: 'Choose automatic landing or require recorded consent.',
+})
