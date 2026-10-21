@@ -119,6 +119,55 @@ await Bun.sleep(60_000)
     }
   })
 
+  test('graceful stop keeps descendants alive until slow leader persistence finishes', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-build-slow-stop-'))
+    const entrypoint = join(tmp, 'child.ts')
+    const ready = join(tmp, 'ready')
+    const persisted = join(tmp, 'persisted')
+    await writeFile(
+      entrypoint,
+      `
+import { writeFile } from 'node:fs/promises'
+const descendant = Bun.spawn(['sleep', '60'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
+let stopping = false
+process.on('SIGTERM', async () => {
+  if (stopping) return
+  stopping = true
+  await Bun.sleep(5200)
+  process.kill(descendant.pid, 0)
+  await writeFile(${JSON.stringify(persisted)}, 'complete')
+  process.exit(0)
+})
+await writeFile(${JSON.stringify(ready)}, String(descendant.pid))
+await Bun.sleep(60000)
+`,
+    )
+    let leader: number | undefined
+    try {
+      const execution = new LocalBuildExecution({ entrypoint, stopTimeoutMs: 20 })
+      const handle = await execution.start({
+        slug: 'slow-stop',
+        workspaceRef: tmp,
+        storeRef: '/store',
+        instance: 'slow',
+      })
+      leader = handle.pid
+      await waitFor(() => Bun.file(ready).size > 0)
+      const descendant = Number(await Bun.file(ready).text())
+      const stopping = handle.stop()
+      await Bun.sleep(5100)
+      expect(await alive(leader!)).toBe(true)
+      expect(await alive(descendant)).toBe(true)
+      await stopping
+      expect(await Bun.file(persisted).text()).toBe('complete')
+      expect((await handle.completion).exitCode).toBe(0)
+      expect(await alive(descendant)).toBe(false)
+    } finally {
+      forceCleanup(leader)
+      await rm(tmp, { recursive: true, force: true })
+    }
+  }, 15000)
+
   test('explicit stop force-terminates a stubborn inherited descendant', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-build-tree-stop-'))
     const entrypoint = join(tmp, 'child.ts')

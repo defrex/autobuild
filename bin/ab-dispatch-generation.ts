@@ -4,6 +4,7 @@ import { distributionRoot } from '../packages/core/src/distribution'
 import {
   consumeGenerationMarker,
   GENERATION_EXITS,
+  DISPATCH_LAUNCH_CONTEXT_ENV,
 } from '../packages/core/src/cli/dispatch-launch-contract'
 import { watchDispatchParent } from '../packages/core/src/cli/dispatch-parent-watch'
 let code: number = GENERATION_EXITS.failed
@@ -11,11 +12,23 @@ try {
   const launch = consumeGenerationMarker(process.env, distributionRoot())
   if (!(await cachedRuntime(launch.runtimeRoot)))
     throw new Error('dispatcher generation requires a completed cached runtime')
+  const { readHandoff } = await import('../packages/core/src/cli/dispatch-handoff')
+  if (process.argv[2] === '--read-handoff') {
+    const handoff = await readHandoff(launch, process.argv.slice(3), process.env)
+    console.log(JSON.stringify({ version: 1, handoff: handoff ?? null }))
+    process.exit(0)
+  }
+  process.env[DISPATCH_LAUNCH_CONTEXT_ENV] = JSON.stringify(launch)
   const watch = watchDispatchParent(process.ppid, () => process.kill(process.pid, 'SIGINT'))
   try {
     const { runDirectBinary } = await import('../packages/core/src/cli/binary-direct')
     const result = await runDirectBinary(process.argv.slice(2))
-    code = result === 0 ? GENERATION_EXITS.stopped : result
+    code =
+      result === 0
+        ? (await readHandoff(launch, process.argv.slice(2), process.env))
+          ? GENERATION_EXITS.handoff
+          : GENERATION_EXITS.stopped
+        : result
   } finally {
     watch.close()
   }
