@@ -16,7 +16,11 @@ export async function runBinary(
   delete process.env[DISPATCH_GENERATION_ENV]
   if (argv[0] !== '--version') loadDotEnv(join(process.cwd(), '.env'), process.env)
   delete process.env[DISPATCH_GENERATION_ENV]
-  if (argv[0] === 'dispatch' && resolver === undefined) {
+  if (
+    argv[0] === 'dispatch' &&
+    !(argv.length === 2 && argv[1] === '--help') &&
+    resolver === undefined
+  ) {
     try {
       const args = parseDispatchArgs(argv.slice(1), process.env)
       if (!args.once && !args.repository) return await launchDispatcher(argv)

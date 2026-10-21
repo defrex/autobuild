@@ -5,6 +5,7 @@ import {
   ALTERNATE_SCREEN_MODE,
   HIDDEN_CURSOR_MODE,
 } from './terminal-restore'
+import { watchPresentationJob } from './dispatch-presentation-job'
 import { dirname } from 'node:path'
 import { distributionRoot } from '../distribution'
 import { resolveMainRepo } from './main-checkout'
@@ -65,16 +66,21 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     },
   }))
   for (const { name, listener } of listeners) process.on(name, listener)
+  const job = watchPresentationJob(child.pid)
+  let clean = false
   let publicCode = 1
   try {
     pruneRuntimes(dirname(dirname(runtime.root)))
     const code = await child.exited
-    publicCode = generationResult(code, child.signalCode).publicCode
+    const result = generationResult(code, child.signalCode)
+    clean = result.reason === 'stopped'
+    publicCode = result.publicCode
   } finally {
+    job.close()
     release()
     for (const { name, listener } of listeners) process.removeListener(name, listener)
-    if (process.stdin.isTTY) process.stdin.setRawMode(false)
-    if (process.stdout.isTTY)
+    if (!clean && process.stdin.isTTY) process.stdin.setRawMode(false)
+    if (!clean && process.stdout.isTTY)
       for (const mode of [
         FOCUS_REPORTING_MODE,
         KITTY_KEYBOARD_MODE,

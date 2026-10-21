@@ -233,6 +233,10 @@ The versioned v1 launch contract consists of argv, a consumed one-shot
 `AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
 `handoff`, `failed`. Public invocations discard inherited markers. No private
 operational channel exists; work outcomes still come only from durable state.
+The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
+shell prompt and `fg` resumes only the presentation; the kernel keeps running.
+Terminal restoration by the launcher is a fallback for abnormal termination,
+never a second alternate-screen exit after a clean generation stop.
 Handoff is reserved; upgrades still require an operator restart. `--once`,
 origin `--repository`, hosted cron and development hot rendering stay direct.
 
