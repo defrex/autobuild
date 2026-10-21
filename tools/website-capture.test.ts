@@ -371,12 +371,18 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     (frame) => frame.kind === 'docs' && !frame.id.startsWith('docs-builds-'),
   )
   expect(frames.map((frame) => [frame.page, frame.width])).toEqual([
+    ['docs/build-store/index.html', 1440],
+    ['docs/build-store/index.html', 390],
     ['docs/builds/index.html', 1440],
     ['docs/builds/index.html', 390],
     ['docs/configuration/index.html', 1440],
     ['docs/configuration/index.html', 390],
+    ['docs/dispatcher-hosting/index.html', 1440],
+    ['docs/dispatcher-hosting/index.html', 390],
     ['docs/dispatcher/index.html', 1440],
     ['docs/dispatcher/index.html', 390],
+    ['docs/forges/index.html', 1440],
+    ['docs/forges/index.html', 390],
     ['docs/getting-started/index.html', 1440],
     ['docs/getting-started/index.html', 390],
     ['docs/index.html', 1440],
@@ -385,6 +391,10 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     ['docs/integration/index.html', 390],
     ['docs/operating/index.html', 1440],
     ['docs/operating/index.html', 390],
+    ['docs/operator-surfaces/index.html', 1440],
+    ['docs/operator-surfaces/index.html', 390],
+    ['docs/plugin-authoring/index.html', 1440],
+    ['docs/plugin-authoring/index.html', 390],
     ['docs/seams/index.html', 1440],
     ['docs/seams/index.html', 390],
     ['docs/tickets/index.html', 1440],
@@ -509,7 +519,10 @@ test('new Markdown page flows through output, navigation, pager and both real ca
     const page = (title: string, order: number) =>
       `---\ntitle: ${title}\ngroup: guides\norder: ${order}\ndescription: A generated page\n---\n# ${title}\n\nFirst paragraph.\n\n## Section\n\nMore words.\n`
     await Bun.write(join(root, 'before.md'), page('Before', 1))
-    await Bun.write(join(root, 'added.md'), page('Added', 2))
+    await Bun.write(
+      join(root, 'added.md'),
+      page('Added', 2) + '\nLong article paragraph.\n'.repeat(350),
+    )
     await Bun.write(join(root, 'after.md'), page('After', 3))
     const files = await buildFiles(root)
     const html = files['docs/added/index.html']!
@@ -529,11 +542,13 @@ test('new Markdown page flows through output, navigation, pager and both real ca
         frames: added,
         includeMotionSamples: false,
       })
-      const inventory: { frame: WebsiteFrame; probe: Probe }[] = await Bun.file(
-        join(outputDir, 'inventory.json'),
-      ).json()
+      const inventory: { frame: WebsiteFrame; probe: Probe; height: number; capped: boolean }[] =
+        await Bun.file(join(outputDir, 'inventory.json')).json()
       expect(inventory).toHaveLength(2)
       for (const entry of inventory) {
+        expect(entry.probe.scrollHeight).toBeGreaterThan(12_000)
+        expect(entry.height).toBe(entry.probe.scrollHeight)
+        expect(entry.capped).toBe(false)
         expect(probeProblems(entry.frame, entry.probe)).toEqual([])
         expect(existsSync(join(outputDir, `${entry.frame.id}.png`))).toBe(true)
       }
