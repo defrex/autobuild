@@ -105,7 +105,7 @@ describe('static site', () => {
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
     expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
     expect(html).toContain(`href="${REPO_URL}"`)
-    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(8)
+    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
     expect(html).toContain('fully local')
     expect(html).toContain('bun add -D @defrex/autobuild')
     expect(html).toContain('bun ab init')
@@ -126,10 +126,11 @@ describe('static site', () => {
     expect(phone).toContain('padding-block: 48px 192px')
   })
 
-  test('each figure has a desktop and a portrait form with one description', async () => {
+  test('each drawn figure has a desktop and a portrait form with one description', async () => {
+    // The integration figure is preformatted terminal text that scrolls instead.
     const { 'index.html': html, 'site.css': css } = await buildFiles()
-    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(4)
-    expect(html.match(/class="phone-only"/g)).toHaveLength(4)
+    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(3)
+    expect(html.match(/class="phone-only"/g)).toHaveLength(3)
     const desk = [...html.matchAll(/class="scroll desk-only"[^>]*aria-label="([^"]+)"/g)].map(
       (m) => m[1],
     )
@@ -138,7 +139,7 @@ describe('static site', () => {
     )
     expect(phone).toEqual(desk)
     // Every portrait drawing is capped to the page width, never a fixed desktop size.
-    expect(html.match(/width: 358px; max-width: 100%/g)).toHaveLength(4)
+    expect(html.match(/width: 358px; max-width: 100%/g)).toHaveLength(3)
     const small = css.slice(css.indexOf('@media (max-width: 719px)'))
     expect(small).toMatch(/\.desk-only\s*{\s*display: none/)
     expect(small).toMatch(/\.phone-only\s*{\s*display: block/)
