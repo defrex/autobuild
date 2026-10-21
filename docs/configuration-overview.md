@@ -50,4 +50,4 @@ bun ab init --validate
 bun ab upgrade
 ```
 
-`upgrade` updates the installation on its distribution channel and merges upstream skill changes with repository edits, surfacing conflicts for resolution. It preserves customization rather than blindly replacing the installed skills. See the [setup reference](setup.md) and [skill installation contract](../SPEC.md#163-skill-installation-vendored-namespaced-editable-d11) for installation, validation, and upgrade details.
+`upgrade` updates the installation on its distribution channel and merges upstream skill changes with repository edits, surfacing conflicts for resolution. It preserves customization rather than blindly replacing the installed skills. See [Upgrading](upgrading.md), [Skills](skills.md#how-upgrades-preserve-customization), the [setup reference](setup.md) and [skill installation contract](../SPEC.md#163-skill-installation-vendored-namespaced-editable-d11) for installation, validation, and upgrade details.
