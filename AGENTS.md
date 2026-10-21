@@ -246,3 +246,10 @@ Design tickets name the surface and the states they touch, cite the `DESIGN.md`
 rule they extend, and say which open decision, if any, a human has already
 made. Live sign-in works only on the production origin, so review evidence
 comes from the capture, not from a preview deploy.
+
+## Documentation verification selection
+
+Plans with explicit `verifySteps` selections must retain `docs` whenever product
+paths change, and conservatively when uncertain. Omit selection frontmatter to
+keep all configured steps as the safe default. The repository's path rules skip
+`docs` for configuration-only changes.
