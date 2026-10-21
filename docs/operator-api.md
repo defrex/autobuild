@@ -253,7 +253,7 @@ The default watch reports actionable conditions only:
   build/PR; it does not duplicate consent or hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
@@ -325,3 +325,11 @@ the original reset, which later rate limits cannot postpone indefinitely.
 uses the same service as `ab restack <node>`. The receipt contains `slug`,
 `request`, `coalesced` and `waiting`; execution is asynchronous. It refuses
 non-node, unopened and terminal builds and enforces repository ownership.
+
+Repository status includes `upgrades.runs`, keyed by originating dispatcher run,
+with detected target, failure, handoff and completion evidence. Facts carry launcher
+lineage, from/to runtimes, resolution mode and authoritative base SHA/ref or original
+installation provenance, plus prepared cache identity. Completion names the successor
+and requires repository ownership. `dispatcher.upgrade-failed` is immediate repository
+attention; the current generation remains active and identical failed inputs are
+suppressed across native handoff until metadata changes or a fresh operator launch.

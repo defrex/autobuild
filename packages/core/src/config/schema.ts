@@ -812,6 +812,7 @@ export const storeSchema = z.strictObject({
 })
 const configRootSchema = z.strictObject({
   store: storeSchema.optional(),
+  upgrade: z.strictObject({ automatic: z.boolean().default(true) }).prefault({}),
   /** Base branch builds cut from and target (§16.1). */
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */

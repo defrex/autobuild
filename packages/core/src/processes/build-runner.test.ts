@@ -5955,6 +5955,101 @@ describe('native suspension and continuation', () => {
     })
   }
 
+  test('shutdown waits beyond the old deadlines for suspension persistence', async () => {
+    const shutdown = new AbortController()
+    let observed!: () => void
+    const ready = new Promise<void>((resolve) => {
+      observed = resolve
+    })
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let persisting!: () => void
+    const entered = new Promise<void>((resolve) => {
+      persisting = resolve
+    })
+    const h = await makeHarness({
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'ab-plan': async () => {
+          observed()
+          await new Promise(() => {})
+          return defaultTurnResult()
+        },
+      }),
+    })
+    const append = h.store.appendWithArtifactsIfCurrent.bind(h.store)
+    h.store.appendWithArtifactsIfCurrent = async (...args) => {
+      persisting()
+      await barrier
+      return append(...args)
+    }
+    let finished = false
+    const running = h.br.run().finally(() => {
+      finished = true
+    })
+    try {
+      await ready
+      shutdown.abort()
+      await entered
+      await Bun.sleep(5100)
+      expect(finished).toBe(false)
+      expect(ofType(await h.store.getEvents(SLUG), 'session.suspended')).toHaveLength(0)
+    } finally {
+      release()
+      await running
+    }
+    expect(ofType(await h.store.getEvents(SLUG), 'session.suspended')).toHaveLength(1)
+    expect(reduceBuild(await h.store.getEvents(SLUG)).sessions.open).toHaveLength(0)
+  }, 15000)
+
+  test('shutdown suspends a session with no native handle and successor records fresh fallback', async () => {
+    const shutdown = new AbortController()
+    let ready!: () => void
+    const observed = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    let first = true
+    const h = await makeHarness({
+      nativeSessions: false,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            if (first) {
+              first = false
+              ready()
+              await new Promise(() => {})
+            }
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    const running = h.br.run()
+    await observed
+    shutdown.abort()
+    await running
+    const before = await h.store.getEvents(SLUG)
+    expect(ofType(before, 'session.suspended')).toHaveLength(1)
+    expect(ofType(before, 'session.suspended')[0]!.payload.handle).toBeUndefined()
+    expect(reduceBuild(before).sessions.open).toHaveLength(0)
+    const next = successor(h)
+    await next.attach()
+    await next.step()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.resume-fallback')).toHaveLength(1)
+    expect(ofType(events, 'session.resume-fallback')[0]!.payload.reason).toBeTruthy()
+    expect(ofType(events, 'session.resumed')).toHaveLength(0)
+  })
+
   test('shutdown deposits partial evidence; restart resumes the same native handle and phase round', async () => {
     const shutdown = new AbortController()
     let observed!: () => void

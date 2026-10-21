@@ -1,4 +1,5 @@
 import { currentTicketRef } from '../kernel/ticket-migrations'
+import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
 import { withSessionlessStore } from './store-opening'
@@ -658,6 +659,15 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         })
         if (commitContext !== undefined) {
           await finishUpgradeCommit(commitContext, report, { stdout, stderr })
+        }
+        if (report.exitCode === 0) {
+          try {
+            stdout(await upgradeFollowup(targetRepo))
+          } catch {
+            stderr(
+              'Could not determine automatic dispatcher upgrade policy; inspect autobuild.toml.',
+            )
+          }
         }
         return report.exitCode
       } finally {

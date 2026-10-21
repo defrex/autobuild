@@ -1,13 +1,12 @@
 import { bunRuntimeArguments } from './runtime-spawn'
 import { spawnUsingRuntime } from './dispatch-runtime-use'
 import { distributionRoot } from '../distribution'
-import { readDispatcherRunFacts, readOpenTick } from '../store/reduced-reads'
+import { readDispatcherRunFacts } from '../store/reduced-reads'
 import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 
 export const DISPATCH_CHILD_OPTIONS_ENV = 'AB_DISPATCH_CHILD_OPTIONS'
-const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
 export interface DispatchChildOptions {
   targetRepo: string
@@ -129,7 +128,6 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
 
   let requestedSignal: string | undefined
   let stopping = false
-  let forced = false
   let stopPromise: Promise<void> | undefined
   // This is the sole supervisor writer of a missing stop fact. `stop()` only
   // chooses/awaits process termination, avoiding check-then-append races.
@@ -147,11 +145,8 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
       }
     }
 
-    const outcome: DispatchChildOutcome = forced
-      ? 'forced'
-      : stopping && exitCode === 0 && child.signalCode === null
-        ? 'normal'
-        : 'abnormal'
+    const outcome: DispatchChildOutcome =
+      stopping && exitCode === 0 && child.signalCode === null ? 'normal' : 'abnormal'
     const error =
       outcome === 'abnormal'
         ? `kernel process exited with status ${exitCode}${
@@ -198,39 +193,9 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
           }
         }
         child.kill('SIGINT')
-        const timeout = deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
-        const stopped = await Promise.race([
-          child.exited.then(() => true),
-          new Promise<false>((resolve) => setTimeout(() => resolve(false), timeout)),
-        ])
-        if (stopped || child.exitCode !== null) return
-
-        // A dispatcher tick may hold an external ticket claim before its build
-        // record exists. Killing that turn can make the ticket disappear from
-        // Ready with no durable build to recover. Let an open tick reach its
-        // normal boundary; all non-tick work is lease-backed/recoverable and a
-        // child stuck there is safe to terminate.
-        let open = true
-        try {
-          const record = await deps.store.getRepo(deps.repo)
-          open =
-            record?.tick?.run === deps.run
-              ? record.tick.open !== undefined
-              : await readOpenTick(deps.store, deps.repo, deps.run, false)
-        } catch {
-          // Unreadable telemetry cannot authorize an unsafe kill.
-        }
-        // The child may have exited while the asynchronous journal read was in
-        // flight. Re-check at the force boundary so evidence never claims a
-        // SIGKILL that was not actually sent.
-        if (child.exitCode !== null) return
-        if (open) {
-          await child.exited
-          return
-        }
-
-        forced = true
-        child.kill('SIGKILL')
+        // The kernel owns local runner suspension and its durable writes.
+        // Neither an elapsed deadline nor a closed claim tick proves those
+        // writes finished. Keep graceful signal handlers installed while waiting.
         await child.exited
       })()
       return stopPromise

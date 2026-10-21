@@ -237,7 +237,41 @@ The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
 shell prompt and `fg` resumes only the presentation; the kernel keeps running.
 Terminal restoration by the launcher is a fallback for abnormal termination,
 never a second alternate-screen exit after a clean generation stop.
-Handoff is reserved; upgrades still require an operator restart. `--once`,
+Automatic upgrades default on (`[upgrade] automatic = true`). The resident
+kernel checks immediately and every 60 seconds independently of dispatch ticks.
+It resolves the root manifest and Bun lock from a single authoritative base
+branch commit through the forge, never from a feature branch, checkout pin or
+stale tracking ref. A declared dependency selects pinned mode; unsupported or
+inconsistent metadata is an attention failure. With no declaration (including
+no root manifest), installed mode rereads the original public installation
+pathname retained across handoffs. Source commits remain fixed snapshots.
+
+A changed exact version (including a downgrade) is installed in isolation and
+validated in the immutable cache before cutover. The operator's installation
+and consuming dependency graph are untouched. Registry/lock/install/contract
+failures retain the running generation and record repository attention. Failed
+inputs are suppressed until their target metadata changes or an operator starts
+a fresh launcher; unrelated base commits do not reset suppression.
+
+The kernel records `dispatcher.upgrade-detected`, `dispatcher.upgrade-failed`,
+`dispatcher.handoff-started` and `dispatcher.handoff-completed`, correlated by
+run and launcher lineage. Facts name both runtimes, resolution provenance and
+prepared cache identity where available. After settling the open claim tick,
+cutover prevents new launches, suspends every live local build session and waits
+for provider cleanup, stream closure and durable suspension before releasing
+leases and exiting. Native handles resume where eligible; otherwise the existing
+`session.resume-fallback` records the reason for a fresh session. Graceful
+shutdown has no persistence deadline. Local harvest retains clean-stop behavior:
+its turn is interrupted and rerun by existing recovery, without native harvest
+suspension. Remote supervised runners retain detach/recovery behavior.
+
+The exited generation's runtime-owned reader derives a handoff from the journal;
+the filesystem-only launcher consumes its versioned JSON result, validates its
+run/lineage and starts the next generation sequentially. There is no overlapping
+generation, rollback or source tracking. The successor records completion only
+after initialization and repository ownership. Operator stop wins over handoff.
+Turning automatic upgrades off cancels preparation and restores manual restart
+behavior; launcher contract changes also require a manual restart. `--once`,
 origin `--repository`, hosted cron and development hot rendering stay direct.
 
 Cache publication is atomic after validation. Current, distinct previous,
@@ -1566,8 +1600,10 @@ SIGINT/SIGTERM. A conditional artifact deposit records `session.suspended`
 with cause `shutdown`, the native handle, active milliseconds, partial transcript
 and any known incremental usage. A terminal fact that lands first prevents
 suspension; suspension fences the old session's terminal credentials permanently.
-The process supervisor retains its existing bounded force-stop path if provider
-cleanup or persistence cannot complete.
+Graceful shutdown waits for provider cleanup and durable suspension without a
+wall-clock force-exit deadline. Only after the runner leader exits does bounded
+process-group cleanup reap remaining descendants. Abnormal parent loss retains
+the detached reaper recovery path.
 
 On attachment the runner retains an eligible current phase/round session and
 records takeover. Matching host, workspace and runtime permit native resume;
@@ -2797,6 +2833,16 @@ answer appended after delivery is a new eligible winner. Destinations remain
 independent, and the kernel derives both the winner and its delivery from the
 event history so replay and restart preserve the result.
 
+Automatic upgrade repository facts are run- and launcher-lineage-correlated:
+`dispatcher.upgrade-detected` is advisory; `dispatcher.upgrade-failed`,
+`dispatcher.handoff-started` and `dispatcher.handoff-completed` are decisive.
+They carry the originating run, correlation, from runtime, target key/mode and
+provenance; prepared handoffs additionally carry the to runtime/cache identity,
+and completion names the successor. Event timestamps mark each boundary. Failure
+is immediate repository attention. A launcher consumes only its own normally
+stopped run's pending handoff, never another host's facts or a stopped-by-operator
+run. See §3.3 for target selection and cutover semantics.
+
 Every dispatcher run start is immediately followed by an advisory
 `dispatcher.runtime-recorded {run, startedSeq, runtime}` fact. Every successful
 runner attach is immediately followed by advisory
@@ -2901,8 +2947,10 @@ build-owned Store state. The kernel claims each execution's durable lease before
 launch and releases that exact holder only after completion; the child renews it.
 The lease remains the cross-process recovery and workspace-teardown gate (the
 in-memory guard is deliberately not durable: a dead process's memory disappears
-with it). Ordinary dispatcher shutdown gracefully signals each local process
-group, escalates the whole group after the bounded stop delay, and reaps it.
+with it). Ordinary dispatcher shutdown gracefully signals each local runner leader and
+waits for it to finish suspension and exit. It then reaps remaining descendants
+with bounded TERM-then-KILL process-group cleanup. The frontend waits for kernel
+teardown without a wall-clock force-kill deadline.
 Before every build-child terminal path exits — natural success or failure,
 SIGINT/SIGTERM, or immutable-parent watchdog death — it launches one detached
 group reaper while the leader still pins the group's identity. That owner
@@ -3268,6 +3316,9 @@ ticketScanIntervalSeconds = 60  # positive integer; ready scans, with tick spaci
 forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
+[upgrade]
+automatic = true                # immediate/60-second target checks; false requires manual restart
+
 #[workspace]                     # optional; default provider = "git-worktree"
 #provider = "vercel-sandbox"    # shipped remote provider, or plugin name
 #[workspace.config]
@@ -3373,7 +3424,7 @@ decide where a build's effective configuration is composed from:
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
-| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing` | The dispatcher's live snapshot; the build runner never interprets them. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
