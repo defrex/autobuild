@@ -22,20 +22,18 @@ Commit your edits with the repository so every agent works from the same instruc
 
 `ab init` installs these twelve skills:
 
-| Skill | Phase or role | Purpose |
-|---|---|---|
-| `ab-spec` | Pre-build grooming | Help you turn intent into a complete ticket spec; this is not a running spec-phase session. |
-| `ab-plan` | Plan | Produce an implementation plan from the spec. |
-| `ab-plan-review` | Plan review | Independently check the plan against the spec. |
-| `ab-implement` | Implement | Execute the approved plan and commit the change. |
-| `ab-code-review` | Code review | Independently review the implementation against the contract. |
-| `ab-finalize` | Finalize | Write the pull request description after verification. |
-| `ab-reconcile` | Reconcile | Resolve conflicts in a kernel-prepared replay onto a refreshed base. |
-| `ab-operate` | External operator agent | Guide your agent as it files tickets, watches builds, answers escalations, and controls landing. |
-| `ab-tickets` | Ticket management | Read, create, groom, and update tickets through the tracker interface. |
-| `ab-harvest` | Harvest synthesis | Turn claimed observations into structured ticket proposals. |
-| `ab-harvest-review` | Harvest review | Independently review those proposals. |
-| `ab-guide` | Reference | Explain the system, configuration, setup, and installed skills. |
+- `ab-spec` — **Pre-build grooming.** Help you turn intent into a complete ticket spec; this is not a running spec-phase session.
+- `ab-plan` — **Plan.** Produce an implementation plan from the spec.
+- `ab-plan-review` — **Plan review.** Independently check the plan against the spec.
+- `ab-implement` — **Implement.** Execute the approved plan and commit the change.
+- `ab-code-review` — **Code review.** Independently review the implementation against the contract.
+- `ab-finalize` — **Finalize.** Write the pull request description after verification.
+- `ab-reconcile` — **Reconcile.** Resolve conflicts in a kernel-prepared replay onto a refreshed base.
+- `ab-operate` — **External operator agent.** Guide your agent as it files tickets, watches builds, answers escalations, and controls landing.
+- `ab-tickets` — **Ticket management.** Read, create, groom, and update tickets through the tracker interface.
+- `ab-harvest` — **Harvest synthesis.** Turn claimed observations into structured ticket proposals.
+- `ab-harvest-review` — **Harvest review.** Independently review those proposals.
+- `ab-guide` — **Reference.** Explain the system, configuration, setup, and installed skills.
 
 The runner invokes phase skills; do not start them manually. Spec grooming and ticket management happen before builds. The operator agent works outside the pipeline, and observation harvest is a separate repository workflow. Autobuild does not ship a generic agent-verifier skill: your repository supplies skills for its own evidence and checks.
 
@@ -51,17 +49,15 @@ After a successful update, pristine advances to the incoming upstream bytes, not
 
 Merging happens per file. A conflicted file keeps both its live and pristine bytes untouched, while other files can advance independently. Each skill's report aggregates its file outcomes, with `conflicted` taking precedence over `resolved`, `merged`, `adopted`, and `current`.
 
-| Outcome | Meaning |
-|---|---|
-| `current` | Upstream has not changed from the baseline; the local file stands as it is. |
-| `adopted` | Incoming upstream bytes were adopted and pristine advanced. This also covers restoring a missing live file, adding a new support file, or removing an unedited upstream-deleted support file. |
-| `merged` | Independent changes combined cleanly and pristine advanced. A customized upstream-deleted support file is also preserved with this outcome, relinquishing its pristine record. |
-| `resolved` | Overlapping edits received a local-biased agent resolution that passed validation; pristine advanced to incoming upstream. |
-| `conflicted` | Resolution was unavailable, failed, was declined as ambiguous, or failed validation. That file's live and pristine bytes stay untouched; conflict markers never enter the live skill. |
-| `installed` | A distributed skill absent from both the live and pristine trees was installed fresh. |
-| `removed` | An eligible retired skill's unchanged live tree and owned discovery link were removed, or its already-missing live tree's obsolete provenance and owned dangling link were cleaned up. |
-| `kept` | A retired skill was customized, configured, or unsafe to remove; or a user-owned Claude discovery entry was preserved even though the canonical tree could be removed. Obsolete pristine ownership is cleared. |
-| `unknown` | An installed `ab-*` name is absent from the distribution and was left alone. This is protective behavior, not a reason to use the reserved prefix for new skills. |
+- `current` — Upstream has not changed from the baseline; the local file stands as it is.
+- `adopted` — Incoming upstream bytes were adopted and pristine advanced. This also covers restoring a missing live file, adding a new support file, or removing an unedited upstream-deleted support file.
+- `merged` — Independent changes combined cleanly and pristine advanced. A customized upstream-deleted support file is also preserved with this outcome, relinquishing its pristine record.
+- `resolved` — Overlapping edits received a local-biased agent resolution that passed validation; pristine advanced to incoming upstream.
+- `conflicted` — Resolution was unavailable, failed, was declined as ambiguous, or failed validation. That file's live and pristine bytes stay untouched; conflict markers never enter the live skill.
+- `installed` — A distributed skill absent from both the live and pristine trees was installed fresh.
+- `removed` — An eligible retired skill's unchanged live tree and owned discovery link were removed, or its already-missing live tree's obsolete provenance and owned dangling link were cleaned up.
+- `kept` — A retired skill was customized, configured, or unsafe to remove; or a user-owned Claude discovery entry was preserved even though the canonical tree could be removed. Obsolete pristine ownership is cleared.
+- `unknown` — An installed `ab-*` name is absent from the distribution and was left alone. This is protective behavior, not a reason to use the reserved prefix for new skills.
 
 Without a pristine record, upgrade cannot infer your edits. An absent local file can be installed, and a local file already identical to incoming upstream can establish its baseline. A differing local file is reported as `conflicted` rather than overwritten. Review the reported pristine path and merge by hand when needed.
 
