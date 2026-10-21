@@ -19,8 +19,10 @@ ancestor and demand the minimal restack path; same-node landings satisfy presenc
 
 ## Choosing a destination
 
-Whenever grooming produces more than one ticket for a feature, explicitly choose
-root or a node before filing. Use a node when the set should reach the base branch
+First decide whether the feature should be more than one ticket at all; the
+[spec standard](spec-standard.md#sizing-and-splitting) prefers fewer, larger
+tickets cut at seams. Whenever grooming produces more than one ticket for a
+feature, explicitly choose root or a node before filing. Use a node when the set should reach the base branch
 as one integrated change, or intermediate states should not ship independently.
 Use root when every ticket is independently valuable and safe to land alone.
 Nested nodes can collect a subfeature before contributing it to a larger feature.

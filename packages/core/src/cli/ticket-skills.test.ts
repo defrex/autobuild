@@ -63,6 +63,7 @@ describe('ticket grooming skill guidance', () => {
       expect(guide).not.toContain('Hosted sources and legacy plugins read as work')
     }
     expect(spec).toContain('Whenever grooming produces more than one ticket for a feature')
+    expect(spec).toContain('../ab-guide/references/spec-standard.md#sizing-and-splitting')
     expect(spec).toContain('including when fleshing out an existing ticket')
     expect(spec).toContain("repository's effective landing policy in `autobuild.toml`")
     expect(spec).toContain('Ask the human when the')

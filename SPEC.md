@@ -406,7 +406,9 @@ Two things wear the name:
 ### 6.1 The spec standard
 
 A reference document defining "buildable": what/why not how, acceptance
-criteria, explicit out-of-scope, evidence links. It is a shared resource
+criteria, explicit out-of-scope, evidence links — plus sizing guidance:
+fewer, larger tickets, split only at clean seams into a wide blocker graph so
+independent tickets build in parallel. It is a shared resource
 cited by **every ticket-producing surface** — `/spec`, `harvest`, every
 `ingest:*`, and `dispatch`. An ingester's proposal is a spec written to the
 same standard with weaker evidence.

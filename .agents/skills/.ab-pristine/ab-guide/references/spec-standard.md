@@ -54,6 +54,77 @@ evidence is not.
 
 ---
 
+## Sizing and splitting
+
+Every build pays a fixed cost no matter how small its diff: spec, plan and
+plan review, code review, the repository's full verify suite, finalize,
+landing, and a restack for everything queued behind it. Ten small tickets pay
+that cost ten times, and a blocker chain pays it in series. Prefer fewer,
+larger tickets: one ticket per coherent change, as large as one plan and one
+review pass can hold without the quality bar slipping.
+
+A ticket is the right size when its acceptance criteria describe one feature
+or fix a reviewer can judge in a single pass, one plan can cover it without
+deferring a design decision to a later build, and its out-of-scope list is
+short and obvious. It is too big when its criteria fall into groups that share
+no behavior, when part of it waits on a decision nobody has made, or when its
+parts need different landing — one can ship now while another needs consent
+or must wait.
+
+Do not split:
+
+- by layer (schema, then API, then UI) when the layers make one behavior
+  change;
+- into "refactor, then feature" unless the refactor is valuable and safe on
+  its own;
+- to make progress visible, or because the spec got long. A long spec with
+  clear criteria is fine.
+
+### Cut along seams
+
+A seam decides where to cut once a split is justified; it is not a reason to
+split. A full-stack change that crosses an API boundary stays one ticket
+unless its size says otherwise.
+
+When a feature does need several tickets, find the seams before deciding the
+cut: places where the code already has a narrow, stable contract between
+parts — a port or adapter interface, a schema or event type, a wire protocol,
+a CLI command's output, a module's public API. Read the code to find them;
+don't guess. Put each ticket on one side of a seam.
+
+A cut at a seam pays twice:
+
+- **Fewer conflicts.** Tickets on opposite sides of a contract touch
+  different code, so they build in parallel and restack cleanly. Two tickets
+  that would edit the same functions are one ticket, or a blocker chain.
+- **Testability.** The contract is the test boundary. Each side is verified
+  against it — the provider by contract tests, the consumer against a fake or
+  fixture — so neither build needs the other to prove it works.
+
+If no seam exists where the work divides, keep it as one ticket, or make the
+first ticket establish the contract with tests at the boundary and block the
+tickets on either side of it until it lands. After that, they can build
+concurrently.
+
+State the seam in each ticket as behavior, not structure: what the contract
+promises observably (the event, the command output, the protocol response) is
+a fair acceptance criterion on both sides; file names and signatures still
+belong to the planner. Record in Evidence why the cut falls where it does, so
+a planner reading one ticket knows what its siblings own.
+
+### Keep the blocker graph wide
+
+A split feature takes as long as its longest blocker chain, not as long as
+its ticket count. A wave of independent tickets finishes in about one build's
+time; the same tickets in a chain take one build per link. Prefer cuts that
+let tickets start together. When one ticket must land first — usually the one
+that establishes a shared contract — keep it to that contract and its tests,
+so the wave behind it starts sooner, and fold nothing unrelated into it.
+Add a blocker only for a real prerequisite, never to express a preferred
+order.
+
+---
+
 ## Immutability during a build
 
 The spec is the build's contract artifact (kind `spec`, revision 0). It
