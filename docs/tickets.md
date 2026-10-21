@@ -1,14 +1,14 @@
 ---
-title: "Tickets are the interface"
+title: "Tickets and specs"
 group: "concepts"
-description: "Choose a ticket source, groom buildable specs, and admit proposed work through the ready gate."
-label: "Tickets"
+description: "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate."
+label: "Tickets and specs"
 order: 5
 ---
 
-# Tickets are the interface
+# Tickets and specs
 
-A ticket tells Autobuild what change to make and why it matters. Grooming turns that intent into a buildable spec. The tracker is the input interface; the build's pinned spec is the execution contract.
+A ticket tells Autobuild what change to make and why it matters. Your operator agent uses `ab-spec` with you to turn that intent into a buildable spec. The tracker is the input interface; the build's pinned spec is the execution contract.
 
 
 ## Choose a source
@@ -30,7 +30,7 @@ The spec standard asks for four things:
 - **Out of scope.** Name adjacent work the build must leave alone.
 - **Evidence.** Link the decision, incident, data, or observations supporting the request.
 
-A human grooms the ticket and moves it to the configured ready state with any required labels. Being present in a tracker is not enough. Dispatch's spec gate returns ready tickets that cannot become conforming specs to Triage with an explanation.
+Your operator agent grooms the ticket with you and moves it to the configured ready state with any required labels. Being present in a tracker is not enough. Dispatch's spec gate returns ready tickets that cannot become conforming specs to Triage with an explanation.
 
 
 ## Ready is a gate, not a guarantee
@@ -39,15 +39,15 @@ The dispatcher claims only tickets meeting the configured ready state and label 
 
 Blockers are distinct from a build escalation. They describe prerequisites between tickets. In a node-enabled repository, prerequisites with builds must be present at the sampled destination; see [integration and blocker presence](integration.md).
 
-At dispatch, Autobuild pins the spec for the build. Changing tracker text later does not quietly change what its reviewers approved. A deliberate spec revision requires an operator answer to an escalation and restarts planning.
+At dispatch, Autobuild pins the spec for the build. Changing tracker text later does not quietly change what its reviewers approved. A deliberate spec revision requires your operator agent to record an answer to an escalation under your instructions and restarts planning.
 
 
-## Intake proposes work
+## Work and node tickets
 
-Anything that can write a ticket can propose work from an outside signal. Autobuild's shipped observation harvest collects discoveries agents record while staying within their current spec, synthesizes proposals, reviews them, and files approved tickets. Harvest is a repository workflow, not another build phase.
+Work tickets describe individual changes and run the build pipeline. Node tickets describe finite integration points that collect related work, verify it together, and land into their parent. Both kinds need conforming specs: a node's intent alone is not a buildable contract.
 
-Proposals default to the configured Triage state for a human to groom before dispatch. A repository can explicitly waive that harvest grooming gate with `[tickets].proposalState`, including choosing its ready state. That waiver does not waive blocker eligibility or the dispatch spec gate.
+A target chooses the integration destination; blockers choose prerequisites. They are separate relationships. Read about [integrating related work](integration.md) for node admission and landing.
 
-Scheduled ingesters for signals such as telemetry remain proposed extensions; they are not shipped integrations. A signal is evidence for a proposal, not permission to dispatch work.
+Outside signals and agent discoveries enter through [Intake and harvest](intake.md), where proposals are groomed before becoming ready work.
 
-Read the [spec standard](spec-standard.md), [ticket-source configuration reference](configuration.md), and [design specification](../SPEC.md) for the full contract and intake model. Follow the [dispatcher guide](dispatcher.md) to see what happens at claim, or [Getting started](getting-started.md) to groom a first ticket.
+Read the [spec standard](spec-standard.md) and [ticket-source configuration reference](configuration.md) for the full contract. Follow the [dispatcher guide](dispatcher.md) to see what happens at claim, or [Getting started](getting-started.md) for a first ticket.
