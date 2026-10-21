@@ -110,6 +110,27 @@
     ]
   },
   {
+    "path": "/docs/verification/",
+    "label": "Verification",
+    "title": "Verification",
+    "group": "concepts",
+    "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
+    "textHash": "e6b4d0a8f78d38c40b74ade9d8f4189e7839b4060365235708eba039a2501773",
+    "headings": [
+      "Steps and outcomes",
+      "Select what a build needs",
+      "Route the verifier role",
+      "What initialization sets up",
+      "Make verification convincing",
+      "Worked example: this repository"
+    ],
+    "code": [
+      "[commands]\ntypecheck = \"bun tsc --noEmit\"\ntest = \"bun test\"\n\n[verify]\nsteps = [\"types\", \"unit\", \"app\"]\n\n[verify.types]\nkind = \"check\"\ncommand = \"typecheck\"\nalways = true\n\n[verify.unit]\nkind = \"check\"\ncommand = \"test\"\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"\npaths = [\"web/**\", \"src/routes/**\"]",
+      "+++\nverifySteps = [\"app\", \"types\"]\n+++",
+      "[verify]\nsteps = [\"app\"]\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"\n\n[roles.default]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\n\n[roles.app]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\""
+    ]
+  },
+  {
     "path": "/docs/operating/",
     "label": "Operating",
     "title": "Operating Autobuild",
