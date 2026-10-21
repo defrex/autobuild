@@ -24,12 +24,43 @@ export function publicTarget(target: UpgradeTarget) {
     ...(sha ? { sha } : {}),
   }
 }
+/** Bun locks may abbreviate commits. Prefer the captured Bun tag over a
+ * package's gitHead, which can describe an earlier npm publication. */
+function matchesRunningForge(
+  target: UpgradeTarget,
+  from: RuntimeIdentity,
+  bunTag?: string,
+): boolean {
+  const record = target.record?.[0]
+  const locked =
+    typeof record === 'string'
+      ? /^@defrex\/autobuild@github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([a-f0-9]{7,40})$/i.exec(
+          record,
+        )
+      : null
+  if (!locked) return false
+  const commit = locked[3]!.toLowerCase()
+  if (bunTag !== undefined) {
+    const prefix = `${locked[1]}-${locked[2]}-`
+    if (!bunTag.startsWith(prefix)) return false
+    const running = bunTag.slice(prefix.length).toLowerCase()
+    return (
+      /^[a-f0-9]{7,40}$/.test(running) && (running.startsWith(commit) || commit.startsWith(running))
+    )
+  }
+  return (
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(from.commit) &&
+    from.commit.toLowerCase().startsWith(commit)
+  )
+}
+
 export interface UpgradeControllerInput {
   run: string
   lineage: string
   from: RuntimeIdentity
   failedKeys: string[]
   currentKey?: string
+  runningBunTag?: string
   reservationOwner?: number
   enabled(): boolean
   resolve(signal: AbortSignal): Promise<UpgradeTarget>
@@ -97,11 +128,7 @@ export class DispatchUpgradeController {
       )
       if (preparation.signal.aborted || !this.input.enabled()) return
       if (this.failed.has(target.key) || target.key === this.input.currentKey) return
-      if (
-        typeof target.record?.[0] === 'string' &&
-        target.record[0].endsWith(`#${this.input.from.commit}`)
-      )
-        return
+      if (matchesRunningForge(target, this.input.from, this.input.runningBunTag)) return
       if (target.version === this.input.from.version) return
       await this.input.append({
         actor: DISPATCHER,

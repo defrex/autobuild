@@ -171,14 +171,16 @@ export const withCacheLock = mutateRuntimeCache
 
 async function stageCode(source: string, target: string): Promise<void> {
   const manifest = await readManifest(source)
-  if (manifest.gitHead === undefined) {
-    try {
-      const tag = (await readFile(join(source, '.bun-tag'), 'utf8')).trim()
-      const commit = /-([a-f0-9]{40})$/.exec(tag)?.[1]
-      if (commit) manifest.gitHead = commit
-    } catch {
-      /* Registry packages need not have a Bun forge tag. */
+  let bunTag: string | undefined
+  try {
+    const tag = (await readFile(join(source, '.bun-tag'), 'utf8')).trim()
+    const commit = /-([a-f0-9]{7,40})$/i.exec(tag)?.[1]
+    if (commit) {
+      bunTag = tag
+      if (manifest.gitHead === undefined && commit.length === 40) manifest.gitHead = commit
     }
+  } catch {
+    /* Registry packages need not have a Bun forge tag. */
   }
   if (!Array.isArray(manifest.files))
     throw new Error('Autobuild manifest must declare distribution files')
@@ -188,6 +190,11 @@ async function stageCode(source: string, target: string): Promise<void> {
     if (!inside(source, resolve(source, entry)) || excludedSnapshotNames.has(entry))
       throw new Error(`unsafe distribution path: ${entry}`)
     await copySnapshotTree(join(source, entry), join(target, entry), source)
+  }
+  // Preserve Bun's forge provenance even when the tag only contains an abbreviated SHA.
+  if (bunTag) {
+    await writeFile(join(target, '.bun-tag'), bunTag)
+    if (!manifest.files.includes('.bun-tag')) manifest.files.push('.bun-tag')
   }
   delete manifest.devDependencies
   delete manifest.patchedDependencies

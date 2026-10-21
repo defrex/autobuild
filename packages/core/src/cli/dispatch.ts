@@ -1,3 +1,5 @@
+import { distributionRoot } from '../distribution'
+import { readDistributionIdentity } from './installation'
 import { launchContext } from './dispatch-launch-contract'
 import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
@@ -4022,6 +4024,7 @@ class DispatchLoop {
       run: this.runId,
       lineage: launch.lineage!,
       from: RUNTIME_IDENTITY,
+      runningBunTag: (await readDistributionIdentity(distributionRoot())).bunTag,
       reservationOwner: launch.launcherPid,
       currentKey: launch.predecessor
         ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key

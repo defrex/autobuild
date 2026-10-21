@@ -143,3 +143,92 @@ test('cadence has one in-flight check and opt-out cancels preparation', async ()
   controller.changed()
   await controller.stop()
 })
+
+for (const { name, commit, bunTag, locked, unchanged } of [
+  {
+    name: 'full running SHA matches abbreviated lock',
+    commit: `a1b2c3d${'0'.repeat(33)}`,
+    bunTag: undefined,
+    locked: 'a1b2c3d',
+    unchanged: true,
+  },
+  {
+    name: 'unknown SHA retains the matching abbreviated Bun tag',
+    commit: 'unknown',
+    bunTag: 'fork-owner-repo-name-a1b2c3d',
+    locked: 'a1b2c3d',
+    unchanged: true,
+  },
+  {
+    name: 'abbreviated Bun tag matches a longer locked commit',
+    commit: 'unknown',
+    bunTag: 'fork-owner-repo-name-a1b2c3d',
+    locked: `a1b2c3d${'0'.repeat(33)}`,
+    unchanged: true,
+  },
+  {
+    name: 'changed commit is still detected',
+    commit: 'unknown',
+    bunTag: 'fork-owner-repo-name-b1b2c3d',
+    locked: 'a1b2c3d',
+    unchanged: false,
+  },
+  {
+    name: 'different forge repository is still detected',
+    commit: 'unknown',
+    bunTag: 'other-owner-repo-name-a1b2c3d',
+    locked: 'a1b2c3d',
+    unchanged: false,
+  },
+  {
+    name: 'Bun provenance takes precedence over a stale npm gitHead',
+    commit: `a1b2c3d${'0'.repeat(33)}`,
+    bunTag: 'fork-owner-repo-name-b1b2c3d',
+    locked: 'a1b2c3d',
+    unchanged: false,
+  },
+]) {
+  test(`fresh forge launch: ${name}`, async () => {
+    const events: RepositoryEventWrite[] = []
+    let installs = 0,
+      cutovers = 0
+    const controller = new DispatchUpgradeController({
+      run: 'fresh-run',
+      lineage: 'fresh-launcher',
+      from: { ...from, commit },
+      runningBunTag: bunTag,
+      failedKeys: [],
+      currentKey: undefined,
+      enabled: () => true,
+      resolve: async () => ({
+        mode: 'pinned',
+        key: 'forge',
+        source: 'main',
+        record: [
+          `@defrex/autobuild@github:fork-owner/repo-name#${locked}`,
+          {},
+          `fork-owner-repo-name-${locked}`,
+        ],
+      }),
+      prepare: async () => {
+        installs++
+        throw new Error('preparation observed')
+      },
+      append: async (event) => {
+        events.push(event)
+      },
+      cutover: async () => {
+        cutovers++
+        return true
+      },
+    })
+    await controller.check()
+    await controller.check()
+    expect(installs).toBe(unchanged ? 0 : 1)
+    expect(cutovers).toBe(0)
+    expect(events.map((event) => event.type)).toEqual(
+      unchanged ? [] : ['dispatcher.upgrade-detected', 'dispatcher.upgrade-failed'],
+    )
+    await controller.stop()
+  })
+}
