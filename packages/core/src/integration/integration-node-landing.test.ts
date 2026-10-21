@@ -337,3 +337,106 @@ test('integration agent verification receives exact commit range without produce
     await h.cleanup()
   }
 })
+
+test.each([false, true])(
+  'recorded migration preserves nested landing and ticket cleanup (remap=%s)',
+  async (remap) => {
+    const h = await makeHarness({
+      localGitForge: true,
+      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
+        { ...readyTicket('B', { title: 'Nested integration' }), kind: 'node', target: 'A' },
+      ],
+    })
+    try {
+      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      const records = await h.store.listBuilds()
+      const a = records.find((record) => record.ticket?.id === 'A')!
+      const b = records.find((record) => record.ticket?.id === 'B')!
+      const { FakeTicketSource } = await import('../ports/tickets/fake')
+      const { Dispatcher } = await import('../processes/dispatcher')
+      const { recordTicketMigration } = await import('../kernel/ticket-migrations')
+      const mapping = { A: remap ? 'NEW-A' : 'A', B: remap ? 'NEW-B' : 'B' }
+      const destination = new FakeTicketSource(
+        (await h.tickets.listAll()).tickets.map((ticket) => ({
+          ...ticket,
+          ref: { ...ticket.ref, source: 'file', id: mapping[ticket.ref.id as 'A' | 'B'] },
+          target: ticket.target ? mapping[ticket.target as 'A' | 'B'] : undefined,
+        })),
+      )
+      Object.defineProperty(destination, 'name', { value: 'file' })
+      await h.store.ensureRepo(h.origin)
+      await recordTicketMigration(
+        h.store,
+        h.origin,
+        { kind: 'human', user: 'operator' },
+        { identity: 'cutover', from: 'fake', to: 'file', mapping },
+      )
+      h.dispatcher = new Dispatcher({
+        ...(h.dispatcher as unknown as { deps: import('../processes/dispatcher').DispatcherDeps })
+          .deps,
+        tickets: destination,
+      })
+
+      await addStack(h, b.branch!)
+      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      await h.runLatest()
+      const state = reduceBuild(await h.events(b.slug))
+      expect(integrationHeadVerified(state, state.integration!.cycle!.head)).toBe(true)
+      await h.dispatcher.tick()
+      await controlBuild({
+        store: h.store,
+        repo: h.origin,
+        slug: b.slug,
+        action: { kind: 'land' },
+        ticketSource: async () => destination,
+      })
+      for (let i = 0; i < 4; i++) {
+        h.clock.advance(60_000)
+        await h.dispatcher.tick()
+      }
+      expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
+      await h.runLatest()
+      await h.dispatcher.tick()
+      await controlBuild({
+        store: h.store,
+        repo: h.origin,
+        slug: a.slug,
+        action: { kind: 'land' },
+        ticketSource: async () => destination,
+      })
+      for (let i = 0; i < 4; i++) {
+        h.clock.advance(60_000)
+        await h.dispatcher.tick()
+      }
+      expect(reduceBuild(await h.events(a.slug)).status).toBe('done')
+      expect(destination.transitions).toEqual(
+        expect.arrayContaining([
+          { id: mapping.A, state: 'Done' },
+          { id: mapping.B, state: 'Done' },
+        ]),
+      )
+      expect(
+        destination.comments.some(
+          (notice) => notice.id === mapping.A && notice.body.includes('merged'),
+        ),
+      ).toBe(true)
+      expect((await h.store.getBuild(a.slug))?.ticket?.source).toBe('fake')
+      expect(reduceBuild(await h.events(b.slug)).landing?.decision?.into).toEqual({
+        kind: 'node',
+        ticket: mapping.A,
+      })
+
+      const messages = await git(['log', '-2', '--format=%B', 'main'], h.origin)
+      expect(messages).toContain('Autobuild-Build: first-child')
+      expect(messages).toContain('Autobuild-Build: second-child')
+      expect(messages).not.toContain(`Autobuild-Build: ${a.slug}`)
+      expect(messages).not.toContain(`Autobuild-Build: ${b.slug}`)
+      expect(await git(['rev-list', '--merges', 'main'], h.origin)).toBe('')
+    } finally {
+      await h.cleanup()
+    }
+  },
+)

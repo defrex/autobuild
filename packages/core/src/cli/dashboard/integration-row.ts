@@ -130,7 +130,7 @@ export function enrichIntegrationRows(
     const list = row.integrationRow
     const identity = row.collectionIdentity
     if (!list || !identity) return row
-    const live = (id: string, source: string) =>
+    const live = (id: string, source: string, claims?: string[]) =>
       rows
         .filter((child) => {
           const match = child.collectionIdentity
@@ -138,9 +138,10 @@ export function enrichIntegrationRows(
             match &&
             match.repo === identity.repo &&
             match.targetBuild === row.slug &&
-            match.targetSource === identity.source &&
-            match.targetId === identity.id &&
-            (match.id ? match.source === source && match.id === id : child.slug === id) &&
+            (claims?.includes(child.slug) ||
+              (match.targetSource === identity.source &&
+                match.targetId === identity.id &&
+                (match.id ? match.source === source && match.id === id : child.slug === id))) &&
             match.status !== 'queued' &&
             match.status !== 'done' &&
             match.status !== 'aborted'
@@ -152,17 +153,23 @@ export function enrichIntegrationRows(
               a.collectionIdentity?.createdAt ?? '',
             ) || b.slug.localeCompare(a.slug),
         )[0]
-    const building = list.openChildren.filter((id) => live(id, identity.source ?? '')).length
     const detail = row.integrationDetail
+    const building = list.openChildren.filter((id) => {
+      const child = detail?.children.find((entry) => entry.id === id && !entry.landed)
+      return live(id, child?.source ?? identity.source ?? '', child?.claims)
+    }).length
     const projected = detail?.children.map((child) => {
-      const active = child.landed ? undefined : live(child.id, child.source)
+      const active = child.landed ? undefined : live(child.id, child.source, child.claims)
       const historical = child.builds?.length
         ? records.find((r) => r.repo === identity.repo && child.builds?.includes(r.slug))
         : undefined
       return {
         ...child,
-        id: historical?.ticket?.id ?? child.id,
-        source: historical?.ticket?.source ?? child.source,
+        id: child.id === historical?.slug ? (historical.ticket?.id ?? child.id) : child.id,
+        source:
+          child.id === historical?.slug
+            ? (historical.ticket?.source ?? child.source)
+            : child.source,
         title:
           child.title === 'title unavailable'
             ? (active?.collectionIdentity?.title ?? historical?.ticket?.title ?? child.title)

@@ -1,3 +1,8 @@
+import {
+  currentTicketRef,
+  readTicketMigrations,
+  resolveTicketRef,
+} from '../kernel/ticket-migrations'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -117,31 +122,31 @@ async function matchingBuild(
   source: TicketSource,
   configuredSource: string,
 ): Promise<OperatorTicketBuild | null> {
-  // The service's database adapter implements the externally named hosted source.
-  const hosted =
-    source.name === 'hosted' || (configuredSource === 'hosted' && source.name === 'database')
-  const candidates = (await store.listBuilds()).filter(
-    (record) =>
-      record.repo === repo &&
-      (record.ticket?.source === source.name || (hosted && record.ticket?.source === 'hosted')),
-  )
-  const matches = candidates.filter((record) => record.ticket!.id === id)
-  // The service database store always projects current ids, even when there is
-  // no matching build. Only a hosted client over an unprojected legacy store
-  // needs fallback lookups; failure must not undo a mutation.
-  if (matches.length === 0 && source.name === 'hosted') {
-    const identities = new Map<string, string>()
+  const candidates = await store.listBuildsForRepo(repo)
+  if (!candidates.length) return null
+  const migrations = await readTicketMigrations(store, repo)
+  const normalized = []
+  for (const record of candidates) {
+    if (!record.ticket) continue
     try {
-      for (const record of candidates) {
-        const raw = record.ticket!.id
-        if (!identities.has(raw)) {
-          const ticket = await source.get(raw)
-          identities.set(raw, ticket?.ref.source === source.name ? ticket.ref.id : raw)
-        }
-        if (identities.get(raw) === id) matches.push(record)
-      }
+      const ref = resolveTicketRef(
+        migrations,
+        record.ticket,
+        source.name === 'database' && configuredSource === 'hosted' ? 'hosted' : source.name,
+        record.slug,
+      )
+      normalized.push({ record, ref })
     } catch {
-      // Build association is optional presentation; keep the successful ticket result.
+      /* unrelated historical source has no current ticket association */
+    }
+  }
+  const matches = normalized.filter(({ ref }) => ref.id === id).map(({ record }) => record)
+  if (!matches.length && source.name === 'hosted') {
+    try {
+      for (const { record, ref } of normalized)
+        if ((await source.get(ref.id))?.ref.id === id) matches.push(record)
+    } catch {
+      /* optional alias association must not undo a successful mutation */
     }
   }
   const projected = await Promise.all(
@@ -273,9 +278,8 @@ export async function prepareOperatorTicketAssets(opts: {
     throw new Error('ticket operator backend is not configured')
   }
   const { context, source } = await openOperatorTickets({ ...opts, backend: opts.backend })
-  if (context.tickets.source !== opts.ref.source)
-    throw new Error('build ticket source differs from configured source')
-  return preparePinnedAssets(source, opts.store, opts.repo, opts.ref.id)
+  const ref = await currentTicketRef(opts.store, opts.repo, context.tickets.source, opts.ref)
+  return preparePinnedAssets(source, opts.store, opts.repo, ref.id)
 }
 
 export async function listOperatorTicketStates(opts: {

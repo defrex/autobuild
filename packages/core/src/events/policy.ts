@@ -140,6 +140,7 @@ export const buildEventPolicy = {
   'phase.deferral-escalated': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
+  'tickets.migration-recorded': 'decisive',
   'change-presence.observed': 'decisive',
   'harvest.pause-requested': 'decisive',
   'harvest.resume-requested': 'decisive',

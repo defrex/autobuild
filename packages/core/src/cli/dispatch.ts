@@ -1,3 +1,4 @@
+import { migrationIdentity } from '../kernel/ticket-migrations'
 import { formatDispatcherError } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
@@ -3667,6 +3668,10 @@ class DispatchLoop {
           buildSnapshot.capacityBuilds ?? [],
           configSnapshot.config.capacity,
           this.wiring.clock(),
+          migrationIdentity(
+            repositoryEvents.ticketMigrations,
+            configSnapshot.config.tickets.source,
+          ),
         ),
         observationCount: this.observationCount,
         observationLimit: configSnapshot.config.policy.harvestThreshold,

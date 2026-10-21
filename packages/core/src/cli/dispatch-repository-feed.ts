@@ -6,6 +6,7 @@ import type { BuildStore, Clock } from '../store/types'
 export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
   return (
     event.type.startsWith('harvest.') ||
+    event.type === 'tickets.migration-recorded' ||
     event.type === 'dispatcher.intake-set' ||
     event.type === 'dispatcher.pause-set' ||
     event.type === 'dispatcher.auto-merge-default-set'
@@ -13,7 +14,7 @@ export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
 }
 
 export const dispatchFrontendReducer = defineReducer({
-  version: 2,
+  version: 3,
   initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean } => ({
     retained: [],
     incompleteIdentities: true,

@@ -4,8 +4,9 @@ Export and import use the ordinary file ticket layout. They operate on tickets
 and current attachments through the ticket source; neither command contacts the
 forge. File and hosted sources support import. Linear supports export only.
 
-1. Pause intake and stop other ticket writers for the cutover. Import preflight
-   does not reserve numbers against concurrent writers.
+1. Pause intake and quiesce build-related ticket writes and other ticket writers
+   for the cutover. In-flight builds need not be aborted. Import preflight does
+   not reserve numbers against concurrent writers.
 2. With the old `[tickets]` configuration, run `ab ticket export /path/to/export`.
    The destination must be absent or empty. Export reads every state, including
    archived Linear tickets and empty discoverable states, and publishes the
@@ -14,8 +15,11 @@ forge. File and hosted sources support import. Linear supports export only.
    hosted ticket service. Keep the export directory intact.
 4. Run `ab ticket import /path/to/export`. Inspect its printed ticket and state
    mappings and `/path/to/export/.ab-import-map.json`.
-5. Inspect ticket bodies, labels, blockers, comments and attachments in the new
-   source. Confirm lifecycle configuration and the ready gate, then resume intake.
+5. Import records a durable source/ID mapping in the same BuildStore and repository
+   that hold the existing builds, after tickets, metadata and assets finish.
+   Keep that BuildStore/repository identity through the cutover.
+6. Inspect ticket bodies, labels, blockers, comments and attachments in the new
+   source. Confirm lifecycle configuration and the ready gate, then resume builds and intake.
 
 Both commands also accept
 `--store <ref>` to reach legacy BuildStore attachments. Keep the old store available
@@ -70,3 +74,36 @@ identity, establishes node kinds, then applies targets using the durable id map,
 just like blockers. Input order does not matter. Resuming also restores edges on
 adopted tickets; normal destination validation still guards existing graphs and
 node demotion. Older work-only exports remain valid.
+
+## In-flight builds
+
+A recorded migration resolves old source-qualified ticket references through the
+new source, including remapped IDs. Completeness, child targeting, capacity
+ancestry, claimed target checks, lifecycle transitions and notices use that
+mapping. Historical build events and ticket references remain unchanged. Moves
+can chain across sources; mappings are never applied backward. A source switch
+alone establishes no continuity. Missing migration evidence or an uncovered ID
+fails closed and names the build and original ticket when operating on that
+build or its frozen membership. Uncovered historical builds stay in their
+original namespace during history searches; they cannot alias current tickets
+or block unrelated intake. Separate trackers with the
+same adapter name cannot be distinguished by historical references; this does
+not establish continuity between them.
+
+When using the export directory directly as the configured file tracker, run
+`ab ticket migration record /path/to/export [--store <ref>]`. This verifies the
+manifest inventory and creation keys against the destination and records identity
+mappings for the original manifest IDs, without importing tickets. Additional
+tickets filed in the directory after export are allowed and are not included in
+the mapping. Every original ID must still exist with its recorded creation key.
+Preserve `.ab-migration.json` for this step;
+the tracker itself can operate without it. `.ab-import-map.json` is progress
+information, never proof of continuity. Repeating an identical recording is safe;
+conflicting evidence is refused.
+
+Import is not transactional across ticket and build services. A partial import
+records no continuity; rerun with the same directory to adopt by creation key.
+If tickets finish but journal recording fails, the command reports that boundary:
+rerun the same command to finish recording before resuming builds. The migration
+journal belongs to the selected BuildStore even when ticket assets live on an
+independent hosted service. Validate the destination configuration before resume.

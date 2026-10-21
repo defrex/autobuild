@@ -1395,7 +1395,8 @@ implementer:  ab context   (findings.json now materialized) → …
 
 Human/pre-build ticket grooming uses one configured-source namespace
 (`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
-forms below). Migration adds `ab ticket export <dir>` and `ab ticket import <dir>`
+forms below). Migration adds `ab ticket export <dir>` and `ab ticket import <dir>`,
+plus `ab ticket migration record <dir>`
 (see [Ticket source migration](#ticket-source-migration)). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
 mutation path. The CRUD subcommands accept `--json` and then writes exactly one
@@ -2532,7 +2533,7 @@ live, the janitor defers the saga so it cannot race process-tree teardown. Once
 that supervisor releases the lease, or an abruptly orphaned lease expires, cleanup
 closes an open unmerged PR without overriding a racing merge, releases the workspace,
 deletes the exact published remote branch and exact local branch, unions the
-`autobuild:aborted` label into the current ticket labels, returns the ticket to
+`autobuild:aborted` label into the current ticket labels, posts an abort notice, and returns the ticket to
 configured Triage, and only then completes as `abandoned`. External effects are
 idempotent and the three `abort.*` facts checkpoint projections across crashes;
 missing Forge capabilities or outages leave the remainder due on the next tick.
@@ -3635,6 +3636,25 @@ State normalization and the complete operator procedure are documented in
 [Ticket migration](docs/ticket-migration.md). The same reference is delivered in
 the installed guide. Export keeps lifecycle membership without inferring roles;
 import reuses unique case-insensitive states and creates normalized missing ones.
+
+
+Completed `ab ticket import <dir> [--store <ref>]` records a durable repository
+`tickets.migration-recorded` fact after all ticket and asset work succeeds. The
+fact carries the stable export identity, source/destination adapter names and
+complete actual ID mapping. `ab ticket migration record <dir> [--store <ref>]`
+verifies a manifest-backed export used directly as a file source, checking every
+ID and creation key, and records the same continuity without importing. Tickets
+filed afterward in the exported tracker are allowed; only original manifest IDs
+enter that mapping.
+
+Current operations resolve historical ticket references forward through recorded
+mappings. Completeness, targeting, admission, ancestry and lifecycle writes
+retain their gates. Missing routes, uncovered IDs and inconsistent evidence fail
+closed at current-ticket and frozen-membership operation boundaries; unrelated
+uncovered history does not block intake or alias current-source tickets. History
+is never rewritten. Preserve the BuildStore and repository,
+quiesce ticket writers during cutover, and resume in-flight builds after recording
+and destination validation. See [the migration procedure](docs/ticket-migration.md).
 
 
 ### Tree and consent operator reads

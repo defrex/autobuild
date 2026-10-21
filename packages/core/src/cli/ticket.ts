@@ -1,9 +1,10 @@
+import { recordTicketMigration, readTicketMigrations } from '../kernel/ticket-migrations'
 import { readTicketTree } from '../operator/tickets'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
-import { exportTickets, importTickets } from '../ports/tickets/migration'
+import { exportTickets, importTickets, directMigration } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
 import { editTicket, type TicketEditorRunner } from './ticket-editor'
 /**
@@ -174,6 +175,7 @@ type TicketCommandName =
   | 'tree'
   | 'export'
   | 'import'
+  | 'migration'
   | 'states'
   | 'state create'
   | 'create'
@@ -787,6 +789,7 @@ const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>
 export const TICKET_USAGE = [
   'usage: ab ticket export <dir> [--store <ref>]',
   'usage: ab ticket import <dir> [--store <ref>]',
+  'usage: ab ticket migration record <dir> [--store <ref>]',
   'usage: ab ticket tree [--json]',
   CREATE_USAGE,
   'usage: ab ticket edit <id> (§8.8)',
@@ -820,22 +823,42 @@ interface TicketCliOpts extends TicketCommandOpts {
 export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<void> {
   const [command, ...args] = argv
   switch (command) {
+    case 'migration':
     case 'export':
     case 'import': {
-      const parsed = parseArgs(args, { store: 'value' }, TICKET_USAGE)
+      const tail = command === 'migration' ? args.slice(1) : args
+      if (command === 'migration' && args[0] !== 'record') throw new Error(TICKET_USAGE)
+      const parsed = parseArgs(tail, { store: 'value' }, TICKET_USAGE)
       const [dir, ...extra] = parsed.positionals
       if (!dir?.trim() || extra.length) throw new Error(TICKET_USAGE)
       const migrationOpts = { ...opts, storeRef: stringFlag(parsed, 'store') ?? opts.storeRef }
       const { source } = await resolveTicketCommand(migrationOpts, command)
-      await withTicketAssets(migrationOpts, source, ({ store, repo }) =>
-        (command === 'export' ? exportTickets : importTickets)({
-          source,
-          assets: store,
-          repo,
-          dir,
-          print: opts.stdout,
-        }),
-      )
+      await withTicketAssets(migrationOpts, source, async ({ store, buildStore, repo }) => {
+        const input = { source, assets: store, repo, dir, print: opts.stdout }
+        if (command === 'export') return exportTickets(input)
+        await buildStore.ensureRepo(repo)
+        await readTicketMigrations(buildStore, repo)
+        const result =
+          command === 'import' ? await importTickets(input) : await directMigration(input)
+        try {
+          await recordTicketMigration(
+            buildStore,
+            repo,
+            {
+              kind: 'human',
+              user: opts.env.USER?.trim() || opts.env.USERNAME?.trim() || 'operator',
+            },
+            result,
+          )
+        } catch (error) {
+          throw new Error(
+            `Tickets imported/validated but continuity was not recorded: ${error instanceof Error ? error.message : error}. Rerun the same command to retry safely.`,
+          )
+        }
+        opts.stdout(
+          `recorded ticket migration ${result.from} → ${result.to}: ${Object.keys(result.mapping).length} tickets`,
+        )
+      })
       return
     }
 

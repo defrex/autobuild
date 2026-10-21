@@ -10,16 +10,52 @@ import { validateFileTicketId } from './requested-id'
 import { normalizeStateName } from './states'
 import { encodePortableAsset, decodePortableAsset, type PortableAsset } from './portable-assets'
 
-const MANIFEST = '.ab-migration.json'
+export const MANIFEST = '.ab-migration.json'
 export const IMPORT_MAP = '.ab-import-map.json'
 const manifestSchema = z.strictObject({
   version: z.literal(1),
   identity: z.string().min(1),
-  source: z.string(),
+  source: z.string().regex(/^[a-z][a-z0-9-]*(?::[\s\S]*)?$/),
   keys: z.record(z.string(), z.string().min(1)),
   states: z.record(z.string(), z.string()),
 })
-type Manifest = z.infer<typeof manifestSchema>
+export type Manifest = z.infer<typeof manifestSchema>
+export async function readMigrationManifest(dir: string): Promise<Manifest> {
+  return manifestSchema.parse(JSON.parse(await readFile(join(resolve(dir), MANIFEST), 'utf8')))
+}
+export function migrationSource(manifest: Manifest): string {
+  // v1 combines adapter name and repository provenance; URLs may contain colons.
+  return manifest.source.split(':', 1)[0]!
+}
+export interface MigrationResult {
+  identity: string
+  from: string
+  to: string
+  mapping: Record<string, string>
+}
+export async function directMigration(opts: MigrationOptions): Promise<MigrationResult> {
+  if (opts.source.name !== 'file')
+    throw new Error('direct migration recording requires a file destination')
+  const manifest = await readMigrationManifest(opts.dir)
+  const mapping: Record<string, string> = Object.create(null)
+  const exported = new FileTicketSource({ dir: resolve(opts.dir) })
+  // The manifest freezes the export inventory; the directory may now be a live
+  // tracker with additional tickets. Only the original IDs establish continuity.
+  for (const [id, key] of Object.entries(manifest.keys)) {
+    validateFileTicketId(id)
+    const ticket = await exported.get(id)
+    const destination = await opts.source.get(id)
+    if (ticket?.creationKey !== key || destination?.creationKey !== key)
+      throw new Error(`migration evidence mismatch for ${id}`)
+    mapping[id] = id
+  }
+  return {
+    identity: manifest.identity,
+    from: migrationSource(manifest),
+    to: opts.source.name,
+    mapping,
+  }
+}
 async function atomicJson(path: string, value: unknown) {
   const temp = `${path}.${crypto.randomUUID()}.tmp`
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`)
@@ -156,7 +192,7 @@ function matchState(name: string, existing: string[]): string | undefined {
   return matches[0]
 }
 /** Resume through creation keys, never through content similarity or mapping files. */
-export async function importTickets(opts: MigrationOptions): Promise<void> {
+export async function importTickets(opts: MigrationOptions): Promise<MigrationResult> {
   const policy = opts.source.requestedIds
   if (!policy || !opts.source.listStates || !opts.source.addState)
     throw new Error(`ticket source ${opts.source.name} does not support import`)
@@ -352,6 +388,12 @@ export async function importTickets(opts: MigrationOptions): Promise<void> {
       }
     }
     opts.print?.(`mapping: ${mappingPath}`)
+    return {
+      identity: manifest.identity,
+      from: migrationSource(manifest),
+      to: opts.source.name,
+      mapping,
+    }
   } catch (error) {
     throw new Error(
       `${error instanceof Error ? error.message : error}\nImport progress retained in ${mappingPath}; rerun import to finish.`,

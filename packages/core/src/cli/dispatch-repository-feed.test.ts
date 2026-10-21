@@ -59,7 +59,7 @@ test('persisted projection advances past discarded events and restarts with only
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
   const snapshot = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 2,
+    version: 3,
   })
   expect(snapshot?.cursor).toBe(3)
   expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
@@ -82,7 +82,7 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
     await start(store, 'old')
     if (bad !== 'missing')
       await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-        version: bad === 'version' ? 1 : 2,
+        version: bad === 'version' ? 1 : 3,
         cursor: bad === 'ahead' ? 999 : 1,
         state: { retained: bad === 'malformed' ? [{}] : [], incompleteIdentities: true },
       })
@@ -267,7 +267,7 @@ test('foreign repository cache facts are rejected and missing repositories are n
   await store.ensureRepo(repo)
   const fact = await setting(store)
   await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 2,
+    version: 3,
     cursor: 1,
     state: { retained: [{ ...fact, repo: '/other' }], incompleteIdentities: true },
   })
@@ -289,7 +289,7 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
   await current.save(true)
   await stale.save(true)
   expect(
-    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 2 }))
+    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 3 }))
       ?.cursor,
   ).toBe(2)
 })

@@ -1,3 +1,4 @@
+import { migrationIdentity } from '../kernel/ticket-migrations'
 import {
   dispatchCapacity,
   type DispatchCapacity,
@@ -266,7 +267,12 @@ export async function readRepositoryCapacity(
           provisioning: build.provisionMarker !== undefined,
         })
       }
-      return dispatchCapacity(builds, config.capacity, now)
+      return dispatchCapacity(
+        builds,
+        config.capacity,
+        now,
+        migrationIdentity(facts.ticketMigrations, config.tickets.source),
+      )
     }
   }
   return undefined

@@ -1395,3 +1395,7 @@ unavailable for uninstrumented adapters. Attribution retains at most ten builds
 ordered by descending count then build name; repository requests are unattributed.
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
+
+Ticket-source continuity is reduced by `kernel/ticket-migrations.ts` from durable
+repository `tickets.migration-recorded` facts. Import publishes only complete
+mappings; current-operation resolvers leave build records and old events intact.
