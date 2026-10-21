@@ -5,9 +5,8 @@ it). This is repository tooling; no capture script is written into the built sit
 The fresh `buildFiles()` map supplies every `docs/**/*.html` output, including
 `docs/index.html` and direct HTML pages. Each is captured at 1440 and 390 pixels.
 Complete output paths are UTF-8 hex encoded in artifact IDs; nested pages retain
-their original URL as the base for relative assets. Docs content must remain
-under `packages/website/`; a future external content root must extend the
-website verify paths when introduced.
+their original URL as the base for relative assets. Public articles are discovered from frontmatter-bearing `docs/*.md`; the
+website verify paths include that content root as well as `packages/website/`.
 
 The four existing landing filenames and reference mappings remain stable.
 All baseline frames use actual reduced-motion media preference. The report
