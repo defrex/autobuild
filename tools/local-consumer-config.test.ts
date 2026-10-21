@@ -83,6 +83,7 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
     skill: 'verify-website',
     paths: [
       'packages/website/**',
+      'docs/**',
       'design/website/**',
       'tools/website-capture*',
       '.agents/skills/verify-website/SKILL.md',
@@ -110,6 +111,8 @@ test('the website step covers site source, design references and evidence toolin
   const rule = { kind: 'paths' as const, step: 'website', paths: step.paths }
   for (const path of [
     'packages/website/src/page.ts',
+    'docs/overview.md',
+    'docs/architecture.md',
     'packages/website/docs/start.md',
     'design/website/reference.html',
     'tools/website-capture.ts',
@@ -119,7 +122,7 @@ test('the website step covers site source, design references and evidence toolin
   ]) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
   }
-  for (const path of ['docs/architecture.md', 'autobuild.toml']) {
+  for (const path of ['autobuild.toml']) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
   }
 })
