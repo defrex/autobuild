@@ -36,8 +36,8 @@ Recovery does not erase a human gate. An unanswered escalation stays parked unti
 
 ## The operator agent stays outside
 
-Your operator agent is an external coding agent that files and grooms tickets, watches builds, answers escalations, and manages landing consent. You set its direction and handle decisions that need your judgment. Locally your agent uses the CLI; connected over MCP, it can use the corresponding operator tools.
+Your operator agent is an external coding agent. It writes specs, files and grooms tickets, watches builds, answers escalations, and manages authorized landing consent. You provide product decisions and guidance. Locally it uses the CLI; an agent connected over MCP can use the corresponding operator tools.
 
-Autobuild does not host or start that orchestrator agent. It runs the build pipeline and exposes durable state and controls for your agent to use. Your agent's chat is separate from the build's paper trail.
+Autobuild does not host or start that orchestrator agent. It runs the build pipeline and exposes durable state and controls for your operator agent to use. Your agent's chat is separate from the build's paper trail.
 
 Read the [architecture map](architecture.md), [operator API reference](operator-api.md), and [integration-tree reference](integration-tree.md) for the process and control boundaries. Follow [one build end to end](builds.md) for the phases inside a runner.

@@ -38,6 +38,10 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/ticket-sources/',
     '/docs/agent-runtimes/',
     '/docs/workspaces/',
+    '/docs/cli/',
+    '/docs/upgrading/',
+    '/docs/troubleshooting/',
+    '/docs/glossary/',
   ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
@@ -139,6 +143,11 @@ test('layout preserves article words and headings from independent HTML baseline
     ).toEqual(original.code)
     for (const key of ['path', 'label', 'title', 'group', 'description'] as const)
       expect(page[key]).toBe(original[key])
+  }
+})
+
+test('every discovered article preserves rendering, headings, and shared navigation', () => {
+  for (const page of DOCS_PAGES) {
     const html = renderDocsPage(page, DOCS_PAGES)
     const article = html.split('aria-atomic="true"></span>')[1]!.split('</article>')[0]!
     expect(article).toBe(prepareHeadings(page.content).html)
