@@ -6007,6 +6007,49 @@ describe('native suspension and continuation', () => {
     expect(reduceBuild(await h.store.getEvents(SLUG)).sessions.open).toHaveLength(0)
   }, 15000)
 
+  test('shutdown suspends a session with no native handle and successor records fresh fallback', async () => {
+    const shutdown = new AbortController()
+    let ready!: () => void
+    const observed = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    let first = true
+    const h = await makeHarness({
+      nativeSessions: false,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          'ab-plan': async (ctx) => {
+            if (first) {
+              first = false
+              ready()
+              await new Promise(() => {})
+            }
+            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+          },
+        }
+      },
+    })
+    const running = h.br.run()
+    await observed
+    shutdown.abort()
+    await running
+    const before = await h.store.getEvents(SLUG)
+    expect(ofType(before, 'session.suspended')).toHaveLength(1)
+    expect(ofType(before, 'session.suspended')[0]!.payload.handle).toBeUndefined()
+    expect(reduceBuild(before).sessions.open).toHaveLength(0)
+    const next = successor(h)
+    await next.attach()
+    await next.step()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.resume-fallback')).toHaveLength(1)
+    expect(ofType(events, 'session.resume-fallback')[0]!.payload.reason).toBeTruthy()
+    expect(ofType(events, 'session.resumed')).toHaveLength(0)
+  })
+
   test('shutdown deposits partial evidence; restart resumes the same native handle and phase round', async () => {
     const shutdown = new AbortController()
     let observed!: () => void

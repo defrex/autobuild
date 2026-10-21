@@ -2846,7 +2846,6 @@ export class BuildRunner {
     const session = started.payload.session
     const state = (await readBuildFacts(store, slug)).value.state
     const native = state.sessions.open.find((s) => s.session === session)?.nativeHandle
-    if (!native && cause === 'shutdown') return
     const producer = [...this.producerSessions.entries()].find(
       ([phase]) => phase === started.payload.phase,
     )
