@@ -16,6 +16,27 @@ import {
 } from './dispatch-launch-contract'
 import type { UpgradeTarget } from './dispatch-upgrade-target'
 
+/** Compare the staging lock receipt with the previously validated base lock.
+ * Registry records carry a URL at index 1; forge records carry dependency
+ * metadata there and identify their source by resolution and Bun tag instead. */
+export function validateUpgradeLockReceipt(
+  authoritative: unknown[],
+  received: unknown[] | undefined,
+): void {
+  if (!received || received[0] !== authoritative[0])
+    throw new Error('installed package contradicts authoritative lock')
+  if (String(authoritative[0]).includes('@github:')) {
+    if (received[2] !== authoritative[2])
+      throw new Error('installed forge identity contradicts authoritative lock')
+    return
+  }
+  if (received[1] !== authoritative[1])
+    throw new Error('installed package contradicts authoritative lock')
+  const integrity = authoritative.at(-1)
+  if (typeof integrity === 'string' && integrity.startsWith('sha') && received.at(-1) !== integrity)
+    throw new Error('installed integrity contradicts authoritative lock')
+}
+
 export async function prepareUpgrade(input: {
   target: UpgradeTarget
   checkout: string
@@ -158,16 +179,10 @@ export async function prepareUpgrade(input: {
       unknown
     >
     const record = lockPackageRecord(generated, name)
-    if (!record || record[0] !== target.record![0] || record[1] !== target.record![1])
-      throw new Error('installed package contradicts authoritative lock')
+    // The generated lock is only a receipt for the previously validated authoritative record.
+    validateUpgradeLockReceipt(target.record!, record)
     if (target.version !== undefined && installed.version !== target.version)
       throw new Error('installed version contradicts target')
-    // The generated lock is only a receipt for checking the previously validated authoritative record.
-    const integrity = target.record!.at(-1)
-    if (typeof integrity === 'string' && integrity.startsWith('sha') && record.at(-1) !== integrity)
-      throw new Error('installed integrity contradicts authoritative lock')
-    if (target.record![0]!.toString().includes('@github:') && record[2] !== target.record![2])
-      throw new Error('installed forge identity contradicts authoritative lock')
     runtime = await prepareRuntime(installed.root, checkout)
     await validate(runtime)
     signal.throwIfAborted()
