@@ -10,26 +10,7 @@ import {
   type Side,
   type SeamState,
 } from './seams'
-import { INSTALL_COMMAND } from './constants'
 import { knobLeft, lean } from './seams-view'
-
-export interface ClipboardLike {
-  writeText(text: string): Promise<void>
-}
-
-/** Copies text; resolves false, never throws, when the clipboard is missing or refuses. */
-export async function copyText(
-  clipboard: ClipboardLike | undefined,
-  text: string,
-): Promise<boolean> {
-  try {
-    if (!clipboard) return false
-    await clipboard.writeText(text)
-    return true
-  } catch {
-    return false
-  }
-}
 
 /** The seam selector itself when `root` is it (querySelector only searches descendants), else its descendant. */
 function closestSelector(root: ParentNode): HTMLElement | null {
@@ -75,16 +56,9 @@ function bindSeams(root: HTMLElement): void {
   })
 }
 
-function bindCopy(button: HTMLButtonElement): void {
-  button.addEventListener('click', async () => {
-    if (await copyText(navigator.clipboard, INSTALL_COMMAND)) button.textContent = 'copied'
-  })
-}
-
 if (typeof document !== 'undefined') {
   bindSiteHeader()
   bindDocs()
   const selector = document.querySelector<HTMLElement>('.seam-selector')
   if (selector && SEAMS.length > 0) bindSeams(selector)
-  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) bindCopy(button)
 }
