@@ -43,8 +43,13 @@ Configured plugin modules can register ticket sources, agent runtimes, workspace
 
 Ordered verify and finalize steps and editable skills extend repository behavior while the phase grammar stays fixed. See [Configuration](configuration-overview.md) and the [full configuration reference](configuration.md) for plugin modules and extension points.
 
+Hosting and operator surfaces are deployment and access choices, not plugin registration ports.
+
 ## Seam guides
 
+- [Tickets](ticket-sources.md): file, Linear, hosted, and optional ticket trees.
+- [Agent runtimes](agent-runtimes.md): Claude Code, Codex, Pi, and model selection.
+- [Workspaces](workspaces.md): git worktree, Vercel Sandbox, and provisioning.
 - [Forges](forges.md): GitHub, local git, and safe publication adapters.
 - [Build store](build-store.md): SQLite, Postgres, HTTP, and storage contracts.
 - [Dispatcher hosting](dispatcher-hosting.md): local processes and scheduled hosted ticks.

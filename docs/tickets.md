@@ -18,6 +18,8 @@ Autobuild ships file, direct Linear, and hosted ticket sources. The file source 
 The source supplies ticket content, workflow states, labels, and blockers. Configuration chooses the source and ready gate; the rest of the build pipeline keeps the same vocabulary and behavior.
 
 
+See [Ticket sources](ticket-sources.md) for adapter setup, credentials, configuration and extension contracts.
+
 ## Groom a buildable spec
 
 The spec standard asks for four things:
