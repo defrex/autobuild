@@ -1,3 +1,4 @@
+import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import { dispatchCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
@@ -428,7 +429,12 @@ async function dashboardFromView(
     ...forgeReadinessWarnings(status),
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
   ]
-  const capacityProjection = dispatchCapacity(capacityBuilds, config.capacity, opts.clock())
+  const capacityProjection = dispatchCapacity(
+    capacityBuilds,
+    config.capacity,
+    opts.clock(),
+    migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
+  )
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, records),
     {

@@ -546,7 +546,27 @@ export const forgeHealthEventPayloadSchemas = {
   'dispatcher.forge-recovered': z.strictObject({ forge: z.string().min(1) }),
 } as const
 
+export const ticketMigrationEventPayloadSchemas = {
+  'tickets.migration-recorded': z
+    .strictObject({
+      identity: z.string().min(1),
+      from: z.string().regex(/^[a-z][a-z0-9-]*$/),
+      to: z.string().regex(/^[a-z][a-z0-9-]*$/),
+      mapping: z.record(z.string().min(1), z.string().min(1)),
+    })
+    .superRefine((value, ctx) => {
+      if (
+        value.from === value.to &&
+        Object.entries(value.mapping).some(([id, next]) => id !== next)
+      )
+        ctx.addIssue({ code: 'custom', message: 'migration sources must differ' })
+      if (new Set(Object.values(value.mapping)).size !== Object.keys(value.mapping).length)
+        ctx.addIssue({ code: 'custom', message: 'duplicate destination ticket id' })
+    }),
+} as const
+
 export const repositoryEventPayloadSchemas = {
+  ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
@@ -613,6 +633,7 @@ export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
 export const HARVEST_EVENT_TYPES = Object.keys(harvestEventPayloadSchemas) as HarvestEventType[]
 
 const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
+  'tickets.migration-recorded': ['human'],
   'change-presence.observed': ['dispatcher', 'kernel'],
   'harvest.pause-requested': ['human'],
   'harvest.resume-requested': ['human'],

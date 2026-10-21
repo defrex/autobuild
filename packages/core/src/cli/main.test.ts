@@ -1079,8 +1079,8 @@ describe('runCli — sessionless build controls', () => {
 
     const d = controlDeps(storeRef)
     expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('build ticket source is "linear"')
-    expect(d.err.join('\n')).toContain('configured for "file"')
+    expect(d.err.join('\n')).toContain('build control-build ticket linear:AUT-42')
+    expect(d.err.join('\n')).toContain('ab ticket migration record')
     const after = openLocalStore(storeRef)
     expect(await after.getEvents(slug)).toEqual(before)
     await after.close()

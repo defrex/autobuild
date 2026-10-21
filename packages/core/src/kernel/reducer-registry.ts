@@ -1,3 +1,4 @@
+import { ticketMigrationsReducer } from './ticket-migrations'
 import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
@@ -85,6 +86,7 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
+  ticketMigrations: { reducer: ticketMigrationsReducer, covers: [] },
   nodeRestack: { reducer: nodeRestackReducer, covers: ['advanceNodeRestack'] },
   leafRestack: { reducer: leafRestackReducer, covers: ['advanceLeafRestack'] },
   baseBranchValue: { reducer: optionalValue(baseBranchReducer), covers: [] },
@@ -211,6 +213,7 @@ const valueExclusions: Record<string, string> = {
   ),
 }
 const repositoryValues = new Set([
+  'ticketMigrations',
   'forgeHealthValue',
   'repositoryReadFacts',
   'dispatcherRunFacts',

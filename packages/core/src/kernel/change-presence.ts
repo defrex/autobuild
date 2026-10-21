@@ -1,3 +1,4 @@
+import type { TicketRef } from '../ontology'
 import type { BuildRecord, BuildDigest } from '../store/types'
 import type { CurrentBuildFacts } from '../store/reduced-reads'
 import type { BuildState } from './reducer'
@@ -17,9 +18,14 @@ export function blockerBuild(
   entries: PresenceBuild[],
   source: string,
   id: string,
+  identity: (ref: TicketRef, build?: string) => string = (ref) =>
+    JSON.stringify([ref.source, ref.id]),
 ): PresenceBuild | string | undefined {
   const generations = entries
-    .filter(({ record }) => record.ticket?.source === source && record.ticket.id === id)
+    .filter(
+      ({ record }) =>
+        record.ticket && identity(record.ticket, record.slug) === identity({ source, id }),
+    )
     .sort(
       (a, b) =>
         b.record.createdAt.localeCompare(a.record.createdAt) ||

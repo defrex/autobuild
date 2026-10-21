@@ -156,3 +156,25 @@ test('pending verification may exclude paused descendants but active unrelated n
     borrowingNodes: ['first'],
   })
 })
+
+test('migration normalization joins remapped frozen ancestry on both sides without changing records', async () => {
+  const { migrationIdentity } = await import('./ticket-migrations')
+  const node = conflict('node')
+  const child = build('child', 'work', 'paused', 'node')
+  node.record.ticket = { source: 'linear', id: 'OLD-NODE' }
+  const original = structuredClone(node.record)
+  const normalize = migrationIdentity(
+    {
+      migrations: [
+        { identity: 'cutover', from: 'linear', to: 'file', mapping: { 'OLD-NODE': 'node' } },
+      ],
+    },
+    'file',
+  )
+  expect(nodeCapacity([node, child], 'node', now).excludedDescendants).toEqual([])
+  expect(nodeCapacity([node, child], 'node', now, normalize).excludedDescendants).toEqual(['child'])
+  child.state.target!.ticket = { source: 'linear', id: 'OLD-NODE' }
+  node.record.ticket = { source: 'file', id: 'node' }
+  expect(nodeCapacity([node, child], 'node', now, normalize).excludedDescendants).toEqual(['child'])
+  expect(original.ticket).toEqual({ source: 'linear', id: 'OLD-NODE' })
+})

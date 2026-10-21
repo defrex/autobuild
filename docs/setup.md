@@ -541,3 +541,7 @@ gate. External orchestrators follow these through `ab watch` with no slugs or an
 explicit repository watch; `ab wait` remains build-only. The dashboard and operator
 repository query retain all failures for that run. After correcting settings or
 access, revalidate and restart dispatch to refresh its startup diagnostics.
+
+Changing the connected ticket source does not itself migrate in-flight builds.
+Follow [ticket migration](ticket-migration.md), keeping the existing BuildStore
+and recording continuity before resuming build-related ticket writes.

@@ -23,6 +23,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Landing policy, examples and forge requirements](references/landing-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
 - [Migration from 0.x](references/migration-1.0.md)
+- [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
 ## How to use this skill
 
@@ -1649,7 +1650,8 @@ it after the bounded stop delay when necessary, and only then releases the lease
 The dispatcher defers cleanup while that lease is live, then performs the
 checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
 delete the exact remote and local build branches, preserve existing ticket labels
-while adding `autobuild:aborted`, and return the ticket to configured Triage before
+while adding `autobuild:aborted`, return the ticket to configured Triage, and post
+an abort notice before
 completing as `abandoned`. Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.

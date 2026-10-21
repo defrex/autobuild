@@ -435,7 +435,7 @@ export interface ControlBuildOpts {
   ticketSource?: () => Promise<TicketSource>
   /** Injected only for --revise-spec-from-ticket. */
   prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
-  readTicketBody?: (ref: TicketRef) => Promise<string>
+  readTicketBody?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<string>
 }
 
 /** Apply one control against a freshly reduced build log. */
@@ -642,7 +642,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
                 'ticket body reader is unavailable for --revise-spec-from-ticket',
               )
             }
-            body = await opts.readTicketBody(record.ticket)
+            body = await opts.readTicketBody(record.ticket, opts.store, record.repo)
             if (record.ticket.source === 'hosted' && !opts.prepareTicketAssets) {
               throw new BuildControlError(
                 'ticket-unavailable',
@@ -891,7 +891,7 @@ export interface AbBuildControlOpts {
   storeRef?: string
   /** Injected only for --revise-spec-from-ticket. */
   prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
-  readTicketBody?: (ref: TicketRef) => Promise<string>
+  readTicketBody?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<string>
   /** Injectable adapter seam for unit tests. */
   openStore?: StoreOpener
 }
