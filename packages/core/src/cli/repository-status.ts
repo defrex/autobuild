@@ -1,3 +1,4 @@
+import { formatRuntimeIdentity } from '../events/runtime'
 import {
   dispatchCapacity,
   type DispatchCapacity,
@@ -175,6 +176,12 @@ export function repositoryStatusFromFacts(
   }
 }
 
+function formatRepositoryDispatcherIdentity(
+  run: NonNullable<DispatcherLiveness['latestRun']>,
+): string {
+  return `${formatDispatcherIdentity(run)}; ${formatRuntimeIdentity(run.runtime)}`
+}
+
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const tick = (
     status.dispatcher.holder ??
@@ -206,9 +213,11 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
         ]
       : []),
     ...(status.warningLines ?? []),
-    `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
+    `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatRepositoryDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
     ...(status.dispatcher.expiredHolder
-      ? [`expired dispatcher: ${formatDispatcherIdentity(status.dispatcher.expiredHolder)}`]
+      ? [
+          `expired dispatcher: ${formatRepositoryDispatcherIdentity(status.dispatcher.expiredHolder)}`,
+        ]
       : []),
     ...[status.dispatcher.holder ?? status.dispatcher.expiredHolder].flatMap((run) =>
       run
