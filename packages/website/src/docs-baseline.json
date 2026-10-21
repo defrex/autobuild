@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "1882f143bb41a45008e36558d9c15f478cd18e2f0858fe475c7abbdfe46aa569",
+    "textHash": "20a2ec9029b5398a4d5890325934035461216529c3cab94bb1e3df0c9dec99db",
     "headings": [
       "From a ticket to a change",
       "Agents judge; code moves the build",
@@ -89,6 +89,25 @@
       "Intake proposes work"
     ],
     "code": []
+  },
+  {
+    "path": "/docs/skills/",
+    "label": "Skills",
+    "title": "Skills",
+    "group": "concepts",
+    "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
+    "textHash": "a94c4b5d9e5ddcb22cfa1c3c6a4da9f65352a1c1647504710ef638e4bffdeb31",
+    "headings": [
+      "Strong defaults, yours to edit",
+      "The shipped skills",
+      "How upgrades preserve customization",
+      "Add a repository-local skill",
+      "Harness discovery"
+    ],
+    "code": [
+      "[verify]\nsteps = [\"app\"]\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"",
+      "mkdir -p .claude/skills\nln -s ../../.agents/skills/verify-app .claude/skills/verify-app"
+    ]
   },
   {
     "path": "/docs/operating/",
