@@ -30,6 +30,7 @@
  * likewise author-chosen — there, by the plugin author rather than the operator.
  */
 import { z } from 'zod'
+import { documentSchema } from './config/reference-metadata'
 import { forwardIssues, type IssueSink } from './zod-issues'
 
 /** How an entry name is validated. Autobuild-owned maps must be able to address
@@ -185,7 +186,7 @@ export function parseEntry<T>(
  */
 export function openMap<T>(label: string, valueSchema: z.ZodType<T>, opts: OpenMapOptions = {}) {
   const keys = opts.keys ?? 'nonempty'
-  return z
+  const schema = z
     .unknown()
     .transform((input, ctx): Record<string, T> => {
       const entries: Record<string, T> = Object.create(null)
@@ -200,4 +201,5 @@ export function openMap<T>(label: string, valueSchema: z.ZodType<T>, opts: OpenM
       return entries
     })
     .prefault({})
+  return documentSchema(schema, { structure: { kind: 'map', value: valueSchema, keys } })
 }
