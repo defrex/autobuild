@@ -432,3 +432,25 @@ Maintainer design decisions, made interactively on the integration branch:
 `reference.html` carries the same hero order and buttons. The four landing
 references were refreshed from this capture.
 
+## Integration section: break it down, land it whole (2026-10-21)
+
+Maintainer copy and figure decision, made interactively on the integration branch:
+
+- **Copy.** The headline is "Break it down. Land it whole." The lead says a
+  big feature splits into as many tickets as it needs, each build lands on
+  the feature's own branch, siblings stay in sync, and main sees the whole
+  thing once, verified, with consent.
+- **Figure.** The drawn main/node/A/B tree and its numbered steps are
+  replaced by real `bun ab ticket tree` output for the node that built this
+  site: AUT-837 "Website for 1.0" with its eleven finished work tickets. A
+  dim summary line follows: eleven tickets landed on
+  `ab-node/website-integration`, and main receives one pull request. The
+  figure is preformatted text in the `well`, using the dashboard's hues for
+  `[node]` (live), `[work]` (slack) and `(Done)` (ok). It has no portrait
+  variant; on phone it scrolls sideways inside itself, like the earlier hero
+  frame. The ticket list is a fixed snapshot and doesn't update itself.
+
+The four landing references were refreshed from this capture. The copy
+comparison still excludes the integration section, which `reference.html`
+predates.
+
