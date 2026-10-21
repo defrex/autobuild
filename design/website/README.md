@@ -395,3 +395,23 @@ Maintainer design decisions, made interactively on the integration branch:
 
 The four landing references were refreshed from this capture.
 
+## Getting-started hero and plain dev install (2026-10-21)
+
+Maintainer design decisions, made interactively on the integration branch:
+
+- **No hero dashboard.** The hero is the headline, lead and the Docs button.
+  The captured `ab dispatch` frame no longer appears on the landing page. It
+  still draws the OG card, so `hero-frame.txt` and `capture:website-hero`
+  stay. This supersedes the hero-frame notes above.
+- **Getting started under the hero.** The four-command terminal from "Start
+  with one ticket" now also sits directly below the hero, where the frame
+  was. The closing section keeps its copy of it. The hero's install-and-copy
+  well and the copy control are gone.
+- **Plain dev install.** The site's install command is `bun add -D
+  @defrex/autobuild`, without `--exact`, on the landing page and in the
+  Getting started guide. The guide calls it a development dependency.
+
+`reference.html` carries the same hero, with the hand-drawn dashboard replaced
+by the terminal, so the copy comparison needs no hero exclusion. The four
+landing references were refreshed from this capture.
+
