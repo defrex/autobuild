@@ -9,6 +9,8 @@ order: 4
 
 # Integrating related work
 
+Break a big feature into tickets, collect their changes on its branch, and land the whole verified feature on main once. Autobuild keeps related work in sync while your operator agent manages landing under your authority.
+
 Autobuild organizes work as a tree rooted at your configured `baseBranch`. Work tickets are leaves. Node tickets are finite integration points that collect children before landing into their parent. A repository can also send every work ticket directly to the root.
 
 
@@ -39,6 +41,6 @@ Presence is checked at claim, without interrupting existing builds. Sibling work
 
 Ordered `[[landing]]` rules in `autobuild.toml` select `auto` or `consent`. Rules can match the source kind, destination, and ticket label; the first matching rule wins. Without a match, leaves default to auto and nodes to consent.
 
-`ab land <slug>` requires readiness, clears a hold, and records consent to the landing. `ab hold <slug>` can suppress landing before readiness and withdraw consent. Neither these controls nor automatic authorization bypass readiness, verification, forge checks, protection, or merge gates.
+Under your instructions, your operator agent uses `ab land <slug>` to record consent to a ready landing and clear a hold. It uses `ab hold <slug>` to suppress landing even before readiness and withdraw consent. Neither these controls nor automatic authorization bypass readiness, verification, forge checks, protection, or merge gates.
 
-Read the [integration-tree reference](integration-tree.md) for admission and node lifecycle, the [restacking reference](restacking.md) for change identity and recovery, and the [landing-policy reference](landing-policy.md) for rules and forge requirements. The [tickets guide](tickets.md) explains the input side of the tree.
+Read the [integration-tree reference](integration-tree.md) for admission and node lifecycle, the [restacking reference](restacking.md) for change identity and recovery, and the [landing-policy reference](landing-policy.md) for rules and forge requirements. The [Tickets and specs](tickets.md) explains the input side of the tree.
