@@ -2059,3 +2059,12 @@ Default `ab watch` and `ab wait --for attention` include
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
 Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+
+## Immutable dispatcher generations
+
+Resident checkout dispatch runs from an immutable generation snapshot under the
+main checkout's `.autobuild/runtime/` cache. Configuration and plugin selection
+still use the checkout. A launcher freezes the currently installed distribution
+and production dependencies offline; all later local runners and agent CLIs use
+that same snapshot. Upgrades require a restart. `--once`, origin mode and hosted
+cron retain their direct execution paths. This adds no configuration keys.

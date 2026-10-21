@@ -211,8 +211,17 @@ The distinctions that change an administrator's answer:
   graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
   termination is replayed only after that drain. Durable normal/forced/abnormal
   evidence retains available process detail, and parent-death detection prevents
-  a detached kernel. `--plain`/non-TTY stay on the direct path, and `--once`
-  remains one tick plus drain.
+  a detached kernel. Resident checkout dispatch first runs a filesystem-only
+  launcher that snapshots the invoking installation and its installed production
+  dependencies offline into `.autobuild/runtime/`. The generation's frontend,
+  kernel, later local runners and agent PATH CLI execute from that immutable
+  root. The launcher owns no Store/lease and uses only the versioned v1 process
+  contract; no automatic handoff is implemented, so upgrades require a restart.
+  Current, distinct previous, held and live-process runtimes survive pruning.
+  Cached Bun entries disable auto-install and explicitly pin a neutral compiler
+  config. Third-party files remain as installed. `--plain`/non-TTY run directly
+  within the generation; `--once`, origin/hosted and hot development paths bypass
+  the launcher. `--once` remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each
   pipeline step capture it at their action boundary, without interrupting an
