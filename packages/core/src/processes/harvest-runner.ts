@@ -1004,38 +1004,56 @@ export class HarvestRunner {
         return
       }
 
-      if (handle !== undefined) {
-        try {
-          const transcript = await owner.end(handle)
-          await this.depositTranscript(
-            spec,
-            session,
-            transcript.content,
-            transcript.metadata.usage,
-            transcript.metadata.model ?? target.model,
-            streamBracket !== undefined
-              ? { stream: streamBracket, outcome: 'aborted' as const }
-              : undefined,
-          )
-        } catch (error) {
-          // The deposit was skipped, so the stream must not stay open behind
-          // the rethrow (lease lost) or the failure appends below.
-          this.closeBracketStream(streamBracket, 'aborted')
-          if (error instanceof HarvestLeaseLostError) throw error
-        }
-      } else {
-        // No handle: the turn failed before the adapter owned a session, so
-        // no deposit will run — close the bracket's stream here.
-        this.closeBracketStream(streamBracket, 'aborted')
-      }
-      if (spec.producer) this.producer = undefined
-
       const failure: AgentTurnFailure =
         turnError !== undefined
           ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
           : result?.kind === 'failed'
             ? result.failure
             : { message: 'no-terminal', permanent: false }
+      let content = JSON.stringify({ session, failed: true, error: failure.message, turn: result })
+      let usage = result?.usage ?? { inputTokens: 0, outputTokens: 0, turns: 0 }
+      let model = target.model
+      if (handle !== undefined) {
+        try {
+          const transcript = await owner.end(handle)
+          if (transcript.content.trim() !== '') content = transcript.content
+          usage = transcript.metadata.usage
+          model = transcript.metadata.model ?? model
+        } catch (error) {
+          if (error instanceof HarvestLeaseLostError) {
+            this.closeBracketStream(streamBracket, 'aborted')
+            throw error
+          }
+          content = JSON.stringify({
+            session,
+            failed: true,
+            error: failure.message,
+            turn: result,
+            cleanupError: errorMessage(error),
+          })
+        }
+      }
+      if (spec.producer) this.producer = undefined
+      // A handled provider failure must close its bracket even when startup
+      // yielded no handle or cleanup yielded no transcript. Otherwise the next
+      // runner mistakes this ordinary retry for an interrupted native turn.
+      try {
+        await this.depositTranscript(
+          spec,
+          session,
+          content,
+          usage,
+          model,
+          streamBracket !== undefined
+            ? { stream: streamBracket, outcome: 'aborted' as const }
+            : undefined,
+        )
+      } catch (error) {
+        if (error instanceof HarvestLeaseLostError) throw error
+        throw new HarvestPersistenceError('Harvest failed-session transcript persistence failed', {
+          cause: error,
+        })
+      }
       const attempt: HarvestProviderAttempt = {
         index,
         session,

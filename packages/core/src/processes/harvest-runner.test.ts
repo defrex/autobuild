@@ -2562,6 +2562,173 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     }
   }
 
+  for (const step of ['synthesize', 'review'] as const) {
+    for (const failure of ['start', 'cleanup'] as const) {
+      test(`${step} ${failure} failure closes the bracket and retries without crash recovery`, async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-failed-bracket-'))
+        roots.push(workspace)
+        const store = new MemoryBuildStore({ clock: steppingClock() })
+        const tickets = new FakeTicketSource()
+        const ids = sequentialIds()
+        const seeded = await seedOpenRun({
+          store,
+          tickets,
+          ids,
+          workspace,
+          stage: step === 'synthesize' ? 'started' : 'proposals',
+        })
+        let fail = true
+        let failedHandle: string | undefined
+        const happy = happyScript(workspace, { store, ids })
+        const scripted = new ScriptedAgentRunner({
+          nativeState: new Map(),
+          script: async (ctx) => {
+            if (failure === 'cleanup' && fail && ctx.opts.env.AB_PHASE === `${step}@1`) {
+              fail = false
+              failedHandle = ctx.session.id
+              return failedTurnResult('provider temporarily unavailable', false)
+            }
+            return happy(ctx)
+          },
+        })
+        const start = scripted.start.bind(scripted)
+        scripted.start = async (opts) => {
+          if (failure === 'start' && fail && opts.env.AB_PHASE === `${step}@1`) {
+            fail = false
+            throw new Error('spawn ENOENT')
+          }
+          return start(opts)
+        }
+        const end = scripted.end.bind(scripted)
+        scripted.end = async (session) => {
+          if (session.id === failedHandle) throw new Error('adapter transcript unavailable')
+          return end(session)
+        }
+        const run = (instance: string) =>
+          new HarvestRunner({
+            store,
+            tickets,
+            config: config(1),
+            runtimes: {
+              scripted: {
+                runner: scripted,
+                servesModels: [''],
+                openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+              },
+            },
+            repo: '/repo',
+            workspacePath: workspace,
+            ids,
+            uuids: randomUuids(),
+            clock: steppingClock(),
+            instance,
+            opts: { heartbeatMs: 100_000, maxSessionAttempts: 2, maxRecoveryAttempts: 1 },
+          }).run()
+
+        expect((await run('first')).outcome).toBe('failed')
+        const first = await store.getRepoEvents('/repo')
+        const started = first.find((event) => event.type === 'harvest.session.started')!
+        const ended = first.find((event) => event.type === 'harvest.session.ended')!
+        const failed = first.find((event) => event.type === 'harvest.failed')!
+        expect(ended?.payload.session).toBe(started.payload.session)
+        expect(ended.seq).toBeLessThan(failed.seq)
+        expect(ended.payload.usage).toEqual({
+          inputTokens: 0,
+          outputTokens: 0,
+          turns: failure === 'start' ? 0 : 1,
+        })
+        expect(failed.payload).toMatchObject({
+          run: seeded.run,
+          step,
+          round: 1,
+          attempt: 1,
+          error: failure === 'start' ? 'spawn ENOENT' : 'provider temporarily unavailable',
+          willRetry: true,
+        })
+        expect(reduceHarvest(first).latest?.sessions.at(-1)?.status).toBe('ended')
+        const transcript = await store.getRepoArtifact(
+          '/repo',
+          ended.payload.transcript.kind,
+          ended.payload.transcript.rev,
+        )
+        expect(new TextDecoder().decode(transcript!.content)).toContain(
+          failure === 'start' ? 'spawn ENOENT' : 'adapter transcript unavailable',
+        )
+        expect(await store.getStream(started.payload.stream!)).toMatchObject({
+          status: 'closed',
+          outcome: 'aborted',
+        })
+
+        expect((await run('replacement')).outcome).toBe('completed')
+        const events = await store.getRepoEvents('/repo')
+        expect(events.filter((event) => event.type === 'harvest.failed')).toHaveLength(1)
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'harvest.recovery-requested' ||
+              event.type === 'harvest.session.resume-fallback' ||
+              event.type === 'harvest.session.resumed',
+          ),
+        ).toBe(false)
+        expect(
+          events
+            .filter((event) => event.type === 'harvest.session.started')
+            .every((event) => event.payload.continuation === undefined),
+        ).toBe(true)
+        expect(events.filter((event) => event.type === 'harvest.proposal.filed')).toHaveLength(1)
+      })
+    }
+  }
+
+  test('failed-session transcript persistence errors do not record an ordinary provider failure', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-failed-deposit-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    await seedOpenRun({ store, tickets, ids, workspace, stage: 'started' })
+    const append = store.appendRepoWithArtifacts.bind(store)
+    store.appendRepoWithArtifacts = async (...args) => {
+      if (args[1].some((artifact) => artifact.kind === 'harvest-transcript')) {
+        throw new Error('transcript store unavailable')
+      }
+      return append(...args)
+    }
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('spawn ENOENT')
+      },
+    })
+    const runner = new HarvestRunner({
+      store,
+      tickets,
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'failed-deposit',
+    })
+    await expect(runner.run()).rejects.toThrow(
+      'Harvest failed-session transcript persistence failed',
+    )
+    const events = await store.getRepoEvents('/repo')
+    expect(events.some((event) => event.type === 'harvest.failed')).toBe(false)
+    expect(events.some((event) => event.type === 'harvest.session.ended')).toBe(false)
+    expect(reduceHarvest(events).latest?.sessions.at(-1)?.status).toBe('open')
+    expect(await store.listStreams({ kind: 'repo', repo: '/repo' })).toMatchObject([
+      { status: 'closed', outcome: 'aborted' },
+    ])
+  })
+
   function startedSessionEvents(events: Awaited<ReturnType<MemoryBuildStore['getRepoEvents']>>) {
     return events.filter((event) => event.type === 'harvest.session.started')
   }
