@@ -358,6 +358,7 @@ test('website applicability includes all website inputs and capture tooling', as
     .website.paths
   for (const path of [
     'packages/website/**',
+    'docs/**',
     'design/website/**',
     'tools/website-capture*',
     '.agents/skills/verify-website/SKILL.md',
@@ -498,3 +499,48 @@ test('docs probes reject disclosure, section, sticky, code and width regressions
     'page scrolls sideways (1500 > 1440)',
   )
 })
+
+test('new Markdown page flows through output, navigation, pager and both real capture widths', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const root = await mkdtemp(join(tmpdir(), 'capture-markdown-'))
+  const outputDir = join(import.meta.dir, '../.ab', `markdown-capture-${process.pid}`)
+  try {
+    const page = (title: string, order: number) =>
+      `---\ntitle: ${title}\ngroup: guides\norder: ${order}\ndescription: A generated page\n---\n# ${title}\n\nFirst paragraph.\n\n## Section\n\nMore words.\n`
+    await Bun.write(join(root, 'before.md'), page('Before', 1))
+    await Bun.write(join(root, 'added.md'), page('Added', 2))
+    await Bun.write(join(root, 'after.md'), page('After', 3))
+    const files = await buildFiles(root)
+    const html = files['docs/added/index.html']!
+    expect(html).toContain('href="/docs/added/" aria-current="page"')
+    expect(html).toContain('guides/')
+    expect(html).toContain('<b>Before</b>')
+    expect(html).toContain('<b>After</b>')
+    // Discovery uses the emitted file as the route, with one frame per device class.
+    const added = discoverFrames({ ...files }).filter((frame) => frame.page?.includes('added'))
+    expect(added.map((frame) => frame.width)).toEqual([1440, 390])
+    const chromium = chromiumBinary()
+    if (chromium) {
+      await captureWebsite({
+        chromium,
+        outputDir,
+        files: { ...files },
+        frames: added,
+        includeMotionSamples: false,
+      })
+      const inventory: { frame: WebsiteFrame; probe: Probe }[] = await Bun.file(
+        join(outputDir, 'inventory.json'),
+      ).json()
+      expect(inventory).toHaveLength(2)
+      for (const entry of inventory) {
+        expect(probeProblems(entry.frame, entry.probe)).toEqual([])
+        expect(existsSync(join(outputDir, `${entry.frame.id}.png`))).toBe(true)
+      }
+    }
+    await rm(join(root, 'added.md'))
+    expect('docs/added/index.html' in (await buildFiles(root))).toBe(false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 120_000)

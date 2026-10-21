@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles } from '../packages/website/src/build'
-import { DOCS_PAGES } from '../packages/website/src/docs'
+import { loadDocsPages } from '../packages/website/src/docs-content'
+const DOCS_PAGES = await loadDocsPages()
 import { SITE_URL } from '../packages/website/src/constants'
 import { chromiumBinary, parseProbe, runRealtimeChromium, serveSite } from './website-capture'
 
