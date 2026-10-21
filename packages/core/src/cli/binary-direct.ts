@@ -1,0 +1,185 @@
+import { guardForge } from '../kernel/guarded-forge'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
+import { openProductionStore } from './store-opening'
+/**
+ * Shared wiring for the `ab` process entry points. Production calls this with
+ * argv only; the repo-local hot entry may additionally supply a per-paint
+ * dashboard renderer resolver. All command routing and resource cleanup stay
+ * identical between the two entries.
+ */
+import { join } from 'node:path'
+import { isSessionlessInvocation, runCli } from './main'
+import { createUpgradeAgentResolver } from './upgrade-agent'
+import { loadDotEnv } from './dotenv'
+import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
+import { openProductionSessionStore } from './store-opening'
+import { processTerminal, processTerminalInput } from './terminal'
+import type { TerminalRestoreProcess } from './terminal-restore'
+import type { DashboardRendererResolver } from './dashboard/render'
+import { loadConfig } from '../config/load'
+import { loadPlugins } from '../plugins/load'
+import { createForge } from '../ports/forge/create'
+import { spawnExec } from '../ports/workspace/git-worktree'
+import { randomIds } from '../ids'
+import { systemClock } from '../store/types'
+import { resolveMainRepo } from './repo-state'
+
+import {
+  usesGenericSessionlessSigintHandler,
+  installSessionlessSigintHandler,
+  withDispatchTerminalRestore,
+} from './binary-lifecycle'
+
+export async function runDirectBinary(
+  argv: string[],
+  resolveDashboardRenderer?: DashboardRendererResolver,
+): Promise<number> {
+  const command = argv[0]
+  // Version identity is installation-local and offline; do not inspect even a
+  // repository-local .env before routing it.
+  if (command !== '--version') {
+    // Local .env supplies developer-set secrets (e.g. LINEAR_API_KEY); real
+    // environment variables always win over .env values.
+    loadDotEnv(join(process.cwd(), '.env'), process.env)
+  }
+
+  delete process.env.AB_DISPATCH_GENERATION
+
+  const unscopedDeps = {
+    workspacePath: process.cwd(),
+    processEnv: process.env,
+    exec: spawnExec,
+    stdout: (line: string) => console.log(line),
+    stderr: (line: string) => console.error(line),
+  }
+
+  // Sessionless commands resolve their own repository/store and do not require
+  // a phase tuple; durable controls also take a target slug and inspect raw
+  // AB_SESSION/AB_BUILD only to reject self-control. The flat-name set and
+  // mixed nested-command classifier live beside the switch in main.ts.
+  if (isSessionlessInvocation(argv)) {
+    // The dispatch watch loop runs until SIGINT; abort the signal so it exits
+    // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
+    // a future dispatch re-attaches).
+    const controller = new AbortController()
+    const onSigint = (): void => controller.abort('SIGINT')
+    const ownsSigint = usesGenericSessionlessSigintHandler(command)
+    const terminal = processTerminal(process.stdout)
+    const removeSigint = installSessionlessSigintHandler(command, onSigint)
+    try {
+      return await withDispatchTerminalRestore(
+        command,
+        terminal,
+        () =>
+          runCli(argv, {
+            ...unscopedDeps,
+            ...(ownsSigint ? { signal: controller.signal } : {}),
+            // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
+            // TTY, so a pipe or redirect silently gets plain output.
+            terminal,
+            input: processTerminalInput(process.stdin),
+            ...(command === 'init'
+              ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
+              : {}),
+            upgradeResolverFactory: createUpgradeAgentResolver,
+            ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
+          }),
+        process as unknown as TerminalRestoreProcess,
+        (signal) => controller.abort(signal),
+      )
+    } finally {
+      removeSigint()
+    }
+  }
+
+  if (command === 'harvest') {
+    let harvestEnv: ReturnType<typeof resolveHarvestCliEnv>
+    try {
+      harvestEnv = resolveHarvestCliEnv(process.env)
+    } catch (error) {
+      if (error instanceof MissingAmbientContextError) {
+        return runCli(argv, unscopedDeps)
+      }
+      console.error(error instanceof Error ? error.message : String(error))
+      return 1
+    }
+    const store = openProductionSessionStore(harvestEnv)
+    try {
+      return await runCli(argv, {
+        ...unscopedDeps,
+        store,
+        harvestEnv,
+        ids: randomIds(),
+        clock: systemClock,
+      })
+    } finally {
+      await store.close()
+    }
+  }
+
+  let cliEnv: ReturnType<typeof resolveCliEnv>
+  try {
+    cliEnv = resolveCliEnv(process.env)
+  } catch (error) {
+    if (error instanceof MissingAmbientContextError) {
+      return runCli(argv, unscopedDeps)
+    }
+    console.error(error instanceof Error ? error.message : String(error))
+    return 1
+  }
+
+  // A scoped phase process is composed from the build worktree's immutable
+  // configuration just like dispatch. Load and select the forge before opening
+  // the store so plugin failures cannot partially execute terminal plumbing.
+  // Guest tolerance (AUT-517), always on here: in checkout mode `ab dispatch`
+  // already failed startup if a configured plugin did not resolve, and
+  // origin-mode phase processes only run inside guests — so an unresolvable
+  // bare specifier here can only be the provider-plugin case, which a phase
+  // process (never constructing workspace providers) may skip.
+  let forge: Awaited<ReturnType<typeof createForge>>
+  try {
+    const repoRoot = process.cwd()
+    const packageRoot = await resolveMainRepo(repoRoot, spawnExec)
+    const config = await loadConfig(join(repoRoot, 'autobuild.toml'))
+    const plugins = await loadPlugins(config.plugins, repoRoot, {
+      packageRoot,
+      guest: true,
+    })
+    forge = await createForge({
+      name: config.forge,
+      registry: plugins,
+      env: process.env,
+      repoRoot,
+    })
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    return 1
+  }
+
+  const kernelStore = openProductionStore(cliEnv.store, cliEnv.token)
+  const store = scopeLocalStoreToPhaseSession(kernelStore, {
+    kind: 'build',
+    id: cliEnv.build,
+    session: cliEnv.session,
+  })
+  try {
+    const record = await store.getBuild(cliEnv.build)
+    if (record)
+      forge = guardForge(forge, {
+        store: kernelStore,
+        repo: record.repo,
+        name: forge.name,
+        wait: true,
+      })
+    return await runCli(argv, {
+      ...unscopedDeps,
+      store,
+      env: cliEnv,
+      forge,
+      ids: randomIds(),
+      clock: systemClock,
+    })
+  } finally {
+    await store.close()
+  }
+}

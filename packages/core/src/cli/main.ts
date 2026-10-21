@@ -1,4 +1,5 @@
 import { currentTicketRef } from '../kernel/ticket-migrations'
+import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
 import { withSessionlessStore } from './store-opening'
 import { abLandings } from './landings'
@@ -685,51 +686,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // a build, so it routes before any store/env requirement and does its own
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
-      const usage =
-        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--repository <origin>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
-      const parsed = parseArgs(
-        rest,
-        {
-          once: 'boolean',
-          interval: 'value',
-          store: 'value',
-          repository: 'value',
-          plain: 'boolean',
-          intake: 'boolean',
-          'no-intake': 'boolean',
-          'auto-merge': 'boolean',
-          'no-auto-merge': 'boolean',
-        },
-        usage,
-      )
-      if (parsed.positionals.length > 0) throw new Error(usage)
-
-      const once = parsed.flags.has('once')
-      const plain = parsed.flags.has('plain')
-      const sawIntake = parsed.flags.has('intake')
-      const sawNoIntake = parsed.flags.has('no-intake')
-      const sawAutoMerge = parsed.flags.has('auto-merge')
-      const sawNoAutoMerge = parsed.flags.has('no-auto-merge')
-      if (sawIntake && sawNoIntake) {
-        throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
-      }
-      if (sawAutoMerge || sawNoAutoMerge) {
-        throw new Error(`Auto-merge flags are retired; configure [[landing]] policy — ${usage}`)
-      }
-
-      const interval = stringFlag(parsed, 'interval')
-      let intervalMs: number | undefined
-      if (interval !== undefined) {
-        const seconds = Number(interval)
-        if (!Number.isFinite(seconds) || seconds <= 0) {
-          throw new Error(`--interval requires a positive number of seconds — ${usage}`)
-        }
-        intervalMs = Math.round(seconds * 1000)
-      }
-      const storeRef = stringFlag(parsed, 'store')
-      const repository = stringFlag(parsed, 'repository') ?? deps.processEnv?.AB_REPOSITORY
-      const intake = sawIntake ? true : sawNoIntake ? false : undefined
-      const defaultAutoMerge = sawAutoMerge ? true : sawNoAutoMerge ? false : undefined
+      const { once, plain, intake, defaultAutoMerge, intervalMs, storeRef, repository } =
+        parseDispatchArgs(rest, deps.processEnv ?? {})
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
       }

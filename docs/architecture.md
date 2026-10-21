@@ -89,7 +89,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, harvest trigger, and the last-step orchestrator resume/reap/wake pass, origin-mode-gated), orchestrator tick step, harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
-| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
+| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -423,6 +423,15 @@ reaps the complete inherited process group, escalating group-wide from SIGTERM
 through the existing bounded delay to SIGKILL; only then is it a liveness signal
 and only then does the kernel release the exact lease. Interactive `ab dispatch` runs the kernel owner in the
 private `bin/ab-dispatch-kernel.ts` child;
+`dispatch-launcher.ts` freezes the invoking distribution and installed production
+dependencies offline under `.autobuild/runtime/`, then starts
+`bin/ab-dispatch-generation.ts` using the pinned v1 process contract. It loads
+only filesystem/process helpers and never opens a Store. The generation's
+frontend, kernel, local runners and agent CLI use one completed immutable root;
+`dispatch-runtime-use.ts` protects current/previous/held/live entries during
+spawn and pruning. Cached guest archives are captured at installation.
+`--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
+Upgrades still require a restart; no generation handoff is implemented.
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;

@@ -217,6 +217,37 @@ surface remains the remote HTTP protocol rather than in-process registration.
 
 Small, independently runnable, crash-safe:
 
+Resident checkout-backed `ab dispatch` starts a launcher and one dispatcher
+**generation**. The launcher eagerly loads its own filesystem/process code,
+opens no Store, holds no repository/execution lease and makes no kernel
+decisions. Before starting the generation it freezes the invoking distribution
+and its already installed production dependency graph into the canonical
+checkout's `.autobuild/runtime/` cache, offline. Source edits (including
+uncommitted edits) and dependency bytes participate in content identity; version
+alone never selects a snapshot. Completed distribution roots are immutable.
+The generation, kernel, later local runners and agent PATH `ab` all execute
+from that same root. Run/attach runtime identities name the cached directory.
+The guest archive is captured from that snapshot too.
+
+The versioned v1 launch contract consists of argv, a consumed one-shot
+`AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
+`handoff`, `failed`. Public invocations discard inherited markers. No private
+operational channel exists; work outcomes still come only from durable state.
+The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
+shell prompt and `fg` resumes only the presentation; the kernel keeps running.
+Terminal restoration by the launcher is a fallback for abnormal termination,
+never a second alternate-screen exit after a clean generation stop.
+Handoff is reserved; upgrades still require an operator restart. `--once`,
+origin `--repository`, hosted cron and development hot rendering stay direct.
+
+Cache publication is atomic after validation. Current, distinct previous,
+explicitly held and live process-use entries survive pruning independently of
+Store leases. Process-start identities distinguish PID reuse; uncertain
+liveness retains code. Each cached Bun entry disables automatic installation
+and pins a cache-owned neutral compiler config before evaluating JavaScript.
+Autobuild compiler chains must remain inside the runtime. Third-party package
+files, including development configs, remain exactly as installed.
+
 - **build-runner** — one operating-system process per build; owns one pipeline
   execution end to end. The local implementation starts the process beside its
   Git worktree in its own POSIX session/process group and owns teardown of that
@@ -2283,7 +2314,7 @@ displays is a reduction of the logs, and anything it does is an event — so
 every frontend (terminal today, web later) is the same adapter pattern
 against the same store, and a dead runner still receives commands on resume.
 
-Interactive `ab dispatch` owns the terminal in a frontend process and supervises
+Within the immutable generation, interactive `ab dispatch` owns the terminal in a frontend process and supervises
 one private child containing the dispatcher, build runners, Harvest, config and
 plugin loading, and every ticket/forge/workspace/runtime adapter. The frontend
 has no handle on those adapters: it reads build and repository streams plus
@@ -2313,9 +2344,10 @@ child is terminated unless such a tick is open, in which case that tick first
 reaches a recoverable durable boundary. The run-stopped fact and frontend result
 distinguish a graceful drain, an actual forced termination requested by the
 operator, and an unsolicited abnormal exit, retaining available exit-code,
-signal, and error evidence. `--plain`, non-TTY,
-and `--once` kernel semantics remain the line-oriented/direct compatibility
-path; `--once` still performs one tick and drains its in-flight work.
+signal, and error evidence. Resident `--plain` and non-TTY generations run
+the line-oriented kernel directly. `--once` bypasses the launcher, performs
+one tick and drains its in-flight work. The launcher forwards stop signals and
+waits for the generation to drain before returning.
 
 Interactive watch presentation enables xterm focus reporting (mode 1004) only
 while it owns terminal input. Local-store reads keep the same cadence regardless

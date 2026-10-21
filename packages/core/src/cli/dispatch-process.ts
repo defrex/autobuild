@@ -1,3 +1,6 @@
+import { bunRuntimeArguments } from './runtime-spawn'
+import { spawnUsingRuntime } from './dispatch-runtime-use'
+import { distributionRoot } from '../distribution'
 import { readDispatcherRunFacts, readOpenTick } from '../store/reduced-reads'
 import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
@@ -75,48 +78,7 @@ export function installDispatchKernelSignalHandlers(
   }
 }
 
-export interface DispatchParentWatchDeps {
-  intervalMs?: number
-  currentParentPid?: () => number
-  isAlive?: (pid: number) => boolean
-}
-
-/** A private kernel must never become a detached daemon if its terminal-owning
- * parent is killed directly rather than through the foreground process group.
- * Polling is deliberately local process liveness, not an operational IPC
- * channel; shutdown still converges through the normal AbortSignal boundary. */
-export function watchDispatchParent(
-  parentPid: number,
-  onParentExit: () => void,
-  deps: DispatchParentWatchDeps = {},
-): DispatchProcessHook {
-  const currentParentPid = deps.currentParentPid ?? (() => process.ppid)
-  const isAlive =
-    deps.isAlive ??
-    ((pid: number): boolean => {
-      try {
-        process.kill(pid, 0)
-        return true
-      } catch {
-        return false
-      }
-    })
-  let closed = false
-  let timer: ReturnType<typeof setInterval>
-  const close = (): void => {
-    if (closed) return
-    closed = true
-    clearInterval(timer)
-  }
-  timer = setInterval(() => {
-    if (currentParentPid() === parentPid && isAlive(parentPid)) return
-    close()
-    onParentExit()
-  }, deps.intervalMs ?? 100)
-  timer.unref?.()
-  return { close }
-}
-
+export { watchDispatchParent, type DispatchParentWatchDeps } from './dispatch-parent-watch'
 export interface DispatchChildSupervisorDeps {
   store: BuildStore
   /** Repository identity (§12) — the Store journal key. */
@@ -141,13 +103,17 @@ function defaultSpawn(input: {
   cwd: string
   env: Record<string, string>
 }): DispatchSubprocess {
-  return Bun.spawn([process.execPath, input.entrypoint], {
-    cwd: input.cwd,
-    env: input.env,
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-  })
+  const { child, release } = spawnUsingRuntime(distributionRoot(), () =>
+    Bun.spawn(bunRuntimeArguments(input.entrypoint), {
+      cwd: input.cwd,
+      env: input.env,
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }),
+  )
+  void child.exited.finally(release)
+  return child
 }
 
 /** Spawn and reap the private kernel. Changing operational state never crosses
@@ -157,6 +123,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   const entrypoint = deps.entrypoint ?? distributionPath('bin', 'ab-dispatch-kernel.ts')
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value
+  delete env.AB_DISPATCH_GENERATION
   env[DISPATCH_CHILD_OPTIONS_ENV] = JSON.stringify(deps.options)
   const child = (deps.spawn ?? defaultSpawn)({ entrypoint, cwd: deps.cwd ?? deps.repo, env })
 
