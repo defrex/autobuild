@@ -10,6 +10,8 @@ The build is green: plan approved, code approved, every verify step passed.
 You write the PR description; the kernel opens the PR when you finish (you
 never touch the forge).
 
+Guidance is an external operator answer, from the operator agent or a human.
+
 ## Session shape
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`, every verify report,
@@ -37,7 +39,7 @@ never touch the forge).
    `ab done` validates the deposit; the kernel opens the PR from it. One
    terminal command; if validation fails, fix what it names and rerun.
 
-`.ab/guidance.json`, when present, is a human operator's answer to the
+`.ab/guidance.json`, when present, is an operator's answer to the
 escalation that blocked this build: the escalation id and the answer text. It
 is authoritative feedback for this attempt and the PR description must act on
 it, while the spec remains the contract this phase is measured against — if the

@@ -151,7 +151,7 @@ bounces.
 stop a build, that's `ab` (or a human), not `mv`.
 
 When a conversation queues work by moving it into `ready/` (or the configured
-ready state of any source), the agent that queued it becomes its operator by
+ready state of any source), the agent that queued it becomes its operator agent by
 default, as the `ab-spec` skill describes under "After filing": load the
 `ab-operate` skill and shepherd those builds to completion unless the human
 says they will operate them, hands them to another agent, or the session
