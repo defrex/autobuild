@@ -8,7 +8,8 @@ description: Design a feature spec-first through conversation, or flesh out an e
 The conversational surface over the complete
 [spec standard](../ab-guide/references/spec-standard.md) installed with
 `ab-guide` — read it first. It defines "buildable": what and why but never how,
-verifiable acceptance criteria, explicit out-of-scope, and evidence. This skill
+verifiable acceptance criteria, explicit out-of-scope, and evidence, plus how
+to size work and where to split it. This skill
 runs *before* a build exists, so it takes a ticket, not a build slug — and
 unlike the phase skills, it is a conversation with a human, not an autonomous
 session.
@@ -31,9 +32,12 @@ ab ticket show <id> --json
 ab ticket tree --json
 ```
 
-Whenever grooming produces more than one ticket for a feature, explicitly choose
-root or a node before filing, including when fleshing out an existing ticket
-splits it into several tickets. Consult the shared destination criteria and read
+Whenever grooming produces more than one ticket for a feature, first confirm
+the split is warranted under the standard's
+[sizing and splitting](../ab-guide/references/spec-standard.md#sizing-and-splitting)
+guidance, then explicitly choose root or a node before filing,
+including when fleshing out an existing ticket splits it into several tickets.
+Consult the shared destination criteria and read
 the repository's effective landing policy in `autobuild.toml`; explain the actual
 landing and consent flow to the human in plain terms. Ask the human when the
 choice is unclear from grooming. Root is valid when each ticket can ship alone.
@@ -61,6 +65,11 @@ in order, but as a conversation, not a form:
    conversation in what actually exists.
 2. **Acceptance criteria.** Propose them yourself from the discussion; let
    the user correct. Each must be checkable by a reviewer or a verify step.
+   If the criteria fall into separate groups, apply
+   [sizing and splitting](../ab-guide/references/spec-standard.md#sizing-and-splitting)
+   before treating the work as several tickets: default to one larger ticket,
+   and when a split is warranted, propose the seams and the blocker graph to
+   the user with the reason for each cut.
 3. **Out of scope.** Ask what adjacent work is explicitly excluded. Propose
    candidates — the tempting expansions you noticed while reading the code.
 4. **Evidence.** Link what exists: the error rates, the user reports, the
@@ -231,6 +240,9 @@ repository, report that rather than waiting on builds that cannot start.
 
 ## Rules
 
+- **Fewer, larger tickets.** Split only when sizing calls for it, cut at
+  seams, and keep the blocker graph wide so independent tickets build
+  together.
 - The spec says **what and why, never how.** An exported, attached `design`
   asset is a contract on observable visual and reference outcomes — layout,
   content, states, copy, look — that plan, review, and verify judge against;
