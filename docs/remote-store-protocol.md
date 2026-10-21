@@ -144,8 +144,8 @@ An actor is exactly one of:
 
 `role`, `session`, `user`, and `source` are nonempty strings. A human actor may
 carry an optional `via` marker naming the delegate that performed the write on
-the person's behalf: `{ "kind": "session", "id": nonempty }` (an operator's
-orchestrator session) or `{ "kind": "mcp", "client": nonempty }` (an MCP
+the person's behalf: `{ "kind": "session", "id": nonempty }` (a human account's
+operator-agent session) or `{ "kind": "mcp", "client": nonempty }` (an MCP
 client). `via` is valid only on `human` actors and only on build and
 repository events — session events are the delegate's own log — and a `via`
 key on any other actor variant is a validation failure. These are the
@@ -688,7 +688,7 @@ authority:
 ## 5. Operator-session operations
 
 Operator sessions are a third resource kind: durable orchestrator-conversation
-state keyed by repository and operator. They are hosted-only — local installs
+state keyed by repository and session owner (the human account in `operator`). They are hosted-only — local installs
 interact through the CLI and dashboard and never create one — but the resource
 contract is uniform, and a conforming server implements it the same way it
 implements the repository journal. A session record is:
@@ -698,7 +698,7 @@ implements the repository journal. A session record is:
 {
   "id": "os_9f2c…",                  // server-assigned, `os_`-prefixed
   "repo": "acme/autobuild",
-  "operator": "alice",               // trimmed nonblank operator identity
+  "operator": "alice",               // trimmed nonblank session-owner identity
   "title": "fix the login flow",     // optional
   "createdAt": "2026-07-15T12:00:00.000Z",
   "updatedAt": "2026-07-15T12:03:00.000Z"
@@ -707,13 +707,13 @@ implements the repository journal. A session record is:
 
 Creating a session makes the record and its first event visible together: the
 record's creation atomically appends a `session.created` event as sequence 1
-with the operator as a human actor. The session event catalog is closed and
+with the session owner as a `human` actor. The session event catalog is closed and
 separate from the build and repository catalogs (`session.created`,
 `message.posted`, `session.wake-set`, `turn.started`, `turn.suspended`,
 `turn.resumed`, `approval.requested`, `approval.answered`, `turn.completed`,
 `turn.failed`, `session.archived`), with its own per-session sequence starting
 at 1 and its own actor-per-type rules. A `via` member is never valid on a
-session event: session events are the delegate's own log, and the operator's
+session event: session events are the delegate's own log, and the session owner's
 identity is already the actor.
 
 | BuildStore operation | HTTP route | Request | Success |
@@ -967,7 +967,7 @@ project; phase CLI scoped handles still constrain build and session access.
 Authenticated raw writes cannot claim a delegated `via`. Owner-project
 credentials also use their recorded creator for operator writes. Dispatcher
 credentials have an immutable server-side purpose: raw store and tickets only,
-never human operator controls. The hosted dispatcher issues one per project
+never operator controls. The hosted dispatcher issues one per project
 invocation, expiring at its configured TTL, and does not revoke at tick return
 for dispatcher plumbing. Spawned builds receive independent delegated grants. Shared content-addressed blobs
 remain deduplicated; this is resource authorization, not blob partitioning.
