@@ -35,6 +35,9 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/build-store/',
     '/docs/dispatcher-hosting/',
     '/docs/operator-surfaces/',
+    '/docs/ticket-sources/',
+    '/docs/agent-runtimes/',
+    '/docs/workspaces/',
   ])
   expect(new Set(DOCS_PAGES.map((p) => p.title)).size).toBe(DOCS_PAGES.length)
   expect(new Set(DOCS_PAGES.map((p) => p.description)).size).toBe(DOCS_PAGES.length)
@@ -180,4 +183,33 @@ test('pager boundaries and synthetic additions derive from the same registry', (
   expect(renderDocsNavigation(extra, pages)).toContain('New page')
   expect(renderPager(DOCS_PAGES.at(-1)!, pages)).toContain('New page')
   expect(renderPager(extra, pages)).toContain(DOCS_PAGES.at(-1)!.label)
+})
+
+test('seam overview reuses the selector and links every seam guide', async () => {
+  const files = await buildFiles()
+  expect(files['index.html']).toContain('class="seam-selector"')
+  for (const page of DOCS_PAGES) {
+    const html = files[page.file]!
+    expect(html.includes('class="seam-selector"')).toBe(page.path === '/docs/seams/')
+    expect(page.content).not.toContain('class="seam-selector"')
+  }
+  const overview = DOCS_PAGES.find((p) => p.path === '/docs/seams/')!
+  for (const slug of [
+    'ticket-sources',
+    'agent-runtimes',
+    'workspaces',
+    'forges',
+    'build-store',
+    'dispatcher-hosting',
+    'operator-surfaces',
+  ]) {
+    expect(overview.content).toContain(`href="/docs/${slug}/"`)
+  }
+  for (const slug of ['ticket-sources', 'agent-runtimes', 'workspaces']) {
+    expect(DOCS_PAGES.find((p) => p.path === `/docs/${slug}/`)!.content).toContain(
+      'href="/docs/plugin-authoring/',
+    )
+  }
+  const seams = files[overview.file]!
+  expect(seams.indexOf('</article>')).toBeLessThan(seams.indexOf('class="seam-selector"'))
 })
