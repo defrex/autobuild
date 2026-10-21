@@ -81,7 +81,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
-| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
+| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated signed-in user email allowlist; matching is case-insensitive. |
 | `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
@@ -1809,7 +1809,7 @@ lines. A missing or unreadable file is a no-op. Any key already present in the
 real process environment—even an empty string—wins over `.env`.
 
 Variables such as `AB_BUILD`, `AB_PHASE`, `AB_SESSION`, and the harvest-session
-identity tuple are runner-owned ambient authorization. Operators should not
+identity tuple are runner-owned ambient authorization. You should not
 set or copy them into `.env`; the runner stamps them for each session.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
