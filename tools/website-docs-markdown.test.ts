@@ -81,7 +81,7 @@ test('production copy covers every article, responsive geometry, formatting and 
         const prose = copied.replace(/^(\\x60{3,})[^\\n]*\\n[\\s\\S]*?^\\1$/gm, '')
         check(!/<\\/?(?:h[1-6]|p|a|code|pre|div|span|button|nav|ul|ol|li)\\b/.test(prose), path + ' leaked HTML')
         check(!copied.includes('Copy as Markdown') && !copied.includes('concepts · builds') && !copied.includes('← previous'), path + ' chrome')
-        check(copied.split('\\n').filter(line => /^# /.test(line)).length === 1, path + ' single article')
+        check(prose.split('\\n').filter(line => /^# /.test(line)).length === 1, path + ' single article')
         for (const match of copied.matchAll(/\\]\\(<([^>]+)>\\)/g)) {
           const url = new URL(match[1]); check(url.origin === '${SITE_URL}' || [...doc.querySelectorAll('article a')].some(a => new URL(a.getAttribute('href'), '${SITE_URL}' + path).href === url.href), path + ' canonical or original external URL')
         }
