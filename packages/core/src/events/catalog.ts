@@ -93,6 +93,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'pr.opened': ['dispatcher'],
   'build.created': ['dispatcher', 'human'],
   'build.completed': ['dispatcher'],
+  'runner.runtime-recorded': ['kernel'],
   'runner.attached': ['kernel'],
   'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],

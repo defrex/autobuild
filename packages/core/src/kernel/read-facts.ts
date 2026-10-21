@@ -112,7 +112,16 @@ const parts = {
   dashboard: dashboardFactsReducer,
   deferral: currentDeferralObservationReducer,
 }
+export interface RunnerAttach {
+  seq: number
+  ts: string
+  instance: string
+  host: string
+  resumedFromSeq?: number
+  runtime: import('../events/runtime').RuntimeIdentity | null
+}
 export interface BuildReadAcc {
+  runnerAttaches: RunnerAttach[]
   summaryRequests: ReturnType<typeof summaryRequestsReducer.initial>
   summaryBoundary: ReturnType<typeof summaryBoundaryReducer.initial>
   hostedImages: ReturnType<typeof hostedPrAttachmentsReducer.initial>
@@ -188,8 +197,9 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 3 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 4 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
+    runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
     summaryBoundary: summaryBoundaryReducer.initial(),
     hostedImages: hostedPrAttachmentsReducer.initial(),
@@ -261,6 +271,14 @@ export const buildReadFactsReducer = defineReducer({
     acc.dashboard = dashboardFactsReducer.advance(acc.dashboard, events)
     acc.deferral = currentDeferralObservationReducer.advance(acc.deferral, events)
     for (const event of projectEvents(events)) {
+      if (event.type === 'runner.attached')
+        acc.runnerAttaches.push({ seq: event.seq, ts: event.ts, ...event.payload, runtime: null })
+      if (event.type === 'runner.runtime-recorded') {
+        const attach = acc.runnerAttaches.find(
+          (a) => a.seq === event.payload.attachedSeq && a.instance === event.payload.instance,
+        )
+        if (attach) attach.runtime = event.payload.runtime
+      }
       if (event.type === 'plan-review.verdict' || event.type === 'code-review.verdict')
         acc.summaryHistory.push({
           kind: 'review',
@@ -382,6 +400,7 @@ export const buildReadFactsReducer = defineReducer({
     }
   },
   finish: (acc: BuildReadAcc) => ({
+    runnerAttaches: structuredClone(acc.runnerAttaches),
     summaryRequests: summaryRequestsReducer.finish(acc.summaryRequests),
     summaryBoundary: summaryBoundaryReducer.finish(acc.summaryBoundary),
     hostedImages: [...hostedPrAttachmentsReducer.finish(acc.hostedImages)],
@@ -685,6 +704,7 @@ export function optionalValue<A, E, V>(reducer: IncrementalReducer<A, E, V>) {
 
 /** One run's correlation facts. History for unrelated runs never enters this value. */
 export interface DispatcherRunFacts {
+  runtime?: RepositoryEvent
   start?: RepositoryEvent
   latestStart?: RepositoryEvent
   stop?: RepositoryEvent
@@ -695,7 +715,7 @@ export interface DispatcherRunFacts {
 }
 export function dispatcherRunFactsReducer(run: string) {
   return defineReducer<DispatcherRunFacts, RepositoryEvent, DispatcherRunFacts>({
-    version: 2,
+    version: 3,
     initial: () => ({}),
     fold(acc, events) {
       for (const event of projectEvents(events)) {
@@ -711,7 +731,8 @@ function foldDispatcherRunFact(acc: DispatcherRunFacts, event: RepositoryEvent):
   if (event.type === 'dispatcher.run-started') {
     acc.start ??= event
     acc.latestStart = event
-  } else if (event.type === 'dispatcher.run-stopped') acc.stop = event
+  } else if (event.type === 'dispatcher.runtime-recorded') acc.runtime = event
+  else if (event.type === 'dispatcher.run-stopped') acc.stop = event
   else if (event.type === 'dispatcher.stop-requested') acc.stopRequest ??= event
   else if (
     event.type === 'dispatcher.tick-started' ||
