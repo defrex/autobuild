@@ -2159,3 +2159,22 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     expect(help).toContain('resume every paused build and turn intake')
   })
 })
+
+test('ticket export routes the CLI cancellation signal into migration', async () => {
+  await runGit(['init'], tmp)
+  await writeFile(join(tmp, 'autobuild.toml'), '[tickets]\nsource = "file"\nreadyState = "ready"\n')
+  const controller = new AbortController()
+  controller.abort(new Error('export cancelled by caller'))
+  const d = deps()
+  const destination = join(tmp, 'export')
+  expect(
+    await runCli(['ticket', 'export', destination], {
+      ...d,
+      workspacePath: tmp,
+      processEnv: { AB_STORE: join(tmp, 'store') },
+      signal: controller.signal,
+    }),
+  ).toBe(1)
+  expect(d.err.join('\n')).toContain('export cancelled by caller')
+  expect(existsSync(destination)).toBe(false)
+})

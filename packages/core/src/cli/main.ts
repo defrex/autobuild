@@ -670,6 +670,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         throw new Error("'ab ticket' needs an exec seam — this is a wiring bug in the ab binary")
       }
       await abTicket(rest, {
+        signal: deps.signal,
         targetRepo: deps.workspacePath,
         env: deps.processEnv ?? {},
         exec: deps.exec,
