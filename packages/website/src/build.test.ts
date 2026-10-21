@@ -50,19 +50,12 @@ describe('static site', () => {
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
     const reference = textOf(updatedReference)
-    expect(
-      html.match(/<a href="\/docs\/seams\/">Explore the infrastructure seams<\/a>/g),
-    ).toHaveLength(1)
     const landing = html
-      .replace('<a href="/docs/seams/">Explore the infrastructure seams</a>', '')
       .replace(
         /<section class="section">(?:(?!<section)[\s\S])*?autobuild · integration[\s\S]*?<\/section>/,
         '',
       )
       .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
-      .replace('<a href="/docs/builds/">Follow one build end to end</a>', '')
-      .replace('<a href="/docs/dispatcher/">Read about the dispatcher</a>', '')
-      .replace('<a href="/docs/tickets/">Read about tickets and intake</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
     expect(words(textOf(landing))).toEqual(words(reference))
@@ -80,11 +73,12 @@ describe('static site', () => {
     expect(js.replaceAll(SITE_URL, '')).not.toMatch(/https?:\/\//)
   })
 
-  test('the hero offers one Docs action, then the getting-started commands', async () => {
+  test('the hero leads into the getting-started commands, then Documentation and a ghost GitHub', async () => {
     const { 'index.html': html } = await buildFiles()
     const first = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
-    expect(first.match(/<a class="btn"/g)).toHaveLength(1)
-    expect(first).toContain('<a class="btn" href="/docs/">Docs</a>')
+    expect(first).toMatch(
+      /<\/div><\/div><div class="actions links"><a class="btn" href="\/docs\/">Documentation<\/a><a class="btn ghost" href="[^"]+">GitHub<\/a><\/div>$/,
+    )
     expect(first).not.toContain('class="frame"')
     expect(first).not.toContain('data-copy')
     const terminal = (section: string): string =>
@@ -96,22 +90,11 @@ describe('static site', () => {
     expect(terminal(first)).toContain(`<b>${INSTALL_COMMAND}</b>`)
   })
 
-  test('core guides have one ordinary link in their matching landing sections', async () => {
+  test('sections carry no inline docs links', async () => {
     const { 'index.html': html } = await buildFiles()
-    const sections = [...html.matchAll(/<section class="section">[\s\S]*?<\/section>/g)].map(
-      (match) => match[0],
-    )
-    expect(sections).toHaveLength(8)
-    for (const [index, title, path] of [
-      [1, 'Every ticket runs the pipeline', '/docs/builds/'],
-      [2, 'A dispatcher spawns builds', '/docs/dispatcher/'],
-      [3, 'Build together, land together', '/docs/integration/'],
-      [6, 'Let the queue fill itself', '/docs/tickets/'],
-    ] as const) {
-      expect(sections[index]).toContain(title)
-      expect(sections[index]!.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
-      expect(sections[index]).toContain(`<a href="${path}">`)
-      expect(html.match(new RegExp(`href="${path}"`, 'g'))).toHaveLength(1)
+    expect(html.slice(html.indexOf('<main'))).not.toMatch(/<p><a href="\/docs\//)
+    for (const path of ['builds', 'dispatcher', 'integration', 'seams', 'tickets']) {
+      expect(html).not.toContain(`href="/docs/${path}/"`)
     }
   })
 
