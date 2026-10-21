@@ -3097,7 +3097,9 @@ their reasons. The setup agent reads the installed guide reference, derives
 commands and verification from the actual repository, chooses pipeline roles,
 configures ticket workflow and environment-only credentials, arranges suitable
 end-to-end verification (authoring a repository-owned agent verifier when
-needed), and leaves one groomed dispatchable ticket.
+needed), and completes `bun ab init --validate`, fixing failures and reviewing
+warnings. You then start `bun ab dispatch` and open your operator agent with
+`ab-operate` loaded to create, groom, and shepherd the first ticket.
 
 After installation, init reports `autobuild.toml: written|skipped`, counts all
 skill outcomes, names attention-worthy local edits, and prints runtime probe
@@ -3229,7 +3231,7 @@ lines. A missing or unreadable file is a no-op. Any key already present in the
 real process environment—even an empty string—wins over `.env`.
 
 Variables such as `AB_BUILD`, `AB_PHASE`, `AB_SESSION`, and the harvest-session
-identity tuple are runner-owned ambient authorization. Operators should not
+identity tuple are runner-owned ambient authorization. You should not
 set or copy them into `.env`; the runner stamps them for each session.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
