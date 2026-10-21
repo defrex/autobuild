@@ -257,12 +257,18 @@ record the first signal in the stop fact, and release its lease before exit.
 
 The default watch reports actionable conditions only:
 
+- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
+
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
-- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
-  with auto-merge off or a current actionable merge-gate deferral. Armed consent
-  awaiting application is silent. One merge decision is reported per build/PR.
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
+  conflicted `restack.replayed` events. `build.consent-ready` is the single
+  signal for a ready consent or held landing, including first repository-wide
+  discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
+  Unready and stale candidates stay silent. `build.merge-decision` remains for
+  current actionable merge-gate deferrals and unsafe forge outcomes, once per
+  build/PR; it does not duplicate consent or hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
@@ -302,7 +308,9 @@ arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
 `ab wait --for attention` is build-only and uses the same build conditions:
-an open escalation or a merge decision. Existing conditions return immediately,
+current failed node verification, an open escalation, janitor failure attention,
+consent readiness, landing/conflict attention or a merge decision. Current failed
+verification satisfies attention even before its notification is written. Existing conditions return immediately,
 even with `--since`; live and backlog matches ignore routine outcomes and
 self-healing failures. A merge match uses the watch observation with
 `condition: "attention"`. Explicit `--event` globs remain event-only.
