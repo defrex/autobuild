@@ -805,7 +805,7 @@ export function renderTopLevelHelp(): string {
   const lines = [
     'ab — agent-driven software delivery from groomed ticket to merged PR',
     '',
-    '`ab` is Autobuild’s human/operator CLI and the agent↔store channel (SPEC §8.2).',
+    '`ab` serves the operator role (normally an operator agent, or you directly) and the agent↔store channel (SPEC §8.2).',
     '',
     'Primary human workflow:',
     '  Install in your repository: bun add -d --exact @defrex/autobuild',
