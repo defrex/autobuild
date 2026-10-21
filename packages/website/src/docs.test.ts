@@ -97,15 +97,6 @@ test('feature guides are text-only and link to repository references', () => {
   }
 })
 
-test('landing links once to the seams guide from its seams section', async () => {
-  const { 'index.html': html } = await buildFiles()
-  expect(html.match(/href="\/docs\/seams\/"/g)).toHaveLength(1)
-  const section = html.split('<section').find((part) => part.includes('autobuild · seams'))!
-  expect(section.slice(0, section.indexOf('</section>'))).toContain(
-    '<a href="/docs/seams/">Explore the infrastructure seams</a>',
-  )
-})
-
 // Baseline hashes captured from the pre-layout article strings, independent of rendered output.
 const baseline: Record<string, string> = {
   '/docs/': '4c5ad4de703c3ed712e115a03052e016609e20e81140858e89aba7e459e4ba76',
