@@ -1,3 +1,4 @@
+import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { loadReducerSnapshot } from '../store/snapshots'
 import { expect } from 'bun:test'
 import { DispatchFrontend } from '../cli/dispatch-frontend'
@@ -152,7 +153,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
         { getReducerSnapshot: getSnapshot },
         { kind: 'repo', repo },
         'dispatchFrontend',
-        { version: 2 },
+        { version: dispatchFrontendReducer.version },
       )
     )?.state,
   ).length
@@ -192,7 +193,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
             { getReducerSnapshot: getSnapshot },
             { kind: 'repo', repo },
             'dispatchFrontend',
-            { version: 2 },
+            { version: dispatchFrontendReducer.version },
           )
         )?.state,
       ).length

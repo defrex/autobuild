@@ -358,6 +358,7 @@ for (const conflict of [false, true])
             revision: 'fixture',
           },
         ])
+        Object.defineProperty(tickets, 'name', { value: 'linear' })
         const dispatcher = new Dispatcher({
           store,
           tickets,

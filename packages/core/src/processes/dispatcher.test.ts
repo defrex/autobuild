@@ -2613,6 +2613,7 @@ describe('Dispatcher dependency gate', () => {
       tickets: [readyTicket('T-1')],
       toml: CAPACITY_2,
       wrapTickets: (source) => {
+        Object.defineProperty(source, 'name', { value: 'linear' })
         source.listReady = listingSource.listReady.bind(listingSource)
         return source
       },
@@ -4529,7 +4530,9 @@ describe('Dispatcher janitor', () => {
       ['git', 'check-ref-format', `refs/heads/ab/${slug}`],
       ['git', 'update-ref', '-d', `refs/heads/ab/${slug}`],
     ])
-    expect(h.tickets.comments).toEqual([])
+    expect(h.tickets.comments).toEqual([
+      { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
+    ])
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
@@ -4947,7 +4950,9 @@ describe('Dispatcher janitor', () => {
     // The first tick already applied the idempotent label union before the
     // transition failed; retry reads it back and does not replace labels again.
     expect(h.tickets.updates).toEqual([{ id: 'T-1', patch: { labels: ['autobuild:aborted'] } }])
-    expect(h.tickets.comments).toEqual([])
+    expect(h.tickets.comments).toEqual([
+      { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
+    ])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('build.janitor-recovered')
     expect(events.findLast((e) => e.type === 'build.completed')?.payload).toEqual({

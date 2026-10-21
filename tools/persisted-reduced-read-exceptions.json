@@ -697,5 +697,9 @@
   "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::reduce": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload over caller-supplied repository events; current production callers use persisted repository facts."
+  },
+  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/readFrame::reduce": {
+    "kind": "reduction",
+    "reason": "Pure frontend presentation fold over the cursor-bounded retained repository feed, which persists its own snapshot and includes durable migration facts; no additional Store read or kernel state decision."
   }
 }

@@ -1,3 +1,4 @@
+import { currentTicketRef, readTicketMigrations, resolveTicketRef } from './ticket-migrations'
 import { randomUUID } from 'node:crypto'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
@@ -26,17 +27,29 @@ function refuse(message: string): never {
   throw new TicketOperationError('refusal', message)
 }
 export async function newestTicketBuild(ctx: ParentContext, ticket: Ticket) {
-  const namespace = (source: string) =>
-    source === 'database' && ctx.configuredSource === 'hosted' ? 'hosted' : source
-  const candidates = (await ctx.store.listBuildsForRepo(ctx.repo)).filter(
-    (b) => b.ticket && namespace(b.ticket.source) === namespace(ticket.ref.source),
-  )
+  const candidates = await ctx.store.listBuildsForRepo(ctx.repo)
+  if (!candidates.length) return undefined
+  const migrations = await readTicketMigrations(ctx.store, ctx.repo)
   const matches: BuildRecord[] = []
   for (const build of candidates) {
-    if (build.ticket!.id === ticket.ref.id) matches.push(build)
-    else if (
-      ctx.configuredSource === 'hosted' &&
-      (await ctx.source.get(build.ticket!.id))?.ref.id === ticket.ref.id
+    if (!build.ticket) continue
+    let ref = build.ticket
+    try {
+      ref = resolveTicketRef(
+        migrations,
+        build.ticket,
+        ctx.source.name === 'database' && ctx.configuredSource === 'hosted'
+          ? 'hosted'
+          : ctx.source.name,
+        build.slug,
+      )
+    } catch {
+      continue
+    }
+    if (
+      ref.id === ticket.ref.id ||
+      (ctx.configuredSource === 'hosted' &&
+        (await ctx.source.get(ref.id))?.ref.id === ticket.ref.id)
     )
       matches.push(build)
   }
@@ -124,7 +137,19 @@ export async function updateTicketTarget(
   if (!record) return updateTicket(ctx.source, id, canonicalPatch, true, expectedRevision)
   let state = (await readBuildFacts(ctx.store, record.slug)).value.state
   const active = state.status !== 'done' && state.status !== 'aborted'
-  const frozenId = state.target?.ticket.id
+  const frozenId = state.target
+    ? (
+        await currentTicketRef(
+          ctx.store,
+          ctx.repo,
+          ctx.source.name === 'database' && ctx.configuredSource === 'hosted'
+            ? 'hosted'
+            : ctx.source.name,
+          state.target.ticket,
+          record.slug,
+        )
+      ).id
+    : undefined
   const effective =
     frozenId === undefined ? undefined : ((await ctx.source.get(frozenId))?.ref.id ?? frozenId)
   if (state.kind !== 'node') {

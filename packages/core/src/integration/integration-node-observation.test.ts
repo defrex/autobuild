@@ -213,3 +213,84 @@ test('collecting stale nodes observe distance and inventory without replay; oper
     await h.cleanup()
   }
 })
+
+test('recorded remaps join frozen children to current membership and isolate unrelated history', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { FakeTicketSource } = await import('../ports/tickets/fake')
+  const { observeIntegration } = await import('../kernel/integration-completeness')
+  const { recordTicketMigration } = await import('../kernel/ticket-migrations')
+  const { newestTicketBuild } = await import('../kernel/node-parent')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  const old = { source: 'linear', id: 'OLD-NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: 'repo',
+    ticket: old,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { repo: 'repo', ticket: old, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  const source = new FakeTicketSource([
+    { ...readyTicket('NODE'), kind: 'node' },
+    { ...readyTicket('CHILD'), target: 'NODE' },
+  ])
+  const child = {
+    record: {
+      slug: 'child',
+      repo: 'repo',
+      ticket: { source: 'linear', id: 'OLD-CHILD' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    state: {
+      ...reduceBuild([]),
+      status: 'running' as const,
+      target: { ticket: old, build: 'node' },
+    },
+  }
+  const unrelated = {
+    record: { ...child.record, slug: 'unrelated', ticket: { source: 'foreign', id: 'OTHER' } },
+    state: reduceBuild([]),
+  }
+  const inputs = async () => ({ listing: await source.listAll(), builds: [child, unrelated] })
+  const absent = await observeIntegration(store, source, 'node', inputs)
+  expect(absent.diagnostics.join()).toContain('ab ticket migration record')
+  await recordTicketMigration(
+    store,
+    'repo',
+    { kind: 'human', user: 'operator' },
+    {
+      identity: 'cutover',
+      from: 'linear',
+      to: 'fake',
+      mapping: { 'OLD-NODE': 'NODE', 'OLD-CHILD': 'CHILD' },
+    },
+  )
+  const current = await observeIntegration(store, source, 'node', inputs)
+  expect(current.diagnostics).toEqual([])
+  expect(current.openChildren).toEqual(['CHILD'])
+  expect(current.children?.map(({ source, id }) => ({ source, id }))).toEqual([
+    { source: 'fake', id: 'CHILD' },
+  ])
+  expect(
+    (
+      await newestTicketBuild(
+        { store, repo: 'repo', source, root: 'main', supportsRetarget: async () => true },
+        (await source.get('NODE'))!,
+      )
+    )?.slug,
+  ).toBe('node')
+  expect((await store.getBuild('node'))?.ticket).toEqual(old)
+  child.state.status = 'done' as 'running'
+  child.state.prState = 'merged' as never
+  await source.transition('CHILD', 'Done')
+  const complete = await observeIntegration(store, source, 'node', inputs)
+  expect(complete.openChildren).toEqual([])
+  expect(complete.contributions).toEqual(['child'])
+  child.record.ticket.id = 'UNCOVERED'
+  const missing = await observeIntegration(store, source, 'node', inputs)
+  expect(missing.diagnostics.join()).toContain('build child ticket linear:UNCOVERED')
+})

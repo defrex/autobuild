@@ -1,3 +1,4 @@
+import { migrationIdentity, ticketMigrationsReducer } from '../kernel/ticket-migrations'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
@@ -395,6 +396,10 @@ export class DispatchFrontend {
           snapshot.capacityBuilds ?? [],
           config.capacity,
           this.clock(),
+          migrationIdentity(
+            ticketMigrationsReducer.reduce(repositoryEvents),
+            config.tickets.source,
+          ),
         ),
         observationCount: this.observationCount,
         observationLimit: config.policy.harvestThreshold,

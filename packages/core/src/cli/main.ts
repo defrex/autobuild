@@ -1,3 +1,4 @@
+import { currentTicketRef } from '../kernel/ticket-migrations'
 import { requestNodeRestack } from '../operator/restack'
 import { withSessionlessStore } from './store-opening'
 import { abLandings } from './landings'
@@ -318,7 +319,7 @@ async function runBuildControl(
   slug: string,
   action: BuildControlAction,
   storeRef?: string,
-  readTicketBody?: (ref: TicketRef) => Promise<string>,
+  readTicketBody?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<string>,
   prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>,
 ): Promise<void> {
   if (deps.exec === undefined) {
@@ -1208,7 +1209,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       let revisionTicketSource: import('../ports/types').TicketSource | undefined
       const readTicketBody =
         resolve?.kind === 'revise-spec' && resolve.body.kind === 'ticket'
-          ? async (ref: TicketRef): Promise<string> => {
+          ? async (original: TicketRef, store: BuildStore, repo: string): Promise<string> => {
               const { source } = await openTicketSource(
                 {
                   targetRepo: deps.workspacePath,
@@ -1220,11 +1221,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                 'ab answer --revise-spec-from-ticket',
               )
               revisionTicketSource = source
-              if (source.name !== ref.source) {
-                throw new Error(
-                  `build ticket source is "${ref.source}", but this repository is configured for "${source.name}"; refusing to read a same-id ticket from a different source`,
-                )
-              }
+              const ref = await currentTicketRef(store, repo, source.name, original, slug)
               const ticket = await source.get(ref.id)
               if (ticket === null) {
                 throw new Error(
@@ -1257,7 +1254,12 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           ? async (ref, store, repo) => {
               if (!revisionTicketSource)
                 throw new Error('ticket body must be read before preparing assets')
-              return preparePinnedAssets(revisionTicketSource, store, repo, ref.id)
+              return preparePinnedAssets(
+                revisionTicketSource,
+                store,
+                repo,
+                (await currentTicketRef(store, repo, revisionTicketSource.name, ref, slug)).id,
+              )
             }
           : undefined,
       )
