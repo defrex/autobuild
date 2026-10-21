@@ -372,3 +372,26 @@ crops of every docs title at desktop and phone widths and the 720px/1000px
 Builds frames. No visual correction to the approved layout was needed.
 Outcome labels keep the action width stable; a pending keyboard copy restores
 focus when disabling the action moved it to the document body.
+
+## Static figures, Docs hero action, and centered masthead (2026-10-21)
+
+Maintainer design decisions, made interactively on the integration branch:
+
+- **Static figures.** The stepped animations on the pipeline, dispatcher,
+  integration tree and intake figures are removed with their Replay controls,
+  capture adapters and motion styles. Each figure is the complete static
+  flowchart, still marked with its `data-capture-figure` ID and no longer
+  `data-capture-animated`, so capture records no motion samples. The four
+  `reference-*-motion-final.png` files are deleted; the history above that
+  cites them is superseded.
+- **One hero action.** The hero offers the install command and a single
+  outlined "Docs" button to `/docs/`. GitHub stays in the masthead and in the
+  closing actions. `reference.html` carries the same change in its hero so
+  the copy comparison still holds.
+- **Centered masthead.** The `─` rule glyph sits mid-line in its 24px row,
+  which left 12px more space under the nav than above it. The rule now pulls
+  up 12px so it marks the masthead's bottom edge and the nav text is
+  vertically centered in the 64px masthead. Everything below moves up 12px.
+
+The four landing references were refreshed from this capture.
+

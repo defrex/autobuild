@@ -79,41 +79,32 @@ describe('static site', () => {
         /<section class="section">(?:(?!<section)[\s\S])*?autobuild · integration[\s\S]*?<\/section>/,
         '',
       )
-      .replace('<a class="btn" href="/docs/">Documentation</a>', '')
       .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
       .replace('<a href="/docs/builds/">Follow one build end to end</a>', '')
       .replace('<a href="/docs/dispatcher/">Read about the dispatcher</a>', '')
       .replace('<a href="/docs/tickets/">Read about tickets and intake</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(
-      words(
-        textOf(
-          withoutHeroFigure(
-            landing.replace(/<button[^>]*data-motion-replay[^>]*>[\s\S]*?<\/button>/g, ''),
-          ),
-        ),
-      ),
-    ).toEqual(words(reference))
+    expect(words(textOf(withoutHeroFigure(landing)))).toEqual(words(reference))
   })
 
-  test('four logical motion figures each have a hidden native replay control', async () => {
+  test('four figures are static drawings with capture IDs and no motion', async () => {
     const { 'index.html': html, 'site.js': js } = await buildFiles()
-    expect(html.match(/data-capture-figure="pipeline"/g)).toHaveLength(1)
-    expect(html.match(/data-capture-animated/g)).toHaveLength(4)
     for (const id of ['pipeline', 'dispatcher', 'intake', 'integration-tree']) {
       expect(html.match(new RegExp(`data-capture-figure="${id}"`, 'g'))).toHaveLength(1)
-      expect(html).toContain(
-        `data-motion-replay hidden aria-label="Replay ${id === 'integration-tree' ? 'integration tree' : id} animation"`,
-      )
     }
-    const pipeline = html.match(/<div data-capture-figure="pipeline"[\s\S]*?<\/button><\/div>/)![0]
-    expect(pipeline.match(/data-motion-node=/g)).toHaveLength(16)
-    expect(html).toContain('data-motion-replay hidden aria-label="Replay pipeline animation"')
-    expect(html).toContain('type="button" class="word motion-replay"')
-    expect(js).toContain('__websiteCapture')
+    expect(html).not.toContain('data-capture-animated')
+    expect(html).not.toContain('data-motion')
+    expect(js).not.toContain('__websiteCapture')
     // Docs copy uses the canonical origin as a URL base, without a network service.
     expect(js.replaceAll(SITE_URL, '')).not.toMatch(/https?:\/\//)
+  })
+
+  test('the hero offers one Docs call to action beside the install command', async () => {
+    const { 'index.html': html } = await buildFiles()
+    const hero = html.match(/<div class="hero">[\s\S]*?<\/div><\/div>/)![0]
+    expect(hero.match(/<a class="btn"/g)).toHaveLength(1)
+    expect(hero).toContain('<a class="btn" href="/docs/">Docs</a>')
   })
 
   test('core guides have one ordinary link in their matching landing sections', async () => {
