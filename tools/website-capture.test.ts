@@ -387,6 +387,8 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     ['docs/getting-started/index.html', 390],
     ['docs/index.html', 1440],
     ['docs/index.html', 390],
+    ['docs/intake/index.html', 1440],
+    ['docs/intake/index.html', 390],
     ['docs/integration/index.html', 1440],
     ['docs/integration/index.html', 390],
     ['docs/operating/index.html', 1440],
