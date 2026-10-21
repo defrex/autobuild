@@ -22,7 +22,7 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
 }
 
 const hero = (frame: string): string =>
-  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a><a class="btn" href="/docs/">Documentation</a></div></div>${heroFrame(frame)}</section>`
+  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="/docs/">Docs</a></div></div>${heroFrame(frame)}</section>`
 
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}<p><a href="/docs/builds/">Follow one build end to end</a></p>${pipelineDiagram()}</section>`
 
