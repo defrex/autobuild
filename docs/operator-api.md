@@ -81,7 +81,7 @@ turn runner (a later ticket) is the only producer of turn facts.
 | Method and path | Result |
 |---|---|
 | `GET …/builds?scope=active\|queued\|all` | Build summaries, newest update first. `queued` means active plus queued, matching `ab builds --queued`. |
-| `GET …/builds/{slug}` | `{detail, dashboardRow}`; `dashboardRow` remains a `CLEANING` row after `build.aborted` and becomes `null` only when the dashboard stops listing it (after cleanup's `build.completed`). |
+| `GET …/builds/{slug}` | `{detail, dashboardRow}`; `detail.runnerAttaches` records chronological attach boundaries and their runtime identity (version, commit, source kind/location), with null runtime for unrecorded historical attaches; `dashboardRow` remains a `CLEANING` row after `build.aborted` and becomes `null` only when the dashboard stops listing it (after cleanup's `build.completed`). |
 | `GET …/dashboard` | `{generatedAt, model, settingsHeader}`. `model` is the dashboard's rows, steps, elapsed timing inputs, harvest row, queue/capacity and settings projection. |
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
@@ -220,7 +220,8 @@ event reads.
 
 Dispatcher liveness is also visible through `ab repository status --json`:
 `dispatcher.holder` identifies the unexpired repository lease owner, independently
-of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
+of `latestRun`. Each run includes its recorded `runtime` (version, commit, and
+source kind/location), or null for unrecorded historical starts. Heartbeat age measures attributable renewals; tick age measures
 durable progress. Missing historical evidence is null. The liveness query uses
 bounded repository facts first, with a full-history fallback when a later
 invocation hides the holder start or the latest stop. Other state reads retain
