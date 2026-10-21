@@ -8,7 +8,7 @@ order: 6
 
 # Operating Autobuild
 
-The operator keeps work moving: watch recorded progress, answer questions, and decide when consent-gated changes may land. An operator can be a human or an external coding agent. Autobuild does not start or host an orchestrator agent.
+Your operator agent keeps work moving: it watches recorded progress, answers escalations, and manages landing consent under your direction. You can also use the controls below directly to inspect progress, answer questions, and decide when consent-gated changes may land. Autobuild does not start or host your agent.
 
 
 ## Watch for attention
@@ -67,6 +67,6 @@ bun ab hold my-build
 
 The live terminal dashboard shown by `bun ab dispatch` and the hosted web operator app both read durable state. They expose build progress, escalations, and pause/resume controls. The web app also lets you inspect sessions and transcripts. Landing consent and hold are available through the CLI, terminal keys `l`/`o`, and MCP/operator tools; the web app has no consent controls.
 
-Any external agent with shell access can operate through the CLI. `bun ab mcp` serves the operator tools locally over stdio. The hosted service exposes its authenticated `/mcp` connector for agents running elsewhere, without requiring a repository checkout on the operator's machine.
+Any external agent with shell access can operate through the CLI. `bun ab mcp` serves the operator tools locally over stdio. The hosted service exposes its authenticated `/mcp` connector for agents running elsewhere, without requiring a repository checkout on the machine running your agent.
 
 Read the [operator API reference](operator-api.md) and [hosted MCP guide](mcp.md) for remote access. The [design specification](../SPEC.md) records the CLI and escalation contracts.
