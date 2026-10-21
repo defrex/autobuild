@@ -2444,3 +2444,338 @@ describe('Linear node metadata', () => {
     })
   })
 })
+
+describe('export snapshots', () => {
+  for (const count of [0, 1, 10, 20, 21, 100, 250, 251]) {
+    test(`batches ${count} tickets within the request budget`, async () => {
+      const issues = Array.from({ length: count }, (_, i) =>
+        gqlIssue({ id: `uuid-${i}`, identifier: `ENG-${i}` }),
+      )
+      const calls: { query: string; variables: Record<string, unknown> }[] = []
+      const fetchFn: LinearFetch = async (_, init) => {
+        const { query, variables } = JSON.parse(init.body)
+        calls.push({ query, variables })
+        const offset = Number(variables.after ?? 0)
+        const page = (size: number, inventory = false) =>
+          connection(
+            issues
+              .slice(offset, offset + size)
+              .map((issue) => (inventory ? { id: issue.id } : structuredClone(issue))),
+            offset + size < count,
+            offset + size < count ? String(offset + size) : null,
+          )
+        const data = query.includes('query ExportInventory')
+          ? { issues: page(250, true) }
+          : {
+              issues: page(20),
+              ...(query.includes('inventory:') ? { inventory: page(250, true) } : {}),
+            }
+        return { ok: true, status: 200, json: async () => ({ data }) }
+      }
+      const result = await makeSource(fetchFn).readExportSnapshot()
+      expect(result).toHaveLength(count)
+      expect(calls.length).toBeLessThanOrEqual(count ? Math.ceil(count / 10) : 1)
+      expect(calls[0]!.query).toContain('nodes { team { key }')
+      expect(calls[0]!.query).toContain(
+        'comments(first: 25, includeArchived: true, orderBy: createdAt)',
+      )
+      expect(calls[0]!.query).toContain('labels(first: 25)')
+      expect(calls[0]!.variables.filter).toEqual({ team: { key: { eq: 'ENG' } } })
+      expect(calls.every((call) => !call.query.includes('query GetIssue'))).toBe(true)
+    })
+  }
+
+  test('retains successful pages and retries identical failed reads until reset', async () => {
+    let now = 1000
+    const issues = Array.from({ length: 21 }, (_, i) =>
+      gqlIssue({ id: `id-${i}`, identifier: `ENG-${i}` }),
+    )
+    const fake = fakeLinear([
+      {
+        body: {
+          data: {
+            issues: connection(issues.slice(0, 20), true, 'detail-2'),
+            inventory: connection(issues.map(({ id }) => ({ id }))),
+          },
+        },
+      },
+      {
+        status: 400,
+        headers: { 'x-ratelimit-requests-reset': '2000', 'x-ratelimit-complexity-reset': '3000' },
+        body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+      },
+      { body: { data: { issues: connection(issues.slice(20)) } } },
+    ])
+    const sleeps: number[] = []
+    const progress: unknown[] = []
+    const source = new LinearTicketSource({
+      apiKey: 'key',
+      teamKey: 'ENG',
+      fetchFn: fake.fetchFn,
+      now: () => now,
+      sleep: async (ms) => {
+        sleeps.push(ms)
+        now += ms
+      },
+    })
+    expect(
+      await source.readExportSnapshot({ progress: (value) => progress.push(value) }),
+    ).toHaveLength(21)
+    expect(sleeps).toEqual([2000])
+    expect(fake.calls[1]!.variables).toEqual(fake.calls[2]!.variables)
+    expect(fake.calls[1]!.query).toEqual(fake.calls[2]!.query)
+    expect(progress).toContainEqual({ completed: 20, total: 21, resetAt: 3000 })
+  })
+
+  for (const reset of [undefined, '', 'NaN', 'Infinity', '999', '1000', '9e20']) {
+    test(`fails without a future usable reset: ${reset}`, async () => {
+      const fake = fakeLinear([
+        {
+          headers: reset === undefined ? {} : { 'x-ratelimit-requests-reset': reset },
+          body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+        },
+      ])
+      let sleeps = 0
+      const source = new LinearTicketSource({
+        apiKey: 'key',
+        teamKey: 'ENG',
+        fetchFn: fake.fetchFn,
+        now: () => 1000,
+        sleep: async () => {
+          sleeps++
+        },
+      })
+      await expect(source.readExportSnapshot()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+      expect(fake.calls).toHaveLength(1)
+      expect(sleeps).toBe(0)
+    })
+  }
+
+  test('snapshot matches get with independent label, parent, relation and comment continuations', async () => {
+    const issue = gqlIssue({
+      labels: connection([{ name: 'a' }], true, 'labels'),
+      parent: {
+        id: 'parent',
+        identifier: 'ENG-1',
+        team: { key: 'ENG' },
+        labels: connection([], true, 'parent-labels'),
+      },
+      inverseRelations: connection([], true, 'relations'),
+      comments: connection(
+        [{ body: 'later', createdAt: '2026-01-02', user: null }],
+        true,
+        'comments',
+      ),
+    })
+    const continuations = () => [
+      { body: { data: { issue: { labels: connection([{ name: 'node' }]) } } } },
+      { body: { data: { issue: { labels: connection([{ name: 'extra' }]) } } } },
+      { body: { data: { r0: { inverseRelations: connection([blocksRelation('ENG-2')]) } } } },
+      {
+        body: {
+          data: {
+            issue: {
+              comments: connection([
+                { body: 'earlier', createdAt: '2026-01-01', user: { name: 'Author' } },
+              ]),
+            },
+          },
+        },
+      },
+    ]
+    const ordinary = fakeLinear([
+      { body: { data: { issue: structuredClone(issue) } } },
+      ...continuations(),
+    ])
+    const snapshot = fakeLinear([
+      {
+        body: {
+          data: {
+            issues: connection([structuredClone(issue)]),
+            inventory: connection([{ id: issue.id }]),
+          },
+        },
+      },
+      ...continuations(),
+    ])
+    expect(await makeSource(snapshot.fetchFn).readExportSnapshot()).toEqual([
+      (await makeSource(ordinary.fetchFn).get('ENG-42'))!,
+    ])
+  })
+
+  test('rejects inconsistent inventory identities', async () => {
+    const fake = fakeLinear([
+      {
+        body: {
+          data: { issues: connection([gqlIssue()]), inventory: connection([{ id: 'different' }]) },
+        },
+      },
+    ])
+    await expect(makeSource(fake.fetchFn).readExportSnapshot()).rejects.toThrow(
+      'identities disagree',
+    )
+  })
+
+  test('aborts a real wait promptly and passes the signal to fetch', async () => {
+    const controller = new AbortController()
+    let signal: AbortSignal | undefined
+    const source = new LinearTicketSource({
+      apiKey: 'key',
+      teamKey: 'ENG',
+      fetchFn: async (_, init) => {
+        signal = init.signal
+        return {
+          ok: false,
+          status: 400,
+          headers: new Headers({ 'x-ratelimit-requests-reset': String(Date.now() + 60_000) }),
+          json: async () => ({
+            errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }],
+          }),
+        }
+      },
+    })
+    const result = source.readExportSnapshot({
+      signal: controller.signal,
+      progress: (value) => {
+        if (value.resetAt) controller.abort(new Error('interrupted'))
+      },
+    })
+    await expect(result).rejects.toThrow('interrupted')
+    expect(signal).toBe(controller.signal)
+  })
+})
+
+for (const kind of ['complexity', 'endpoint-requests']) {
+  test(`export honors exhausted ${kind} reset independently of ordinary fallback`, async () => {
+    let now = 1000
+    const fake = fakeLinear([
+      {
+        headers: {
+          [`x-ratelimit-${kind}-remaining`]: '0',
+          [`x-ratelimit-${kind}-reset`]: '2000',
+          'x-ratelimit-requests-reset': '9000',
+          'x-ratelimit-requests-remaining': '10',
+        },
+        body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+      },
+      { body: { data: { issues: connection([]), inventory: connection([]) } } },
+    ])
+    const waits: number[] = []
+    const source = new LinearTicketSource({
+      apiKey: 'key',
+      teamKey: 'ENG',
+      fetchFn: fake.fetchFn,
+      now: () => now,
+      sleep: async (ms) => {
+        waits.push(ms)
+        now += ms
+      },
+    })
+    expect(await source.readExportSnapshot()).toEqual([])
+    expect(waits).toEqual([1000])
+    expect(fake.calls).toHaveLength(2)
+  })
+}
+
+test('repeated export limits extend waiting and ordinary failures do not retry', async () => {
+  let now = 1000
+  const limit = (reset: string) => ({
+    headers: { 'x-ratelimit-requests-reset': reset },
+    body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+  })
+  const fake = fakeLinear([limit('2000'), limit('4000'), { status: 500, body: {} }])
+  const waits: number[] = []
+  const source = new LinearTicketSource({
+    apiKey: 'key',
+    teamKey: 'ENG',
+    fetchFn: fake.fetchFn,
+    now: () => now,
+    sleep: async (ms) => {
+      waits.push(ms)
+      now += ms
+    },
+  })
+  await expect(source.readExportSnapshot()).rejects.toThrow('HTTP 500')
+  expect(waits).toEqual([1000, 2000])
+  expect(fake.calls).toHaveLength(3)
+})
+
+for (const phase of ['inventory', 'labels', 'parentLabels', 'relations', 'comments']) {
+  test(`export retries ${phase} continuation without restarting completed reads`, async () => {
+    let now = 1000
+    const issue = gqlIssue({
+      labels: connection([], phase === 'labels', 'labels'),
+      parent:
+        phase === 'parentLabels'
+          ? {
+              id: 'parent',
+              identifier: 'ENG-0',
+              team: { key: 'ENG' },
+              labels: connection([], true, 'parent'),
+            }
+          : null,
+      inverseRelations: connection([], phase === 'relations', 'relations'),
+      comments: connection([], phase === 'comments', 'comments'),
+    })
+    const continuation =
+      phase === 'inventory'
+        ? { issues: connection([]) }
+        : phase === 'relations'
+          ? { r0: { inverseRelations: connection([]) } }
+          : phase === 'comments'
+            ? { issue: { comments: connection([]) } }
+            : { issue: { labels: connection([]) } }
+    const fake = fakeLinear([
+      {
+        body: {
+          data: {
+            issues: connection([issue]),
+            inventory: connection([{ id: issue.id }], phase === 'inventory', 'inventory'),
+          },
+        },
+      },
+      {
+        headers: { 'x-ratelimit-requests-reset': '2000' },
+        body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+      },
+      { body: { data: continuation } },
+    ])
+    const source = new LinearTicketSource({
+      apiKey: 'key',
+      teamKey: 'ENG',
+      fetchFn: fake.fetchFn,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms
+      },
+    })
+    expect(await source.readExportSnapshot()).toHaveLength(1)
+    expect(fake.calls).toHaveLength(3)
+    expect(fake.calls[1]!.variables).toEqual(fake.calls[2]!.variables)
+    expect(fake.calls[1]!.query).toEqual(fake.calls[2]!.query)
+  })
+}
+
+test('cancellation rejects a held transport response even when transport ignores signal', async () => {
+  const controller = new AbortController()
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const source = new LinearTicketSource({
+    apiKey: 'key',
+    teamKey: 'ENG',
+    fetchFn: async () => {
+      await held
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { issues: connection([]), inventory: connection([]) } }),
+      }
+    },
+  })
+  const pending = source.readExportSnapshot({ signal: controller.signal })
+  controller.abort(new Error('cancelled'))
+  release()
+  await expect(pending).rejects.toThrow('cancelled')
+})

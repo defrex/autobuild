@@ -17,6 +17,15 @@ forge. File and hosted sources support import. Linear supports export only.
 5. Inspect ticket bodies, labels, blockers, comments and attachments in the new
    source. Confirm lifecycle configuration and the ready gate, then resume intake.
 
+Linear export reads full ticket details in batches and prints `read X/Y tickets`.
+The total is shown as pending until inventory discovery finishes. If Linear reports
+a rate limit with a usable future reset time, export prints the wait time, waits
+until that reset, and retries the failed read while retaining completed pages.
+Without a usable reset time, export fails immediately. A running dispatcher and
+other clients authenticated as the same API user share the API budget, so they
+can cause additional waits. Interrupting export with Ctrl-C publishes nothing;
+the destination stays absent or empty until all ticket and attachment reads succeed.
+
 Both commands also accept
 `--store <ref>` to reach legacy BuildStore attachments. Keep the old store available
 through export when file or Linear tickets have attachments there.

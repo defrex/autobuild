@@ -192,7 +192,14 @@ export type TicketMutation =
   | { kind: 'transition'; state: string }
   | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
 
+export interface ExportSnapshotOptions {
+  signal?: AbortSignal
+  progress?: (progress: { completed: number; total?: number; resetAt?: number }) => void
+}
+
 export interface TicketSource {
+  /** Complete export-only snapshot; ordinary dispatch reads keep their own policy. */
+  readExportSnapshot?(opts?: ExportSnapshotOptions): Promise<Ticket[]>
   /** Opt in only when kind/target persistence, graph validation and complete
    * enumeration are supported at every write boundary, including guarded writes. */
   readonly integrationTree?: boolean

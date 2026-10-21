@@ -12,6 +12,7 @@ import { ticketRevision } from './revision'
  */
 import { z } from 'zod'
 import type {
+  ExportSnapshotOptions,
   DependencyState,
   Ticket,
   TicketCreateOptions,
@@ -71,7 +72,7 @@ function isEntityNotFound(error: unknown): boolean {
 /** The narrow slice of fetch this adapter needs — injectable for tests. */
 export type LinearFetch = (
   url: string,
-  init: { method: 'POST'; headers: Record<string, string>; body: string },
+  init: { method: 'POST'; headers: Record<string, string>; body: string; signal?: AbortSignal },
 ) => Promise<{
   ok: boolean
   status: number
@@ -250,7 +251,8 @@ function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | nul
   return cursor
 }
 
-const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`
+const DETAIL_FIELDS = `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} }`
+const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${DETAIL_FIELDS} } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
@@ -265,9 +267,135 @@ const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $re
 const DELETE_RELATION_MUTATION = `mutation DeleteRelation($id: String!) { issueRelationDelete(id: $id) { success } }`
 const linearReservedIssueIdSchema = z.uuidv4()
 
+type ReadQuery = <T>(
+  operation: string,
+  query: string,
+  variables: Record<string, unknown>,
+) => Promise<T>
+class ExportRateLimit extends TicketSourceRateLimitError {
+  constructor(
+    resetAt: number,
+    readonly exportReset?: number,
+  ) {
+    super('linear', resetAt)
+  }
+}
+
+async function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+    }
+    const abort = () => {
+      cleanup()
+      reject(signal?.reason)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
+}
+
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
   readonly integrationTree = true
+
+  async readExportSnapshot(opts: ExportSnapshotOptions = {}): Promise<Ticket[]> {
+    let completed = 0
+    let total: number | undefined
+    const progress = (resetAt?: number) => opts.progress?.({ completed, total, resetAt })
+    const read: ReadQuery = async <T>(
+      operation: string,
+      query: string,
+      variables: Record<string, unknown>,
+    ): Promise<T> => {
+      for (;;) {
+        opts.signal?.throwIfAborted()
+        try {
+          return await this.gql<T>(operation, query, variables, opts.signal, true)
+        } catch (error) {
+          opts.signal?.throwIfAborted()
+          if (
+            !(error instanceof ExportRateLimit) ||
+            error.exportReset === undefined ||
+            error.exportReset <= this.now()
+          )
+            throw error
+          progress(error.exportReset)
+          while (this.now() < error.exportReset) {
+            await this.sleep(Math.min(error.exportReset - this.now(), 2_147_483_647), opts.signal)
+            opts.signal?.throwIfAborted()
+          }
+        }
+      }
+    }
+    // Linear charges .1 per scalar and 1 per object, multiplied by bounds:
+    // 20 * (15 metadata/wrappers + 2*25*1.1 labels + 25*3.5 relations
+    // + 25*2.3 comments) + 250*1.1 inventory + wrappers < 5,000 points.
+    // https://linear.app/developers/rate-limiting (query ceiling: 10,000).
+    const detailFields = DETAIL_FIELDS.replaceAll('first: 100', 'first: 25').replaceAll(
+      'first: 50',
+      'first: 25',
+    )
+    const selection = `issues(filter: $filter, first: 20, after: $after, includeArchived: true) { nodes { ${detailFields} } ${PAGE_INFO} }`
+    const inventory = `issues(filter: $filter, first: 250, after: $after, includeArchived: true) { nodes { id } ${PAGE_INFO} }`
+    const filter = { team: { key: { eq: this.teamKey } } }
+    const query = `query ExportSnapshot($filter: IssueFilter!, $after: String) { ${selection} inventory: ${inventory} }`
+    progress()
+    const first = await read<{
+      issues: Connection<GqlIssue>
+      inventory: Connection<{ id: string }>
+    }>('export', query, { filter, after: null })
+    const ids = new Set<string>()
+    const collect = (page: Connection<{ id?: string }>) => {
+      for (const issue of page.nodes) {
+        if (!issue.id || ids.has(issue.id))
+          throw new Error('linear: duplicate or missing export identity')
+        ids.add(issue.id)
+      }
+    }
+    collect(first.inventory)
+    const inventorySeen = new Set<string>()
+    let after = nextCursor(first.inventory.pageInfo, inventorySeen)
+    while (after !== null) {
+      const page = await read<{ issues: Connection<{ id: string }> }>(
+        'exportInventory',
+        `query ExportInventory($filter: IssueFilter!, $after: String) { ${inventory} }`,
+        { filter, after },
+      )
+      collect(page.issues)
+      after = nextCursor(page.issues.pageInfo, inventorySeen)
+    }
+    total = ids.size
+    progress()
+    const tickets: Ticket[] = []
+    const seen = new Set<string>()
+    let page = first.issues
+    do {
+      for (const issue of page.nodes) {
+        if (!issue.id || !ids.delete(issue.id))
+          throw new Error('linear: export identities disagree')
+        tickets.push(await this.hydrateDetail(issue, issue.identifier, read))
+        completed++
+        progress()
+      }
+      after = nextCursor(page.pageInfo, seen)
+      if (after !== null)
+        page = (
+          await read<{ issues: Connection<GqlIssue> }>(
+            'export',
+            `query ExportDetails($filter: IssueFilter!, $after: String) { ${selection} }`,
+            { filter, after },
+          )
+        ).issues
+    } while (after !== null)
+    if (ids.size) throw new Error('linear: export identities disagree')
+    return tickets
+  }
 
   async listAll(): Promise<TicketListing> {
     return this.listReady({})
@@ -278,6 +406,7 @@ export class LinearTicketSource implements TicketSource {
   private readonly claimedState: string
   private readonly createState: string | undefined
   private readonly now: () => number
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>
   private cooldown?: TicketSourceRateLimitError
   private readonly fetchFn: LinearFetch
 
@@ -294,6 +423,7 @@ export class LinearTicketSource implements TicketSource {
     teamKey: string
     fetchFn?: LinearFetch
     now?: () => number
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
     /** Workflow state claim() moves the issue to (claim-before-launch, §12). */
     claimedState?: string
     /** Workflow state create() files new issues into; absent = Linear's team
@@ -301,6 +431,7 @@ export class LinearTicketSource implements TicketSource {
     createState?: string
   }) {
     this.now = opts.now ?? Date.now
+    this.sleep = opts.sleep ?? abortableSleep
     this.apiKey = opts.apiKey
     this.teamKey = opts.teamKey
     this.claimedState = opts.claimedState ?? 'In Progress'
@@ -429,13 +560,21 @@ export class LinearTicketSource implements TicketSource {
     }
     if (requireTeam && issue.team && issue.team.key !== this.teamKey)
       throw new Error(`target ${id} is in a different source/team (${issue.team.key})`)
-    await this.completeMetadata(issue, false)
+    return this.hydrateDetail(issue, id)
+  }
+
+  private async hydrateDetail(
+    issue: GqlIssue,
+    id: string,
+    read: ReadQuery = this.gql.bind(this),
+  ): Promise<Ticket> {
+    await this.completeMetadata(issue, false, read)
     // Detail reads exhaust labels and relations independently of dispatch bounds.
     const labels: Array<{ name: string }> = [...issue.labels.nodes]
     const labelSeen = new Set<string>()
     let labelAfter = nextCursor(issue.labels.pageInfo, labelSeen)
     while (labelAfter !== null) {
-      const page: { issue: { labels: Connection<{ name: string }> } } = await this.gql(
+      const page: { issue: { labels: Connection<{ name: string }> } } = await read(
         'getLabels',
         `query TicketLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 100, after: $after) { nodes { name } ${PAGE_INFO} } } }`,
         { id: issue.id ?? id, after: labelAfter },
@@ -444,7 +583,7 @@ export class LinearTicketSource implements TicketSource {
       labelAfter = nextCursor(page.issue.labels.pageInfo, labelSeen)
     }
     issue.labels = { nodes: labels }
-    await this.completeRelations([issue], true)
+    await this.completeRelations([issue], true, read)
     const mapComment = (c: { body: string; createdAt: string; user: { name: string } | null }) => ({
       body: c.body,
       createdAt: c.createdAt,
@@ -460,7 +599,7 @@ export class LinearTicketSource implements TicketSource {
         issue: {
           comments: Connection<{ body: string; createdAt: string; user: { name: string } | null }>
         }
-      } = await this.gql(
+      } = await read(
         'getComments',
         `query TicketComments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`,
         { id: issue.id ?? id, after },
@@ -786,7 +925,11 @@ export class LinearTicketSource implements TicketSource {
 
   /** Each alias owns a cursor. Graph reads retain the historic first 250
    * relations; listing reads exhaust relations, including blockers after 250. */
-  private async completeRelations(issues: DependencyIssue[], ready: boolean): Promise<void> {
+  private async completeRelations(
+    issues: DependencyIssue[],
+    ready: boolean,
+    read: ReadQuery = this.gql.bind(this),
+  ): Promise<void> {
     const pending = issues.map((issue) => ({
       issue,
       seen: new Set<string>(),
@@ -819,7 +962,7 @@ export class LinearTicketSource implements TicketSource {
             )
         variables[`after${n}`] = item.after
       })
-      const data = await this.gql<Record<string, RelationOwner | null>>(
+      const data = await read<Record<string, RelationOwner | null>>(
         'relations',
         `query Relations(${definitions.join(', ')}) { ${selections.join(' ')} }`,
         variables,
@@ -849,7 +992,11 @@ export class LinearTicketSource implements TicketSource {
     return result
   }
 
-  private async completeMetadata(issue: GqlIssue, ownLabels = true): Promise<void> {
+  private async completeMetadata(
+    issue: GqlIssue,
+    ownLabels = true,
+    read: ReadQuery = this.gql.bind(this),
+  ): Promise<void> {
     const complete = async (owner: {
       id?: string
       identifier: string
@@ -859,7 +1006,7 @@ export class LinearTicketSource implements TicketSource {
       let after = nextCursor(owner.labels.pageInfo, seen)
       const labels = [...owner.labels.nodes]
       while (after !== null) {
-        const page: { issue: { labels: Connection<{ name: string }> } } = await this.gql(
+        const page: { issue: { labels: Connection<{ name: string }> } } = await read(
           'metadataLabels',
           `query TicketLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 100, after: $after) { nodes { name } ${PAGE_INFO} } } }`,
           { id: owner.id ?? owner.identifier, after },
@@ -982,16 +1129,26 @@ export class LinearTicketSource implements TicketSource {
     operation: string,
     query: string,
     variables: Record<string, unknown>,
+    signal?: AbortSignal,
+    exportRead = false,
   ): Promise<T> {
-    if (this.cooldown && this.now() < this.cooldown.resetAt) throw this.cooldown
+    signal?.throwIfAborted()
+    const exportReset =
+      this.cooldown instanceof ExportRateLimit ? this.cooldown.exportReset : undefined
+    const cooldownUntil =
+      exportRead && exportReset !== undefined ? exportReset : this.cooldown?.resetAt
+    if (this.cooldown && cooldownUntil !== undefined && this.now() < cooldownUntil)
+      throw this.cooldown
     const response = await this.fetchFn(LINEAR_API_URL, {
       method: 'POST',
+      signal,
       headers: {
         Authorization: this.apiKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query, variables }),
     })
+    signal?.throwIfAborted()
     const http = `linear ${operation}: HTTP ${response.status}`
     let raw: unknown
     try {
@@ -1000,6 +1157,7 @@ export class LinearTicketSource implements TicketSource {
       if (!response.ok) throw new Error(http)
       throw error
     }
+    signal?.throwIfAborted()
     const payload = (raw !== null && typeof raw === 'object' ? raw : {}) as {
       data?: T | null
       errors?: GqlError[]
@@ -1015,7 +1173,17 @@ export class LinearTicketSource implements TicketSource {
         Number.isFinite(reset) && reset > now && reset > 0 && reset <= 8.64e15
           ? reset
           : now + 60_000
-      this.cooldown = new TicketSourceRateLimitError(this.name, resetAt)
+      const kinds = ['requests', 'complexity', 'endpoint-requests']
+      const exhausted = kinds.filter((kind) => {
+        const remaining = response.headers?.get(`x-ratelimit-${kind}-remaining`)
+        return remaining?.trim() && Number.isFinite(Number(remaining)) && Number(remaining) <= 0
+      })
+      const resets = (exhausted.length ? exhausted : kinds).flatMap((kind) => {
+        const value = response.headers?.get(`x-ratelimit-${kind}-reset`)
+        const date = value?.trim() ? Number(value) : NaN
+        return Number.isFinite(date) && date > now && date <= 8.64e15 ? [date] : []
+      })
+      this.cooldown = new ExportRateLimit(resetAt, resets.length ? Math.max(...resets) : undefined)
       throw this.cooldown
     }
     if (errors.length > 0) {
