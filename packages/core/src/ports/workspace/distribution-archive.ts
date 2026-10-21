@@ -294,7 +294,7 @@ export const PREBUILT_DISTRIBUTION_DIR = '.autobuild-dist'
 export const DISTRIBUTION_ARCHIVE_ENV = 'AB_DISTRIBUTION_ARCHIVE'
 
 export async function packageAutobuildDistribution(): Promise<Uint8Array> {
-  return packageDistribution(distributionRoot(), spawnExec)
+  return packageDistribution(distributionRoot(), (cmd, options) => spawnExec(cmd, options))
 }
 
 /** Pack the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
