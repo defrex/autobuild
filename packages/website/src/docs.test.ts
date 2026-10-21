@@ -25,6 +25,7 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/dispatcher/',
     '/docs/integration/',
     '/docs/tickets/',
+    '/docs/intake/',
     '/docs/skills/',
     '/docs/verification/',
     '/docs/operating/',
