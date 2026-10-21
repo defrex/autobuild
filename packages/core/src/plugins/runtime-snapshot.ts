@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { renameSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile, readFile, stat, copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { distributionRoot } from '../distribution'
@@ -9,7 +10,7 @@ import {
   validateCoreConfigs,
   withCacheLock,
 } from '../cli/dispatch-runtime-cache'
-import { claimRuntimeForProcess } from '../cli/dispatch-runtime-use'
+import { claimRuntimeForProcess, pruneRuntimes } from '../cli/dispatch-runtime-use'
 import {
   copyDependencies,
   copySnapshotTree,
@@ -27,6 +28,8 @@ export async function snapshotPlugin(resolved: string, local: boolean): Promise<
   const core = await cachedRuntime(distributionRoot())
   if (!core) return resolved
   claimRuntimeForProcess(core.root)
+  // Short-lived phase CLIs reclaim dead users during a resident generation.
+  pruneRuntimes(dirname(dirname(core.root)))
   const key = `${core.root}:${resolved}`
   let pending = loaded.get(key)
   if (!pending) {
@@ -49,7 +52,10 @@ async function prepare(selected: string, local: boolean, core: string): Promise<
   }
   // A standalone module has no declared edges; never invent a surrounding
   // monorepo as its package boundary.
-  const hasManifest = existsSync(join(boundary, 'package.json'))
+  const standalone =
+    !existsSync(join(boundary, 'package.json')) ||
+    (local && (existsSync(join(boundary, 'autobuild.toml')) || existsSync(join(boundary, '.git'))))
+  const hasManifest = !standalone
   const cache = dirname(dirname(core))
   const extensions = join(cache, 'extensions')
   await mkdir(extensions, { recursive: true })
@@ -57,12 +63,37 @@ async function prepare(selected: string, local: boolean, core: string): Promise<
   try {
     const tree = join(stage, 'distribution')
     const root = join(tree, 'package')
-    const before = await treeDigest(boundary, excludedSnapshotNames)
-    const manifest = hasManifest ? undefined : await standalonePluginManifest(selected, boundary)
+    const files = new Set<string>()
+    const manifest = hasManifest
+      ? undefined
+      : await standalonePluginManifest(selected, boundary, files)
+    const fingerprint = async () => {
+      if (!manifest) return treeDigest(boundary, excludedSnapshotNames)
+      const hash = createHash('sha256')
+      const current = new Set<string>()
+      await standalonePluginManifest(selected, boundary, current)
+      for (const file of [...current].sort()) {
+        hash.update(JSON.stringify([relative(boundary, file), (await stat(file)).mode & 0o111]))
+        hash.update(await readFile(file))
+      }
+      return hash.digest('hex')
+    }
+    const before = await fingerprint()
     const scan = () =>
-      scanDependencies(boundary, { dev: local, coreRoot: core, ...(manifest ? { manifest } : {}) })
+      scanDependencies(boundary, {
+        dev: local && !manifest,
+        coreRoot: core,
+        ...(manifest ? { manifest } : {}),
+      })
     const graph = await scan()
-    await copySnapshotTree(boundary, root)
+    if (manifest) {
+      await mkdir(root, { recursive: true })
+      for (const file of files) {
+        const target = join(root, relative(boundary, file))
+        await mkdir(dirname(target), { recursive: true })
+        await copyFile(file, target)
+      }
+    } else await copySnapshotTree(boundary, root)
     await writeFile(join(tree, 'tsconfig.json'), RUNTIME_CONFIG)
     await writeFile(join(root, 'tsconfig.json'), RUNTIME_CONFIG)
     if (manifest) await writeFile(join(root, 'package.json'), JSON.stringify(manifest))
@@ -76,10 +107,7 @@ async function prepare(selected: string, local: boolean, core: string): Promise<
     }
     await validateCoreConfigs(root, ['.'])
     await copyDependencies(graph, root, core)
-    if (
-      before !== (await treeDigest(boundary, excludedSnapshotNames)) ||
-      graph.fingerprint !== (await scan()).fingerprint
-    )
+    if (before !== (await fingerprint()) || graph.fingerprint !== (await scan()).fingerprint)
       throw new Error(`plugin changed while preparing snapshot: ${selected}`)
     const digest = await treeDigest(tree, new Set(), core)
     const destination = join(extensions, digest)

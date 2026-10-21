@@ -224,12 +224,20 @@ export async function copyDependencies(
 /** Standalone plugins have no manifest. Discover their literal native module
  * edges without evaluating consumer code or installing packages. Computed core
  * imports are covered by the canonical core link at every package boundary. */
-export async function standalonePluginManifest(entry: string, boundary: string): Promise<Manifest> {
+export async function standalonePluginManifest(
+  entry: string,
+  boundary: string,
+  files = new Set<string>(),
+): Promise<Manifest> {
   const dependencies: Record<string, string> = {}
   const visited = new Set<string>()
   async function visit(file: string): Promise<void> {
     if (visited.has(file)) return
     visited.add(file)
+    const actual = await realpath(file)
+    if (!inside(boundary, actual))
+      throw new Error(`standalone plugin link escapes its directory: ${file}`)
+    files.add(file)
     const extension = file.split('.').at(-1)
     if (!['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'].includes(extension ?? '')) return
     const loader =
@@ -238,7 +246,17 @@ export async function standalonePluginManifest(entry: string, boundary: string):
         : extension === 'ts' || extension === 'mts' || extension === 'cts'
           ? 'ts'
           : 'js'
-    const imports = new Bun.Transpiler({ loader }).scanImports(await readFile(file, 'utf8'))
+    const source = await readFile(file, 'utf8')
+    // Literal package-relative assets retain their import.meta.url location.
+    for (const match of source.matchAll(
+      /new\s+URL\(\s*['"](\.[^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g,
+    )) {
+      const asset = resolve(dirname(file), match[1]!)
+      if (!inside(boundary, asset))
+        throw new Error(`standalone plugin asset escapes its directory: ${asset}`)
+      await visit(asset)
+    }
+    const imports = new Bun.Transpiler({ loader }).scanImports(source)
     for (const imported of imports) {
       const path = imported.path
       if (
