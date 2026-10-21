@@ -24,6 +24,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     'dashboard',
     'web-dashboard',
     'website',
+    'docs',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({
     kind: 'check',

@@ -25,7 +25,7 @@ test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_U
 # optional steps in its opening `verifySteps` front matter; a plan without that
 # metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard", "website"]
+steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard", "website", "docs"]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
@@ -70,6 +70,12 @@ paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture
 kind = "agent"
 skill = "verify-website"
 paths = ["packages/website/**", "docs/**", "design/website/**", "tools/website-capture*", ".agents/skills/verify-website/SKILL.md"]
+
+# Semantic documentation coverage for this repository's product surfaces.
+[verify.docs]
+kind = "agent"
+skill = "verify-docs"
+paths = ["packages/core/src/**", "packages/hosted-dispatcher/src/**", "packages/hosted-store-service/src/**", "packages/hosted-store-service/app/**", "packages/postgres-store/src/**", "packages/vercel-sandbox/src/**", "packages/website/**", "bin/**", "skills/**", "templates/**", "SPEC.md", "README.md", "docs/**"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.
