@@ -1,4 +1,12 @@
-# Authoring Autobuild plugins
+---
+title: "Writing a plugin"
+group: "guides"
+description: "Build, contract-test, package, and publish an Autobuild infrastructure adapter."
+label: "Plugins"
+order: 7
+---
+
+# Writing a plugin
 
 Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
 Here, `ab <command>` means the repository-installed CLI; run it as
@@ -380,7 +388,10 @@ acme-autobuild-plugin/
 └── bun.lock
 ```
 
-A representative package manifest is:
+A representative package manifest is shown below. This example declares only the
+current tested host release (`1.0.0-beta.2`); widen that compatibility range only
+after running the unchanged contracts on each supported host. The plugin package
+version is independent of this host range and of the manifest API range:
 
 ```json
 {
@@ -394,9 +405,9 @@ A representative package manifest is:
     "test": "bun test",
     "prepublishOnly": "bun run typecheck && bun test"
   },
-  "devDependencies": { "autobuild": "^2.0.0", "typescript": "^7.0.0" },
-  "peerDependencies": { "autobuild": "^2.0.0" },
-  "peerDependenciesMeta": { "autobuild": { "optional": true } }
+  "devDependencies": { "@defrex/autobuild": "1.0.0-beta.2", "typescript": "5.9.3" },
+  "peerDependencies": { "@defrex/autobuild": "1.0.0-beta.2" },
+  "peerDependenciesMeta": { "@defrex/autobuild": { "optional": true } }
 }
 ```
 
