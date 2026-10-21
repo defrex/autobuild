@@ -135,7 +135,7 @@
     "title": "Verification",
     "group": "concepts",
     "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
-    "textHash": "e6b4d0a8f78d38c40b74ade9d8f4189e7839b4060365235708eba039a2501773",
+    "textHash": "caa384b2730dc7d9f6bfff690b5ed326cd7b3ab67225cfbff49e6f1cb78581ac",
     "headings": [
       "Steps and outcomes",
       "Select what a build needs",
