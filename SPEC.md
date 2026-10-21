@@ -2533,7 +2533,7 @@ live, the janitor defers the saga so it cannot race process-tree teardown. Once
 that supervisor releases the lease, or an abruptly orphaned lease expires, cleanup
 closes an open unmerged PR without overriding a racing merge, releases the workspace,
 deletes the exact published remote branch and exact local branch, unions the
-`autobuild:aborted` label into the current ticket labels, returns the ticket to
+`autobuild:aborted` label into the current ticket labels, posts an abort notice, and returns the ticket to
 configured Triage, and only then completes as `abandoned`. External effects are
 idempotent and the three `abort.*` facts checkpoint projections across crashes;
 missing Forge capabilities or outages leave the remainder due on the next tick.

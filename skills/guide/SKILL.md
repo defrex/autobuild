@@ -1650,7 +1650,8 @@ it after the bounded stop delay when necessary, and only then releases the lease
 The dispatcher defers cleanup while that lease is live, then performs the
 checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
 delete the exact remote and local build branches, preserve existing ticket labels
-while adding `autobuild:aborted`, and return the ticket to configured Triage before
+while adding `autobuild:aborted`, return the ticket to configured Triage, and post
+an abort notice before
 completing as `abandoned`. Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.
