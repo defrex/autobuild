@@ -1,3 +1,4 @@
+import { resolveTicketRef, migrationIdentity } from '../kernel/ticket-migrations'
 import { nodeRestackDemand, presenceRestackPath } from '../kernel/node-restack-demand'
 import {
   deferMixedVersion,
@@ -1131,14 +1132,43 @@ export class Dispatcher {
     }
   }
 
+  private async currentTicketId(record: BuildRecord): Promise<string> {
+    if (!record.ticket) throw new Error(`build ${record.slug} has no ticket`)
+    return resolveTicketRef(
+      this.store.repositoryFacts().ticketMigrations,
+      record.ticket,
+      this.deps.tickets.name,
+      record.slug,
+    ).id
+  }
+
   private async activeTicketIdentities(refs: TicketRef[], listed: Ticket[]): Promise<Set<string>> {
     const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
-    const ids = new Set(refs.map(key))
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    const records = await this.repoBuildDigests()
+    const normalized = refs.map((ref) => {
+      try {
+        return resolveTicketRef(
+          migrations,
+          ref,
+          this.deps.tickets.name,
+          records.find(
+            ({ record }) => record.ticket?.source === ref.source && record.ticket.id === ref.id,
+          )?.record.slug,
+        )
+      } catch (error) {
+        // An unrelated source remains excluded only in its original namespace.
+        // A recorded cutover that omits a live claim must block admission.
+        if (migrations.migrations.some((m) => m.from === ref.source && m.from !== m.to)) throw error
+        return ref
+      }
+    })
+    const ids = new Set(normalized.map(key))
     if (this.deps.tickets.name !== 'hosted' || listed.length === 0) return ids
     const listedIds = new Set(listed.map((ticket) => key(ticket.ref)))
     const identity = ticketIdentity(this.deps.tickets)
     try {
-      for (const ref of refs) {
+      for (const ref of normalized) {
         if (ref.source === 'hosted' && !listedIds.has(key(ref))) ids.add(await identity(ref))
       }
     } catch (error) {
@@ -2173,15 +2203,22 @@ export class Dispatcher {
   }
 
   private async observeWorkTarget(record: BuildRecord, state: BuildState, report: TickReport) {
-    if (!record.ticket || record.ticket.source !== this.deps.tickets.name) return
-    const ticket = await this.deps.tickets.get(record.ticket.id)
+    if (!record.ticket) return
+    const ticket = await this.deps.tickets.get(await this.currentTicketId(record))
     if (!ticket) {
       report.janitorDiagnostics.push(
         `build ${record.slug}: claimed ticket cannot be read; frozen work target retained`,
       )
       return
     }
-    const effective = state.target?.ticket.id
+    const effective = state.target
+      ? resolveTicketRef(
+          this.store.repositoryFacts().ticketMigrations,
+          state.target.ticket,
+          this.deps.tickets.name,
+          record.slug,
+        ).id
+      : undefined
     const canonical =
       effective && this.deps.config.tickets.source === 'hosted'
         ? ((await this.deps.tickets.get(effective))?.ref.id ?? effective)
@@ -2199,7 +2236,7 @@ export class Dispatcher {
   /** Provider edits and interrupted caller writes converge through this same
    * durable path, independently of ticket readiness or caller liveness. */
   private async observeNodeParent(record: BuildRecord, state: BuildState, report: TickReport) {
-    if (!record.ticket || record.ticket.source !== this.deps.tickets.name) return
+    if (!record.ticket) return
     if (nodeParentBusy(state)) return
     if (
       state.pr &&
@@ -2243,11 +2280,18 @@ export class Dispatcher {
       this.integrationPublicationInputs = undefined
       return
     }
-    const ticket = await this.deps.tickets.get(record.ticket.id)
+    const ticket = await this.deps.tickets.get(await this.currentTicketId(record))
     if (!ticket) throw new Error('node ticket cannot be read; parent observation failed closed')
     const desired = ticket.target ?? null
     const request = node?.parentRequest
-    const effective = state.target?.ticket.id
+    const effective = state.target
+      ? resolveTicketRef(
+          this.store.repositoryFacts().ticketMigrations,
+          state.target.ticket,
+          this.deps.tickets.name,
+          record.slug,
+        ).id
+      : undefined
     const canonical =
       effective && this.deps.config.tickets.source === 'hosted'
         ? ((await this.deps.tickets.get(effective))?.ref.id ?? effective)
@@ -2269,7 +2313,18 @@ export class Dispatcher {
         state.nodeRestack?.parentRequest?.id !== request?.id
       )
         return
-      if (request && desired !== (request.next.target?.ticket.id ?? null)) {
+      if (
+        request &&
+        desired !==
+          (request.next.target
+            ? resolveTicketRef(
+                this.store.repositoryFacts().ticketMigrations,
+                request.next.target.ticket,
+                this.deps.tickets.name,
+                record.slug,
+              ).id
+            : null)
+      ) {
         await this.store.appendIfCurrent(record.slug, state.lastSeq, {
           actor: DISPATCHER,
           type: 'node.parent-cancelled',
@@ -2381,7 +2436,14 @@ export class Dispatcher {
 
   private async nodeHasCapacity(slug: string): Promise<boolean> {
     const builds = await this.capacityBuilds()
-    return nodeCapacity(builds, slug, this.deps.clock()).occupied < this.deps.config.capacity
+    return (
+      nodeCapacity(
+        builds,
+        slug,
+        this.deps.clock(),
+        migrationIdentity(this.store.repositoryFacts().ticketMigrations, this.deps.tickets.name),
+      ).occupied < this.deps.config.capacity
+    )
   }
 
   private hasLiveExecutionLease(record: BuildRecord): boolean {
@@ -2583,13 +2645,19 @@ export class Dispatcher {
     if (record.ticket !== undefined && !has('abort.ticket-returned')) {
       const label = 'autobuild:aborted'
       try {
-        const current = await tickets.get(record.ticket.id)
+        const current = await tickets.get(await this.currentTicketId(record))
         if (current === null) throw new Error(`ticket no longer exists in ${tickets.name}`)
         if (!current.labels.includes(label)) {
-          await tickets.update(record.ticket.id, { labels: [...current.labels, label] })
+          await tickets.update(await this.currentTicketId(record), {
+            labels: [...current.labels, label],
+          })
         }
         const triageState = this.triageState()
-        await tickets.transition(record.ticket.id, triageState)
+        await tickets.transition(await this.currentTicketId(record), triageState)
+        await tickets.comment(
+          await this.currentTicketId(record),
+          `build ${record.slug} aborted — returned to ${triageState}`,
+        )
         await append({
           actor: DISPATCHER,
           type: 'abort.ticket-returned',
@@ -2597,6 +2665,7 @@ export class Dispatcher {
         })
       } catch (error) {
         fail('ticket handback', `${tickets.name} ticket ${record.ticket.id}`, error)
+        return
       }
     }
 
@@ -2624,9 +2693,12 @@ export class Dispatcher {
       await store.releaseLease(record.slug, record.lease.holder)
     }
     if (record.ticket !== undefined) {
-      await tickets.transition(record.ticket.id, this.deps.config.tickets.readyState)
+      await tickets.transition(
+        await this.currentTicketId(record),
+        this.deps.config.tickets.readyState,
+      )
       await tickets.comment(
-        record.ticket.id,
+        await this.currentTicketId(record),
         `build ${record.slug} was discarded during dispatch — returned to ${this.deps.config.tickets.readyState}`,
       )
     }
@@ -2785,7 +2857,7 @@ export class Dispatcher {
           break
         }
         if (!record.ticket) throw new Error('Landing policy requires a readable source ticket')
-        const ticket = await tickets.get(record.ticket.id)
+        const ticket = await tickets.get(await this.currentTicketId(record))
         if (!ticket)
           throw new Error(
             `Landing policy source ticket ${record.ticket.id} is unavailable; retrying on next poll`,
@@ -2793,7 +2865,15 @@ export class Dispatcher {
         const input = {
           from: integration ? ('node' as const) : ('leaf' as const),
           into: current.target
-            ? { kind: 'node' as const, ticket: current.target.ticket.id }
+            ? {
+                kind: 'node' as const,
+                ticket: resolveTicketRef(
+                  this.store.repositoryFacts().ticketMigrations,
+                  current.target.ticket,
+                  this.deps.tickets.name,
+                  record.slug,
+                ).id,
+              }
             : { kind: 'root' as const },
           labels: ticket.labels,
         }
@@ -3305,8 +3385,11 @@ export class Dispatcher {
         }
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
-          await tickets.transition(record.ticket.id, this.doneState)
-          await tickets.comment(record.ticket.id, `build ${record.slug} merged: ${pr.url}`)
+          await tickets.transition(await this.currentTicketId(record), this.doneState)
+          await tickets.comment(
+            await this.currentTicketId(record),
+            `build ${record.slug} merged: ${pr.url}`,
+          )
         }
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -3331,9 +3414,9 @@ export class Dispatcher {
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
           const triageState = this.triageState()
-          await tickets.transition(record.ticket.id, triageState)
+          await tickets.transition(await this.currentTicketId(record), triageState)
           await tickets.comment(
-            record.ticket.id,
+            await this.currentTicketId(record),
             `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${triageState}`,
           )
         }
@@ -3749,14 +3832,17 @@ export class Dispatcher {
         // can only sample the ticket's current assets (SPEC §6.3).
         const assets =
           seed?.assets ??
-          (await preparePinnedAssets(this.deps.tickets, store, record.repo, record.ticket.id).catch(
-            (error) => {
-              // Preserve legacy recovery only without native assets. Native preparation
-              // must never publish an empty pin after losing the source bytes.
-              if (this.deps.tickets.assets || this.deps.tickets.name === 'hosted') throw error
-              return []
-            },
-          ))
+          (await preparePinnedAssets(
+            this.deps.tickets,
+            store,
+            record.repo,
+            await this.currentTicketId(record),
+          ).catch((error) => {
+            // Preserve legacy recovery only without native assets. Native preparation
+            // must never publish an empty pin after losing the source bytes.
+            if (this.deps.tickets.assets || this.deps.tickets.name === 'hosted') throw error
+            return []
+          }))
         await store.appendIfCurrent(record.slug, 0, {
           actor: DISPATCHER,
           type: 'build.created',
@@ -3932,7 +4018,10 @@ export class Dispatcher {
 
       stage = 'comment'
       if (record.ticket !== undefined && !events.commentPosted) {
-        await this.deps.tickets.comment(record.ticket.id, `build ${record.slug} dispatched`)
+        await this.deps.tickets.comment(
+          await this.currentTicketId(record),
+          `build ${record.slug} dispatched`,
+        )
         await store.append(record.slug, {
           actor: DISPATCHER,
           type: 'dispatch.comment-posted',
@@ -4368,16 +4457,18 @@ export class Dispatcher {
       treeEntries.some(({ digest }) => digest.kind === 'node') ||
       ready.some((ticket) => ticket.kind === 'node')
     let presence: PresenceInputs | undefined
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    const normalizeTicket = migrationIdentity(migrations, this.deps.tickets.name)
     const builtTickets = hasNodes
       ? new Set(
           treeEntries.flatMap(({ record }) =>
-            record.ticket ? [JSON.stringify([record.ticket.source, record.ticket.id])] : [],
+            record.ticket ? [normalizeTicket(record.ticket, record.slug)] : [],
           ),
         )
       : undefined
     const needsPresence = (candidate: Ticket) =>
       (candidate.blockedBy ?? []).some((id) => {
-        const build = blockerBuild(treeEntries, candidate.ref.source, id)
+        const build = blockerBuild(treeEntries, candidate.ref.source, id, normalizeTicket)
         return (
           id !== candidate.ref.id &&
           build !== undefined &&
@@ -4424,7 +4515,12 @@ export class Dispatcher {
                   candidate.target !== undefined,
               )
               .flatMap((candidate) => {
-                const node = blockerBuild(entries, candidate.ref.source, candidate.target!)
+                const node = blockerBuild(
+                  entries,
+                  candidate.ref.source,
+                  candidate.target!,
+                  normalizeTicket,
+                )
                 return node && typeof node !== 'string' && node.digest.kind === 'node'
                   ? [node.record.slug]
                   : []
@@ -4626,10 +4722,24 @@ export class Dispatcher {
     )
       return `integration requires forge ${forge.name} capabilities createNodeBranch, compareBranches and remoteBranchSha; upgrade the plugin`
     if (ticket.target === undefined) return undefined
+    const migrations = this.store.repositoryFacts().ticketMigrations
     const entries = (await this.repoBuildDigests())
       .filter(
         ({ record }) =>
-          record.ticket?.source === ticket.ref.source && record.ticket.id === ticket.target,
+          record.ticket &&
+          (() => {
+            try {
+              const ref = resolveTicketRef(
+                migrations,
+                record.ticket,
+                ticket.ref.source,
+                record.slug,
+              )
+              return ref.id === ticket.target
+            } catch {
+              return false
+            }
+          })(),
       )
       .sort(
         (a, b) =>
@@ -4657,7 +4767,13 @@ export class Dispatcher {
     if (state.integration?.intent && !state.integration.landing)
       return `target node ${ticket.target} is landing`
     if (!digest.nodeOpened || !record.branch) return `target node ${ticket.target} is not yet open`
-    return { target: { ticket: record.ticket!, build: record.slug }, branch: record.branch }
+    return {
+      target: {
+        ticket: resolveTicketRef(migrations, record.ticket!, this.deps.tickets.name, record.slug),
+        build: record.slug,
+      },
+      branch: record.branch,
+    }
   }
 
   private async openNode(record: BuildRecord, state: BuildState): Promise<void> {
@@ -5453,7 +5569,12 @@ export class Dispatcher {
     const required = new Map<string, ChangeIdentity[]>()
     const fallback: string[] = []
     for (const id of ticket.blockedBy ?? []) {
-      const build = blockerBuild(inputs.entries, ticket.ref.source, id)
+      const build = blockerBuild(
+        inputs.entries,
+        ticket.ref.source,
+        id,
+        migrationIdentity(this.store.repositoryFacts().ticketMigrations, this.deps.tickets.name),
+      )
       if (id === ticket.ref.id || !nodes.get(id)?.exists || build === undefined) {
         fallback.push(id)
         continue

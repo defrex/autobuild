@@ -2613,6 +2613,7 @@ describe('Dispatcher dependency gate', () => {
       tickets: [readyTicket('T-1')],
       toml: CAPACITY_2,
       wrapTickets: (source) => {
+        Object.defineProperty(source, 'name', { value: 'linear' })
         source.listReady = listingSource.listReady.bind(listingSource)
         return source
       },

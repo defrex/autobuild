@@ -23,6 +23,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Landing policy, examples and forge requirements](references/landing-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
 - [Migration from 0.x](references/migration-1.0.md)
+- [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
 ## How to use this skill
 

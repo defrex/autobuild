@@ -1830,8 +1830,8 @@ triageState = "Triage"
         `
           import { FakeTicketSource } from ${JSON.stringify(fakeModule)}
           export const source = new FakeTicketSource([
-            ${JSON.stringify(readyTicket('B-1', { title: 'Resolved dependency', state: 'Done', labels: [] }))},
-            ${JSON.stringify(readyTicket('P-1', { title: 'Plugin lifecycle', blockedBy: ['B-1'] }))},
+            ${JSON.stringify({ ...readyTicket('B-1', { title: 'Resolved dependency', state: 'Done', labels: [] }), ref: { source: 'journal', id: 'B-1' } })},
+            ${JSON.stringify({ ...readyTicket('P-1', { title: 'Plugin lifecycle', blockedBy: ['B-1'] }), ref: { source: 'journal', id: 'P-1' } })},
           ], { doneState: 'Done' })
           Object.defineProperty(source, 'name', { value: 'journal' })
           export default {

@@ -1,3 +1,4 @@
+import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
   projectIntegrationRow,
@@ -1352,6 +1353,12 @@ export function buildDashboard(
     })),
     config.capacity,
     new Date(),
+    migrationIdentity(
+      Array.isArray(repositoryEvents)
+        ? ticketMigrationsReducer.reduce(repositoryEvents)
+        : repositoryEvents.ticketMigrations,
+      config.tickets.source,
+    ),
   )
   const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(

@@ -23,6 +23,7 @@ const RUN_STARTED = 'dispatcher.run-started'
  * setting types are enumerated because they share one schema group with the
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
+  'tickets.migration-recorded',
   'dispatcher.forge-degraded',
   'dispatcher.forge-recovered',
   ...Object.keys(changePresenceEventPayloadSchemas),
@@ -105,7 +106,7 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 4
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 5
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) ||
@@ -153,7 +154,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 5
+export const JOURNAL_VIEW_REDUCER_VERSION = 6
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {

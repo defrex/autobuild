@@ -1,3 +1,4 @@
+import { ticketMigrationsReducer } from './ticket-migrations'
 import {
   advanceCompatibility,
   initialCompatibility,
@@ -57,6 +58,7 @@ export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, Bu
   rawEvents: true,
   version:
     4 +
+    ticketMigrationsReducer.version +
     leafRestackReducer.version +
     buildReducer.version +
     currentDeferralObservationReducer.version,
@@ -492,6 +494,7 @@ export interface RepositoryReadAcc {
   settings: ReturnType<typeof dispatchSettingsReducer.initial>
   harvest: ReturnType<typeof harvestReducer.initial>
   forgeHealth: ReturnType<typeof forgeHealthReducer.initial>
+  ticketMigrations: ReturnType<typeof ticketMigrationsReducer.initial>
   health: ReturnType<typeof ticketSourceHealthReducer.initial>
   autoMerge: ReturnType<typeof autoMergeDefaultReducer.initial>
   config: ReturnType<typeof effectiveConfigReducer.initial>
@@ -508,6 +511,7 @@ export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
   version:
     4 +
+    ticketMigrationsReducer.version +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     forgeHealthReducer.version +
@@ -537,6 +541,7 @@ export const repositoryReadFactsReducer = defineReducer({
     settings: dispatchSettingsReducer.initial(),
     harvest: harvestReducer.initial(),
     forgeHealth: forgeHealthReducer.initial(),
+    ticketMigrations: ticketMigrationsReducer.initial(),
     health: ticketSourceHealthReducer.initial(),
     autoMerge: autoMergeDefaultReducer.initial(),
     config: effectiveConfigReducer.initial(),
@@ -551,6 +556,7 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
     acc.harvest = harvestReducer.advance(acc.harvest, events)
     acc.forgeHealth = forgeHealthReducer.advance(acc.forgeHealth, events)
+    acc.ticketMigrations = ticketMigrationsReducer.advance(acc.ticketMigrations, events)
     acc.health = ticketSourceHealthReducer.advance(acc.health, events)
     acc.autoMerge = autoMergeDefaultReducer.advance(acc.autoMerge, events)
     acc.config = effectiveConfigReducer.advance(acc.config, events)
@@ -659,6 +665,7 @@ export const repositoryReadFactsReducer = defineReducer({
     settings: dispatchSettingsReducer.finish(acc.settings),
     harvest: harvestReducer.finish(acc.harvest),
     forgeHealth: forgeHealthReducer.finish(acc.forgeHealth),
+    ticketMigrations: ticketMigrationsReducer.finish(acc.ticketMigrations),
     health: ticketSourceHealthReducer.finish(acc.health),
     autoMerge: autoMergeDefaultReducer.finish(acc.autoMerge),
     config: effectiveConfigReducer.finish(acc.config),

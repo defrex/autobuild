@@ -438,6 +438,7 @@ export const eventPayloadSchemas = {
   }),
   'integration.abandoned': z.strictObject({ id: z.string().min(1), reason: z.string().min(1) }),
   'integration.observed': z.strictObject({
+    membershipSource: z.string().optional(),
     openChildren: z.array(z.string()),
     diagnostics: z.array(z.string()),
     contributions: z.array(z.string()),
@@ -448,6 +449,7 @@ export const eventPayloadSchemas = {
           id: z.string(),
           title: z.string().optional(),
           builds: z.array(z.string()).optional(),
+          claims: z.array(z.string()).optional(),
         }),
       )
       .optional(),

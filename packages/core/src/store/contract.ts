@@ -2100,6 +2100,36 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         ]
       }
 
+      test('ticket migrations survive run turnover and stay repository scoped', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/migration'
+          await store.ensureRepo(repo)
+          await store.ensureRepo('other/migration')
+          const payload = {
+            identity: 'cutover',
+            from: 'linear',
+            to: 'file',
+            mapping: { N: 'NODE' },
+          }
+          await store.appendRepo(repo, {
+            actor: { kind: 'human', user: 'operator' },
+            type: 'tickets.migration-recorded',
+            payload,
+          })
+          for (const write of noopInvocation('new-run')) await store.appendRepo(repo, write)
+          expect(
+            (await store.getRepoStateEvents(repo)).find(
+              (event) => event.type === 'tickets.migration-recorded',
+            )?.payload,
+          ).toEqual(payload)
+          expect(
+            (await store.getRepoStateEvents('other/migration')).some(
+              (event) => event.type === 'tickets.migration-recorded',
+            ),
+          ).toBe(false)
+        })
+      })
+
       test('ticket-source health remains durable across newer runs', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/source-health'

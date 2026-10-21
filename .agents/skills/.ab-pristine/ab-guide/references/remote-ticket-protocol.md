@@ -333,3 +333,8 @@ client version. Without it, both fields are projected away, preserving historica
 strict decoders. Current hosted clients send all three capability headers and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
 empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.
+
+Completed ticket imports record `tickets.migration-recorded` in the selected
+BuildStore repository journal, with export identity, origin/destination adapter
+names and the actual complete ID mapping. Requested-ID preservation alone does
+not establish continuity for in-flight builds; see the migration procedure.

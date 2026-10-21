@@ -1329,3 +1329,8 @@ The optional `integrationAuditPending` digest fact is introduced on the 0.14
 release line without changing protocol identity 4. It survives build completion
 and is cleared by audit settlement. Services omit it for historical 0.12/0.13
 clients, retaining their decoders and the supported three-line window.
+
+`tickets.migration-recorded` is a durable, decisive human-authored repository
+fact: `{ identity, from, to, mapping }`, where mapping contains source ticket IDs
+and destination IDs. All migration facts survive dispatcher-run turnover.
+Conflicting identity reuse or source-qualified mappings fail replay closed.

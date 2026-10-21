@@ -16,6 +16,7 @@ export interface IntegrationChild {
   id: string
   title: string
   builds?: string[]
+  claims?: string[]
   state: string
   landed: boolean
 }
@@ -43,13 +44,14 @@ export function projectIntegrationDetail(
   const row = projectIntegrationRow(record, state, restack, config)
   if (!row) return undefined
   const observation = state.integration?.observation
+  const membershipSource = observation?.membershipSource ?? record.ticket?.source
   const open = new Set(observation?.openChildren ?? [])
   const contributions = new Set(observation?.contributions ?? [])
   const children: IntegrationChild[] = (observation?.children ?? [])
     .filter(
       (c) =>
         observation!.diagnostics.length ||
-        (c.source === record.ticket?.source && open.has(c.id)) ||
+        (c.source === membershipSource && open.has(c.id)) ||
         c.builds?.some((b) => contributions.has(b)),
     )
     .map((c) => ({
@@ -57,17 +59,17 @@ export function projectIntegrationDetail(
       title: c.title ?? 'title unavailable',
       landed:
         !!c.builds?.some((b) => contributions.has(b)) &&
-        !(c.source === record.ticket?.source && open.has(c.id)),
+        !(c.source === membershipSource && open.has(c.id)),
       state:
         c.builds?.some((b) => contributions.has(b)) &&
-        !(c.source === record.ticket?.source && open.has(c.id))
+        !(c.source === membershipSource && open.has(c.id))
           ? 'landed'
           : 'queued',
     }))
   for (const id of open)
-    if (!children.some((c) => c.id === id && c.source === record.ticket?.source))
+    if (!children.some((c) => c.id === id && c.source === membershipSource))
       children.push({
-        source: record.ticket?.source ?? '',
+        source: membershipSource ?? '',
         id,
         title: 'title unavailable',
         state: 'queued',
@@ -76,7 +78,7 @@ export function projectIntegrationDetail(
   for (const contribution of contributions)
     if (!children.some((c) => c.builds?.includes(contribution)))
       children.push({
-        source: record.ticket?.source ?? '',
+        source: membershipSource ?? '',
         id: contribution,
         builds: [contribution],
         title: 'title unavailable',

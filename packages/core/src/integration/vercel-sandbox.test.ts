@@ -315,6 +315,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         labels: [],
       },
     ])
+    Object.defineProperty(tickets, 'name', { value: 'file' })
     const provider = new VercelSandboxProvider({
       config: {
         image: 'vercel/sandbox/universal:latest',
@@ -635,6 +636,7 @@ test('a guest that exits after the launching invocation detached is settled by t
         labels: [],
       },
     ])
+    Object.defineProperty(tickets, 'name', { value: 'file' })
     const runner = new ScriptedAgentRunner({
       script: async () => defaultTurnResult('unused local runtime'),
     })
