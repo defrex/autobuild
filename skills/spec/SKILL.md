@@ -212,7 +212,7 @@ planner does not treat it as a contract.
 
 Once work you specified sits in the ready state, its builds start without
 anyone watching them. By default, the agent that wrote the spec becomes their
-operator. You hold the context an escalation asks about — the intent, the
+operator agent. You hold the context an escalation asks about — the intent, the
 alternatives the human rejected, what was ruled out of scope — and a build
 blocked on a question you could answer should not wait for a human.
 

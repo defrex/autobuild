@@ -51,9 +51,9 @@ commands; see [owner workflow](setup.md#connected-projects).
 
 ## Operator sessions
 
-Operator sessions are the signed-in operator's durable orchestrator
+Operator sessions are the signed-in user's durable orchestrator
 conversations: a hosted-only third store resource. A session
-belongs to the operator who created it; other operators of the same repository
+belongs to the user who created it; other members of the same repository
 can read it and cannot write to it (`403 auth` on non-owner writes). Every
 write is attributed to the token's signed user — never a client-supplied
 identity — and carries no `via` marker: session events are the delegate's own
@@ -62,14 +62,14 @@ archived status is terminal.
 
 | Method and path | Result |
 |---|---|
-| `GET …/sessions` | The repository's session records, newest update first. Readable by any operator of the repository. |
-| `POST …/sessions` | `{"title"?:"…"}` → `201` + the created `SessionRecord`; the signed-in operator owns it. |
-| `GET …/sessions/{sid}` | `{session, state, turns}` where `state` is the reducer's derived state (`status`, `openTurn`, `pendingApproval`, `wakeGlobs`, `wakeCursors`, `turns`) and `turns` the ordered turn list. Readable by any operator of the repository. |
+| `GET …/sessions` | The repository's session records, newest update first. Readable by any member of the repository. |
+| `POST …/sessions` | `{"title"?:"…"}` → `201` + the created `SessionRecord`; the signed-in user owns it. |
+| `GET …/sessions/{sid}` | `{session, state, turns}` where `state` is the reducer's derived state (`status`, `openTurn`, `pendingApproval`, `wakeGlobs`, `wakeCursors`, `turns`) and `turns` the ordered turn list. Readable by any member of the repository. |
 | `POST …/sessions/{sid}/messages` | `{"text":"…"}` → appends `message.posted`. Owner only. |
 | `PUT …/sessions/{sid}/wake` | `{"globs":["…"]}` (possibly empty) → appends `session.wake-set`. Owner only. |
 | `POST …/sessions/{sid}/approvals` | `{"turn":"…","toolCallId":"…","decision":"approve"\|"deny"}` → `approval.answered`. Owner only; `409 refusal` when the reduced state has no matching pending approval. |
 | `POST …/sessions/{sid}/archive` | Empty body → `session.archived`. Owner only; `409 refusal` when already archived. |
-| `GET …/sessions/{sid}/turns/{turn}/stream?since=N&wait=N` | The turn's stream read: `{chunks,status,outcome?,artifact?}` with `since` strictly greater-than and the same bounded-wait semantics as the stream protocol (whole seconds, clamped at 30). Unknown turn is `404 not-found`. Readable by any operator of the repository. |
+| `GET …/sessions/{sid}/turns/{turn}/stream?since=N&wait=N` | The turn's stream read: `{chunks,status,outcome?,artifact?}` with `since` strictly greater-than and the same bounded-wait semantics as the stream protocol (whole seconds, clamped at 30). Unknown turn is `404 not-found`. Readable by any member of the repository. |
 
 Session state is a reduction of the session's event log, never a stored
 column; a `GET …/sessions/{sid}` response therefore always reflects the
