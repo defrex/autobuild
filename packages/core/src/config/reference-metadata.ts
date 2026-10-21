@@ -22,7 +22,10 @@ export function documentSchema<T extends z.ZodType>(schema: T, metadata: Referen
 export function documentFields(schema: z.ZodObject, descriptions: Record<string, string>): void {
   for (const [key, description] of Object.entries(descriptions)) {
     const field = schema.shape[key]
-    if (!field) throw new Error(`Documentation names an unknown field: ${key}`)
+    if (!field)
+      throw new Error(
+        `Configuration reference metadata names an unknown field: ${key}. Remove its obsolete description, then regenerate with bun run docs:configuration.`,
+      )
     documentSchema(field, { description })
   }
 }

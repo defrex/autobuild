@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { openMap } from '../open-map'
-import { documentSchema } from './reference-metadata'
+import { documentFields, documentSchema } from './reference-metadata'
 import {
   configurationReference,
   DOCUMENTATION_RELOAD_FALLBACK,
@@ -18,6 +18,14 @@ const doc = <T extends z.ZodType>(schema: T) =>
 const fields = (schema: z.ZodType) => schemaFields(schema, 'fixture', () => 'fixture reload')
 
 describe('configuration reference input adapter', () => {
+  test('obsolete field descriptions name the field and regeneration command', () => {
+    expect(() =>
+      documentFields(z.strictObject({}), { removedField: 'Obsolete description.' }),
+    ).toThrow(
+      'removedField. Remove its obsolete description, then regenerate with bun run docs:configuration',
+    )
+  })
+
   test('derives nested keys, wrapper defaults, types and native constraints', () => {
     const model = fields(
       doc(
