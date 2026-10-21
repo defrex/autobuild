@@ -1,7 +1,8 @@
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { renderPage } from './page'
-import { DOCS_PAGES, renderDocsPage } from './docs'
+import { renderDocsPage } from './docs'
+import { loadDocsPages } from './docs-content'
 
 const SRC = import.meta.dir
 export const DEFAULT_OUT = join(SRC, '..', 'dist')
@@ -21,7 +22,8 @@ export function heroFrameText(): Promise<string> {
 }
 
 /** Everything the site is made of, as text. */
-export async function buildFiles(): Promise<SiteFiles> {
+export async function buildFiles(docsRoot?: string): Promise<SiteFiles> {
+  const pages = await loadDocsPages(docsRoot)
   const bundle = await Bun.build({
     entrypoints: [join(SRC, 'client.ts')],
     minify: true,
@@ -30,7 +32,7 @@ export async function buildFiles(): Promise<SiteFiles> {
   if (!bundle.success) throw new Error(bundle.logs.map(String).join('\n'))
   const [output] = bundle.outputs
   return {
-    ...Object.fromEntries(DOCS_PAGES.map((page) => [page.file, renderDocsPage(page)])),
+    ...Object.fromEntries(pages.map((page) => [page.file, renderDocsPage(page, pages)])),
     'index.html': renderPage(),
     'site.css': await Bun.file(join(SRC, 'styles.css')).text(),
     'site.js': await (output as Bun.BuildArtifact).text(),
