@@ -673,42 +673,6 @@ a.dim {
   transform: none;
 }
 
-/* State changes use the drawing's existing colors and never move its labels. */
-[data-motion-node][data-motion-active] {
-  outline: 2px solid #55b8b8;
-  outline-offset: -2px;
-}
-[data-motion-node][data-motion-active] b {
-  color: #55b8b8;
-}
-[data-motion-node="merged"][data-motion-active] {
-  outline-color: #65b868;
-}
-[data-motion-node="merged"][data-motion-active] b {
-  color: #65b868;
-}
-[data-motion-edge][data-motion-traversed="false"] {
-  opacity: 0.3;
-}
-/* Failure remains legible while the normal path is being explained. */
-[data-motion-edge="failure"][data-motion-traversed] {
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .motion-replay {
-    display: none;
-  }
-  [data-motion-node][data-motion-active] {
-    outline: none;
-  }
-  [data-motion-node][data-motion-active] b {
-    color: inherit;
-  }
-  [data-motion-edge][data-motion-traversed] {
-    opacity: 1;
-  }
-}
-
 /* Shared public-site masthead, independent of each page's reading frame. */
 .site-masthead {
   max-width: 1440px;
@@ -765,6 +729,8 @@ a.dim {
   white-space: nowrap;
   overflow: hidden;
   line-height: 24px;
+  /* The ─ glyph sits mid-line; pull it up so it marks the masthead's bottom edge. */
+  margin-top: -12px;
   user-select: none;
 }
 @media (max-width: 719px) {
@@ -808,49 +774,6 @@ a.dim {
   .site-menu-open .site-menu {
     background: #e6e6e6;
     color: #000000;
-  }
-}
-
-[data-integration-beats][data-integration-active]:not(svg) {
-  outline: 2px solid #55b8b8;
-  outline-offset: -2px;
-}
-svg[data-integration-active] {
-  outline: none;
-}
-svg[data-integration-active] > path {
-  stroke: #55b8b8;
-}
-[data-integration-active] b {
-  color: #55b8b8;
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-integration-beats][data-integration-active]:not(svg) {
-    outline: none;
-  }
-  [data-integration-active] b {
-    color: inherit;
-  }
-  svg[data-integration-active] > path {
-    stroke: #888888;
-  }
-}
-
-/* The flow figures use the pipeline's bounded state emphasis. Text never disappears. */
-@media (prefers-reduced-motion: no-preference) {
-  [data-sequence-state="active"]:not(svg) {
-    outline: 2px solid #55b8b8;
-    outline-offset: -2px;
-  }
-  [data-sequence-state="running"]:not(svg) {
-    outline: 2px solid #55b8b8;
-    outline-offset: -2px;
-  }
-  svg[data-sequence-state="waiting"] {
-    opacity: 0.25;
-  }
-  svg[data-sequence-state="active"] > path {
-    stroke: #55b8b8;
   }
 }
 
