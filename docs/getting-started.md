@@ -1,7 +1,7 @@
 ---
 title: "Getting started"
 group: "start"
-description: "Install Autobuild in your repository, configure it with ab init, groom a ticket, and start the dispatcher."
+description: "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change."
 label: "Getting started"
 order: 1
 ---
@@ -35,29 +35,38 @@ Initialization vendors the editable `ab-*` skills, writes a stack-neutral `autob
 Review the generated configuration and skills as repository files. Setup must establish the tools and credentials your chosen adapters need; installation alone does not configure a working pipeline. The [configuration reference](configuration.md) covers every field.
 
 
-## 3. Groom the first ticket
+## 3. Validate setup
 
-Open your coding agent in the repository and invoke the installed `ab-spec` skill. For an example request, use the invocation for your runtime:
+```
+bun ab init --validate
+```
 
-
-- Claude Code: `/ab-spec add a retry budget`
-- Codex: `$ab-spec add a retry budget`
-- Pi: `/skill:ab-spec add a retry budget`
-
-The agent asks questions, develops acceptance criteria, records scope and evidence, and files the ticket in your configured tracker. Decide what the change should do, then groom it to the tracker's configured ready state. A draft or triage ticket is not dispatchable just because it exists.
-
-Keep the first change small enough to review and give it checks that can demonstrate success. Use the [spec standard](spec-standard.md) to assess whether the ticket is buildable.
+Fix every named failure, review warnings and unknowns, and rerun validation before proceeding. Validation checks readiness without claiming tickets or starting builds.
 
 
 ## 4. Start dispatch
-
 
 ```
 bun ab dispatch
 ```
 
-The dispatcher claims ready work and shows a live dashboard. The README quickstart starts dispatch before grooming; either order works because the dispatcher claims ready tickets as they arrive.
+Run this yourself and leave it running. The dispatcher claims tickets as they enter the tracker's configured ready state and shows a live dashboard. A draft or triage ticket is not ready merely because it exists.
 
-Each claimed work ticket gets an isolated build and moves through planning, review, implementation, verification, and PR creation. Watch the build's recorded state. When it escalates, an operator must answer the question before it can continue. Merge still follows the configured landing policy and gates.
 
-For deeper reference, read the [configuration reference](configuration.md), [architecture map](architecture.md), and [design specification](../SPEC.md). Return to the [overview](overview.md) for the lifecycle and its limits.
+## 5. Ask your operator agent for the first change
+
+Open your coding agent at the repository root and load the installed `ab-operate` skill:
+
+- Claude Code: `/ab-operate`
+- Codex: `$ab-operate`
+- Pi: `/skill:ab-operate`
+
+Then ask in plain language:
+
+> Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through landing. Ask me before granting landing consent.
+
+The agent uses the grooming and ticket skills to develop acceptance criteria, scope, and evidence with you. Keep the first change small and give it checks that demonstrate success; the [spec standard](spec-standard.md) defines a buildable ticket. Dispatch is already running, so moving the ticket to ready makes it eligible for claim immediately.
+
+Your agent watches recorded progress and answers build questions within your instructions, bringing unresolved decisions back to you. Landing follows the configured policy and gates; a green build does not guarantee immediate merge.
+
+Continue with [Working with your operator agent](operating.md). The [configuration reference](configuration.md), [architecture map](architecture.md), and [design specification](../SPEC.md) cover the details.
