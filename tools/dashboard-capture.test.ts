@@ -80,6 +80,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'harvest-suspended-wide',
+    'harvest-suspended-narrow',
     'capacity-wide',
     'integration-detail-wide',
     'integration-detail-narrow',
@@ -184,6 +186,10 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
+    } else if (frame.id.startsWith('harvest-suspended-')) {
+      expect(frame.text).toContain('SUSPENDED')
+      expect(frame.text).not.toContain('synthesize[>]')
+      expect(frame.model.harvest?.action).toBeUndefined()
     } else if (frame.id === 'native-sessions') {
       expect(frame.text).toContain('suspended cause pause')
       expect(frame.text).toContain('fresh session: workspace-not-local-git-worktree')
@@ -211,6 +217,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&
       frame.id !== 'website-hero' &&
+      !frame.id.startsWith('harvest-suspended-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-')
     ) {

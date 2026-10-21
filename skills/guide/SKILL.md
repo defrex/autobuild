@@ -224,7 +224,10 @@ The distinctions that change an administrator's answer:
   for the same input until metadata changes or a fresh operator launch. Cutover
   suspends all live local build sessions and waits for their durable writes before
   exiting. Eligible native handles resume; other sessions record a reasoned fresh
-  fallback. Local harvest is interrupted and rerun through existing recovery.
+  fallback. Local harvest also suspends durably on cutover or clean stop. The next
+  generation resumes eligible native sessions with fresh logical credentials, or
+  records `harvest.session.resume-fallback` and starts fresh. Suspension spends
+  no recovery attempt; real crashes retain ordinary recovery accounting.
   A runtime-owned journal reader gives the launcher its own durable handoff;
   generations run sequentially and completion requires successor ownership.
   `[upgrade] automatic = false` disables preparation/cutover. Manual restart is
@@ -1894,9 +1897,9 @@ ordinary fresh-session recovery applies. Unrelated open sessions are reclaimed
 without inventing transcripts. Dashboard history shows suspended and resumed
 segments separately, with their individual transcript refs and usage.
 
-The phase budget counts active time across interruptions using the original
+The build phase budget counts active time across interruptions using the original
 ceiling. Suspended intervals do not consume it; abrupt loss is conservatively
-charged through recovery. Pause immediately suspends a live turn with cause
+charged through recovery. Build pause immediately suspends a live turn with cause
 `pause`, including remote sessions and sessions without a native handle. Resume
 continues the local native session where eligible; otherwise the recorded
 fallback explains the fresh rerun. Pause acknowledgement follows turn stop and
@@ -1915,7 +1918,9 @@ the harvest runner's synthesize and review brackets each get one stream
 (`phase` spelled `harvest:<step>`), with `harvest.session.started` carrying
 the stream id. `ab harvest status` shows each run's sessions the way build
 status does — one row per session with its stream id and open/closed status
-(`session hs_… (harvest, synthesize@1) stream st_… (open)`). Once a stream
+(`session hs_… (harvest, synthesize@1, open) stream st_… (open)`).
+Suspended turns show `suspended`, a closed stream and partial transcript evidence.
+The next dispatcher automatically continues them; the harvest gate remains independent. Once a stream
 closes, its finalized document is a repository-scoped `stream:<id>` artifact,
 and `ab artifact download stream:<id>` retrieves it; the stream form is an
 operator-only read (ambient phase identity fails closed).
@@ -2157,7 +2162,9 @@ run plus relevant open/latest context from the same journal the runner resumes.
 Each section distinguishes recoverable from terminal and shows that run's
 automatic attempts/limit, stopped step/round, attention, exact retained snapshot
 before exhaustion or released observation/proposal keys afterward, workflow
-occurrences, review rounds, and filed ticket refs. Repository event history is
+occurrences, review rounds, and filed ticket refs. A durably suspended local turn
+shows `suspended` in status and both dashboards, with timing frozen and no human
+resume action: continuation is automatic when a dispatcher next runs. Repository event history is
 shown once. It is read-only and also reports an idle or paused repository with
 no run. The dispatch header always shows its acknowledged `harvest ON/OFF` gate
 and global `h` controls it. The optional, non-color-only `Harvest` row omits the

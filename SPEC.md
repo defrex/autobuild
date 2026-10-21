@@ -261,9 +261,11 @@ cutover prevents new launches, suspends every live local build session and waits
 for provider cleanup, stream closure and durable suspension before releasing
 leases and exiting. Native handles resume where eligible; otherwise the existing
 `session.resume-fallback` records the reason for a fresh session. Graceful
-shutdown has no persistence deadline. Local harvest retains clean-stop behavior:
-its turn is interrupted and rerun by existing recovery, without native harvest
-suspension. Remote supervised runners retain detach/recovery behavior.
+shutdown has no persistence deadline. Local harvest uses the same durable shutdown boundary: repository session
+suspension closes its credentials and stream, then the next generation resumes
+the same native turn with fresh logical credentials. Unsupported or unavailable
+native state records `harvest.session.resume-fallback` before a fresh turn.
+Orderly suspension spends no harvest recovery attempt; real crashes still do. Remote supervised runners retain detach/recovery behavior.
 
 The exited generation's runtime-owned reader derives a handoff from the journal;
 the filesystem-only launcher consumes its versioned JSON result, validates its
@@ -1213,7 +1215,7 @@ Delegated grants have no fixed wall-clock expiry. The service checks signed
 bindings against authoritative durable lifecycle facts on every request and
 fails closed if those reads fail. Active, paused and escalated builds may outlive
 a dispatcher restart or a week-long parent credential. Build termination,
-harvest execution/run termination, or the phase's own session end retires the
+harvest execution/run termination, or the phase's own session end or suspension retires the
 corresponding grant after a 60-second evidence grace window. A durable ending
 permanently closes that grant; recovered harvest executions use fresh durable
 authorizations and fresh grants. Project removal denies all its grants immediately.

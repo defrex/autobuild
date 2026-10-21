@@ -3,6 +3,8 @@
  * snapshots are never authoritative: dashboard state, resumption boundaries,
  * claims, and the dedup ledger are all re-derived from append-only facts.
  */
+import type { HarvestEventPayload } from '../events/repository'
+import type { NativeSessionHandle } from '../ports/types'
 import type { RepositoryEvent } from '../events/repository'
 import type { Actor } from '../events/envelope'
 import type { ArtifactRef, Finding, TicketRef } from '../ontology'
@@ -68,6 +70,23 @@ export interface HarvestRecoveryExhaustion {
   attentionAcknowledgedAt?: string
 }
 
+export interface HarvestSessionState extends HarvestEventPayload<'harvest.session.started'> {
+  status: 'open' | 'suspended' | 'ended'
+  startedSeq: number
+  startedAt: string
+  suspendedAt?: string
+  cause?: 'shutdown' | 'cutover'
+  nativeHandle?: NativeSessionHandle
+  transcript?: ArtifactRef
+  resumed?: boolean
+  fallback?: boolean
+}
+
+export function suspendedHarvestSession(run: HarvestRunState): HarvestSessionState | undefined {
+  const latest = run.sessions.at(-1)
+  return run.status === 'running' && latest?.status === 'suspended' ? latest : undefined
+}
+
 export interface HarvestRunState {
   run: string
   status: 'running' | 'completed' | 'escalated' | 'failed'
@@ -77,6 +96,7 @@ export interface HarvestRunState {
   scan: ArtifactRef
   /** Absent only on runs started by historical pre-drift journals. */
   trigger?: HarvestTrigger
+  sessions: HarvestSessionState[]
   steps: HarvestStepOccurrence[]
   proposals: Array<{ round: number; artifact: ArtifactRef; seq: number }>
   reviews: HarvestReviewRound[]
@@ -200,7 +220,7 @@ export interface HarvestAcc {
 }
 
 /** Bump when `HarvestAcc`'s shape or fold semantics change. */
-export const HARVEST_REDUCER_VERSION = 1
+export const HARVEST_REDUCER_VERSION = 2
 
 function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void {
   const order = acc.runs
@@ -458,6 +478,7 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
           observations: event.payload.observations.map((key) => ({ ...key })),
           scan: cloneRef(event.payload.scan),
           ...(event.payload.trigger !== undefined ? { trigger: event.payload.trigger } : {}),
+          sessions: [],
           steps: [],
           proposals: [],
           reviews: [],
@@ -641,10 +662,80 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
         }
         break
       }
-      case 'harvest.session.started':
-      case 'harvest.session.ended':
-        // Session facts remain individually queryable but add no transition.
+      case 'harvest.session.started': {
+        const run = requireRun(runs, event.payload.run, event)
+        if (run.sessions.some((s) => s.session === event.payload.session))
+          throw new Error('Duplicate harvest session')
+        const continuation = event.payload.continuation
+        if (continuation) {
+          const prior = run.sessions.find((s) => s.session === continuation.predecessor)
+          if (
+            !prior ||
+            prior.step !== event.payload.step ||
+            prior.round !== event.payload.round ||
+            prior.status === 'ended'
+          )
+            throw new Error('Invalid harvest continuation')
+          if ((prior.continuation?.root ?? prior.session) !== continuation.root)
+            throw new Error('Invalid harvest continuation root')
+          prior.status = 'ended'
+        }
+        run.sessions.push({
+          ...structuredClone(event.payload),
+          status: 'open',
+          startedSeq: event.seq,
+          startedAt: event.ts,
+          ...(continuation?.handle ? { nativeHandle: structuredClone(continuation.handle) } : {}),
+        })
         break
+      }
+      case 'harvest.session.native-handle-recorded':
+      case 'harvest.session.suspended':
+      case 'harvest.session.resumed':
+      case 'harvest.session.resume-fallback':
+      case 'harvest.session.ended': {
+        const run = requireRun(runs, event.payload.run, event)
+        const session = run.sessions.find((s) => s.session === event.payload.session)
+        if (session?.status !== 'open') throw new Error('Harvest session is not open')
+        if (
+          event.type === 'harvest.session.native-handle-recorded' ||
+          event.type === 'harvest.session.resumed'
+        ) {
+          if (
+            session.nativeHandle &&
+            JSON.stringify(session.nativeHandle) !== JSON.stringify(event.payload.handle)
+          )
+            throw new Error('Conflicting harvest native identity')
+          session.nativeHandle = structuredClone(event.payload.handle)
+        }
+        if (event.type === 'harvest.session.resumed') {
+          if (
+            session.resumed ||
+            session.fallback ||
+            session.continuation?.predecessor !== event.payload.predecessor ||
+            session.continuation.root !== event.payload.root
+          )
+            throw new Error('Invalid harvest resume acceptance')
+          session.resumed = true
+        }
+        if (event.type === 'harvest.session.resume-fallback') {
+          if (!session.continuation || session.resumed || session.fallback)
+            throw new Error('Invalid harvest fallback')
+          session.fallback = true
+          delete session.nativeHandle
+        }
+        if (event.type === 'harvest.session.suspended') {
+          session.status = 'suspended'
+          session.suspendedAt = event.ts
+          session.cause = event.payload.cause
+          session.transcript = cloneRef(event.payload.transcript)
+        }
+        if (event.type === 'harvest.session.ended') {
+          session.status = 'ended'
+          session.transcript = cloneRef(event.payload.transcript)
+        }
+        break
+      }
       case 'dispatcher.intake-set':
       case 'dispatcher.pause-set':
       case 'dispatcher.auto-merge-default-set':

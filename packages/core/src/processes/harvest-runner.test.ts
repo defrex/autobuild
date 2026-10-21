@@ -3060,3 +3060,180 @@ test('resuming an approved join canonicalizes a legacy ledger target without cha
     await rm(workspace, { recursive: true, force: true })
   }
 })
+
+describe('local harvest native suspension', () => {
+  for (const step of ['synthesize', 'review', 'continue'] as const) {
+    for (const native of [true, false]) {
+      test(`${step}: repeated clean stops ${native ? 'resume native identity' : 'record fresh fallback'} without recovery`, async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-suspend-'))
+        roots.push(workspace)
+        const store = new MemoryBuildStore({ clock: steppingClock() })
+        const tickets = new FakeTicketSource()
+        const ids = sequentialIds()
+        await seedObservation(store, 'suspension', 'retain this turn')
+        const nativeState = native ? new Map<string, string[]>() : undefined
+        const logicalSessions: string[] = []
+        let stops = 0
+        let stop = new AbortController()
+        const deps = {
+          store,
+          tickets,
+          config: config(1),
+          repo: '/repo',
+          workspacePath: workspace,
+          ids,
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          opts: { heartbeatMs: 100_000, maxRecoveryAttempts: 1 },
+        }
+        const makeRunner = () =>
+          new ScriptedAgentRunner({
+            nativeState,
+            script: async ({ opts, message }) => {
+              const env = resolveHarvestCliEnv(opts.env)
+              const cli = { store, env, workspacePath: workspace, ids }
+              if (
+                env.phase === step ||
+                (step === 'continue' && env.phase === 'synthesize' && env.round === 2)
+              ) {
+                logicalSessions.push(env.session)
+                if (stops++ < 3) {
+                  stop.abort()
+                  return defaultTurnResult('partial work')
+                }
+                if (native) expect(message).toContain('ab harvest context')
+              }
+              await buildHarvestContext(cli)
+              if (env.phase === 'synthesize') {
+                const observations = JSON.parse(
+                  await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
+                )
+                const file = join(workspace, '.ab/proposals.json')
+                await writeFile(file, JSON.stringify(proposalSet(observations)))
+                await submitHarvestProposals(cli, file)
+              } else {
+                const notes = join(workspace, '.ab/review.md')
+                await writeFile(notes, 'approved')
+                if (step === 'continue' && env.round === 1) {
+                  const findings = join(workspace, '.ab/findings-input.json')
+                  await writeFile(
+                    findings,
+                    JSON.stringify([{ severity: 'important', summary: 'Clarify the proposal' }]),
+                  )
+                  await submitHarvestVerdict(cli, { verdict: 'revise', notes, findings })
+                } else await submitHarvestVerdict(cli, { verdict: 'approve', notes })
+              }
+              return defaultTurnResult('done')
+            },
+          })
+        for (let generation = 0; generation < 4; generation++) {
+          stop = new AbortController()
+          const runner = makeRunner()
+          const result = await new HarvestRunner({
+            ...deps,
+            instance: `generation-${generation}`,
+            shutdownSignal: stop.signal,
+            runtimes: { scripted: { runner, servesModels: [''] } },
+          }).run()
+          expect(result.outcome).toBe(generation < 3 ? 'suspended' : 'completed')
+          const events = await store.getRepoEvents('/repo')
+          expect(
+            events.filter(
+              (e) => e.type === 'harvest.failed' || e.type === 'harvest.recovery-requested',
+            ),
+          ).toHaveLength(0)
+          const { readRepositoryFacts } = await import('../store/reduced-reads')
+          const { projectHarvestStatus } = await import('../cli/harvest')
+          const { projectHarvest } = await import('../cli/dashboard/model')
+          const facts = (await readRepositoryFacts(store, '/repo')).value
+          expect(projectHarvestStatus('/repo', facts)).toEqual(
+            projectHarvestStatus('/repo', events),
+          )
+          if (generation < 3) {
+            expect(projectHarvestStatus('/repo', facts).status).toBe('suspended')
+            expect(projectHarvest(events)?.status).toBe('suspended')
+            expect(projectHarvest(events)?.action).toBeUndefined()
+            const paused = projectHarvest([
+              ...events,
+              {
+                repo: '/repo',
+                actor: KERNEL,
+                type: 'harvest.paused',
+                payload: {},
+                seq: events.at(-1)!.seq + 1,
+                ts: '2099-01-01T00:00:00Z',
+              },
+            ])
+            expect(paused?.steps).toEqual(projectHarvest(events)?.steps)
+            const bracket = facts.harvest.runs[0]!.sessions.at(-1)!
+            expect(bracket.status).toBe('suspended')
+            expect(bracket.transcript).toBeDefined()
+            if (native) expect(bracket.nativeHandle?.nativeId).toBeDefined()
+          }
+        }
+        const events = await store.getRepoEvents('/repo')
+        expect(new Set(logicalSessions).size).toBe(4)
+        expect(events.filter((e) => e.type === 'harvest.session.suspended')).toHaveLength(3)
+        expect(
+          events.filter(
+            (e) =>
+              e.type === (native ? 'harvest.session.resumed' : 'harvest.session.resume-fallback'),
+          ),
+        ).toHaveLength(3)
+        expect(events.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
+        if (native) {
+          const accepted = events.filter((e) => e.type === 'harvest.session.resumed')
+          expect(new Set(accepted.map((e) => e.payload.handle.nativeId)).size).toBe(1)
+        }
+      })
+    }
+  }
+
+  test('a durable terminal wins an abort and stops before launching review', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-terminal-stop-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedObservation(store, 'terminal', 'terminal wins')
+    const ids = sequentialIds()
+    const stop = new AbortController()
+    const runner = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const cli = { store, env: resolveHarvestCliEnv(opts.env), workspacePath: workspace, ids }
+        await buildHarvestContext(cli)
+        const observations = JSON.parse(
+          await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
+        )
+        const file = join(workspace, '.ab/proposals.json')
+        await writeFile(file, JSON.stringify(proposalSet(observations)))
+        await submitHarvestProposals(cli, file)
+        stop.abort()
+        throw new Error('abort after typed terminal')
+      },
+    })
+    expect(
+      (
+        await new HarvestRunner({
+          store,
+          tickets: new FakeTicketSource(),
+          config: config(1),
+          runtimes: { scripted: { runner, servesModels: [''] } },
+          repo: '/repo',
+          workspacePath: workspace,
+          ids,
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          instance: 'terminal',
+          shutdownSignal: stop.signal,
+        }).run()
+      ).outcome,
+    ).toBe('suspended')
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((e) => e.type === 'harvest.session.suspended' || e.type === 'harvest.failed'),
+    ).toHaveLength(0)
+    expect(events.filter((e) => e.type === 'harvest.session.started')).toHaveLength(1)
+    expect(
+      events.some((e) => e.type === 'harvest.step.completed' && e.payload.step === 'synthesize'),
+    ).toBe(true)
+  })
+})

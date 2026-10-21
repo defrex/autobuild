@@ -1,3 +1,4 @@
+import { nativeSessionHandleSchema } from './native-session'
 import { runtimeIdentitySchema } from './runtime'
 import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
 import { hardReadinessKeys } from '../ports/forge/readiness'
@@ -224,7 +225,54 @@ export const harvestEventPayloadSchemas = {
     artifact: artifactRefSchema.optional(),
     detail: z.string().optional(),
   }),
+  'harvest.session.native-handle-recorded': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    handle: nativeSessionHandleSchema,
+  }),
+  'harvest.session.suspended': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    cause: z.enum(['shutdown', 'cutover']),
+    transcript: artifactRefSchema,
+    usage: z
+      .strictObject({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        turns: z.number().int().nonnegative(),
+      })
+      .optional(),
+  }),
+  'harvest.session.resumed': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    predecessor: z.string().min(1),
+    root: z.string().min(1),
+    handle: nativeSessionHandleSchema,
+  }),
+  'harvest.session.resume-fallback': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    reason: z.enum([
+      'missing-handle',
+      'changed-route',
+      'unsupported',
+      'wrong-runner',
+      'wrong-host',
+      'wrong-workspace',
+      'missing-state',
+    ]),
+    message: z.string().min(1),
+  }),
   'harvest.session.started': z.strictObject({
+    continuation: z
+      .strictObject({
+        predecessor: z.string().min(1),
+        root: z.string().min(1),
+        handle: nativeSessionHandleSchema.optional(),
+        cause: z.enum(['shutdown', 'cutover', 'runner-loss']),
+      })
+      .optional(),
     run: z.string().min(1),
     session: z.string().min(1),
     role: z.enum(['harvest', 'harvest-review']),
@@ -660,6 +708,11 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.step.completed': ['kernel'],
   'harvest.session.started': ['kernel'],
   'harvest.session.ended': ['kernel'],
+  'harvest.session.native-handle-recorded': ['kernel'],
+  'harvest.session.suspended': ['kernel'],
+  'harvest.session.resumed': ['kernel'],
+  'harvest.session.resume-fallback': ['kernel'],
+
   'harvest.proposals.submitted': ['agent'],
   'harvest.review.verdict': ['agent'],
   'harvest.proposal.id-reserved': ['kernel'],
