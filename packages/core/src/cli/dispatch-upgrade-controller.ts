@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { dirname } from 'node:path'
 import type { RuntimeIdentity } from '../events/runtime'
 import type { RepositoryEventWrite } from '../events/repository'
 import { DISPATCHER } from '../events/envelope'
@@ -8,7 +9,7 @@ import {
   type UpgradeTarget,
 } from './dispatch-upgrade-target'
 import type { CachedRuntime } from './dispatch-runtime-cache'
-import { releasePreparedRuntime, retainRuntime } from './dispatch-runtime-use'
+import { releasePreparedRuntime, reservePreparedRuntime } from './dispatch-runtime-use'
 import { captureRuntimeIdentity } from '../runtime-identity'
 import type { Handoff } from '../kernel/dispatch-upgrade'
 
@@ -29,6 +30,7 @@ export interface UpgradeControllerInput {
   from: RuntimeIdentity
   failedKeys: string[]
   currentKey?: string
+  reservationOwner?: number
   enabled(): boolean
   resolve(signal: AbortSignal): Promise<UpgradeTarget>
   prepare(target: UpgradeTarget, signal: AbortSignal): Promise<CachedRuntime>
@@ -114,7 +116,11 @@ export class DispatchUpgradeController {
         root: runtime.root,
         cacheId: runtime.id,
       }
-      retainRuntime(runtime.root, true)
+      reservePreparedRuntime(
+        dirname(dirname(runtime.root)),
+        runtime.id,
+        this.input.reservationOwner,
+      )
       if (await this.input.cutover(handoff)) {
         // Retain the reservation through old-generation exit. The launcher transfers it under the cache lock.
         runtime = undefined
@@ -139,7 +145,7 @@ export class DispatchUpgradeController {
       }
     } finally {
       if (runtime) {
-        retainRuntime(runtime.root, false)
+        releasePreparedRuntime(runtime.root, this.input.reservationOwner)
         releasePreparedRuntime(runtime.root)
       }
       if (this.preparation === preparation) this.preparation = undefined

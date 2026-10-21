@@ -14,6 +14,7 @@ export interface GenerationLaunch {
   run?: string
   lineage?: string
   predecessor?: string
+  launcherPid?: number
 }
 export function generationArguments(root: string, argv: readonly string[]): string[] {
   return [

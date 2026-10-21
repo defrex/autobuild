@@ -16,7 +16,6 @@ import {
   pruneRuntimes,
   spawnUsingRuntime,
   releasePreparedRuntime,
-  retainRuntime,
 } from './dispatch-runtime-use'
 import {
   DISPATCH_GENERATION_ENV,
@@ -72,6 +71,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
         runtimeRoot: runtime.root,
         checkout,
         originalInstall,
+        launcherPid: process.pid,
         run: randomUUID(),
         lineage,
         ...(predecessor ? { predecessor } : {}),
@@ -88,7 +88,6 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       )
       child = spawned.child
       releasePreparedRuntime(runtime.root)
-      retainRuntime(runtime.root, false)
       const job = watchPresentationJob(child.pid)
       let result: ReturnType<typeof generationResult>
       try {

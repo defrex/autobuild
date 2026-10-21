@@ -4022,6 +4022,7 @@ class DispatchLoop {
       run: this.runId,
       lineage: launch.lineage!,
       from: RUNTIME_IDENTITY,
+      reservationOwner: launch.launcherPid,
       currentKey: launch.predecessor
         ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key
         : undefined,

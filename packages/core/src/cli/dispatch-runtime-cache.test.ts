@@ -17,6 +17,7 @@ import {
 } from './dispatch-runtime-dependencies'
 import {
   releasePreparedRuntime,
+  reservePreparedRuntime,
   activateRuntime,
   pruneRuntimes,
   retainRuntime,
@@ -348,3 +349,28 @@ test('a separate pruner cannot cross a spawn boundary before its live claim is p
   pruneRuntimes(dirname(dirname(old.root)))
   await expect(validateRuntime(old)).rejects.toThrow()
 }, 30000)
+
+test('launcher-owned candidate reservations survive generation exit and are reclaimed on launcher death', async () => {
+  const { source, checkout } = await fixture()
+  const runtime = await prepareRuntime(source, checkout)
+  const cache = dirname(dirname(runtime.root))
+  const owner = Bun.spawn([process.execPath, '--eval', 'setInterval(() => {}, 1000)'], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  try {
+    reservePreparedRuntime(cache, runtime.id, owner.pid)
+    releasePreparedRuntime(runtime.root)
+    pruneRuntimes(cache)
+    expect(existsSync(runtime.root)).toBe(true)
+    owner.kill('SIGTERM')
+    await owner.exited
+    pruneRuntimes(cache)
+    expect(existsSync(runtime.root)).toBe(false)
+  } finally {
+    if (owner.exitCode === null) {
+      owner.kill('SIGTERM')
+      await owner.exited
+    }
+  }
+})
