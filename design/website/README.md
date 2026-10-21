@@ -30,7 +30,7 @@ Design canvas so builds can read it without access to claude.ai.
   scrolls sideways; at desktop width nothing changes. The pipeline runs top
   to bottom, the dispatcher shows one build-runner with stacked cards behind
   it above a full-width build store, and the intake lays its four sources in
-  a 2×2 grid with the PM agent below.
+  a 2×2 grid with the operator agent below.
 - Sections are 288px apart at desktop width and 192px apart below 720px, with
   the same space after the last section. No horizontal rules appear in the landing content; the shared header now
   carries the authorized glyph rule described below.
@@ -276,7 +276,7 @@ uses four beats per ready ticket: claim, route, runner start, and state writes
 through the CLI and phase-event paths. Earlier runners remain active as later
 ones start. The phone drawing emphasizes its existing three stack layers and
 common write paths for those same three starts. The intake uses three beats
-per source: source filing, routing through the PM agent, and ticket delivery
+per source: source filing, routing through the operator agent, and ticket delivery
 along the existing route into the dispatcher. The human and escalation branch
 remain unchanged. Both sequences finish at 4,800ms by removing every transient
 attribute; labels stay selectable throughout.
@@ -454,3 +454,13 @@ The four landing references were refreshed from this capture. The copy
 comparison still excludes the integration section, which `reference.html`
 predates.
 
+
+## Operator agent naming (2026-10-21)
+
+Maintainer naming decision: the agent role that writes specs, watches the
+dispatcher and answers escalations is the **operator agent**, matching the
+shipped `ab-operate` skill and the operator tools. "PM agent" overstated the
+role, since product calls stay with the human. The intake figure's central
+node, its description and `reference.html` now say "operator agent". Copy
+reserves "operator" for the agent role and says "you" for the human. The
+four landing references were refreshed from this capture.
