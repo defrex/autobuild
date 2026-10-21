@@ -9,7 +9,11 @@ import {
 } from './dispatch-runtime-cache'
 import { readDistributionIdentity, lockPackageRecord } from './installation'
 import { reserveExistingRuntime, releasePreparedRuntime } from './dispatch-runtime-use'
-import { DISPATCH_LAUNCH_VERSION } from './dispatch-launch-contract'
+import {
+  DISPATCH_LAUNCH_VERSION,
+  DISPATCH_GENERATION_ENV,
+  generationArguments,
+} from './dispatch-launch-contract'
 import type { UpgradeTarget } from './dispatch-upgrade-target'
 
 export async function prepareUpgrade(input: {
@@ -32,6 +36,37 @@ export async function prepareUpgrade(input: {
         throw new Error('target lacks durable handoff support; manual restart required')
       },
     )
+    const probe = Bun.spawn(
+      [process.execPath, ...generationArguments(runtime.root, ['--read-handoff', 'dispatch'])],
+      {
+        cwd: checkout,
+        env: {
+          ...input.env,
+          [DISPATCH_GENERATION_ENV]: JSON.stringify({
+            version: DISPATCH_LAUNCH_VERSION,
+            runtimeRoot: runtime.root,
+            checkout,
+          }),
+        },
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+      },
+    )
+    const [code, output] = await Promise.all([
+      probe.exited,
+      new Response(probe.stdout).text(),
+      new Response(probe.stderr).text(),
+    ])
+    let receipt: { version?: number; handoff?: unknown }
+    try {
+      receipt = JSON.parse(output)
+    } catch {
+      throw new Error('target generation handoff reader validation failed')
+    }
+    if (code !== 0 || receipt.version !== DISPATCH_LAUNCH_VERSION || receipt.handoff !== null)
+      throw new Error('target generation handoff reader is incompatible; manual restart required')
     return runtime
   }
   const cache = join(checkout, '.autobuild/runtime')
@@ -99,9 +134,20 @@ export async function prepareUpgrade(input: {
       // Installer diagnostics can contain registry credentials. Only emit a classified error.
       const drain = new Response(child.stderr).text()
       const code = await child.exited
-      await drain
+      const diagnostic = await drain
       signal.throwIfAborted()
-      if (code !== 0) throw new Error(`target package installation failed (status ${code})`)
+      if (code !== 0) {
+        const reason = /401|403|unauthorized|forbidden/i.test(diagnostic)
+          ? 'registry authentication failed'
+          : /404|no version matching|not found/i.test(diagnostic)
+            ? 'target package version is unavailable'
+            : /ENOTFOUND|ECONN|unable to connect|connection refused/i.test(diagnostic)
+              ? 'registry is unreachable'
+              : /integrity|checksum/i.test(diagnostic)
+                ? 'package integrity validation failed'
+                : `target package installation failed (status ${code})`
+        throw new Error(reason)
+      }
     } finally {
       clearTimeout(timer)
       signal.removeEventListener('abort', abort)

@@ -40,6 +40,10 @@ test('real Bun lock and isolated install validate exact registry integrity, then
     'export const DISPATCH_LAUNCH_VERSION = 1\n',
   )
   await writeFile(join(source, 'packages/core/src/cli/dispatch-handoff.ts'), 'export {}')
+  await writeFile(
+    join(source, 'bin/ab-dispatch-generation.ts'),
+    `if (process.argv[2] === '--read-handoff') console.log(JSON.stringify({version:1,handoff:null})); export {}`,
+  )
   const tarball = join(root, 'package.tgz')
   await Bun.$`tar czf ${tarball} -C ${root} package`.quiet()
   const bytes = await readFile(tarball)
@@ -127,6 +131,24 @@ test('real Bun lock and isolated install validate exact registry integrity, then
         env,
       }),
     ).rejects.toThrow('integrity')
+    await writeFile(
+      join(source, 'bin/ab-dispatch-generation.ts'),
+      'throw new Error("broken generation entry")',
+    )
+    await expect(
+      prepareUpgrade({
+        checkout: repo,
+        target: {
+          mode: 'installed',
+          key: 'broken-entry',
+          version: '2.0.0',
+          source,
+          installRoot: source,
+        },
+        signal,
+        env,
+      }),
+    ).rejects.toThrow('handoff reader validation failed')
   } finally {
     await server.stop(true)
     await rm(root, { recursive: true, force: true })
