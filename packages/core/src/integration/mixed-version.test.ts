@@ -586,3 +586,50 @@ test('durable deferral attention names only decisive unknown types and releases'
     await store.close()
   }
 })
+
+test('a frozen pre-runtime catalog skips advisory companions while preserving start and attach positions', async () => {
+  // Separate process: mutating this fixture catalog must not affect other tests.
+  const script = `
+    import { MemoryBuildStore } from './packages/core/src/store/memory';
+    import { eventPayloadSchemas } from './packages/core/src/events/payloads';
+    import { repositoryEventPayloadSchemas } from './packages/core/src/events/repository';
+    import { buildEventPolicy, repositoryEventPolicy } from './packages/core/src/events/policy';
+    import { reduceBuild } from './packages/core/src/kernel/reducer';
+    import { decodeStoredEvent, initialCompatibility, advanceCompatibility } from './packages/core/src/events/compatibility';
+    const store = new MemoryBuildStore();
+    const runtime = {version:'1',commit:'unknown',source:{kind:'package',location:'/runtime'}};
+    await store.createBuild({slug:'old-reader',repo:'/repo'});
+    const attach = await store.append('old-reader',{actor:{kind:'kernel'},type:'runner.attached',payload:{instance:'i',host:'h'}});
+    await store.append('old-reader',{actor:{kind:'kernel'},type:'runner.runtime-recorded',payload:{instance:'i',attachedSeq:attach.seq,runtime}});
+    await store.ensureRepo('/repo');
+    const start = await store.appendRepo('/repo',{actor:{kind:'dispatcher'},type:'dispatcher.run-started',payload:{run:'r',pid:1,effectiveConfig:{kind:'config',rev:0},roleWarnings:[]}});
+    await store.appendRepo('/repo',{actor:{kind:'dispatcher'},type:'dispatcher.runtime-recorded',payload:{run:'r',startedSeq:start.seq,runtime}});
+    const builds = await store.getEvents('old-reader');
+    const repository = await store.getRepoEvents('/repo');
+    delete eventPayloadSchemas['runner.runtime-recorded'];
+    delete repositoryEventPayloadSchemas['dispatcher.runtime-recorded'];
+    delete buildEventPolicy['runner.runtime-recorded'];
+    delete repositoryEventPolicy['dispatcher.runtime-recorded'];
+    const b = initialCompatibility(), r = initialCompatibility();
+    advanceCompatibility(b,builds); advanceCompatibility(r,repository);
+    console.log(JSON.stringify({b,r,buildKnown:builds.filter(e=>decodeStoredEvent(e)).map(e=>[e.type,e.seq]),repoKnown:repository.filter(e=>decodeStoredEvent(e)).map(e=>[e.type,e.seq]),status:reduceBuild(builds).status,raw:builds.map(e=>e.seq)}));
+  `
+  const child = Bun.spawn([process.execPath, '-e', script], {
+    cwd: join(import.meta.dir, '../../../..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [output, error, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(code, error).toBe(0)
+  const result = JSON.parse(output)
+  expect(result.b).toMatchObject({ unknownFacts: 1, decisiveFacts: 0, lastSeq: 2 })
+  expect(result.r).toMatchObject({ unknownFacts: 1, decisiveFacts: 0, lastSeq: 2 })
+  expect(result.buildKnown).toEqual([['runner.attached', 1]])
+  expect(result.repoKnown).toEqual([['dispatcher.run-started', 1]])
+  expect(result.raw).toEqual([1, 2])
+  expect(result.status).toBe('running')
+})

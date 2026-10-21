@@ -35,6 +35,50 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
  * the union of the shapes it reaches is fingerprinted. */
 function corpora(): unknown[][] {
   return [
+    [
+      {
+        type: 'runner.attached',
+        seq: 1,
+        ts: '2026-10-21T00:00:00Z',
+        payload: { instance: 'runner', host: 'host', resumedFromSeq: 0 },
+      },
+      {
+        type: 'runner.runtime-recorded',
+        seq: 2,
+        payload: {
+          instance: 'runner',
+          attachedSeq: 1,
+          runtime: {
+            version: '1',
+            commit: 'unknown',
+            source: { kind: 'package', location: '/runtime' },
+          },
+        },
+      },
+      {
+        type: 'dispatcher.run-started',
+        seq: 3,
+        payload: {
+          run: 'run-a',
+          pid: 1,
+          effectiveConfig: { kind: 'config', rev: 0 },
+          roleWarnings: [],
+        },
+      },
+      {
+        type: 'dispatcher.runtime-recorded',
+        seq: 4,
+        payload: {
+          run: 'run-a',
+          startedSeq: 3,
+          runtime: {
+            version: '1',
+            commit: 'unknown',
+            source: { kind: 'package', location: '/runtime' },
+          },
+        },
+      },
+    ],
     leafRestackLog(),
     [
       {
@@ -160,7 +204,7 @@ describe('reducer registry', () => {
         "build": 17,
         "buildDelegation": 1,
         "buildDigest": 10,
-        "buildReadFacts": 55,
+        "buildReadFacts": 56,
         "buildStreamSeed": 26,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
@@ -169,7 +213,7 @@ describe('reducer registry', () => {
         "dispatchFrontend": 2,
         "dispatchSettings": 1,
         "dispatchStatus": 3,
-        "dispatcherRunFacts": 2,
+        "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
         "executionNoProgress": 5,
         "forgeHealthValue": 1,
@@ -199,7 +243,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 20,
+        "repositoryReadFacts": 21,
         "repositoryStateEvents": 4,
         "sandboxStates": 1,
         "session": 1,
