@@ -716,6 +716,7 @@ export class HarvestRunner {
         round: spec.round,
       })
       const stream = streamBracket?.sink
+      await this.ensureLease()
       const started = await store.appendRepo(repo, {
         actor: KERNEL,
         type: 'harvest.session.started',
@@ -746,6 +747,7 @@ export class HarvestRunner {
       let recorded = false
       const onNativeSession = async (value: NativeSessionHandle) => {
         try {
+          await this.ensureLease()
           const validated = nativeSessionHandleSchema.parse(value)
           const expected =
             nativeHandle ?? (continuation && !fallback ? continuation.handle : undefined)
@@ -784,6 +786,7 @@ export class HarvestRunner {
         reason: HarvestEventPayload<'harvest.session.resume-fallback'>['reason'],
         message: string,
       ) => {
+        await this.ensureLease()
         await store.appendRepo(repo, {
           actor: KERNEL,
           type: 'harvest.session.resume-fallback',
@@ -854,6 +857,7 @@ export class HarvestRunner {
       } catch (error) {
         turnError = error
       }
+      if (observationFailure instanceof HarvestLeaseLostError) throw observationFailure
       if (observationFailure !== undefined)
         throw new HarvestPersistenceError('Native identity persistence failed', {
           cause: observationFailure,
