@@ -1,3 +1,4 @@
+import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { RepositoryAttention } from '../kernel/repository-attention'
 import { reduceBuild } from '../kernel/reducer'
 import { gitRewrite } from '../ports/forge/git-rewrite'
@@ -844,6 +845,12 @@ describe('abDispatch guards', () => {
       const repoEvents = await fx.store.getRepoEvents(fx.origin)
       const types = repoEvents.map((event) => event.type)
       expect(types).toContain('dispatcher.run-started')
+      const start = repoEvents.find((e) => e.type === 'dispatcher.run-started')!
+      expect(repoEvents.find((e) => e.type === 'dispatcher.runtime-recorded')?.payload).toEqual({
+        run: 'hosted-dispatcher-expired',
+        startedSeq: start.seq,
+        runtime: RUNTIME_IDENTITY,
+      })
       expect(types).toContain('dispatcher.run-stopped')
       expect(types).not.toContain('dispatcher.tick-started')
       expect(types).not.toContain('dispatcher.tick-completed')
@@ -1558,12 +1565,14 @@ describe('dispatcher run identity without a kernelRunId', () => {
       const runEvents = repoEvents.filter(
         (event) =>
           event.type === 'dispatcher.run-started' ||
+          event.type === 'dispatcher.runtime-recorded' ||
           event.type === 'dispatcher.tick-started' ||
           event.type === 'dispatcher.tick-completed' ||
           event.type === 'dispatcher.run-stopped',
       )
       expect(runEvents.map((event) => event.type)).toEqual([
         'dispatcher.run-started',
+        'dispatcher.runtime-recorded',
         'dispatcher.tick-started',
         'dispatcher.tick-completed',
         'dispatcher.run-stopped',
@@ -6296,7 +6305,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // tick record.
       expect(
         repoAdded
-          .slice(0, 2)
+          .slice(0, 3)
           .map((event) => ({ actor: event.actor, type: event.type, payload: event.payload })),
       ).toEqual([
         {
@@ -6312,16 +6321,25 @@ describe('abDispatch interactive keyboard controls', () => {
         },
         {
           actor: { kind: 'dispatcher' },
+          type: 'dispatcher.runtime-recorded',
+          payload: {
+            run: expect.stringMatching(/-dispatch-/),
+            startedSeq: repoAdded[0]!.seq,
+            runtime: RUNTIME_IDENTITY,
+          },
+        },
+        {
+          actor: { kind: 'dispatcher' },
           type: 'dispatcher.tick-yielded',
           payload: { run: expect.stringMatching(/-dispatch-/), holder: 'other-dispatcher' },
         },
       ])
-      expect(repoAdded.slice(2).map((event) => event.type)).toEqual([
+      expect(repoAdded.slice(3).map((event) => event.type)).toEqual([
         'harvest.pause-requested',
         'harvest.resume-requested',
         'harvest.resumed',
       ])
-      for (const event of repoAdded.slice(2, 4)) {
+      for (const event of repoAdded.slice(3, 5)) {
         expect(event.actor).toEqual({
           kind: 'human',
           user: 'harvest-op',
@@ -6550,10 +6568,11 @@ describe('abDispatch interactive keyboard controls', () => {
       // standing holder; the yield is its only durable tick record.
       expect(added.map((event) => event.type)).toEqual([
         'dispatcher.run-started',
+        'dispatcher.runtime-recorded',
         'dispatcher.tick-yielded',
         'harvest.resume-requested',
       ])
-      expect(added[2]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
+      expect(added[3]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
       expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       await fx.store.appendRepo(fx.origin, {
@@ -6694,6 +6713,7 @@ describe('abDispatch interactive keyboard controls', () => {
           .map((event) => event.type),
       ).toEqual([
         'dispatcher.run-started',
+        'dispatcher.runtime-recorded',
         'dispatcher.tick-started',
         'dispatcher.tick-completed',
         'harvest.resume-requested',
@@ -6858,7 +6878,12 @@ describe('abDispatch interactive keyboard controls', () => {
           .slice(before)
           .filter((e) => e.type !== 'dispatcher.ticket-scan-completed')
           .map((e) => e.type),
-      ).toEqual(['dispatcher.run-started', 'dispatcher.tick-started', 'dispatcher.tick-completed'])
+      ).toEqual([
+        'dispatcher.run-started',
+        'dispatcher.runtime-recorded',
+        'dispatcher.tick-started',
+        'dispatcher.tick-completed',
+      ])
       expect(stripAnsi(term.all())).not.toContain(
         'harvest run action unavailable while harvest is OFF',
       )
@@ -11586,3 +11611,43 @@ for (const mode of [
     }
   }, 30_000)
 }
+
+test('dispatcher runtime persistence failure prevents claims and ticks', async () => {
+  const fx = await makeFixture(readyTicket('T-runtime'), happyHandlers())
+  const append = fx.store.appendRepo.bind(fx.store)
+  fx.store.appendRepo = async (...args) => {
+    if (args[1].type === 'dispatcher.runtime-recorded')
+      throw new Error('runtime metadata unavailable')
+    return append(...args)
+  }
+  try {
+    await expect(
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: fx.wire,
+      }),
+    ).rejects.toThrow('runtime metadata unavailable')
+    const events = await fx.store.getRepoEvents(fx.origin)
+    const starts = events.filter((e) => e.type === 'dispatcher.run-started')
+    expect(starts).toHaveLength(1)
+    const stops = events.filter((e) => e.type === 'dispatcher.run-stopped')
+    expect(stops).toHaveLength(1)
+    expect(stops[0]?.payload).toEqual({
+      run: starts[0]!.payload.run,
+      outcome: 'abnormal',
+      exitCode: 1,
+      error: 'runtime metadata unavailable',
+    })
+    expect(events.filter((e) => e.type === 'dispatcher.runtime-recorded')).toHaveLength(0)
+    expect(events.filter((e) => e.type === 'dispatcher.tick-started')).toHaveLength(0)
+    expect(await fx.store.listBuilds()).toHaveLength(0)
+  } finally {
+    await fx.cleanup()
+  }
+})

@@ -25,7 +25,14 @@ export function projectDispatcherLiveness(
       record?.lease?.holder === id && start && record.heartbeatAt && record.heartbeatAt >= start.ts
         ? record.heartbeatAt
         : null
+    const runtime = ordered.findLast(
+      (e) =>
+        e.type === 'dispatcher.runtime-recorded' &&
+        e.payload.run === id &&
+        e.payload.startedSeq === start?.seq,
+    )
     return {
+      runtime: runtime?.type === 'dispatcher.runtime-recorded' ? runtime.payload.runtime : null,
       run: id,
       pid: start?.type === 'dispatcher.run-started' ? start.payload.pid : null,
       host: start?.type === 'dispatcher.run-started' ? (start.payload.host ?? null) : null,

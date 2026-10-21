@@ -1,4 +1,6 @@
 import { nodeActivityKey, nodePollingSchedule } from '../kernel/node-polling'
+import { buildReadFactsReducer } from '../kernel/read-facts'
+import { formatRuntimeIdentity } from '../events/runtime'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, type TreeProjection } from './dashboard/tree'
@@ -152,6 +154,7 @@ export type BuildDecisionProjection =
 
 export interface BuildDetail extends BuildSummary {
   nodePolling?: { mode: 'active' | 'idle'; intervalSeconds: number; lastChecked?: string }
+  runnerAttaches: import('../kernel/read-facts').RunnerAttach[]
   tree?: TreeProjection
   /** Immutable policy provenance and durable command/native application state. */
   landing?: BuildState['landing']
@@ -305,6 +308,7 @@ export function detail(
     record,
     {
       state: reduceBuild(events),
+      runnerAttaches: buildReadFactsReducer.reduce(events).runnerAttaches,
       log: indexLog(events),
       observations: events
         .filter((event) => event.type === 'observation.recorded')
@@ -321,7 +325,9 @@ export function detail(
 export function detailFromFacts(
   record: BuildRecord,
   facts: Pick<BuildFacts, 'state' | 'open'> &
-    Partial<Pick<BuildFacts, 'log'>> & { observations: BuildState['observations'] },
+    Partial<Pick<BuildFacts, 'log' | 'runnerAttaches'>> & {
+      observations: BuildState['observations']
+    },
   now: Date,
   events?: AbEvent[],
   decision?: BuildDecisionProjection,
@@ -356,6 +362,7 @@ export function detailFromFacts(
     }))
   return {
     ...summary,
+    runnerAttaches: facts.runnerAttaches ?? [],
     ...(facts.log ? { tree: projectTree(record, state, facts.log.restack) } : {}),
     autoMerge: autoMergeDisplay(state),
     ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
@@ -555,6 +562,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.nodePolling)
     lines.push(
       `  node polling: ${d.nodePolling.mode === 'idle' ? `idle; polled every ${d.nodePolling.intervalSeconds} seconds` : 'active; polled every tick'}; last checked: ${d.nodePolling.lastChecked ?? 'unrecorded'}`,
+    )
+  for (const attach of d.runnerAttaches)
+    lines.push(
+      `  runner attach #${attach.seq}: ${attach.instance}; host ${attach.host}; ${attach.ts}; ${formatRuntimeIdentity(attach.runtime)}`,
     )
   if (d.compatibility)
     lines.push(

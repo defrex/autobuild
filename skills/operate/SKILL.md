@@ -137,6 +137,8 @@ cannot recover its earlier interval: reconcile current repository status.
 attention watch.
 
 
+Runtime identity on `dispatcher.holder` describes the lease owner, independently
+of the newest invocation; missing historical runtime is null.
 Check dispatcher liveness with `ab repository status --json` after a watch
 timeout or `dispatcher.lost` observation, or when dispatch appears unhealthy. Do not
 use process lists to decide whether a dispatcher owns this repository. The
@@ -197,8 +199,12 @@ Checking once is not shepherding. When you take responsibility for builds:
 ### Inspect
 
 - `ab builds [--queued] [--all] [--json]` — builds and their effective status.
-- `ab build status <slug> [--events N]` — one build's detail and recent events.
-- `ab repository status` — the repository's derived status.
+- `ab build status <slug> [--events N]` — one build's detail, chronological runner
+  attaches with runtime identity, and recent events. Historical runtime is null
+  in JSON and unrecorded in human output.
+- `ab repository status` — the repository's derived status, including the lease
+  holder’s recorded runtime version, commit, and source kind/location. Historical
+  runtime is null in JSON and unrecorded in human output.
 - `ab artifact` — fetch one artifact's bytes.
 
 Read events with a cursor or a small `--events` count; logs are long.

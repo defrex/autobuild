@@ -21,7 +21,7 @@ export async function readDispatcherLiveness(
     [...runs].map(async (run) => (await readDispatcherRunFacts(store, repo, run)).value),
   )
   const events = correlations.flatMap((run) =>
-    [run.start, run.latestStart, run.stop, run.tick].filter(
+    [run.start, run.latestStart, run.stop, run.tick, run.runtime].filter(
       (event): event is RepositoryEvent => event !== undefined,
     ),
   )
