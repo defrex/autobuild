@@ -51,12 +51,12 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "c5391cc122892184c98abe1842123b5106cb402d1fe628debee7ed844904d688",
+    "textHash": "b068ca3dec52fefa53de4153921a8e61471c5d9dd04d74428f5e3d77913de623",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
       "Resume the work, not the chat",
-      "The operator stays outside"
+      "The operator agent stays outside"
     ],
     "code": []
   },
@@ -136,7 +136,7 @@
     "title": "Operating Autobuild",
     "group": "guides",
     "description": "Watch durable progress, answer escalations, pause work, and authorize landing through the CLI or an external operator agent.",
-    "textHash": "fa49d14f63e0e9a2d91912048ccf37d9d39f87701b22b5e1756e8ece5fab67fc",
+    "textHash": "19e251f1938799f7cdac5e14bc937151a12275da329937d82eb925ba86baff99",
     "headings": [
       "Watch for attention",
       "Answer and pause",
