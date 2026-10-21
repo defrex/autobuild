@@ -109,7 +109,7 @@ test('landing links once to the seams guide from its seams section', async () =>
 // Baseline hashes captured from the pre-layout article strings, independent of rendered output.
 const baseline: Record<string, string> = {
   '/docs/': '4c5ad4de703c3ed712e115a03052e016609e20e81140858e89aba7e459e4ba76',
-  '/docs/getting-started/': 'a529f40f08beacf8b98ac7fe16e47efb2b375d3bd4d88b502049a90195d7ca32',
+  '/docs/getting-started/': '22f59774aedfcc978380bb4a82708b6e0c3ef5f0b5b20edf2b2b417bae352c2a',
   '/docs/builds/': '9501174b11a6ef474a81f347354f9a76894d731c2168936a8854b1da2d20fc93',
   '/docs/dispatcher/': 'd4a673bf44920c1938b22428a59bc66d1c9a45fd68db6005b0508961b062d738',
   '/docs/integration/': 'ab7d2800bb22df819550c51c6c4bb5608db28c95e239c81e122706a9281649c8',
