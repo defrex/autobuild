@@ -153,6 +153,15 @@ a.dim {
   color: #000000;
   border-color: #e6e6e6;
 }
+/* Lower emphasis: the same box with its outline withheld until hover. */
+.btn.ghost {
+  border-color: transparent;
+  color: #888888;
+}
+.btn.ghost:hover {
+  color: #55b8b8;
+  border-color: transparent;
+}
 .word {
   background: transparent;
   border: 0;
