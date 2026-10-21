@@ -1,3 +1,6 @@
+import { bunRuntimeArguments } from '../../cli/runtime-spawn'
+import { spawnUsingRuntime } from '../../cli/dispatch-runtime-use'
+import { distributionRoot } from '../../distribution'
 import { distributionPath } from '../../distribution'
 import {
   DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS,
@@ -41,22 +44,28 @@ export class LocalBuildExecution implements BuildExecution {
   ): Promise<BuildExecutionHandle> {
     if (/^https?:/i.test(input.storeRef) && !auth)
       throw new Error('remote build launch requires delegated authority')
-    const child = this.spawn([process.execPath, this.entrypoint], {
-      env: {
-        ...this.env,
-        AB_TOKEN: auth?.token,
-        [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
-          ...input,
-          supervision: { kind: 'local-parent', parentPid: process.pid },
+    const { child, release } = spawnUsingRuntime(
+      distributionRoot(),
+      () =>
+        this.spawn(bunRuntimeArguments(this.entrypoint), {
+          env: {
+            ...this.env,
+            AB_DISPATCH_GENERATION: undefined,
+            AB_TOKEN: auth?.token,
+            [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
+              ...input,
+              supervision: { kind: 'local-parent', parentPid: process.pid },
+            }),
+          },
+          stdin: 'ignore',
+          stdout: 'ignore',
+          stderr: 'ignore',
+          // On POSIX this makes the build child a new session and process-group
+          // leader. Every agent tool descendant inherits that group by default.
+          detached: true,
         }),
-      },
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-      // On POSIX this makes the build child a new session and process-group
-      // leader. Every agent tool descendant inherits that group by default.
-      detached: true,
-    })
+      true,
+    )
     let reaping: Promise<void> | undefined
     const reap = (): Promise<void> =>
       (reaping ??= terminateProcessGroup(child.pid, this.stopTimeoutMs))
@@ -69,6 +78,7 @@ export class LocalBuildExecution implements BuildExecution {
     const completion = leaderExit.then(async (exit) => {
       // A naturally exited leader may leave inherited descendants behind.
       await reap()
+      release()
       return exit
     })
 

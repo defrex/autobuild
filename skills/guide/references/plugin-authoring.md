@@ -213,6 +213,31 @@ source = "file"
 readyState = "ready"
 ```
 
+Inside a cached dispatcher generation, selection still uses those roots, but
+selected external plugin code and its installed dependency closure are copied
+into an immutable auxiliary snapshot. Native ESM, CommonJS `require`, delayed
+imports, export-from and module-anchored `createRequire` all resolve the core
+package to the same canonical frozen runtime, including SDK values and classes.
+There are no loader hooks or source transforms. Repo-path modules in a consuming
+repository use their literal import closure and literal `new URL(..., import.meta.url)`
+assets, rather than copying the checkout or its unused dev dependencies. Plugins
+with their own package boundary retain that package’s assets and dependency graph.
+Package-relative assets remain
+beside copied modules; `import.meta.url` and filenames name the snapshot, while
+cwd and factory `repoRoot` remain the consuming checkout. Explicit absolute
+paths remain plugin-controlled external resources.
+
+Auxiliary snapshots use neutral compiler boundaries and cached Bun entrypoints
+pin the core config with `--no-install --tsconfig-override` before JavaScript
+runs. Autobuild-owned compiler chains cannot escape the runtime; installed
+third-party development configs are preserved byte-for-byte. New selections
+can prepare new snapshots without changing the generation's core identity.
+Live plugin processes retain their core runtime independently of Store leases.
+Plugin-loading CLI calls reclaim dead auxiliary snapshots during the generation,
+so edits between phase commands do not accumulate checkout-sized copies.
+Ordinary noncached consumers retain the separately loaded SDK compatibility
+rules described above.
+
 Each configured specifier string must be unique. An exact repeat fails config
 validation before Bun resolves or evaluates any plugin, identifies the repeated
 value and both list positions, and tells the operator to remove or deduplicate

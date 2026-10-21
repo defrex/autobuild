@@ -45,7 +45,7 @@ export const spawnExec: Exec = async (cmd, opts) => {
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    ...(opts.env === undefined ? {} : { env: { ...process.env, ...opts.env } }),
+    env: { ...process.env, ...opts.env, AB_DISPATCH_GENERATION: undefined },
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   })
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -555,6 +555,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       }
       env[name] = value
     }
+    delete env.AB_DISPATCH_GENERATION
     return env
   }
 
