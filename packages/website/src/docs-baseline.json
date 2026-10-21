@@ -157,12 +157,13 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "45fc1fabf2c0cecf6f107b65aef71e633c8c9014b782bcb4878515d8bf424888",
+    "textHash": "0ee3ea8e524764d65989a059b3d43db84cd280354753dc0cb3b663353acbc77b",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",
       "What runs where",
-      "Extend the boundaries"
+      "Extend the boundaries",
+      "Seam guides"
     ],
     "code": []
   },

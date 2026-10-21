@@ -1,4 +1,12 @@
-# Authoring Autobuild plugins
+---
+title: "Writing a plugin"
+group: "guides"
+description: "Build, contract-test, package, and publish an Autobuild infrastructure adapter."
+label: "Plugins"
+order: 7
+---
+
+# Writing a plugin
 
 Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
 Here, `ab <command>` means the repository-installed CLI; run it as
@@ -15,12 +23,31 @@ conformance or a successful `ab plugin doctor` alone is not certification.
 Import public types only from `@defrex/autobuild/plugin-sdk`; package-internal module
 paths are not API.
 
-| CLI port | Manifest map | Factory result | Required semantics |
-|---|---|---|---|
-| `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, stable external creation-key projection, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
-| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
-| `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair; preserve unknown unpublished work. |
-| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. Optional API 1.8 failure classification and request observers are described below. |
+### `ticket-source`
+
+Manifest map: `ticketSources`. Factory result: `TicketSource`.
+
+Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, stable external creation-key projection, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage.
+
+### `agent-runtime`
+
+Manifest map: `agentRuntimes`. Factory result: `RuntimeRegistration`.
+
+Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface.
+
+### `workspace-provider`
+
+Manifest map: `workspaceProviders`. Factory result: `WorkspaceProvider`.
+
+Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair; preserve unknown unpublished work.
+
+### `forge`
+
+Manifest map: `forges`. Factory result: `Forge`.
+
+Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. Optional API 1.8 failure classification and request observers are described below.
+
+### Shared capabilities and compatibility
 
 Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
 actual build branch into a build-private ref, publish immutable exact-SHA refs
@@ -421,7 +448,10 @@ acme-autobuild-plugin/
 └── bun.lock
 ```
 
-A representative package manifest is:
+A representative package manifest is shown below. This example declares only the
+current tested host release (`1.0.0-beta.2`); widen that compatibility range only
+after running the unchanged contracts on each supported host. The plugin package
+version is independent of this host range and of the manifest API range:
 
 ```json
 {
@@ -435,9 +465,9 @@ A representative package manifest is:
     "test": "bun test",
     "prepublishOnly": "bun run typecheck && bun test"
   },
-  "devDependencies": { "autobuild": "^2.0.0", "typescript": "^7.0.0" },
-  "peerDependencies": { "autobuild": "^2.0.0" },
-  "peerDependenciesMeta": { "autobuild": { "optional": true } }
+  "devDependencies": { "@defrex/autobuild": "1.0.0-beta.2", "typescript": "5.9.3" },
+  "peerDependencies": { "@defrex/autobuild": "1.0.0-beta.2" },
+  "peerDependenciesMeta": { "@defrex/autobuild": { "optional": true } }
 }
 ```
 
