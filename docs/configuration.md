@@ -3247,6 +3247,8 @@ No provider API key, GitHub token, or remote-store bearer token belongs in
 
 ## Troubleshooting
 
+See [Troubleshooting](troubleshooting.md) for symptom-led diagnosis and recovery.
+
 ### Reading an invalid-config error
 
 Start with `ab dispatch --once` when a real single tick is safe. A syntax error
