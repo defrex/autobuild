@@ -121,16 +121,16 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
-# Ticket source and lifecycle states. The dispatcher talks to Linear directly
-# with LINEAR_API_KEY from its environment (.env); nothing secret lives here.
+# Ticket source and lifecycle states. Tickets are local files in the default
+# tracker, .autobuild/tickets/ (untracked, on the maintainer's machine). This
+# repository moved off Linear on 2026-10-21 because the dispatcher kept
+# exhausting Linear's hourly request budget; ids (AUT-n) were kept.
 [tickets]
-source = "linear"
-teamKey = "AUT"                 # Linear team key ("Auto-build")
-readyState = "Todo"             # sole ready gate here; team AUT has no "Ready" state. Case-sensitive.
+source = "file"
+readyState = "ready"            # sole ready gate
 readyLabels = []                # additional label gate ([] = none)
-claimedState = "In Progress"    # claim() moves the issue here
-createState = "Todo"            # new tickets are filed here
-triageState = "Backlog"         # bounced, aborted, and closed-unmerged tickets return here
-proposalState = "Backlog"       # harvest proposals wait for a human to groom them to Todo.
+createState = "ready"           # new tickets are filed straight to ready, as before the move
+triageState = "triage"          # bounced, aborted, and closed-unmerged tickets return here
+proposalState = "triage"        # harvest proposals wait for a human to groom them to ready.
                                 # Auto-dispatching them (proposalState = readyState) ran away:
                                 # each proposal build's observations filed more proposals.

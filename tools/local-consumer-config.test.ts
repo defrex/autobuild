@@ -39,7 +39,7 @@ test('repository builds in local worktrees on the local Claude Code and Codex CL
   await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
 })
 
-test('local rollout preserves this repository pipeline and Linear integration', async () => {
+test('local rollout preserves this repository pipeline and file ticket tracker', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
   expect(config.commands).toMatchObject({
@@ -89,14 +89,13 @@ test('local rollout preserves this repository pipeline and Linear integration', 
     skill: 'finalize-changelog',
   })
   expect(config.tickets).toMatchObject({
-    source: 'linear',
-    teamKey: 'AUT',
-    readyState: 'Todo',
-    claimedState: 'In Progress',
-    createState: 'Todo',
-    triageState: 'Backlog',
-    proposalState: 'Backlog',
+    source: 'file',
+    readyState: 'ready',
+    createState: 'ready',
+    triageState: 'triage',
+    proposalState: 'triage',
   })
+  expect(config.tickets.teamKey).toBeUndefined()
 })
 
 test('the website step applies only to the site source and its design reference', async () => {
