@@ -1,3 +1,4 @@
+import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { newerFact, seedNewerMemoryFact } from '../testing/newer-writer'
 import { readBuildFacts } from '../store/reduced-reads'
 import { done } from '../cli/terminals'
@@ -823,11 +824,16 @@ describe('attach', () => {
     await h.br.attach()
 
     const events = await h.store.getEvents(SLUG)
-    expect(events.map((e) => e.type)).toEqual(['runner.attached'])
+    expect(events.map((e) => e.type)).toEqual(['runner.attached', 'runner.runtime-recorded'])
     const attached = ofType(events, 'runner.attached')[0]!
     expect(attached.actor).toEqual({ kind: 'kernel' })
     expect(attached.payload.instance).toBe('runner-1')
     expect(attached.payload.host).toBe('sandbox-a')
+    expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
+      instance: attached.payload.instance,
+      attachedSeq: attached.seq,
+      runtime: RUNTIME_IDENTITY,
+    })
     expect(attached.payload.resumedFromSeq).toBeUndefined()
 
     const record = await h.store.getBuild(SLUG)
@@ -840,6 +846,11 @@ describe('attach', () => {
     await h.br.attach()
     const events = await h.store.getEvents(SLUG)
     const attached = ofType(events, 'runner.attached')[0]!
+    expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
+      instance: attached.payload.instance,
+      attachedSeq: attached.seq,
+      runtime: RUNTIME_IDENTITY,
+    })
     expect(attached.seq).toBe(4)
     expect(attached.payload.resumedFromSeq).toBe(3)
   })
@@ -896,6 +907,7 @@ describe('attach', () => {
     await expect(h.br.attach()).rejects.toThrow(/injected crash after session.ended/)
     let events = await h.store.getEvents(SLUG)
     expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
     expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual([
       's_dead_2',
     ])
@@ -1087,8 +1099,9 @@ describe('setup command (§16.1)', () => {
       exitStatus: 1,
       output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
     })
-    expect(events.slice(-2).map((event) => event.type)).toEqual([
+    expect(events.slice(-3).map((event) => event.type)).toEqual([
       'runner.attached',
+      'runner.runtime-recorded',
       'runner.setup-failed',
     ])
     expect(
@@ -1119,6 +1132,7 @@ describe('setup command (§16.1)', () => {
     expect(h.execCalls).toEqual([])
     expect(ofType(events, 'build.paused')).toHaveLength(1)
     expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
     expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
     expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
     expect(h.runner.sessions.size).toBe(0)
@@ -1141,6 +1155,7 @@ describe('setup command (§16.1)', () => {
     expect(h.execCalls).toEqual([])
     expect(ofType(events, 'build.aborted')).toHaveLength(1)
     expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
     expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
     expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
     expect(h.runner.sessions.size).toBe(0)
@@ -1258,10 +1273,12 @@ describe('setup command (§16.1)', () => {
     await h.br.attach()
 
     const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-3).map((event) => event.type)).toEqual([
+    expect(events.slice(-5).map((event) => event.type)).toEqual([
       'runner.attached',
+      'runner.runtime-recorded',
       'runner.setup-failed',
       'runner.attached',
+      'runner.runtime-recorded',
     ])
     const recovered = ofType(events, 'runner.attached').at(-1)
     expect(recovered?.payload.resumedFromSeq).toBe(ofType(events, 'runner.setup-failed')[0]?.seq)
@@ -1295,9 +1312,10 @@ describe('setup command (§16.1)', () => {
     await h.br.attach()
 
     const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-2).map((event) => event.type)).toEqual([
+    expect(events.slice(-3).map((event) => event.type)).toEqual([
       'session.ended',
       'runner.attached',
+      'runner.runtime-recorded',
     ])
     expect(ofType(events, 'session.ended').at(-1)?.payload).toEqual({
       session: 's_before_setup_recovery',
@@ -1824,6 +1842,7 @@ describe('happy path (§15.6)', () => {
     'workspace.provisioned',
     'spec.imported',
     'runner.attached',
+    'runner.runtime-recorded',
     'plan.started',
     'session.started',
     'plan.completed',
@@ -4458,6 +4477,7 @@ describe('no-terminal retry policy (D5)', () => {
       'workspace.provisioned',
       'spec.imported',
       'runner.attached',
+      'runner.runtime-recorded',
       'plan.started',
       'session.started',
       'session.ended',
@@ -7332,4 +7352,18 @@ test('finalize post-step expiry still parks classified read evidence before reco
   expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
   expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
   expect(ofType(events, 'phase.failed')).toHaveLength(0)
+})
+
+test('runtime companion append failure prevents phase work after attach', async () => {
+  const h = await makeHarness()
+  const append = h.store.append.bind(h.store)
+  h.store.append = async (...args) => {
+    if (args[1].type === 'runner.runtime-recorded') throw new Error('runtime metadata unavailable')
+    return append(...args)
+  }
+  await expect(h.br.run()).rejects.toThrow('runtime metadata unavailable')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'runner.attached')).toHaveLength(1)
+  expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
+  expect(ofType(events, 'plan.started')).toHaveLength(0)
 })
