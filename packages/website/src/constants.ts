@@ -1,5 +1,5 @@
 export const REPO_URL = 'https://github.com/defrex/autobuild'
-export const INSTALL_COMMAND = 'bun add -d --exact @defrex/autobuild'
+export const INSTALL_COMMAND = 'bun add -D @defrex/autobuild'
 /** The site's public origin; every absolute URL in the page is built from it. */
 export const SITE_URL = 'https://www.autobuild.run'
 export const HEADLINE = 'Tickets in, Product out.'

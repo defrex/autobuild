@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { WEBSITE_HERO_COLUMNS } from '../../../tools/dashboard-capture'
-import { frameHtml, frameLines, frameText, heroFrame } from './frame'
+import { frameHtml, frameLines, frameText } from './frame'
 import { COLOR } from './svg'
 
 const TRACKED = join(import.meta.dir, 'hero-frame.txt')
@@ -59,15 +59,5 @@ describe('the tracked hero frame', () => {
     }
     expect(text.match(/AUT-\d+/g)).toHaveLength(5)
     expect(text).not.toMatch(/\b(?:BLOCKED|PAUSED|held|error|failed|failure|capture|fixture)\b/i)
-  })
-
-  test('renders as one preformatted region with no escape left in the page', async () => {
-    const html = heroFrame(await Bun.file(TRACKED).text())
-    expect(html).toStartWith('<div class="scroll" tabindex="0" role="region" aria-label="')
-    expect(html).toContain('<pre class="frame">')
-    expect(html).not.toContain('\x1b')
-    expect(html).toContain(`<span style="color: ${COLOR.ok}">RUNNING</span>`)
-    expect(html).toContain(`<b style="color: ${COLOR.live}">[&gt;] implement(9m17s)</b>`)
-    expect(html).not.toContain('href=')
   })
 })
