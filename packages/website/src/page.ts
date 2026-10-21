@@ -29,7 +29,7 @@ const pipeline = `<section class="section">${intro('autobuild · how it works', 
 
 const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}${dispatcherDiagram()}${dispatcherLegend()}</section>`
 
-const integration = `<section class="section">${intro('autobuild · integration', 'Build together, land together', 'Builds land into a node’s branch and sibling work restacks onto its new head. Once the node is complete and verified, it lands into its parent under your landing policy.')}${integrationDiagram()}</section>`
+const integration = `<section class="section">${intro('autobuild · integration', 'Break it down. Land it whole.', 'Split a big feature into as many tickets as it needs. Each build lands on the feature’s own branch, siblings stay in sync automatically, and main sees the whole thing once, verified, when you say so.')}${integrationDiagram()}</section>`
 
 const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}</section>`
 
