@@ -1,0 +1,144 @@
+[
+  {
+    "path": "/docs/",
+    "label": "Overview",
+    "title": "How Autobuild works",
+    "group": "start",
+    "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
+    "textHash": "1882f143bb41a45008e36558d9c15f478cd18e2f0858fe475c7abbdfe46aa569",
+    "headings": [
+      "From a ticket to a change",
+      "Agents judge; code moves the build",
+      "Where it fits",
+      "Using these docs"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/getting-started/",
+    "label": "Getting started",
+    "title": "Getting started",
+    "group": "start",
+    "description": "Install Autobuild in your repository, configure it with ab init, groom a ticket, and start the dispatcher.",
+    "textHash": "d4e652fa6e5e513785533e4c5ba6d861ee95783fcc3a70da7d45011af8ecaa67",
+    "headings": [
+      "1. Install in the repository",
+      "2. Initialize and configure",
+      "3. Groom the first ticket",
+      "4. Start dispatch"
+    ],
+    "code": ["bun add -D @defrex/autobuild", "bun ab init", "bun ab dispatch"]
+  },
+  {
+    "path": "/docs/builds/",
+    "label": "Builds",
+    "title": "One build, end to end",
+    "group": "concepts",
+    "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
+    "textHash": "da75515e990d77aea199fcab5772b8e427a3f14ed11450e9e8edcfd8d1c089b2",
+    "headings": [
+      "The spec is the contract",
+      "Produce, then review",
+      "Verify, then publish",
+      "When a human is needed",
+      "The reconcile epilogue"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/dispatcher/",
+    "label": "Dispatcher",
+    "title": "The dispatcher and durable state",
+    "group": "concepts",
+    "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
+    "textHash": "c5391cc122892184c98abe1842123b5106cb402d1fe628debee7ed844904d688",
+    "headings": [
+      "Ready work becomes a build",
+      "The log is the source of truth",
+      "Resume the work, not the chat",
+      "The operator stays outside"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/integration/",
+    "label": "Integration",
+    "title": "Integrating related work",
+    "group": "concepts",
+    "description": "Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.",
+    "textHash": "86a648891950c7b525d570634aa7e1e51b8deb945248117c293813cb903ab921",
+    "headings": [
+      "Targets form the tree",
+      "One identity per leaf change",
+      "Blockers are a separate graph",
+      "Policy authorizes landing"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/tickets/",
+    "label": "Tickets",
+    "title": "Tickets are the interface",
+    "group": "concepts",
+    "description": "Choose a ticket source, groom buildable specs, and admit proposed work through the ready gate.",
+    "textHash": "16cb49ba0309b7152420da37284cd001443ea35b859a695d3ccb5899e32a2232",
+    "headings": [
+      "Choose a source",
+      "Groom a buildable spec",
+      "Ready is a gate, not a guarantee",
+      "Intake proposes work"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/operating/",
+    "label": "Operating",
+    "title": "Operating Autobuild",
+    "group": "guides",
+    "description": "Watch durable progress, answer escalations, pause work, and authorize landing through the CLI or an external operator agent.",
+    "textHash": "fa49d14f63e0e9a2d91912048ccf37d9d39f87701b22b5e1756e8ece5fab67fc",
+    "headings": [
+      "Watch for attention",
+      "Answer and pause",
+      "Authorize landing",
+      "Choose an operator surface"
+    ],
+    "code": [
+      "bun ab watch --json",
+      "bun ab wait my-build --for attention --json --timeout 5m",
+      "bun ab answer my-build \"Keep the public API compatible\"",
+      "bun ab pause my-build\nbun ab resume my-build",
+      "bun ab land my-build\nbun ab hold my-build"
+    ]
+  },
+  {
+    "path": "/docs/seams/",
+    "label": "Seams",
+    "title": "Infrastructure seams",
+    "group": "reference",
+    "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
+    "textHash": "45fc1fabf2c0cecf6f107b65aef71e633c8c9014b782bcb4878515d8bf424888",
+    "headings": [
+      "Storage and tickets",
+      "Agents, code, and workspaces",
+      "What runs where",
+      "Extend the boundaries"
+    ],
+    "code": []
+  },
+  {
+    "path": "/docs/configuration/",
+    "label": "Configuration",
+    "title": "Repository configuration",
+    "group": "reference",
+    "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
+    "textHash": "0dbfcc57b3e7029f1dff82600d6ac5be3d0a5cc35ca7439c0eadb194a53dffc9",
+    "headings": [
+      "Commands and extension steps",
+      "Roles, models, and limits",
+      "Admission and landing",
+      "Editable skills and installation"
+    ],
+    "code": ["bun ab init\nbun ab init --validate", "bun ab upgrade"]
+  }
+]
