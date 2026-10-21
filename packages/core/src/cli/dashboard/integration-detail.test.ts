@@ -225,3 +225,39 @@ test('verification uses the pinned build steps before preparation and the cycle 
   }
   expect(detail(s).verifySteps).toEqual([{ step: 'cycle-step', outcome: 'pending' }])
 })
+
+test('normalized membership joins a current-source child to a historical parent by its recorded claim', () => {
+  const s = state()
+  s.integration!.observation = {
+    membershipSource: 'file',
+    openChildren: ['NEW-CHILD'],
+    contributions: [],
+    diagnostics: [],
+    children: [
+      { source: 'file', id: 'NEW-CHILD', title: 'Current child', claims: ['current-child'] },
+    ],
+  }
+  const childState: BuildState = {
+    ...reduceBuild([]),
+    status: 'running',
+    target: { ticket: { source: 'file', id: 'NEW-NODE' }, build: 'node' },
+    currentPhase: { phase: 'implement', round: 1, seq: 1 },
+  }
+  const child = projectBuild(
+    { ...record, slug: 'current-child', ticket: { source: 'file', id: 'NEW-CHILD' } },
+    childState,
+    config,
+    [],
+  )!
+  const parent = projectBuild(record, s, config, [])!
+  const projected = enrichIntegrationRows([parent, child])[0]!
+  expect(projected.integrationDetail?.children).toContainEqual({
+    source: 'file',
+    id: 'NEW-CHILD',
+    title: 'Current child',
+    claims: ['current-child'],
+    state: 'implement',
+    landed: false,
+  })
+  expect(projected.integrationRow?.children).toMatchObject({ known: true, building: 1 })
+})

@@ -140,7 +140,13 @@ export async function observeIntegration(
       )
         continue
       const ref = current(build)!
-      if (ref.source === build.ticket.source && ref.id === build.ticket.id) continue
+      if (
+        ref.source === build.ticket.source &&
+        ref.id === build.ticket.id &&
+        nodeRef.source === record.ticket.source &&
+        nodeRef.id === record.ticket.id
+      )
+        continue
       const entry = display.get(JSON.stringify([ref.source, ref.id]))
       if (entry) entry.claims = [...new Set([...(entry.claims ?? []), build.slug])].sort()
     }

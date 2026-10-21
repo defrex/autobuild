@@ -81,6 +81,9 @@ test.each([false, true])(
         ticket: { source: 'file', id: mapping.N },
       })
       expect(state.baseBranch).toBe(node.branch)
+      const { observeIntegration } = await import('../kernel/integration-completeness')
+      const observed = await observeIntegration(h.store, destination, node.slug)
+      expect(observed.children?.find((entry) => entry.id === 'W')?.claims).toContain(work.slug)
       expect((await h.store.getBuild(node.slug))?.ticket?.source).toBe('fake')
     } finally {
       await h.cleanup()
