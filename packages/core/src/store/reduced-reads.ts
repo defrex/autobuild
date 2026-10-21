@@ -277,3 +277,11 @@ export async function readForgeHealth(store: Reader & Pick<BuildStore, 'getRepo'
   )
   return result.value.value
 }
+
+export async function readDispatchUpgrade(store: Reader, repo: string) {
+  return readValue<import('../kernel/dispatch-upgrade').DispatchUpgradeState>(
+    store,
+    { kind: 'repo', repo },
+    'dispatchUpgrade',
+  )
+}

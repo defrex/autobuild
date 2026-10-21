@@ -406,6 +406,7 @@ function unique(fields: readonly string[]): string[] {
  * be traversed safely through Zod internals.
  */
 const TABLE_HEADINGS: Record<string, string> = {
+  upgrade: '`[upgrade]`',
   landing: '`[[landing]]`',
   store: '`[store]`',
   pr: '`[pr]`',
@@ -420,6 +421,7 @@ const TABLE_HEADINGS: Record<string, string> = {
 }
 
 const TABLE_FIELDS: Record<string, string[]> = {
+  upgrade: ['automatic'],
   landing: Object.keys(landingRuleSchema.shape),
   store: ['url'],
   pr: Object.keys(prSchema.shape),
