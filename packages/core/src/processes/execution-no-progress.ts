@@ -59,6 +59,7 @@ export const executionProgress = {
   'node.compared': 'bookkeeping',
   'pr.opened': 'progress',
   'build.completed': 'progress',
+  'runner.runtime-recorded': 'bookkeeping',
   'runner.attached': 'bookkeeping',
   'runner.setup-failed': 'failure',
   'workspace.provisioned': 'bookkeeping',

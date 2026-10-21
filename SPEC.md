@@ -813,7 +813,8 @@ Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
 (all harvest facts, operator-sandbox facts, and the three dispatcher setting
 types) plus, when the journal has one, the tail from the latest
-`dispatcher.run-started`. Reducing this subset with the state readers yields
+`dispatcher.run-started`. The run-scoped `dispatcher.runtime-recorded` companion
+is retained in this same bounded tail. Reducing this subset with the state readers yields
 exactly what a full replay yields, so the cost of reading repository state no
 longer grows with the number of past dispatcher invocations. The journal
 itself stays append-only: full replay remains the normative truth, and
@@ -2513,7 +2514,7 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
@@ -2759,6 +2760,30 @@ After that delivery, no shadowed answer can surface on a later round, while an
 answer appended after delivery is a new eligible winner. Destinations remain
 independent, and the kernel derives both the winner and its delivery from the
 event history so replay and restart preserve the result.
+
+Every dispatcher run start is immediately followed by an advisory
+`dispatcher.runtime-recorded {run, startedSeq, runtime}` fact. Every successful
+runner attach is immediately followed by advisory
+`runner.runtime-recorded {instance, attachedSeq, runtime}` before dispatch work
+or phases begin. Persistence failure prevents that work. Existing lifecycle
+facts remain decisive; older readers skip the advisory companions without
+compatibility deferral. Interrupted pairs and historical logs remain readable
+with runtime null in JSON and `runtime unrecorded` in human detail.
+
+The runtime is captured once per executing process from its own distribution,
+never the consuming repository or dispatcher on behalf of a runner. It includes
+`version`, `commit` (a Git object id or explicit `unknown`), and
+`source: {kind: source | package, location}` with an absolute distribution root
+(realpath when available). A source distribution owns its Git top level,
+including worktrees; nested package installs cannot inherit a consumer's HEAD.
+Packages use valid manifest `gitHead` when available. Missing diagnostic metadata
+never prevents startup. Capture survives later checkout movement.
+
+Repository status reports the authoritative lease holder's runtime independently
+of the newest invocation. Build detail reports chronological runner attaches;
+each phase is attributable to the preceding attach boundary. Companions correlate
+by exact start/attach sequence and run/instance, never by proximity or instance
+alone. Writer-version stamping and runtime selection are unchanged.
 
 **C — setup failure:** the first attach retains the normal `runner.attached`
 fact, then a failed setup appends `runner.setup-failed
