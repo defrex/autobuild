@@ -25,8 +25,10 @@ async function atomicJson(path: string, value: unknown) {
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`)
   await rename(temp, path)
 }
-async function inventory(source: TicketSource): Promise<Ticket[]> {
+async function inventory(source: TicketSource, signal?: AbortSignal): Promise<Ticket[]> {
+  signal?.throwIfAborted()
   const listing = await source.listReady({})
+  signal?.throwIfAborted()
   if (listing.diagnostics.length)
     throw new Error(`incomplete ticket scan:\n${listing.diagnostics.join('\n')}`)
   const ids = new Set<string>()
@@ -34,7 +36,9 @@ async function inventory(source: TicketSource): Promise<Ticket[]> {
   for (const ticket of listing.tickets) {
     if (ids.has(ticket.ref.id)) throw new Error(`duplicate ticket id: ${ticket.ref.id}`)
     ids.add(ticket.ref.id)
+    signal?.throwIfAborted()
     const detail = await source.get(ticket.ref.id)
+    signal?.throwIfAborted()
     if (!detail) throw new Error(`ticket disappeared: ${ticket.ref.id}`)
     if (!detail.state) throw new Error(`ticket has no state: ${ticket.ref.id}`)
     tickets.push(detail)
@@ -60,11 +64,17 @@ async function currentAssets(
   store: TicketAssetStore | undefined,
   repo: string,
   id: string,
+  signal?: AbortSignal,
 ): Promise<PortableAsset[]> {
+  signal?.throwIfAborted()
   if (!store) return []
   const result: PortableAsset[] = []
-  for (const summary of await store.listTicketAssets(repo, id)) {
+  const summaries = await store.listTicketAssets(repo, id)
+  signal?.throwIfAborted()
+  for (const summary of summaries) {
+    signal?.throwIfAborted()
     const asset = await store.getTicketAsset(repo, id, summary.kind, summary.name, summary.revision)
+    signal?.throwIfAborted()
     if (!asset) throw new Error(`asset disappeared: ${id} ${summary.kind}/${summary.name}`)
     result.push(encodePortableAsset({ ...asset.meta, entries: asset.entries }))
   }
@@ -75,10 +85,13 @@ export interface MigrationOptions {
   dir: string
   repo: string
   assets?: TicketAssetStore
+  signal?: AbortSignal
   print?: (line: string) => void
 }
 /** Publish a complete portable tracker only after every source read succeeds. */
 export async function exportTickets(opts: MigrationOptions): Promise<void> {
+  const check = () => opts.signal?.throwIfAborted()
+  check()
   const destination = resolve(opts.dir)
   try {
     if ((await readdir(destination)).length)
@@ -86,11 +99,29 @@ export async function exportTickets(opts: MigrationOptions): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  const tickets = await inventory(opts.source)
+  check()
+  const tickets = opts.source.readExportSnapshot
+    ? await opts.source.readExportSnapshot({
+        signal: opts.signal,
+        progress: ({ completed, total, resetAt }) => {
+          opts.print?.(
+            `read ${completed}/${total ?? 'pending'} tickets${resetAt === undefined ? '' : `; waiting until ${new Date(resetAt).toISOString()}`}`,
+          )
+        },
+      })
+    : await inventory(opts.source, opts.signal)
+  check()
+  const ids = new Set<string>()
+  for (const ticket of tickets) {
+    if (ids.has(ticket.ref.id)) throw new Error(`duplicate ticket id: ${ticket.ref.id}`)
+    ids.add(ticket.ref.id)
+    if (!ticket.state) throw new Error(`ticket has no state: ${ticket.ref.id}`)
+  }
   const names = [
     ...tickets.map((ticket) => ticket.state!),
     ...((await opts.source.listStates?.()) ?? []).map((state) => state.name),
   ]
+  check()
   const states = uniqueStateMap(names, normalizeStateName)
   const identity = crypto.randomUUID()
   const manifest: Manifest = {
@@ -102,6 +133,7 @@ export async function exportTickets(opts: MigrationOptions): Promise<void> {
   }
   const records = []
   for (const ticket of tickets) {
+    check()
     validateFileTicketId(ticket.ref.id)
     const key = ticket.creationKey ?? `migration:${identity}:${ticket.ref.id}`
     manifest.keys[ticket.ref.id] = key
@@ -122,27 +154,36 @@ export async function exportTickets(opts: MigrationOptions): Promise<void> {
             opts.assets ?? opts.source.assets,
             opts.repo,
             ticket.ref.id,
+            opts.signal,
           ),
         },
         ticket.body,
       ),
     })
   }
+  check()
   await mkdir(dirname(destination), { recursive: true })
   const staging = `${destination}.${identity}.tmp`
   await mkdir(staging)
   try {
-    for (const state of Object.values(states))
+    for (const state of Object.values(states)) {
+      check()
       await mkdir(join(staging, state), { recursive: true })
-    for (const record of records)
+    }
+    for (const record of records) {
+      check()
       await writeFile(join(staging, record.state, `${record.id}.md`), record.raw, { flag: 'wx' })
+    }
+    check()
     await atomicJson(join(staging, MANIFEST), manifest)
     // Recheck immediately before publication; never remove a populated destination.
     try {
+      check()
       await rmdir(destination)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    check()
     await rename(staging, destination)
   } finally {
     await rm(staging, { recursive: true, force: true })

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileTicketSource } from './file'
@@ -413,3 +414,129 @@ test('invalid target graphs fail before destination changes', async () => {
   ).rejects.toThrow('orphan')
   expect((await target.listAll()).tickets).toHaveLength(0)
 })
+
+test('Linear export waits without publication and preserves portable content and legacy assets', async () => {
+  const { LinearTicketSource } = await import('./linear')
+  const connection = <T>(nodes: T[], hasNextPage = false) => ({
+    nodes,
+    pageInfo: { hasNextPage, endCursor: hasNextPage ? 'next' : null },
+  })
+  const issue = {
+    id: 'uuid-1',
+    identifier: 'ENG-1',
+    title: 'Export',
+    description: 'Body',
+    url: 'https://example.test',
+    team: { key: 'ENG' },
+    state: { name: 'Ready', type: 'unstarted' },
+    labels: connection([{ name: 'node' }]),
+    parent: {
+      id: 'uuid-parent',
+      identifier: 'ENG-0',
+      team: { key: 'ENG' },
+      labels: connection([{ name: 'node' }]),
+    },
+    inverseRelations: connection([{ type: 'blocks', issue: { identifier: 'ENG-2' } }]),
+    comments: connection([{ body: 'Comment', createdAt: '2026-01-01', user: null }], true),
+  }
+  const store = new MemoryBuildStore()
+  await store.putTicketAsset('repo', 'ENG-1', bundle)
+  const dir = join(root, 'linear-export')
+  await mkdir(dir)
+  let now = 1000
+  let requests = 0
+  const lines: string[] = []
+  const source = new LinearTicketSource({
+    apiKey: 'key',
+    teamKey: 'ENG',
+    now: () => now,
+    sleep: async (ms) => {
+      expect(await readdir(dir)).toEqual([])
+      now += ms
+    },
+    fetchFn: async () => {
+      requests++
+      const data =
+        requests === 1
+          ? { issues: connection([issue]), inventory: connection([{ id: issue.id }]) }
+          : { issue: { comments: connection([]) } }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(requests === 2 ? { 'x-ratelimit-requests-reset': '2000' } : {}),
+        json: async () =>
+          requests === 2
+            ? { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] }
+            : { data },
+      }
+    },
+  })
+  await exportTickets({
+    source,
+    dir,
+    repo: 'repo',
+    assets: store,
+    print: (line) => lines.push(line),
+  })
+  expect(requests).toBe(3)
+  expect(lines).toContain('read 0/1 tickets; waiting until 1970-01-01T00:00:02.000Z')
+  const portable = new FileTicketSource({ dir })
+  const ticket = await portable.get('ENG-1')
+  expect(ticket).toMatchObject({
+    kind: 'node',
+    target: 'ENG-0',
+    body: 'Body',
+    labels: ['node'],
+    blockedBy: ['ENG-2'],
+    creationKey: 'uuid-1',
+    comments: [{ body: 'Comment', createdAt: '2026-01-01' }],
+  })
+  expect(
+    (await portable.assets.getTicketAsset('repo', 'ENG-1', 'design', 'reference'))?.entries,
+  ).toEqual(bundle.entries)
+})
+
+for (const boundary of ['already', 'snapshot', 'assets', 'staging'] as const) {
+  test(`cancellation at ${boundary} prevents export publication`, async () => {
+    const source = await fixture()
+    const controller = new AbortController()
+    const dir = join(root, 'cancelled')
+    await mkdir(dir)
+    const abort = () => controller.abort(new Error('cancelled'))
+    if (boundary === 'already') abort()
+    if (boundary === 'snapshot') {
+      source.listReady = async () => {
+        abort()
+        return { tickets: [], diagnostics: [] }
+      }
+    }
+    if (boundary === 'assets') {
+      const getAsset = source.assets.getTicketAsset.bind(source.assets)
+      source.assets.getTicketAsset = async (...args) => {
+        const asset = await getAsset(...args)
+        abort()
+        return asset
+      }
+    }
+    if (boundary === 'staging') {
+      const check = controller.signal.throwIfAborted.bind(controller.signal)
+      controller.signal.throwIfAborted = () => {
+        if (readdirSync(root).some((name) => name.endsWith('.tmp'))) abort()
+        check()
+      }
+    }
+    const lines: string[] = []
+    await expect(
+      exportTickets({
+        source,
+        dir,
+        repo: 'repo',
+        signal: controller.signal,
+        print: (line) => lines.push(line),
+      }),
+    ).rejects.toThrow('cancelled')
+    expect(await readdir(dir)).toEqual([])
+    expect((await readdir(root)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    expect(lines.some((line) => line.startsWith('exported'))).toBe(false)
+  })
+}
