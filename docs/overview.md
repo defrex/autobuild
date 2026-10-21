@@ -43,7 +43,7 @@ Autobuild fits repositories where work can be described as clear tickets and che
 
 It favors throughput over the latency of one change: independent builds can run side by side, while each still pays for planning, review, and verification. A small edit that needs an immediate answer may be better handled directly in your coding agent.
 
-It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove the operator's responsibility.
+It does not replace product decisions or make vague tickets precise without your input. If you cannot state what done means, or your checks cannot detect a broken change, grooming and verification need attention first. Builds can stop for escalation answers; unattended execution does not remove your responsibility.
 
 
 ## Using these docs

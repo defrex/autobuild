@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "a189f5c2c67c845631fce233a13f2dfe044c76e708423bf10a838ec79ee5ad8d",
+    "textHash": "647afb524cd4829ae829b7e92592a2e9899072920eea997db595fc188ae882d8",
     "headings": [
       "From a ticket to a change",
       "Agents judge; code moves the build",
@@ -20,7 +20,7 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, groom a ticket, and start the dispatcher.",
-    "textHash": "d4e652fa6e5e513785533e4c5ba6d861ee95783fcc3a70da7d45011af8ecaa67",
+    "textHash": "f97cef2398ffa51dbe604847d7eb384867251c6a8478a8e0ac4101519772d00d",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
@@ -35,7 +35,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "da75515e990d77aea199fcab5772b8e427a3f14ed11450e9e8edcfd8d1c089b2",
+    "textHash": "3f2ee58bb9eac4b1da25bcd0020798d124a7a85251136ebd8577c9d9224ed0be",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -51,12 +51,12 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "c5391cc122892184c98abe1842123b5106cb402d1fe628debee7ed844904d688",
+    "textHash": "98287c345ca43dd173eb5403aae356266edfba56861004fb39ef34dba2b9446b",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
       "Resume the work, not the chat",
-      "The operator stays outside"
+      "The operator agent stays outside"
     ],
     "code": []
   },
@@ -136,7 +136,7 @@
     "title": "Operating Autobuild",
     "group": "guides",
     "description": "Watch durable progress, answer escalations, pause work, and authorize landing through the CLI or an external operator agent.",
-    "textHash": "fa49d14f63e0e9a2d91912048ccf37d9d39f87701b22b5e1756e8ece5fab67fc",
+    "textHash": "7707740f62525ca18c221391d485cb778999d13a6724d4ac938833407cfd068d",
     "headings": [
       "Watch for attention",
       "Answer and pause",
