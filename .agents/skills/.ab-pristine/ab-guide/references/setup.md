@@ -124,8 +124,10 @@ exits nonzero on failure. Then:
    then push them to `baseBranch`. A remote sandbox clones the authoritative
    GitHub revision; it cannot acquire local-only edits.
 6. Run `ab init --validate`. Fix every named failure, review warnings and unknowns, and rerun
-   validation. Only then use the installed grooming/ticket skills to create the
-   first groomed Ready ticket and start `ab dispatch`.
+   validation. Setup ends at successful validation. Ask the human to start
+   `bun ab dispatch`, then open their coding agent at the repository root with
+   `ab-operate` loaded to specify, create, groom, and shepherd the first ticket.
+   The setup agent must not start dispatch itself.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.
@@ -546,7 +548,7 @@ without the optional readiness capability report UNKNOWN and need an adapter
 upgrade; local Git passes these hosted-policy checks trivially.
 
 Known hard failures make `ab init --validate` exit unsuccessfully. Warnings and
-unknowns preserve the workspace validation result and require operator review.
+unknowns preserve the workspace validation result and require your review.
 Dispatch reports known hard failures once per invocation as durable
 `dispatcher.forge-readiness-failed` repository notices without adding an admission
 gate. External orchestrators follow these through `ab watch` with no slugs or an
