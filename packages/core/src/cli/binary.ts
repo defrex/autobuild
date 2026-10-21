@@ -13,8 +13,10 @@ export async function runBinary(
   argv: string[],
   resolver?: DashboardRendererResolver,
 ): Promise<number> {
+  delete process.env.AB_DISPATCH_LAUNCH_CONTEXT
   delete process.env[DISPATCH_GENERATION_ENV]
   if (argv[0] !== '--version') loadDotEnv(join(process.cwd(), '.env'), process.env)
+  delete process.env.AB_DISPATCH_LAUNCH_CONTEXT
   delete process.env[DISPATCH_GENERATION_ENV]
   if (
     argv[0] === 'dispatch' &&

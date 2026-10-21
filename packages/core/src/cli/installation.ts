@@ -206,7 +206,9 @@ async function readMetadata(path: string): Promise<string> {
   }
 }
 
-function githubDependency(value: unknown): { owner: string; repository: string } | undefined {
+export function githubDependency(
+  value: unknown,
+): { owner: string; repository: string } | undefined {
   if (typeof value !== 'string') return undefined
   const match = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#([^\s]+))?$/.exec(value)
   if (match?.[1] === undefined || match[2] === undefined) return undefined
@@ -245,7 +247,7 @@ async function parseJsonc(path: string): Promise<Record<string, unknown>> {
   }
 }
 
-function lockDependency(
+export function lockDependency(
   lock: Record<string, unknown>,
   packageName: string,
   section: DependencySection,
@@ -268,7 +270,7 @@ function declaredSection(
   return first === undefined ? undefined : { ...first, dual: declared.length > 1 }
 }
 
-function lockPackageRecord(
+export function lockPackageRecord(
   lock: Record<string, unknown>,
   packageName: string,
 ): unknown[] | undefined {

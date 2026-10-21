@@ -171,6 +171,15 @@ export const withCacheLock = mutateRuntimeCache
 
 async function stageCode(source: string, target: string): Promise<void> {
   const manifest = await readManifest(source)
+  if (manifest.gitHead === undefined) {
+    try {
+      const tag = (await readFile(join(source, '.bun-tag'), 'utf8')).trim()
+      const commit = /-([a-f0-9]{40})$/.exec(tag)?.[1]
+      if (commit) manifest.gitHead = commit
+    } catch {
+      /* Registry packages need not have a Bun forge tag. */
+    }
+  }
   if (!Array.isArray(manifest.files))
     throw new Error('Autobuild manifest must declare distribution files')
   await mkdir(target, { recursive: true })

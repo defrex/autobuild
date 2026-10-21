@@ -84,6 +84,7 @@ describe('ab repository status', () => {
         latestStoppedRun: null,
       },
       sandboxes: [],
+      upgrades: { runs: {} },
       publications: [],
     })
     expect(getRepoStateEvents).toBe(0)
@@ -116,6 +117,7 @@ describe('ab repository status', () => {
           latestStoppedRun: null,
         },
         sandboxes: [],
+        upgrades: { runs: {} },
         publications: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)

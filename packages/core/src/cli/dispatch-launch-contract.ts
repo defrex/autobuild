@@ -10,6 +10,10 @@ export interface GenerationLaunch {
   version: 1
   runtimeRoot: string
   checkout: string
+  originalInstall?: string
+  run?: string
+  lineage?: string
+  predecessor?: string
 }
 export function generationArguments(root: string, argv: readonly string[]): string[] {
   return [
@@ -49,4 +53,22 @@ export function generationResult(
   // Handoff is reserved; this launcher deliberately implements no target selection.
   if (code === GENERATION_EXITS.handoff) return { reason: 'handoff', publicCode: 1 }
   return { reason: 'failed', publicCode: code === GENERATION_EXITS.failed || code === 0 ? 1 : code }
+}
+
+export const DISPATCH_LAUNCH_CONTEXT_ENV = 'AB_DISPATCH_LAUNCH_CONTEXT'
+export function launchContext(
+  env: Record<string, string | undefined>,
+): GenerationLaunch | undefined {
+  const raw = env[DISPATCH_LAUNCH_CONTEXT_ENV]
+  if (!raw) return undefined
+  const value = JSON.parse(raw) as GenerationLaunch
+  if (
+    value.version !== 1 ||
+    !value.run ||
+    !value.lineage ||
+    !value.originalInstall ||
+    !isAbsolute(value.originalInstall)
+  )
+    throw new Error('invalid generation context')
+  return value
 }

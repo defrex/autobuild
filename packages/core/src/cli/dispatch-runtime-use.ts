@@ -297,3 +297,17 @@ export function releasePreparedRuntime(root: string): void {
 export function mutateRuntimeCache<T>(cache: string, operation: () => T): T {
   return locked(cache, operation)
 }
+
+/** Validate and reserve an existing candidate in the same pruning critical section. */
+export function reserveExistingRuntime(root: string): boolean {
+  const cache = dirname(dirname(root))
+  return locked(cache, (state) => {
+    const runtime = ownCachedRuntime(root)
+    if (!runtime || runtime.cache !== cache) return false
+    state.claims[`preparing-${process.pid}-${runtime.id}`] = {
+      id: runtime.id,
+      process: { pid: process.pid, start: identity(process.pid), host: localHost },
+    }
+    return true
+  })
+}

@@ -13,6 +13,7 @@ export const DISPATCHER_CONFIG_ARTIFACT = 'dispatcher-config'
  */
 export const CONFIG_RELOAD_CLASSIFICATION = {
   store: 'restart',
+  upgrade: 'hot',
   baseBranch: 'hot',
   capacity: 'hot',
   ticketScanIntervalSeconds: 'hot',

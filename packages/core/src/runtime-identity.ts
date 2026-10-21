@@ -8,6 +8,11 @@ import { AUTOBUILD_VERSION } from './store/remote/version'
 /** Capture the distribution's source identity, never the target checkout. */
 export function captureRuntimeIdentity(root = distributionRoot()) {
   let commit = 'unknown'
+  let version = AUTOBUILD_VERSION
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+    if (typeof manifest.version === 'string') version = manifest.version
+  } catch {}
   let location = resolve(root)
   try {
     location = realpathSync(location)
@@ -39,7 +44,7 @@ export function captureRuntimeIdentity(root = distributionRoot()) {
     }
   }
   return Object.freeze({
-    version: AUTOBUILD_VERSION,
+    version,
     commit,
     source: Object.freeze({ kind, location }),
   }) satisfies RuntimeIdentity

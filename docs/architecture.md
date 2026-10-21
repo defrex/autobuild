@@ -431,7 +431,17 @@ frontend, kernel, local runners and agent CLI use one completed immutable root;
 `dispatch-runtime-use.ts` protects current/previous/held/live entries during
 spawn and pruning. Cached guest archives are captured at installation.
 `--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
-Upgrades still require a restart; no generation handoff is implemented.
+`dispatch-upgrade-target.ts` reads manifest and lock blobs from one authoritative
+base snapshot, or rereads the original install pathname when unpinned.
+`dispatch-upgrade-install.ts` stages and validates exact targets;
+`dispatch-upgrade-controller.ts` checks immediately and every 60 seconds, suppresses
+failed target inputs and serializes cutover with claim ticks. Upgrade/handoff facts
+are reduced by `kernel/dispatch-upgrade.ts`. The exited immutable generation's
+`dispatch-handoff.ts` reader interprets the journal for the filesystem-only launcher,
+which starts generations sequentially. Local runners finish all suspension writes
+before exit; eligible handles resume natively and others record fresh-session
+fallback. Local harvest is interrupted and rerun by existing recovery. Automatic
+upgrades can be disabled; launcher contract changes require a manual restart.
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;

@@ -1,3 +1,4 @@
+import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import {
   advanceCompatibility,
   initialCompatibility,
@@ -484,6 +485,7 @@ export interface RepositoryReadAcc {
     Extract<RepositoryEvent, { type: 'change-presence.observed' }>['payload']
   >
 
+  upgrades: ReturnType<typeof dispatchUpgradeReducer.initial>
   openHarvest: ReturnType<typeof openHarvestExecutionsReducer.initial>
   attention: ReturnType<typeof repositoryAttentionReducer.initial>
   harvestFailures: Record<
@@ -527,6 +529,7 @@ export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
   version:
     4 +
+    dispatchUpgradeReducer.version +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     forgeHealthReducer.version +
@@ -541,6 +544,7 @@ export const repositoryReadFactsReducer = defineReducer({
   initial: (): RepositoryReadAcc => ({
     compatibility: initialCompatibility(),
     presence: {},
+    upgrades: dispatchUpgradeReducer.initial(),
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
     attention: repositoryAttentionReducer.initial(),
@@ -565,6 +569,7 @@ export const repositoryReadFactsReducer = defineReducer({
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
     advanceCompatibility(acc.compatibility, events)
+    acc.upgrades = dispatchUpgradeReducer.advance(acc.upgrades, events)
     acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
     acc.openHarvest = openHarvestExecutionsReducer.advance(acc.openHarvest, events)
     acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
@@ -664,6 +669,7 @@ export const repositoryReadFactsReducer = defineReducer({
   finish: (acc: RepositoryReadAcc) => ({
     compatibility: structuredClone(acc.compatibility),
     presence: structuredClone(acc.presence),
+    upgrades: dispatchUpgradeReducer.finish(acc.upgrades),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
     harvestAuthorizations: structuredClone(acc.harvestAuthorizations),
