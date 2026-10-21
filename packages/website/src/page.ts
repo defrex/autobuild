@@ -1,6 +1,5 @@
 import { renderSiteHeader } from './site-header'
 import { integrationDiagram } from './integration-diagram'
-import { heroFrame } from './frame'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
 import { OG_HEIGHT, OG_IMAGE_ALT, OG_WIDTH } from './og'
@@ -21,8 +20,10 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
   return `<div class="cmd"><span>${promptHtml}<b${style}>${command}</b></span><span class="dim">${note}</span></div>`
 }
 
-const hero = (frame: string): string =>
-  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="/docs/">Docs</a></div></div>${heroFrame(frame)}</section>`
+// The same four commands open the page below the hero and close it.
+const startTerminal = `<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'bun ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'bun ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div>`
+
+const hero = `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><a class="btn" href="/docs/">Docs</a></div></div>${startTerminal}</section>`
 
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}<p><a href="/docs/builds/">Follow one build end to end</a></p>${pipelineDiagram()}</section>`
 
@@ -36,14 +37,9 @@ const throughput = `<section class="section">${intro('autobuild · throughput', 
 
 const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}<p><a href="/docs/tickets/">Read about tickets and intake</a></p>${intakeDiagram()}</section>`
 
-const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'bun ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'bun ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="/docs/getting-started/">Getting started</a><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
+const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}${startTerminal}<div class="actions links"><a class="btn" href="/docs/getting-started/">Getting started</a><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
-export interface PageInput {
-  /** The tracked `hero-frame.txt`: the dashboard's own ANSI lines. */
-  heroFrame: string
-}
-
-export function renderPage({ heroFrame: frame }: PageInput): string {
+export function renderPage(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -74,7 +70,7 @@ export function renderPage({ heroFrame: frame }: PageInput): string {
 </head>
 <body>
 ${renderSiteHeader('home')}
-<main class="wrap"><div class="sections">${hero(frame)}${pipeline}${dispatcher}${integration}${seams}${throughput}${intake}${start}</div></main>
+<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${integration}${seams}${throughput}${intake}${start}</div></main>
 <footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
 </html>

@@ -73,7 +73,7 @@ export const DOCS_PAGES: readonly DocsPage[] = [
 <p>The GitHub forge needs an authenticated <a href="https://cli.github.com">gh CLI</a> or an exported <code>GITHUB_TOKEN</code> or <code>GH_TOKEN</code>. The local-git forge needs no account or remote. Setup will help choose the arrangement for your repository.</p>
 <h2>1. Install in the repository</h2>
 ${command(INSTALL_COMMAND)}
-<p>This adds Autobuild as an exact development dependency. If installation creates <code>package.json</code> and <code>bun.lock</code>, commit them and ignore <code>node_modules/</code>. Run the repository-installed CLI with <code>bun ab</code>.</p>
+<p>This adds Autobuild as a development dependency. If installation creates <code>package.json</code> and <code>bun.lock</code>, commit them and ignore <code>node_modules/</code>. Run the repository-installed CLI with <code>bun ab</code>.</p>
 <h2>2. Initialize and configure</h2>
 ${command('bun ab init')}
 <p>Initialization vendors the editable <code>ab-*</code> skills, writes a stack-neutral <code>autobuild.toml</code>, and hands repository-aware setup to a coding agent. Follow that handoff to choose a runtime and model, ticket tracker, forge, workspace, and meaningful verification commands for your stack.</p>
