@@ -1,6 +1,6 @@
 {
   "name": "@defrex/autobuild-vercel-sandbox",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "description": "Vercel Sandbox workspace provider plugin for Autobuild (transitional: the implementation stays builtin-hosted until AUT-505)",
   "license": "Apache-2.0",
   "type": "module",
