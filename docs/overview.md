@@ -48,6 +48,6 @@ It does not replace product decisions or make vague tickets precise without your
 
 ## Using these docs
 
-Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), and [tickets](tickets.md), plus [Operating](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references.
+Start with [Getting started](getting-started.md) for installation and a first ticket. These pages introduce the system for engineers evaluating it. Read about [builds](builds.md), the [dispatcher](dispatcher.md), [integration](integration.md), [tickets](tickets.md), and [Skills](skills.md) for editable agent defaults, plus [Operating](operating.md), [Seams](seams.md), and [Configuration](configuration-overview.md); the repository holds the detailed references.
 
 The [configuration reference](configuration.md) describes what you configure. The [spec standard](spec-standard.md) defines a buildable ticket.
