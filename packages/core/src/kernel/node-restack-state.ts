@@ -18,6 +18,8 @@ export function sameParentRejection(
 /** Reservations outlive writer leases and disposable replay workspaces. A new
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
+  requests?: Record<string, EventPayload<'node.restack-requested'>>
+  distance?: EventPayload<'node.parent-distance'>
   parentRequest?: EventPayload<'node.parent-requested'>
   parentChange?: EventPayload<'node.parent-accepted'>
   parentReplay?: string
@@ -41,6 +43,16 @@ export interface NodeRestackState {
 export function advanceNodeRestack(state: NodeRestackState, events: readonly AbEvent[]) {
   for (const event of events) {
     switch (event.type) {
+      case 'node.restack-requested':
+        state.requests ??= {}
+        state.requests[event.payload.id] = event.payload
+        break
+      case 'node.restack-satisfied':
+        if (state.requests) delete state.requests[event.payload.id]
+        break
+      case 'node.parent-distance':
+        state.distance = event.payload
+        break
       case 'node.parent-requested':
         state.parentRequest = event.payload
         break
@@ -50,6 +62,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         delete state.parentReplay
         delete state.parentPr
         delete state.parentRejection
+        delete state.distance
         delete state.observedParent
         break
       case 'node.parent-cancelled':
@@ -168,7 +181,12 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           if (!state.rewritten) throw new Error('node completion requires a confirmed rewrite')
           if (state.active.operation === 'restack') {
             if (state.parentChange) state.parentReplay = state.parentChange.id
+            // Coverage is frozen in the reservation. Settlement atomically
+            // acknowledges it, even if the process dies before audit receipts.
+            for (const id of state.active.requests ?? [])
+              if (state.requests) delete state.requests[id]
             state.contributionBase = state.active.parent
+            delete state.distance
           }
         }
         delete state.active
@@ -185,9 +203,10 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         if (state.contributionBase !== undefined) {
           state.contributionBoundaries ??= {}
           state.contributionBoundaries[event.payload.head] =
-            state.active?.operation === 'restack' && state.rewritten?.head === event.payload.head
+            event.payload.base ??
+            (state.active?.operation === 'restack' && state.rewritten?.head === event.payload.head
               ? state.active.parent
-              : state.contributionBase
+              : state.contributionBase)
         }
         state.inventory = event.payload
         break
@@ -195,7 +214,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 6,
+  version: 7,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

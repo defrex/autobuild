@@ -298,3 +298,21 @@ test('janitor attention appears on the shared row and clears without changing li
   delete state.janitor
   expect(row(state).alert).toBeUndefined()
 })
+
+test('parent distance matches immutable base, parent and branch; unknown is not zero', () => {
+  const state = node()
+  expect(row(state).parentDistance).toBe('parent distance unknown')
+  state.nodeRestack = {
+    items: [],
+    contributionBase: 'base',
+    observedParent: { branch: 'main', sha: 'parent' },
+    distance: { base: 'base', parent: 'parent', branch: 'main', count: 3 },
+  }
+  expect(row(state).parentDistance).toBe('parent 3 commits ahead')
+  state.nodeRestack.distance!.count = 1
+  expect(row(state).parentDistance).toBe('parent 1 commit ahead')
+  state.nodeRestack.distance!.count = 0
+  expect(row(state).parentDistance).toBe('parent current')
+  state.nodeRestack.contributionBase = 'new-base'
+  expect(row(state).parentDistance).toBe('parent distance unknown')
+})

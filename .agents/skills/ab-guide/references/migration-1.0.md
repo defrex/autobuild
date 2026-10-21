@@ -66,3 +66,12 @@ Check [forge requirements](landing-policy.md#forge-requirements) and
 [restacking](restacking.md) before enabling nodes on a plugin forge. Ensure
 archive publication/read permissions, tree capabilities and required merge
 methods are available; legacy read compatibility is insufficient.
+
+## Demand-driven node restacks
+
+Parent movement is now observed without starting a node replay. Existing frozen
+transactions finish after upgrade; subsequent replay needs completeness before
+verification, freshness before landing, dependency presence, operator demand
+(`ab restack <node>`), or accepted re-parenting. Nested nodes need independent
+demand. Leaves keep their existing timing. There is no eager compatibility mode.
+See [restacking](restacking.md) for durable requests and parent commit distance.

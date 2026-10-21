@@ -1,3 +1,4 @@
+import { requestNodeRestack } from '../operator/restack'
 import { expect, test } from 'bun:test'
 import { makeHarness, happyHandlers, readyTicket, writeFileIn, CONFIG_TOML } from './harness'
 import { reduceBuild } from '../kernel/reducer'
@@ -113,7 +114,8 @@ for (const scenario of [
         const alpha = (await record('A'))!
         const landing = reduceBuild(await h.events(beta.slug)).mergedSha!
         const alphaHead = await h.forgeAdapter.remoteBranchSha!(alpha.branch!)
-        expect((await git(['rev-list', alphaHead], h.origin)).split('\n')).not.toContain(landing)
+        // No eager replay: the unchanged contribution still includes its landing.
+        expect((await git(['rev-list', alphaHead], h.origin)).split('\n')).toContain(landing)
         expect(await record('DEP')).toBeUndefined()
         await h.tickets.transition('DEP', 'Ready')
         h.clock.advance(60_000)
@@ -387,6 +389,7 @@ test('a trailerless work landing survives node replay and subsequent squash tran
       payload: { outcome: 'merged' },
     })
     await git(['commit', '--allow-empty', '-m', 'root moved before admission'], h.origin)
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: node.slug, user: 'operator' })
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     const head = await h.forgeAdapter.remoteBranchSha!(node.branch!)
     expect((await git(['rev-list', head], h.origin)).split('\n')).not.toContain(landing)
@@ -408,3 +411,76 @@ test('a trailerless work landing survives node replay and subsequent squash tran
     await h.cleanup()
   }
 })
+
+for (const saturated of [false, true])
+  test(`queued presence demand refreshes only the required nested path (saturated=${saturated})`, async () => {
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('A', { title: 'Ancestor node' }), kind: 'node' },
+        { ...readyTicket('B', { title: 'Nested target' }), kind: 'node', target: 'A' },
+        { ...readyTicket('S', { title: 'Unrelated sibling' }), kind: 'node' },
+        {
+          ...readyTicket('OPEN', { title: 'Keep target collecting', state: 'Backlog' }),
+          target: 'B',
+        },
+        readyTicket('BLOCK', { title: 'Root prerequisite' }),
+        {
+          ...readyTicket('DEP', {
+            title: 'Queued dependent',
+            ...(saturated ? { state: 'Backlog' } : {}),
+          }),
+          target: 'B',
+          blockedBy: ['BLOCK'],
+        },
+      ],
+    })
+    try {
+      for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+      const record = async (id: string) =>
+        (await h.store.listBuilds()).find((r) => r.ticket?.id === id)
+      expect(await record('DEP')).toBeUndefined()
+      const blocker = (await record('BLOCK'))!
+      await h.runLatest()
+      const state = reduceBuild(await h.events(blocker.slug))
+      await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, state.pr!.headSha)
+      if (saturated) {
+        await h.dispatcher.tick()
+        for (const id of ['BUSY-1', 'BUSY-2'])
+          h.tickets.add(readyTicket(id, { title: `Busy work ${id}` }))
+        h.clock.advance(60_000)
+        await h.dispatcher.tick()
+        await h.tickets.transition('DEP', 'Ready')
+        h.clock.advance(60_000)
+      }
+      for (let i = 0; i < 8; i++) await h.dispatcher.tick()
+      if (saturated) {
+        expect(await record('DEP')).toBeUndefined()
+        const { controlBuild } = await import('../cli/build-control')
+        for (const id of ['BUSY-1', 'BUSY-2'])
+          await controlBuild({
+            store: h.store,
+            repo: h.origin,
+            slug: (await record(id))!.slug,
+            action: { kind: 'abort' },
+          })
+        for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      }
+      expect(await record('DEP')).toBeDefined()
+      for (const id of ['A', 'B']) {
+        const events = await h.events((await record(id))!.slug)
+        expect(
+          events.some(
+            (e) => e.type === 'node.restack-requested' && e.payload.reason === 'presence',
+          ),
+        ).toBe(true)
+        expect(events.some((e) => e.type === 'node.writer-settled')).toBe(true)
+      }
+      expect(
+        (await h.events((await record('S'))!.slug)).some((e) => e.type === 'node.writer-reserved'),
+      ).toBe(false)
+    } finally {
+      await h.cleanup()
+    }
+  })

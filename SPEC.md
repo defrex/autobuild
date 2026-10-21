@@ -2027,8 +2027,8 @@ is excluded. An empty completed node contributes nothing; missing or ambiguous
 completion evidence does not mean empty. The newest build generation is used,
 with ties diagnosed rather than falling back to older successful work.
 
-The existing cascade supplies ancestor changes to descendants. Sibling changes
-wait for their node to land in the common ancestor and cascade into the target;
+Demand-driven restacking supplies ancestor changes to descendants. Sibling changes
+wait for their node to land in the common ancestor and presence demand into the target;
 descendant changes wait for their node to land into the target ancestor. Same-node
 landings satisfy presence directly. Unknown evidence leaves source work queued,
 with diagnostics naming the blocker and destination. Blockers with no build,
@@ -2119,7 +2119,7 @@ new parent. Former-parent-only history is excluded; owned foreign changes and
 source build identities survive. Existing review identity is retained and its PR
 base changes after branch publication. Empty and same-head moves need no new
 commit or PR. Descendants keep targeting the moved node and follow its head
-through the ordinary cascade, including source-aware conflict reconciliation.
+through independent demand-driven restacks, including source-aware conflict reconciliation.
 
 A supported ticket mutation records `node.parent-requested` before the provider
 write under node writer authority. The dispatcher reads back the source and
@@ -2155,14 +2155,31 @@ by a human follows ordinary terminal handling. Changing a claimed work ticket's 
 refused before any combined patch is written: abort and re-dispatch is the
 supported path. Unclaimed tickets retain ordinary target editing.
 
-**Descendant cascade and node writers.** Every open node observes its effective
-parent branch and its own authoritative head. Parent movement schedules a
-multi-change restack, including for an empty node with no PR. Publications flow
-down the tree on subsequent dispatcher polls, to arbitrary depth; clean replay
-starts no agent and consumes no runner capacity. Observations coalesce after the
-active frozen transaction completes. Leaf children retain their verify-entry and
-awaiting-landing restack rules. Existing integration PR numbers and bases survive
-rewrites; an empty node never creates a placeholder PR.
+**Demand-driven restacking and node writers.** Nodes observe parent movement durably but restack only on demand: before a
+complete nonempty node verifies; before landing if its parent moved; when queued
+dependency presence requires an ancestor change; on `ab restack <node>`; or on
+accepted re-parenting. There is no eager mode or cadence option. Nested nodes
+need their own demand. Existing frozen transactions, including ones reserved
+before upgrade, finish first; later demand coalesces onto the latest parent.
+Leaves keep verify-entry and awaiting-landing restacks for every target.
+
+Presence demand uses change identities, never ticket resolution alone. It follows
+only the path from the nearest proven ancestor source down to the dependent's
+actual destination, processing ancestors first. Unrelated siblings stay idle;
+changes absent from all ancestors cannot trigger a speculative replay. Tickets
+remain queued until presence is observed in their destination.
+
+`ab restack <node>` (operator tool `builds.restack`, input `{repo, slug}`) records
+a durable request, coalescing pending demand. It refuses leaves, terminal nodes,
+and unopened nodes. Paused or blocked nodes wait for their normal safety gates.
+A request arriving during replay survives until its parent and required identities
+are covered. Re-parenting invalidates requests for the old destination.
+
+Both dashboards show `parent N commits ahead`, `parent current`, or
+`parent distance unknown`. Distance counts commits reachable from the observed
+parent but not the last confirmed contribution base; it is not elapsed time or
+poll count. Samples are invalidated by replay or re-parenting. A stale node
+cannot verify or land; inventory and child landings continue while it collects.
 
 Node branches have one writer at a time. A distinct mutable node writer lease
 (serialized independently of runner execution leases) guards both restacks and
@@ -2179,7 +2196,8 @@ a durable confirmed receipt can preserve a historical write. Exact
 expected-head replacement and immutable archive refs preserve displaced history;
 contention retains the previous contribution boundary and retries the complete
 observed contribution. An untagged commit, including an empty commit, is foreign.
-`node.inventory` reports reachable build identities separately from node-owned
+`node.inventory` retains the sampled source boundary without promoting the confirmed
+restack base. It reports reachable build identities separately from node-owned
 foreign commits above the durable boundary; inherited foreign history is excluded
 from the owned count.
 
@@ -2606,7 +2624,12 @@ dispatcher-authored. Existing merged/closed PR, abort and completion facts close
 Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
 `node.item-conflicted`, `node.item-replayed`, `node.publish-intended`,
 `node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
-cascade). It retains the previous contribution boundary, latest parent
+restacking). Durable `node.restack-requested` facts retain operator/presence demand,
+including destination, sampled parent, dependent ticket and required identities.
+Reservations freeze covered request ids; confirmed settlement acknowledges only
+that coverage, and `node.restack-satisfied` records coverage or destination change.
+`node.parent-distance` records immutable base/parent/branch and count (null when unknown).
+It retains the previous contribution boundary, latest parent
 observation, complete replay prefix, active source item and merge proofs.
 `integration.observed` optionally carries display-only `children` entries
 (source/id, optional title and contribution build identity). Open-child and

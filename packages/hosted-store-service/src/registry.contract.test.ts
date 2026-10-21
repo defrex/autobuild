@@ -327,6 +327,57 @@ describe('agent tool registry contract', () => {
     )
   })
 
+  test('builds.restack shares HTTP validation, durable receipt and repository isolation', async () => {
+    const world = await seedWorld()
+    await world.store.createBuild({ slug: 'node', repo, branch: 'ab-node/node' })
+    await world.store.append('node', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo,
+        ticket: { source: 'fake', id: 'NODE' },
+        kind: 'node',
+        baseBranch: 'main',
+      },
+    })
+    await world.store.append('node', {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: 'a'.repeat(40) },
+    })
+    const server = createOperatorServer({
+      projects: testProjects([repo]),
+      store: world.store,
+      secret,
+      clock,
+    })
+    const route = await api(server)(
+      'POST',
+      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/node/restack`,
+    )
+    expect(route.status).toBe(200)
+    const tool = (await toolFor(world)('builds.restack', { repo, slug: 'node' })) as {
+      request: unknown
+      coalesced: boolean
+    }
+    expect(tool.coalesced).toBe(true)
+    expectEqual(tool.request, (route.body as { request: unknown }).request)
+    const refusal = await api(server)(
+      'POST',
+      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/restack`,
+    )
+    expect(refusal.status).toBe(409)
+    const error = await toolFor(world)('builds.restack', { repo, slug: 'demo' }).catch(
+      (error) => error,
+    )
+    expectEqual((error as RegistryError).body, refusal.body)
+    const missing = await api(server)(
+      'POST',
+      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/missing/restack`,
+    )
+    expect(missing.status).toBe(404)
+  })
+
   test('builds.control matches the control route for an accepted command', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
@@ -897,6 +948,7 @@ describe('agent tool registry contract', () => {
     const mutators = TOOLS.filter((tool) => tool.approval === 'default').map((tool) => tool.name)
     // One minimal valid input per mutator.
     const inputs: Record<string, unknown> = {
+      'builds.restack': { repo, slug: 'demo' },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
       'repository.settings': { repo, setting: 'intake', enabled: true },

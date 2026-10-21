@@ -381,6 +381,7 @@ function renderBuild(
         [
           paint(`integration → ${row.destination}`, 'bold', color),
           bar,
+          ...(row.parentDistance ? [paint(row.parentDistance, 'dim', color)] : []),
           ...counts,
           ...(row.verified ? [paint('· verified', 'green', color)] : []),
         ],
@@ -766,6 +767,7 @@ function detailBody(
     const progress = integrationProgress(build.integrationRow, color)
     body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
     field('Branch', `${detail.branch} · restack ${detail.restack}`)
+    if (detail.parentDistance) field('Parent', detail.parentDistance.replace(/^parent /, ''))
     for (const path of detail.conflictFiles ?? []) field('Conflict', path)
     body.push(
       ...packLines(

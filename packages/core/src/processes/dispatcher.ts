@@ -1,3 +1,4 @@
+import { nodeRestackDemand, presenceRestackPath } from '../kernel/node-restack-demand'
 import {
   deferMixedVersion,
   mixedVersionDeferred,
@@ -2014,6 +2015,8 @@ export class Dispatcher {
               state.prState !== 'closed' &&
               !executionLeaseLive
             ) {
+              await this.prepareIntegration(record, state, report, launched, { refreshOnly: true })
+              ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
               await this.cascadeNode(record, state, report, launched, opts)
               loaded = undefined
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
@@ -4329,7 +4332,15 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
-    if (paused || (capacity <= 0 && !ready.some((ticket) => ticket.kind === 'node'))) {
+    if (
+      paused ||
+      (capacity <= 0 &&
+        !ready.some(
+          (ticket) =>
+            ticket.kind === 'node' ||
+            (ticket.target !== undefined && (ticket.blockedBy?.length ?? 0) > 0),
+        ))
+    ) {
       await this.sourceCondition(undefined, 'ready-scan')
       if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
       return
@@ -4379,6 +4390,7 @@ export class Dispatcher {
       string,
       { branch: string; destination: string; head: string; identities: string[] }
     >()
+    const demands: { slug: string; request: EventPayload<'node.restack-requested'> }[] = []
     const verdicts = new Map<string, DependencyVerdict>()
     const failed = new Set<string>()
     const targetBlocked = new Set<string>()
@@ -4425,7 +4437,14 @@ export class Dispatcher {
             aliases: new Map(),
             landings: [],
           }
-          verdict = await this.presenceVerdict(ticket, target, nodes, inputs, destinationHeads)
+          verdict = await this.presenceVerdict(
+            ticket,
+            target,
+            nodes,
+            inputs,
+            demands,
+            destinationHeads,
+          )
         } else verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
       } catch (error) {
         if (error instanceof TicketSourceRateLimitError) {
@@ -4443,7 +4462,31 @@ export class Dispatcher {
       verdicts.set(ticket.ref.id, verdict)
     }
     if (this.outOfBudget(opts)) return
-    if (failed.size === 0) await this.sourceCondition(undefined, 'dependency-check')
+    if (failed.size === 0) {
+      await this.sourceCondition(undefined, 'dependency-check')
+      for (const { slug, request } of demands) {
+        if (this.outOfBudget(opts)) return
+        const current = (await this.store.buildFacts(slug)).state
+        const pending = Object.values(current.nodeRestack?.requests ?? {})
+        if (
+          current.baseBranch !== request.branch ||
+          pending.some(
+            (old) =>
+              old.reason === 'presence' &&
+              old.branch === request.branch &&
+              old.dependent?.source === request.dependent?.source &&
+              old.dependent?.id === request.dependent?.id &&
+              (request.identities ?? []).every((id) => old.identities?.includes(id)),
+          )
+        )
+          continue
+        await this.store.appendIfCurrent(slug, current.lastSeq, {
+          actor: DISPATCHER,
+          type: 'node.restack-requested',
+          payload: request,
+        })
+      }
+    }
     for (const verdict of verdicts.values()) {
       if (verdict.unresolved.length > 0) {
         report.dependencyBlocked += 1
@@ -4742,8 +4785,11 @@ export class Dispatcher {
         forge.remoteBranchSha(record.branch),
       ])
       if (
-        parent === state.nodeRestack?.contributionBase &&
-        head === state.nodeRestack?.inventory?.head
+        (parent === state.nodeRestack?.contributionBase || !nodeRestackDemand(state)) &&
+        state.nodeRestack?.distance?.parent === parent &&
+        state.nodeRestack.distance.base === state.nodeRestack.contributionBase &&
+        head === state.nodeRestack?.inventory?.head &&
+        !Object.keys(state.nodeRestack?.requests ?? {}).length
       )
         return
     }
@@ -4820,7 +4866,10 @@ export class Dispatcher {
       const parentHead = forge.remoteBranchSha
         ? await forge.remoteBranchSha(state.baseBranch!)
         : undefined
-      if (state.nodeRestack?.active || parentHead !== state.nodeRestack?.contributionBase) {
+      if (
+        state.nodeRestack?.active ||
+        (nodeRestackDemand(state) && parentHead !== state.nodeRestack?.contributionBase)
+      ) {
         // Upgrade recovery: an old dispatcher may have left a native request
         // armed. Cancel every targeting leaf before admitting a node rewrite.
         for (const child of await this.repoBuildDigests()) {
@@ -4976,6 +5025,7 @@ export class Dispatcher {
     state: BuildState,
     report: TickReport,
     launched: Set<string>,
+    sampling: { refreshOnly?: boolean } = {},
   ): Promise<void> {
     if (
       state.status === 'paused' ||
@@ -5007,12 +5057,13 @@ export class Dispatcher {
       this.integrationPollDue(
         this.integrationPolls,
         record.slug,
-        `${comparison.headSha}:${comparison.parentSha}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${claims}`,
+        `${comparison.headSha}:${comparison.parentSha}:${state.nodeRestack?.inventory?.head ?? ''}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${claims}`,
       )
     ) {
       await this.observeIntegration(record.slug)
       state = (await this.store.buildFacts(record.slug)).state
     }
+    if (sampling.refreshOnly) return
     if (
       state.integration?.cycle &&
       !state.nodeRestack?.active &&
@@ -5295,6 +5346,93 @@ export class Dispatcher {
     }
   }
 
+  private async sampleDestinationPresence(
+    branch: string,
+    destination: string,
+    target: { target: { build: string } } | undefined,
+    inputs: PresenceInputs,
+    observations: Map<
+      string,
+      { branch: string; destination: string; head: string; identities: string[] }
+    >,
+  ) {
+    let observed = observations.get(destination)
+    if (!observed) {
+      const forge = this.kernelForge()
+      if (!forge.remoteBranchSha || (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite))
+        throw new Error('forge cannot snapshot destination presence')
+      const head = await forge.remoteBranchSha(branch)
+      const evidence = JSON.stringify({
+        version: 2,
+        revisions: [
+          ...inputs.entries
+            .filter(({ digest }) => digest.mergedSha || digest.nodeContribution)
+            .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq]),
+          ...[...inputs.states].map(([slug, state]) => [slug, state.lastSeq]),
+        ].sort(),
+      })
+      const cached = this.store.repositoryFacts().presence[destination]
+      if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
+        observed = cached
+      else
+        observed = await this.withKernelRepository(async (path) => {
+          const destinationRef = `refs/autobuild/reconcile/${target?.target.build ?? 'presence'}/presence`
+          let sampled: string
+          if (forge.snapshotBase)
+            sampled = await forge.snapshotBase({
+              workspacePath: path,
+              base: branch,
+              destinationRef,
+            })
+          else if (target && forge.rewrite)
+            sampled = await forge.rewrite.snapshot({
+              workspacePath: path,
+              branch,
+              destinationRef,
+            })
+          else {
+            const exec = forge.kernelExec ?? this.deps.exec
+            const fetch = await exec(
+              [
+                'git',
+                'fetch',
+                '--no-tags',
+                '--no-write-fetch-head',
+                '--refmap=',
+                'origin',
+                `+refs/heads/${branch}:${destinationRef}`,
+              ],
+              { cwd: path },
+            )
+            if (fetch.exitCode !== 0) throw new Error(fetch.stderr)
+            const resolved = await exec(
+              ['git', 'rev-parse', '--verify', `${destinationRef}^{commit}`],
+              { cwd: path },
+            )
+            if (resolved.exitCode !== 0) throw new Error(resolved.stderr)
+            sampled = resolved.stdout.trim()
+          }
+          if (sampled !== head) throw new Error('destination moved while sampling presence')
+          const identities = await observePresence(
+            { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path },
+            head,
+            inputs.landings,
+            inputs.aliases,
+          )
+          const payload = { branch, destination, head, evidence, identities }
+          await this.store.ensureRepo(this.deps.repo)
+          await this.store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload,
+          })
+          return payload
+        })
+      observations.set(destination, observed)
+    }
+    return observed!
+  }
+
   private async presenceVerdict(
     ticket: Ticket,
     target:
@@ -5302,6 +5440,7 @@ export class Dispatcher {
       | undefined,
     nodes: Map<string, DependencyState>,
     inputs: PresenceInputs,
+    demands: { slug: string; request: EventPayload<'node.restack-requested'> }[],
     observations: Map<
       string,
       { branch: string; destination: string; head: string; identities: string[] }
@@ -5353,79 +5492,61 @@ export class Dispatcher {
     diagnostics.push(...lifecycle.diagnostics)
     if ([...required.values()].every((ids) => ids.length === 0)) return { unresolved, diagnostics }
     try {
-      let observed = observations.get(destination)
-      if (!observed) {
-        const forge = this.kernelForge()
-        if (!forge.remoteBranchSha || (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite))
-          throw new Error('forge cannot snapshot destination presence')
-        const head = await forge.remoteBranchSha(branch)
-        const evidence = JSON.stringify({
-          version: 2,
-          revisions: [
-            ...inputs.entries
-              .filter(({ digest }) => digest.mergedSha || digest.nodeContribution)
-              .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq]),
-            ...[...inputs.states].map(([slug, state]) => [slug, state.lastSeq]),
-          ].sort(),
-        })
-        const cached = this.store.repositoryFacts().presence[destination]
-        if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
-          observed = cached
-        else
-          observed = await this.withKernelRepository(async (path) => {
-            const destinationRef = `refs/autobuild/reconcile/${target?.target.build ?? 'presence'}/presence`
-            let sampled: string
-            if (forge.snapshotBase)
-              sampled = await forge.snapshotBase({
-                workspacePath: path,
-                base: branch,
-                destinationRef,
-              })
-            else if (target && forge.rewrite)
-              sampled = await forge.rewrite.snapshot({
-                workspacePath: path,
-                branch,
-                destinationRef,
-              })
-            else {
-              const exec = forge.kernelExec ?? this.deps.exec
-              const fetch = await exec(
-                [
-                  'git',
-                  'fetch',
-                  '--no-tags',
-                  '--no-write-fetch-head',
-                  '--refmap=',
-                  'origin',
-                  `+refs/heads/${branch}:${destinationRef}`,
-                ],
-                { cwd: path },
-              )
-              if (fetch.exitCode !== 0) throw new Error(fetch.stderr)
-              const resolved = await exec(
-                ['git', 'rev-parse', '--verify', `${destinationRef}^{commit}`],
-                { cwd: path },
-              )
-              if (resolved.exitCode !== 0) throw new Error(resolved.stderr)
-              sampled = resolved.stdout.trim()
-            }
-            if (sampled !== head) throw new Error('destination moved while sampling presence')
-            const identities = await observePresence(
-              { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path },
-              head,
-              inputs.landings,
-              inputs.aliases,
-            )
-            const payload = { branch, destination, head, evidence, identities }
-            await this.store.ensureRepo(this.deps.repo)
-            await this.store.appendRepo(this.deps.repo, {
-              actor: DISPATCHER,
-              type: 'change-presence.observed',
-              payload,
-            })
-            return payload
+      const observed = await this.sampleDestinationPresence(
+        branch,
+        destination,
+        target,
+        inputs,
+        observations,
+      )
+      const missing = [
+        ...new Set(
+          [...required.values()].flatMap((ids) => missingChanges(ids, observed.identities)),
+        ),
+      ]
+      if (target && missing.length) {
+        const path: { slug?: string; identities: string[]; branch: string; head: string }[] = [
+          { slug: target.target.build, ...observed },
+        ]
+        const seen = new Set<string>()
+        let slug: string | undefined = target.target.build
+        while (slug) {
+          if (seen.has(slug)) throw new Error('cyclic node ancestry')
+          seen.add(slug)
+          const record = await this.store.getBuild(slug)
+          if (!record || record.repo !== this.deps.repo) throw new Error('missing node ancestry')
+          const state: BuildState = (await this.store.buildFacts(slug)).state
+          if (state.kind !== 'node' || !state.baseBranch || state.nodeRestack?.parentRequest)
+            throw new Error('uncertain node ancestry')
+          slug = state.target?.build
+          const parent = await this.sampleDestinationPresence(
+            state.baseBranch,
+            slug ?? `root:${state.baseBranch}`,
+            slug ? { target: { build: slug } } : undefined,
+            inputs,
+            observations,
+          )
+          path.push({ ...(slug ? { slug } : {}), ...parent })
+          if (missing.every((id) => path.some((entry) => entry.identities.includes(id)))) break
+        }
+        for (const requested of presenceRestackPath(path, missing)) {
+          const index = path.findIndex((entry) => entry.slug === requested)
+          const parent = path[index + 1]!
+          const identities = missing.filter((id) =>
+            path.slice(index + 1).some((entry) => entry.identities.includes(id)),
+          )
+          demands.push({
+            slug: requested,
+            request: {
+              id: this.deps.ids('presence-restack'),
+              reason: 'presence',
+              branch: parent.branch,
+              parent: parent.head,
+              dependent: ticket.ref,
+              identities,
+            },
           })
-        observations.set(destination, observed)
+        }
       }
       for (const [id, identities] of required) {
         const missing = missingChanges(identities, observed.identities)

@@ -472,3 +472,14 @@ unavailable for uninstrumented adapters. Attribution retains at most ten builds
 ordered by descending count then build name; repository requests are unattributed.
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
+
+## Intentional node staleness
+
+An open collecting node may intentionally trail its parent. Parent movement is
+observed without starting replay. Use `ab restack <node>` (or `builds.restack`
+with `{repo, slug}`) to request freshness; paused or blocked nodes retain the
+request until their ordinary safety gates permit it. Completeness, landing,
+queued dependency presence and accepted re-parenting supply automatic demand.
+Nested nodes need independent demand. Inspect the shared parent commit distance
+readout; unknown is unavailable evidence, not zero. Existing transactions finish
+before fresh demand is evaluated. Leaves keep their usual restack points.
