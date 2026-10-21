@@ -1,12 +1,11 @@
 import { expect, test } from 'bun:test'
 import { integrationDiagram } from './integration-diagram'
 
-test('complete static tree has both contributions, branch, sequence and one replay control', () => {
+test('complete static tree has both contributions, branch and sequence', () => {
   const html = integrationDiagram()
   expect(html.match(/data-capture-figure="integration-tree"/g)).toHaveLength(1)
-  expect(html.match(/data-capture-animated/g)).toHaveLength(1)
-  expect(html.match(/data-motion-replay hidden/g)).toHaveLength(1)
-  expect(html).toContain('aria-label="Replay integration tree animation"')
+  expect(html).not.toContain('data-capture-animated')
+  expect(html).not.toContain('Replay')
   const visible = html.replace(/<[^>]+>/g, ' ')
   for (const label of [
     '[x] main',

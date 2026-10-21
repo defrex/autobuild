@@ -1,4 +1,3 @@
-import { replayControl } from './motion-control'
 import {
   type Connector,
   type ConnectorKind,
@@ -34,48 +33,6 @@ const DISPATCHER_DESCRIPTION =
 const INTAKE_DESCRIPTION =
   'Customer support, meetings, telemetry and errors, and build observations all feed the PM agent. The PM agent sends tickets to the autobuild dispatcher. Escalations return from the dispatcher to the PM agent, which answers them itself. The PM agent and you are linked both ways, for only the real product calls.'
 
-// Several desktop segments form one semantic edge; phone routing uses the same keys.
-const desktopEdges = [
-  'plan',
-  'plan',
-  'plan',
-  'implement',
-  'plan-review',
-  'plan-return',
-  'code-review',
-  'code-return',
-  'verify:*',
-  'verify:*',
-  'verify:*',
-  'finalize',
-  'merged',
-  'failure',
-  'failure',
-  'failure',
-]
-const phoneEdges = [
-  'plan',
-  'implement',
-  'finalize',
-  'merged',
-  'verify:*',
-  'plan-review',
-  'plan-return',
-  'code-review',
-  'code-return',
-  'failure',
-]
-
-function pipelineEdge(edge: Connector, key: string): string {
-  return connector(edge).replace('<svg ', `<svg data-motion-edge="${key}" `)
-}
-
-function pipelineNode(...args: Parameters<typeof plainNode>): string {
-  return plainNode(...args)
-    .replace(/<b style="color: [^"]+">/, '<b>')
-    .replace('<div ', `<div data-motion-node="${args[4]}" `)
-}
-
 export function pipelineDiagram(): string {
   const connectors = [
     c('flow', 136, 204, 24, 8, 'M 0 4 L 24 4'),
@@ -96,14 +53,14 @@ export function pipelineDiagram(): string {
     c('fail', 432, 48, 8, 46, 'M 4 0 L 4 46', true),
   ]
   const nodes = [
-    pipelineNode(0, 180, 136, 56, 'spec'),
-    pipelineNode(184, 96, 136, 56, 'plan'),
-    pipelineNode(184, 264, 136, 56, 'plan-review'),
-    pipelineNode(368, 96, 136, 56, 'implement'),
-    pipelineNode(368, 264, 136, 56, 'code-review'),
-    pipelineNode(576, 180, 136, 56, 'verify:*'),
-    pipelineNode(760, 180, 136, 56, 'finalize'),
-    pipelineNode(944, 180, 136, 56, 'merged', COLOR.ok),
+    plainNode(0, 180, 136, 56, 'spec'),
+    plainNode(184, 96, 136, 56, 'plan'),
+    plainNode(184, 264, 136, 56, 'plan-review'),
+    plainNode(368, 96, 136, 56, 'implement'),
+    plainNode(368, 264, 136, 56, 'code-review'),
+    plainNode(576, 180, 136, 56, 'verify:*'),
+    plainNode(760, 180, 136, 56, 'finalize'),
+    plainNode(944, 180, 136, 56, 'merged', COLOR.ok),
   ]
   const captions = [
     caption({ left: 287, top: 200, width: 56, text: 'revise', color: COLOR.live }),
@@ -118,19 +75,14 @@ export function pipelineDiagram(): string {
     }),
   ]
   return (
-    '<div data-capture-figure="pipeline" data-capture-animated>' +
+    '<div data-capture-figure="pipeline">' +
     diagram(
       1120,
       340,
       PIPELINE_DESCRIPTION,
-      [
-        ...connectors.map((edge, index) => pipelineEdge(edge, desktopEdges[index]!)),
-        ...nodes,
-        ...captions,
-      ].join(''),
+      [...connectors.map(connector), ...nodes, ...captions].join(''),
     ) +
     pipelinePhone() +
-    replayControl('pipeline') +
     '</div>'
   )
 }
@@ -147,14 +99,14 @@ function pipelinePhone(): string {
     c('fail', 4, 200, 20, 152, 'M 20 148 L 4 148 L 4 4 L 18 4', true),
   ]
   const nodes = [
-    pipelineNode(24, 0, 140, 56, 'spec'),
-    pipelineNode(24, 88, 140, 56, 'plan'),
-    pipelineNode(218, 88, 140, 56, 'plan-review'),
-    pipelineNode(24, 176, 140, 56, 'implement'),
-    pipelineNode(218, 176, 140, 56, 'code-review'),
-    pipelineNode(24, 320, 140, 56, 'verify:*'),
-    pipelineNode(24, 408, 140, 56, 'finalize'),
-    pipelineNode(24, 496, 140, 56, 'merged', COLOR.ok),
+    plainNode(24, 0, 140, 56, 'spec'),
+    plainNode(24, 88, 140, 56, 'plan'),
+    plainNode(218, 88, 140, 56, 'plan-review'),
+    plainNode(24, 176, 140, 56, 'implement'),
+    plainNode(218, 176, 140, 56, 'code-review'),
+    plainNode(24, 320, 140, 56, 'verify:*'),
+    plainNode(24, 408, 140, 56, 'finalize'),
+    plainNode(24, 496, 140, 56, 'merged', COLOR.ok),
   ]
   const captions = [
     caption({ left: 164, top: 146, width: 54, text: 'revise', color: COLOR.live, align: 'center' }),
@@ -171,21 +123,8 @@ function pipelinePhone(): string {
   return phoneDiagram(
     552,
     PIPELINE_DESCRIPTION,
-    [
-      ...connectors.map((edge, index) => pipelineEdge(edge, phoneEdges[index]!)),
-      ...nodes,
-      ...captions,
-    ].join(''),
+    [...connectors.map(connector), ...nodes, ...captions].join(''),
   )
-}
-
-// Attach semantic identity to the existing primitive without changing its geometry.
-function marked(html: string, key: string): string {
-  return html.replace(/^<(div|svg)/, `<$1 data-sequence-key="${key}"`)
-}
-
-function routed(item: Connector, key: string): string {
-  return marked(connector(item), key)
 }
 
 export function dispatcherDiagram(): string {
@@ -202,34 +141,26 @@ export function dispatcherDiagram(): string {
     { top: 204, done: 3, current: 'implement' },
     { top: 344, done: 5, current: 'verify:*' },
   ]
-  const parts: string[] = connectors.map((item, i) =>
-    routed(item, ['claim', 'route', 'route', 'start-0', 'start-1', 'start-2'][i]!),
-  )
+  const parts: string[] = connectors.map(connector)
   const nodes: string[] = []
-  for (const [index, row] of rows.entries()) {
+  for (const row of rows) {
     const y = row.top + 28
     parts.push(
-      routed(c('flow', 600, y, 46, 8, 'M 0 4 L 46 4', true), `write-${index}`),
-      routed(c('write', 864, y, 38, 8, 'M 0 4 L 38 4', true), `write-${index}`),
-      routed(c('write', 968, y, 14, 8, 'M 0 4 L 14 4', true), `write-${index}`),
-      routed(c('event', 508, row.top + 64, 8, 24, 'M 4 0 L 4 24'), `write-${index}`),
-      routed(c('event', 512, row.top + 84, 470, 8, 'M 0 4 L 470 4', true), `write-${index}`),
+      connector(c('flow', 600, y, 46, 8, 'M 0 4 L 46 4', true)),
+      connector(c('write', 864, y, 38, 8, 'M 0 4 L 38 4', true)),
+      connector(c('write', 968, y, 14, 8, 'M 0 4 L 14 4', true)),
+      connector(c('event', 508, row.top + 64, 8, 24, 'M 4 0 L 4 24')),
+      connector(c('event', 512, row.top + 84, 470, 8, 'M 0 4 L 470 4', true)),
     )
     nodes.push(
-      marked(
-        node({ left: 424, top: row.top, width: 176, height: 64, html: plainNode2('build-runner') }),
-        `runner-${index}`,
-      ),
+      node({ left: 424, top: row.top, width: 176, height: 64, html: plainNode2('build-runner') }),
     )
     for (let i = 0; i < 7; i++) {
       nodes.push(
-        marked(
-          cell(
-            648 + i * 32,
-            row.top + 20,
-            i < row.done ? 'done' : i === row.done ? 'live' : 'pending',
-          ),
-          `runner-${index}`,
+        cell(
+          648 + i * 32,
+          row.top + 20,
+          i < row.done ? 'done' : i === row.done ? 'live' : 'pending',
         ),
       )
     }
@@ -256,28 +187,24 @@ export function dispatcherDiagram(): string {
   }
   const rest = [
     caption({ left: 0, top: 148, width: 144, text: 'ready tickets' }),
-    marked(plainNode(0, 168, 144, 40, 'ticket'), 'ticket-0'),
-    marked(plainNode(0, 216, 144, 40, 'ticket'), 'ticket-1'),
-    marked(plainNode(0, 264, 144, 40, 'ticket'), 'ticket-2'),
-    marked(plainNode(192, 200, 160, 72, 'dispatcher'), 'dispatcher'),
+    plainNode(0, 168, 144, 40, 'ticket'),
+    plainNode(0, 216, 144, 40, 'ticket'),
+    plainNode(0, 264, 144, 40, 'ticket'),
+    plainNode(192, 200, 160, 72, 'dispatcher'),
     caption({ left: 648, top: 32, width: 240, text: 'one agent session per step' }),
-    marked(
-      node({
-        left: 984,
-        top: 48,
-        width: 136,
-        height: 400,
-        padding: '12px',
-        html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events<br>artifacts<br>streams</span>`,
-      }),
-      'store',
-    ),
+    node({
+      left: 984,
+      top: 48,
+      width: 136,
+      height: 400,
+      padding: '12px',
+      html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events<br>artifacts<br>streams</span>`,
+    }),
   ]
   return (
-    '<div data-capture-figure="dispatcher" data-capture-animated>' +
+    '<div data-capture-figure="dispatcher">' +
     diagram(1120, 470, DISPATCHER_DESCRIPTION, [...parts, ...nodes, ...rest].join('')) +
     dispatcherPhone() +
-    replayControl('dispatcher') +
     '</div>'
   )
 }
@@ -298,16 +225,16 @@ function dispatcherPhone(): string {
   )
   // The runner card paints first so the connectors that cross it stay visible.
   const backdrop = [
-    marked(rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine), 'runner-2'),
-    marked(rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine), 'runner-1'),
-    marked(rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well), 'runner-0'),
+    rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine),
+    rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine),
+    rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well),
   ]
   const parts = [
     caption({ left: 0, top: 0, width: 200, text: 'ready tickets' }),
-    marked(plainNode(0, 24, 110, 40, 'ticket'), 'ticket-0'),
-    marked(plainNode(124, 24, 110, 40, 'ticket'), 'ticket-1'),
-    marked(plainNode(248, 24, 110, 40, 'ticket'), 'ticket-2'),
-    marked(plainNode(99, 104, 160, 56, 'dispatcher'), 'dispatcher'),
+    plainNode(0, 24, 110, 40, 'ticket'),
+    plainNode(124, 24, 110, 40, 'ticket'),
+    plainNode(248, 24, 110, 40, 'ticket'),
+    plainNode(99, 104, 160, 56, 'dispatcher'),
     caption({
       left: 16,
       top: 222,
@@ -335,40 +262,18 @@ function dispatcherPhone(): string {
       color: COLOR.live,
       bold: true,
     }),
-    marked(
-      node({
-        left: 0,
-        top: 392,
-        width: 358,
-        height: 72,
-        html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events · artifacts · streams</span>`,
-      }),
-      'store',
-    ),
+    node({
+      left: 0,
+      top: 392,
+      width: 358,
+      height: 72,
+      html: `<b>build store</b><br><span style="color: ${COLOR.slack}">events · artifacts · streams</span>`,
+    }),
   ]
   return phoneDiagram(
     464,
     DISPATCHER_DESCRIPTION,
-    [
-      ...backdrop,
-      ...connectors.map((item, i) =>
-        routed(
-          item,
-          [
-            'ticket-0',
-            'ticket-1',
-            'ticket-2',
-            'claim',
-            'claim',
-            'start',
-            'write',
-            'write',
-            'write',
-          ][i]!,
-        ),
-      ),
-      ...parts,
-    ].join(''),
+    [...backdrop, ...connectors.map(connector), ...parts].join(''),
   )
 }
 
@@ -398,10 +303,10 @@ export function intakeDiagram(): string {
     c('event', 425, 194, 8, 118, 'M 4 118 L 4 0', true),
   ]
   const nodes = [
-    marked(plainNode(0, 0, 216, 56, 'customer support'), 'source-0'),
-    marked(plainNode(0, 72, 216, 56, 'meetings'), 'source-1'),
-    marked(plainNode(0, 144, 216, 56, 'telemetry · errors'), 'source-2'),
-    marked(plainNode(0, 216, 216, 56, 'build observations'), 'source-3'),
+    plainNode(0, 0, 216, 56, 'customer support'),
+    plainNode(0, 72, 216, 56, 'meetings'),
+    plainNode(0, 144, 216, 56, 'telemetry · errors'),
+    plainNode(0, 216, 216, 56, 'build observations'),
     node({
       left: 336,
       top: 80,
@@ -438,44 +343,14 @@ export function intakeDiagram(): string {
     }),
   ]
   return (
-    '<div data-capture-figure="intake" data-capture-animated>' +
+    '<div data-capture-figure="intake">' +
     diagram(
       1120,
       368,
       INTAKE_DESCRIPTION,
-      [
-        ...connectors.map((item, i) =>
-          routed(
-            item,
-            [
-              'source-0',
-              'source-1',
-              'source-2',
-              'source-3',
-              'route',
-              'route',
-              'delivery',
-              'escalation',
-              'escalation',
-              'escalation',
-              'human',
-              'human',
-            ][i]!,
-          ),
-        ),
-        ...nodes.map((html, i) =>
-          i < 4
-            ? html
-            : marked(
-                html,
-                ['source-0', 'source-1', 'source-2', 'source-3', 'pm', 'queue', 'human'][i]!,
-              ),
-        ),
-        ...captions,
-      ].join(''),
+      [...connectors.map(connector), ...nodes, ...captions].join(''),
     ) +
     intakePhone() +
-    replayControl('intake') +
     '</div>'
   )
 }
@@ -493,10 +368,10 @@ function intakePhone(): string {
     c('escalate', 4, 228, 20, 176, 'M 20 172 L 4 172 L 4 4 L 18 4', true),
   ]
   const nodes = [
-    marked(plainNode(0, 0, 171, 64, 'customer support'), 'source-0'),
-    marked(plainNode(187, 0, 171, 64, 'meetings'), 'source-1'),
-    marked(plainNode(0, 80, 171, 64, 'telemetry · errors'), 'source-2'),
-    marked(plainNode(187, 80, 171, 64, 'build observations'), 'source-3'),
+    plainNode(0, 0, 171, 64, 'customer support'),
+    plainNode(187, 0, 171, 64, 'meetings'),
+    plainNode(0, 80, 171, 64, 'telemetry · errors'),
+    plainNode(187, 80, 171, 64, 'build observations'),
     node({
       left: 24,
       top: 176,
@@ -535,32 +410,6 @@ function intakePhone(): string {
   return phoneDiagram(
     432,
     INTAKE_DESCRIPTION,
-    [
-      ...connectors.map((item, i) =>
-        routed(
-          item,
-          [
-            'source-0',
-            'source-1',
-            'source-2',
-            'source-3',
-            'route',
-            'human',
-            'human',
-            'delivery',
-            'escalation',
-          ][i]!,
-        ),
-      ),
-      ...nodes.map((html, i) =>
-        i < 4
-          ? html
-          : marked(
-              html,
-              ['source-0', 'source-1', 'source-2', 'source-3', 'pm', 'human', 'queue'][i]!,
-            ),
-      ),
-      ...captions,
-    ].join(''),
+    [...connectors.map(connector), ...nodes, ...captions].join(''),
   )
 }
