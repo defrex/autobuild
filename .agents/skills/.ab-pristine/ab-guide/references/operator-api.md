@@ -146,6 +146,24 @@ revision, a trusted caller fetches the current ticket body and supplies it; the
 build must still have a recorded ticket. Revision conformance, lazy retry,
 artifact metadata, event ordering, and refusal rules are the same as the CLI.
 
+Operators may explicitly revise an opened idle collecting node or a node blocked on failed
+integration verification without an escalation. Use
+`ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
+`ab answer <node> --revise-spec-from-ticket`. Ticket edits alone do not revise
+the build. Both forms enforce the same spec standard as leaf revisions.
+Each kernel `spec.revised` records the exact artifact and operator identity
+(with optional transport provenance); earlier revisions remain readable.
+Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
+The node recollects and verifies the new revision, including on the same head
+and parent after a failed cycle. Earlier cycles remain historical evidence
+and cannot block or authorize landing under the replacement. Children keep
+their specs, claims and targets; contributions are not restarted.
+Active verification/reconcile or writer work, restack/reparent work, pause,
+pending controls, landing intent and ended PRs refuse the no-escalation path.
+A concurrent state change refuses publication with a retry explanation;
+uncited artifacts are inert. Leaves still require an open escalation and
+restart from `plan`.
+
 ## The registry's protocol face: `POST …/tools/{tool}`
 
 One generic route executes any entry of the agent tool registry (the same
