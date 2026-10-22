@@ -882,6 +882,26 @@ Cross-field validation rejects:
 selectors are validated even though the mandatory step will not use them for
 applicability.
 
+In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
+`range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
+has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
+`specPath` and `commits`. The JSON index repeats this metadata and adds the
+exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
+and reflect scratch allocation, including legacy tracked-file collisions.
+Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
+normally lives at `.ab/node-verification.json`. These files are marked `derived`
+in `materialized`, with their source build and revision recorded in the metadata.
+
+Membership comes from build identity trailers on every commit reachable in the
+frozen parent-to-head range, including earlier cycles and merge side history.
+Specs use the current event-authorized revision, never an unsanctioned latest
+deposit or mutable ticket body. Unknown identities, ambiguous or invalid trailers,
+and missing source data fail hydration. Commits without a build trailer are
+listed as unattributed; this introduces no new intent or verdict policy.
+A node change is authorized when the node spec or the spec of the contribution
+that introduced it covers it; use the commit mapping to find that spec.
+Leaf verification context is unchanged.
+
 ### Role routing for an agent verify step
 
 An agent verify step selects `[roles.<step>]` by its **logical step name** —
