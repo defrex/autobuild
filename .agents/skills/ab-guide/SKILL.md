@@ -1884,7 +1884,7 @@ With no slugs the repository journal is included; named watches add it with
 
 The default watch reports actionable conditions only:
 
-- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node.
+- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
 
 - `build.janitor-failing`: a build has failed janitor attempts for the configured attention threshold. A successful attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.

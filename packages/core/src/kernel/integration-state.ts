@@ -139,40 +139,43 @@ export function integrationNeedsRunner(state: BuildState): boolean {
   return integrationCurrent(state) && !integrationFailed(state) && !integrationCycleVerified(state)
 }
 
-/** Reporting history is independent of the current cycle's repair eligibility. */
+/** Only the current failed cycle can still require a repair child. */
 export function missingIntegrationFailures(
   state: BuildState,
   slug: string,
 ): EventPayload<'integration.verification-failed'>[] {
   if (state.kind !== 'node' || state.status === 'done' || state.status === 'aborted') return []
-  const cycles =
-    state.integration?.cycles ?? (state.integration?.cycle ? [state.integration.cycle] : [])
-  return cycles.flatMap((cycle) => {
-    if (state.integration?.failures?.some((failure) => failure.id === cycle.id)) return []
-    const steps = [
-      ...new Set(
-        state.verify.results
-          .filter(
-            (result) =>
-              result.seq > cycle.seq &&
-              result.restackId === cycle.id &&
-              result.headSha === cycle.head &&
-              result.baseSha === cycle.parent &&
-              result.outcome === 'fail',
-          )
-          .map((result) => result.step),
-      ),
-    ]
-    return steps.length
-      ? [
-          {
-            id: cycle.id,
-            head: cycle.head,
-            parent: cycle.parent,
-            steps,
-            guidance: `file a repair child targeting this node: ${slug}`,
-          },
-        ]
-      : []
-  })
+  const cycle = state.integration?.cycle
+  if (
+    !cycle ||
+    state.nodeComparison?.headSha !== cycle.head ||
+    state.nodeComparison?.parentSha !== cycle.parent
+  )
+    return []
+  if (state.integration?.failures?.some((failure) => failure.id === cycle.id)) return []
+  const steps = [
+    ...new Set(
+      state.verify.results
+        .filter(
+          (result) =>
+            result.seq > cycle.seq &&
+            result.restackId === cycle.id &&
+            result.headSha === cycle.head &&
+            result.baseSha === cycle.parent &&
+            result.outcome === 'fail',
+        )
+        .map((result) => result.step),
+    ),
+  ]
+  return steps.length
+    ? [
+        {
+          id: cycle.id,
+          head: cycle.head,
+          parent: cycle.parent,
+          steps,
+          guidance: `file a repair child targeting this node: ${slug}`,
+        },
+      ]
+    : []
 }

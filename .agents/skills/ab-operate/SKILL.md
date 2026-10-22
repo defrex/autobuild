@@ -334,7 +334,7 @@ outcomes or self-healing failures.
 
 Treat every default-watch record as a call to act:
 
-- `integration.verification-failed`: inspect the failed steps, verified head and parent; file a repair child targeting the named node. Each failed cycle reports once.
+- `integration.verification-failed`: inspect the failed steps, verified head and parent, then recheck current status. If the node still needs that repair, file a repair child targeting it. Each current failed cycle reports once; recovery does not backfill superseded failures. The node may have advanced after notification.
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
 - `build.consent-ready`: inspect the one consent queue, then land or hold the

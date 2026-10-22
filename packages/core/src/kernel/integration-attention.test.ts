@@ -116,7 +116,7 @@ test('CAS contention and restarts report each failed cycle once, retaining histo
   // Identical SHAs still define a separate episode.
   await cycle(store, 'second')
   await receipt(store, { restackId: 'second' })
-  // Move again before recovery: neither historical failure may be lost.
+  // A superseded, unreported failure no longer requires a repair notification.
   await cycle(
     store,
     'third',
@@ -129,8 +129,8 @@ test('CAS contention and restarts report each failed cycle once, retaining histo
     baseSha: 'dddddddddddddddddddddddddddddddddddddddd',
   })
   await reportIntegrationFailures(store, 'node')
-  expect(await reports(store)).toHaveLength(3)
-  expect((await facts(store)).integration?.failures).toHaveLength(3)
+  expect((await reports(store)).map((event) => event.payload.id)).toEqual(['first', 'third'])
+  expect((await facts(store)).integration?.failures).toHaveLength(2)
 })
 
 test('receipts must match cycle, head, parent, ordering and failure outcome; leaves stay silent', async () => {
@@ -211,4 +211,57 @@ test('shared dashboard exposes repair text and vocabulary, then removes it after
   await reportIntegrationFailures(store, 'node')
   await cycle(store, 'repaired', 'f'.repeat(40))
   expect((await row())?.blockers).toEqual([])
+})
+
+test('recovery does not backfill superseded failures on running or repaired nodes', async () => {
+  for (const outcome of [undefined, 'pass'] as const) {
+    const store = await seed()
+    await receipt(store)
+    await cycle(store, 'second')
+    await receipt(store, { restackId: 'second' })
+    await cycle(store, 'repair', 'f'.repeat(40))
+    if (outcome)
+      await receipt(store, {
+        restackId: 'repair',
+        headSha: 'f'.repeat(40),
+        outcome,
+      })
+    await reportIntegrationFailures(store, 'node')
+    await reportIntegrationFailures(store, 'node')
+    expect(await reports(store)).toEqual([])
+    expect(
+      (await facts(store)).verify.results.filter((result) => result.outcome === 'fail'),
+    ).toHaveLength(2)
+  }
+})
+
+test('recovery discards a stale repair proposal when a new cycle wins the CAS race', async () => {
+  const store = await seed()
+  await receipt(store)
+  const append = store.appendIfCurrent.bind(store)
+  let moved = false
+  store.appendIfCurrent = async (...args) => {
+    if (!moved) {
+      moved = true
+      await cycle(store, 'repair', 'f'.repeat(40))
+      await receipt(store, { restackId: 'repair', headSha: 'f'.repeat(40), outcome: 'pass' })
+    }
+    return append(...args)
+  }
+  await reportIntegrationFailures(store, 'node')
+  expect(await reports(store)).toEqual([])
+})
+
+test('a changed observed head or parent suppresses an obsolete failure before preparation', async () => {
+  for (const change of [{ headSha: 'f'.repeat(40) }, { parentSha: 'f'.repeat(40) }]) {
+    const store = await seed()
+    await receipt(store)
+    await store.append('node', {
+      actor: DISPATCHER,
+      type: 'node.compared',
+      payload: { headSha: 'a'.repeat(40), parentSha: 'b'.repeat(40), ahead: 1, ...change },
+    })
+    await reportIntegrationFailures(store, 'node')
+    expect(await reports(store)).toEqual([])
+  }
 })

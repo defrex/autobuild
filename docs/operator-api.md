@@ -238,7 +238,7 @@ record the first signal in the stop fact, and release its lease before exit.
 
 The default watch reports actionable conditions only:
 
-- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node.
+- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
 
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.

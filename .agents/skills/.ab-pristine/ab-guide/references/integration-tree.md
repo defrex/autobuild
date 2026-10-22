@@ -127,7 +127,7 @@ publication; tracker edits cannot be transactional with a forge write.
 
 The kernel runs all configured verify steps with normal path applicability on
 the exact node head and parent. Either moving invalidates eligibility, even a
-clean restack. Failed verification blocks the node and emits `integration.verification-failed` once per prepared cycle. Default watch and new hosted wake settings include it; `ab wait --for attention` also detects the current failure before notification. The fact names failed steps, head, parent and repair guidance. Watch baselines prior failures; reconcile status after arming. A new cycle can notify again, while historical facts do not keep a repaired node blocked. To recover, file a repair child targeting
+clean restack. Failed verification blocks the node and emits `integration.verification-failed` once per prepared cycle. Default watch and new hosted wake settings include it; `ab wait --for attention` also detects the current failure before notification. The fact names failed steps, head, parent and repair guidance. Watch baselines prior failures; reconcile status after arming. A new cycle can notify again, while historical facts do not keep a repaired node blocked. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled. Recheck current status before filing a repair, since the node may have advanced after notification. To recover, file a repair child targeting
 it; the repaired landed head permits a new cycle. Historical reports keep their
 actual head/base citations. Integration grammar is collect → verify → land →
 close, with restacking and repair cycles along the way.
