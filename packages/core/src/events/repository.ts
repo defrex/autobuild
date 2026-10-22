@@ -576,7 +576,7 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.runner-settled': z.strictObject({
     run: dispatchRun,
     slug: z.string().min(1),
-    outcome: z.enum(['parked', 'lease-held', 'launch-failed', 'failed']),
+    outcome: z.enum(['parked', 'lease-held', 'launch-failed', 'failed', 'relaunch']),
     status: z.string().min(1).optional(),
     error: z.string().min(1).optional(),
   }),

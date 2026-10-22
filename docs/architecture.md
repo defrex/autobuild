@@ -454,7 +454,13 @@ initial spawn and across handoffs, including when later config edits are invalid
 and rendering. The old kernel releases repository authority but retains local
 execution supervision until completion or the hot policy deadline. Build-log
 execution authorization permits expected mixed-version deferral without restart
-attention. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
+attention. Accepted authorization also carries the target runtime.
+`processes/execution-relaunch.ts` compares immutable identities from existing
+boundary facts; local runners finish the phase, record an instance-correlated
+relaunch request and clean up. Confirmed teardown records a neutral relaunch
+outcome. The current owner's ordinary lease sweep resumes durable work promptly,
+including after an ownership gap; remote execution and deadline suspension keep
+their existing paths. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
 after a predecessor dies. Cutover suspends immediately when provider evidence
 cannot establish safe overlap. Automatic upgrades can be disabled; targets
 without preflight capability require manual restart.
