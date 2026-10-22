@@ -221,14 +221,24 @@ The distinctions that change an administrator's answer:
   installation pathname, retained across handoffs. Feature branches and checkout
   pins never choose the target. Preparation validates an exact runtime in isolation;
   failures retain the current generation and raise repository attention, suppressed
-  for the same input until metadata changes or a fresh operator launch. Cutover
-  suspends all live local build sessions and waits for their durable writes before
-  exiting. Eligible native handles resume; other sessions record a reasoned fresh
-  fallback. Local harvest is interrupted and rerun through existing recovery.
-  A runtime-owned journal reader gives the launcher its own durable handoff;
-  generations run sequentially and completion requires successor ownership.
-  `[upgrade] automatic = false` disables preparation/cutover. Manual restart is
-  required when disabled or when the launcher contract changes.
+  for the same input until target or selected-store compatibility evidence changes or a fresh operator launch. The successor
+  preflights config, selected-store compatibility and durable protocol writes before
+  requesting yield. SQLite compares semantic schema requirements, accepting equivalent
+  migrated catalogs without initializing the live store. A failed request cannot be
+  accepted or revived by detection; a newly prepared attempt must pass preflight.
+  Compatible generations drain: the predecessor releases terminal
+  input/rendering and repository authority, then supervises only captured local
+  executions while the successor owns ticks and launches. Unknown/incompatible
+  provider evidence selects immediate-suspension cutover. Rejected protocol writes
+  fail preflight and preserve the predecessor. The hot `policy.upgradeDrainSeconds`
+  defaults to 900; remaining local sessions suspend at that deadline and resume
+  natively where eligible, with reasoned fresh fallback otherwise. Remote runners
+  detach. Repository-owned harvest/provisioning work joins before lease release.
+  Durable takeover and retirement completion are separate; status exposes both
+  runtimes, outstanding draining executions and deadline. The launcher keeps live
+  runtimes reserved and joins all children on operator stop. `[upgrade] automatic =
+  false` disables preparation. A target or launcher without negotiated preflight/overlap capability, or a changed
+  launcher contract, requires manual restart.
   Current, distinct previous, held and live-process runtimes survive pruning.
   Cached Bun entries disable auto-install and explicitly pin a neutral compiler
   config. Third-party files remain as installed. `--plain`/non-TTY run directly
@@ -638,6 +648,9 @@ without consuming that budget.
 
 Classified session deferrals consume no phase failures. Unsupported decisive
 facts retain the mixed-version wait gate and durable compatibility diagnostic.
+During an accepted drain, an unsettled build-log authorization suppresses restart
+attention only for the exact predecessor runtime and execution instance. The old
+runner still exits for relaunch; a later execution never inherits authorization.
 When the scoped `ab context` initial own-build read fails, the CLI best-effort
 writes `session.build-read-failed` with exact session, phase, round, operation
 `context`, reason `own-build-read`, and diagnostic. A valid terminal from that
@@ -838,6 +851,7 @@ nonnegative integer so zero can disable that trigger.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
+| `upgradeDrainSeconds` | `900` | positive integer | Local generation drain deadline from handoff start; hot-reloaded while draining. |
 | `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it; native continuation retains accumulated time and excludes suspension. |
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps distinct failed verify cycles since the latest spec revision; passed and skipped cycles cost zero. |
@@ -1055,10 +1069,11 @@ commit, and the PR; a refused or failed attempt is journaled too.
 `[upgrade] automatic` is a strict boolean, defaults to `true`, and hot-reloads.
 Resident checkout dispatchers check every 60 seconds, independently of tick cadence.
 Exact changed targets can include downgrades. Missing or inconsistent declared-pin
-metadata never falls back to installed mode. Source tracking, overlapping
-generations and rollback are deferred. `--once`, origin/hosted and direct hot
+metadata never falls back to installed mode. Source tracking and rollback are deferred.
+Compatible generations overlap through the durable draining handoff described above. `--once`, origin/hosted and direct hot
 presentation modes bypass automatic adoption. Operator stop wins over cutover.
-Repository status exposes per-run upgrade target, failure and handoff facts;
+Repository status exposes per-run upgrade target, failure and handoff facts, both
+generations, takeover, outstanding draining builds and deadline;
 `dispatcher.upgrade-failed` is actionable attention. Unrelated base commits do not
 retry an unchanged failed target. No registry credentials belong in these facts.
 
@@ -1205,7 +1220,11 @@ existing exit code is unchanged; upgrade never pushes or rewrites history.
 With automatic upgrades enabled, pinned dispatchers adopt the changed version
 once the commit reaches the configured base branch. Installed-mode dispatchers
 follow their original installation when its version changes. A skill-only merge
-does not itself change a runtime version.
+does not itself change a runtime version. The successor passes config/store and
+protocol-write preflight before yield; compatible generations drain, otherwise
+cutover suspends immediately. Existing runners keep execution leases while the
+successor owns repository work. Remaining local sessions suspend at the hot drain
+deadline and resume through their durable session records.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
