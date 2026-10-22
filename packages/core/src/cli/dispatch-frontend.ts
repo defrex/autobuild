@@ -1,3 +1,6 @@
+import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
+import { readDispatchUpgrade } from '../store/reduced-reads'
+import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
@@ -273,6 +276,7 @@ export class DispatchFrontend {
   }
 
   private paint(): void {
+    if (this.presentationRestored) return
     if (this.refresh !== undefined && !this.refresh.painting) return
     if (this.model === undefined) return
     const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
@@ -1058,7 +1062,7 @@ export class DispatchFrontend {
     } catch {
       // Final presentation remains best-effort.
     } finally {
-      this.region.finish()
+      if (!this.presentationRestored) this.region.finish()
     }
   }
 
@@ -1096,6 +1100,36 @@ export class DispatchFrontend {
       env: this.opts.env,
       options,
     })
+    let releaseWork: Promise<void> | undefined
+    let releaseAcknowledged = false
+    const releaseTimer = setInterval(() => {
+      if (releaseWork || releaseAcknowledged || this.operatorStopRequested) return
+      releaseWork = (async () => {
+        const state = (await readDispatchUpgrade(this.opts.store, this.opts.repo)).value.runs[
+          this.runId
+        ]
+        if (!state?.request || !state.handoff || state.failure) return
+        if (state.released) {
+          releaseAcknowledged = true
+          return
+        }
+        if (!this.presentationRestored) {
+          await this.finishPresentation()
+          this.presentationRestored = true
+          releaseDispatchPresentation()
+        }
+        await this.opts.store.appendRepo(this.opts.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.terminal-released',
+          payload: state.prepared!.payload,
+        })
+        releaseAcknowledged = true
+      })()
+        .catch(() => {})
+        .finally(() => {
+          releaseWork = undefined
+        })
+    }, 1_000)
     const stop = (): void => this.requestOperatorStop()
     this.opts.signal?.addEventListener('abort', stop, { once: true })
     try {
@@ -1103,6 +1137,7 @@ export class DispatchFrontend {
       if (this.opts.signal?.aborted) this.requestOperatorStop()
       const result = await this.child.completed
       if (
+        !this.presentationRestored &&
         !(result.outcome === 'normal' && result.exitCode === 0) &&
         !(result.outcome === 'forced' && this.operatorStopRequested)
       ) {
@@ -1117,6 +1152,8 @@ export class DispatchFrontend {
         )
       }
     } finally {
+      clearInterval(releaseTimer)
+      await releaseWork
       this.opts.signal?.removeEventListener('abort', stop)
       await this.child.stop()
       await this.finishPresentation()
