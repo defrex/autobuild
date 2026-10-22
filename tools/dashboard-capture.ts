@@ -602,6 +602,8 @@ mode = "auto"
         type: 'node.writer-settled',
         payload: { id: 'intent-replay', outcome: 'completed' },
       })
+      // These provenance facts must not shift the established leaf timeline.
+      harness.clock.advance(-6000)
     }
     await harness.store.append(slug, {
       actor: DISPATCHER,
@@ -612,6 +614,7 @@ mode = "auto"
         foreign: label === 'with-pr' ? ['a'.repeat(40)] : [],
       },
     })
+    harness.clock.advance(-1000)
     await harness.store.append(slug, {
       actor: DISPATCHER,
       type: 'node.compared',
