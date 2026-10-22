@@ -128,7 +128,9 @@ publication; tracker edits cannot be transactional with a forge write.
 The kernel runs all configured verify steps with normal path applicability on
 the exact node head and parent. Either moving invalidates eligibility, even a
 clean restack. Failed verification blocks the node and emits `integration.verification-failed` once per prepared cycle. Default watch and new hosted wake settings include it; `ab wait --for attention` also detects the current failure before notification. The fact names failed steps, head, parent and repair guidance. Watch baselines prior failures; reconcile status after arming. A new cycle can notify again, while historical facts do not keep a repaired node blocked. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled. Recheck current status before filing a repair, since the node may have advanced after notification. To recover, file a repair child targeting
-it; the repaired landed head permits a new cycle. Historical reports keep their
+it; the repaired landed head permits a new cycle. If the contract changed, an
+operator can explicitly revise the spec instead and verify again on the same head
+(see operator node spec revisions below). Historical reports keep their
 actual head/base citations. Integration grammar is collect → verify → land →
 close, with restacking and repair cycles along the way.
 
@@ -209,3 +211,23 @@ active polling and action-time readiness checks remain fresh. Successful
 `node.poll-checked` facts preserve quiet history across restarts; missing facts
 force a fresh check. `ab build status` reports active or idle cadence and the
 last successful check (or unrecorded evidence).
+
+## Operator node spec revisions
+
+Operators may explicitly revise an opened idle collecting node or a node blocked on failed
+integration verification without an escalation. Use
+`ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
+`ab answer <node> --revise-spec-from-ticket`. Ticket edits alone do not revise
+the build. Both forms enforce the same spec standard as leaf revisions.
+Each kernel `spec.revised` records the exact artifact and operator identity
+(with optional transport provenance); earlier revisions remain readable.
+Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
+The node recollects and verifies the new revision, including on the same head
+and parent after a failed cycle. Earlier cycles remain historical evidence
+and cannot block or authorize landing under the replacement. Children keep
+their specs, claims and targets; contributions are not restarted.
+Active verification/reconcile or writer work, restack/reparent work, pause,
+pending controls, landing intent and ended PRs refuse the no-escalation path.
+A concurrent state change refuses publication with a retry explanation;
+uncited artifacts are inert. Leaves still require an open escalation and
+restart from `plan`.

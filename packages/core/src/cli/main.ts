@@ -292,6 +292,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
       }
       if (result.resolution === 'revise-spec') {
         const revision = result.specRev === undefined ? '' : ` (spec rev ${result.specRev})`
+        if (result.nodeRevision)
+          return `build ${result.slug}: revised node spec${revision}; collecting for a new verification cycle`
         if (result.authorizedEarlier === true) {
           return `build ${result.slug}: completed the spec revision recorded earlier${revision}; the body supplied now was not used${
             result.resumed ? '; resume requested' : ''

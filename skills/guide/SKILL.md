@@ -684,7 +684,7 @@ Agent verifiers may also use `ab verdict pass`,
 skip reason is required and
 must be non-blank; no failure report is required. Either kind of skip satisfies
 that step for the current cycle and advances, but it is not a pass and never
-masks another step's failure. Only failures return the build to `implement` and
+masks another step's failure. For leaves, failures return the build to `implement` and
 consume `[policy].maxVerifyAttempts` once per distinct failed cycle since the
 latest spec revision. Passing target-movement cycles cost zero; cycle identifiers
 remain monotonic across restacks and reconciles. Skips retain the cycle's attempt number
@@ -1758,8 +1758,8 @@ to the build's event log and apply the same write-time checks.
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
-| Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | Human `escalation.answered` events naming the exact replacement revision, then kernel `spec.revised`. |
-| Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same `revise-spec` answer and `spec.revised` sequence. |
+| Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
+| Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
 | Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
@@ -1857,21 +1857,39 @@ and must use a fresh id without `persists` if a genuinely different problem
 touches the same code. Dismissal settles a chain, not a file or the reviewer's
 ability to report new problems.
 
-Spec revision requires an open escalation. `--revise-spec` reads a conforming
+Leaf spec revision requires an open escalation. `--revise-spec` reads a conforming
 replacement from a file; `--revise-spec-from-ticket` re-imports the build's
 recorded ticket after an operator amends it. The human `escalation.answered`
 fact names the exact deposited revision it authorizes, then kernel
 `spec.revised` publishes it. If interrupted between those facts, a retry
 completes the recorded body and does not use a newly supplied one. A
-non-conforming body records nothing. The build restarts from `plan` on the new
+non-conforming body records nothing. The leaf restarts from `plan` on the new
 revision and keeps any open PR. A build's spec can therefore change under it:
 phase runs after the revision read the new revision, while historical runs
 remain readable at the revision they actually saw.
 
+Operators may explicitly revise an opened idle collecting node or a node blocked on failed
+integration verification without an escalation. Use
+`ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
+`ab answer <node> --revise-spec-from-ticket`. Ticket edits alone do not revise
+the build. Both forms enforce the same spec standard as leaf revisions.
+Each kernel `spec.revised` records the exact artifact and operator identity
+(with optional transport provenance); earlier revisions remain readable.
+Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
+The node recollects and verifies the new revision, including on the same head
+and parent after a failed cycle. Earlier cycles remain historical evidence
+and cannot block or authorize landing under the replacement. Children keep
+their specs, claims and targets; contributions are not restarted.
+Active verification/reconcile or writer work, restack/reparent work, pause,
+pending controls, landing intent and ended PRs refuse the no-escalation path.
+A concurrent state change refuses publication with a retry explanation;
+uncited artifacts are inert. Leaves still require an open escalation and
+restart from `plan`.
+
 Every command requires an applicable target in this repository. Pause and
 resume require an active build; abort and hold also accept queued builds.
 Land requires a ready candidate and cannot bypass verification or merge gates;
-`ab answer` additionally requires an open escalation. A stale, missing, done,
+`ab answer` requires an open escalation except for eligible node spec revisions. A stale, missing, done,
 aborted, or otherwise inapplicable target is an error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
 same stable fallback on both surfaces. These commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > `[store] url` > repository

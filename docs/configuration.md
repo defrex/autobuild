@@ -2030,7 +2030,7 @@ attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
 ### Failure budgets and own-build read deferrals
 
-`policy.maxVerifyAttempts` counts distinct failed logical verify cycles after
+For leaves, `policy.maxVerifyAttempts` counts distinct failed logical verify cycles after
 the latest spec revision. Passing and skipped cycles, including target movement
 through restack or reconcile, consume zero. Cycle identifiers remain monotonic;
 pass, pass, pass, fail at cycle 4 spends one failure. Duplicate completion
