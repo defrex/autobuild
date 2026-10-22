@@ -1728,7 +1728,7 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
 })
 
 describe('reduceBuild: publication loss record (AUT-328)', () => {
-  test('publication.lost is an inert fact: the state only advances its sequence', () => {
+  test('publication.lost advances sequence and polling activity without changing workflow', () => {
     const before = toLog([
       ev('runner.attached', { instance: 'runner-1', host: 'local' }),
       ev('publication.requested', {
@@ -1761,15 +1761,17 @@ describe('reduceBuild: publication loss record (AUT-328)', () => {
       }),
     ])
     const next = reduceBuild(after)
-    // Same projection as before the loss fact, apart from the seq advance —
-    // recovery runs through the abandoned-publication flow, not the reducer.
-    expect({ ...next, lastSeq: 0, lastEvent: undefined }).toEqual({
+    // Workflow remains unchanged; polling activity wakes recovery and children.
+    // Recovery runs through the abandoned-publication flow, not the reducer.
+    expect({ ...next, pollingActivity: undefined, lastSeq: 0, lastEvent: undefined }).toEqual({
       ...state,
+      pollingActivity: undefined,
       lastSeq: 0,
       lastEvent: undefined,
     })
     expect(next.lastSeq).toBe(state.lastSeq + 1)
     expect(next.lastEvent?.type).toBe('publication.lost')
+    expect(next.pollingActivity?.['publication.lost']).toBe(String(next.lastSeq))
   })
 })
 
@@ -2213,4 +2215,23 @@ test('handle-free pause suspension replays incrementally and preserves an observ
     })
     expect(state.sessions.suspended[0]!.nativeHandle).toEqual(observed ? handle : undefined)
   }
+})
+
+test('node polling checkpoints replay incrementally without becoming activity', () => {
+  const log = toLog([
+    ev('node.opened', { sha: 'head' }),
+    ev('node.compared', { headSha: 'head', parentSha: 'parent', ahead: 0 }),
+    ev('node.poll-checked', {
+      activityKey: 'stable-key',
+      unchangedSince: '2026-07-15T12:00:00.000Z',
+      nodeIdleAfterSeconds: 600,
+      nodeIdlePollSeconds: 120,
+    }),
+  ])
+  const state = reduceBuild(log)
+  const checkpoint = log[2]!
+  if (checkpoint.type !== 'node.poll-checked') throw new Error('expected checkpoint fixture')
+  expect(state.nodePolling).toEqual({ ...checkpoint.payload, checkedAt: checkpoint.ts })
+  expect(state.pollingActivity?.['node.poll-checked']).toBeUndefined()
+  expect(reduceBuild([]).nodePolling).toBeUndefined()
 })

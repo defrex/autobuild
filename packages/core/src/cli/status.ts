@@ -1,3 +1,4 @@
+import { nodeActivityKey, nodePollingSchedule } from '../kernel/node-polling'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, type TreeProjection } from './dashboard/tree'
@@ -150,6 +151,7 @@ export type BuildDecisionProjection =
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
+  nodePolling?: { mode: 'active' | 'idle'; intervalSeconds: number; lastChecked?: string }
   tree?: TreeProjection
   /** Immutable policy provenance and durable command/native application state. */
   landing?: BuildState['landing']
@@ -550,6 +552,10 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
 /** Labeled sections, each omitted when absent ("when each is available"). */
 export function renderDetail(d: BuildDetail, now: Date): string[] {
   const lines: string[] = [`build ${d.slug}`]
+  if (d.nodePolling)
+    lines.push(
+      `  node polling: ${d.nodePolling.mode === 'idle' ? `idle; polled every ${d.nodePolling.intervalSeconds} seconds` : 'active; polled every tick'}; last checked: ${d.nodePolling.lastChecked ?? 'unrecorded'}`,
+    )
   if (d.compatibility)
     lines.push(
       `  newer facts: ${d.compatibility.unknownFacts} (${d.compatibility.decisiveFacts} decisive)`,
@@ -1086,8 +1092,40 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     )
     const configMeta =
       configArtifact !== null ? parseBuildConfigMetadata(configArtifact) : undefined
+    let nodePolling: BuildDetail['nodePolling']
+    if (
+      facts.state.kind === 'node' &&
+      facts.state.status !== 'done' &&
+      facts.state.status !== 'aborted' &&
+      facts.state.prState !== 'closed' &&
+      facts.state.prState !== 'merged'
+    ) {
+      const children: { slug: string; state: BuildState }[] = []
+      for (const child of await context.store.listBuilds()) {
+        if (child.repo !== record.repo) continue
+        const state = (await readBuildFacts(context.store, child.slug)).value.state
+        if (state.target?.build === record.slug) children.push({ slug: child.slug, state })
+      }
+      // The checkpoint records the dispatcher's hot policy. A held node's
+      // launch artifact can predate later policy changes.
+      const policy = {
+        nodeIdleAfterSeconds: facts.state.nodePolling?.nodeIdleAfterSeconds ?? 600,
+        nodeIdlePollSeconds: facts.state.nodePolling?.nodeIdlePollSeconds ?? 120,
+      }
+      nodePolling = nodePollingSchedule(
+        facts.state,
+        nodeActivityKey(facts.state, children),
+        policy,
+        now,
+        facts.open !== null ||
+          facts.publication.pending() ||
+          facts.publication.abandonedPending() ||
+          undefined,
+      )
+    }
     const d: BuildDetail = {
       ...projected,
+      ...(nodePolling ? { nodePolling } : {}),
       ...(configMeta?.revision !== undefined ? { effectiveConfigRev: configMeta.revision } : {}),
       ...(configMeta?.pipelineSource !== undefined
         ? { pipelineSource: configMeta.pipelineSource }

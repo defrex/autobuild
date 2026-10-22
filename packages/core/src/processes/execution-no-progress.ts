@@ -57,6 +57,7 @@ export const executionProgress = {
   'node.parent-rejection-cleared': 'bookkeeping',
   'node.parent-rejected': 'bookkeeping',
   'node.opened': 'progress',
+  'node.poll-checked': 'bookkeeping',
   'node.compared': 'bookkeeping',
   'pr.opened': 'progress',
   'build.completed': 'progress',
