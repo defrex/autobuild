@@ -33,3 +33,13 @@ test('request hotspots require at least two requests and a strict majority of at
     }).success,
   ).toBe(false)
 })
+
+test('historical counts retain unknown categories and new counts round trip', () => {
+  const old = { total: 5, unattributed: 5, builds: [], complete: true }
+  expect(forgeRequestCountsSchema.parse(old)).toEqual(old)
+  const current = { ...old, restPrimary: 1, restNotModified: 2, graphql: 1 }
+  expect(forgeRequestCountsSchema.parse(JSON.parse(JSON.stringify(current)))).toEqual(current)
+  for (const key of ['restPrimary', 'restNotModified', 'graphql']) {
+    expect(forgeRequestCountsSchema.safeParse({ ...current, [key]: -1 }).success).toBe(false)
+  }
+})

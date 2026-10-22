@@ -2694,6 +2694,18 @@
         "complete": {
           "type": "50",
           "optional": false
+        },
+        "restPrimary": {
+          "type": "36",
+          "optional": true
+        },
+        "restNotModified": {
+          "type": "36",
+          "optional": true
+        },
+        "graphql": {
+          "type": "36",
+          "optional": true
         }
       }
     },

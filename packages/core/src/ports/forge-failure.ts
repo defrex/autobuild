@@ -34,6 +34,7 @@ export function isForgeFailure(error: unknown): error is ForgeFailure {
 }
 
 export interface ForgeRequestContext {
+  outcome?: 'restPrimary' | 'restNotModified' | 'graphql'
   build?: string
 }
 /** Called once for each actual provider request, including failed requests. */

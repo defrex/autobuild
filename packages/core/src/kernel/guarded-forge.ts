@@ -95,7 +95,7 @@ export function guardForge(
           )
             return wrap(value)
           if (typeof value !== 'function') return value
-          if (key === 'observeRequests') return value.bind(target)
+          if (key === 'observeRequests' || key === 'withReadScope') return value.bind(target)
           return async function invoke(...args: unknown[]): Promise<unknown> {
             await before()
             let requested = false

@@ -91,3 +91,40 @@ test('runner composition retries a new limit only after durable dispatcher recov
     'dispatcher.forge-recovered',
   ])
 })
+
+test('scope callbacks and observation cache hits cannot prove forge recovery', async () => {
+  const { GitHubForge } = await import('../ports/forge/github')
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
+  let calls = 0
+  const raw = new GitHubForge({
+    repository: 'acme/repo',
+    transport: async () => {
+      calls++
+      return { status: 200, headers: {}, json: { commit: { sha: 'head' } } }
+    },
+  })
+  const forge = guardForge(raw, { store, repo: 'r', name: 'github', now })
+  await forge.withReadScope!(async () => {
+    expect(await forge.remoteBranchSha!('main')).toBe('head')
+    await store.appendRepo('r', {
+      actor: { kind: 'dispatcher' },
+      type: 'dispatcher.forge-degraded',
+      payload: {
+        forge: 'github',
+        message: 'limit',
+        firstFailureAt: now().toISOString(),
+        resetAt: now().toISOString(),
+      },
+    })
+    expect(await forge.remoteBranchSha!('main')).toBe('head')
+    expect(calls).toBe(1)
+  })
+  expect(await readForgeHealth(store, 'r')).toBeDefined()
+  await forge.withReadScope!(async () => {})
+  expect(await readForgeHealth(store, 'r')).toBeDefined()
+  await forge.remoteBranchSha!('main')
+  expect(calls).toBe(2)
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+})

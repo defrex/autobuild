@@ -90,6 +90,35 @@ async function pushAndOpen(harness: ForgeContractHarness): Promise<{
  */
 export function describeForgeContract(name: string, factory: ForgeContractFactory): void {
   describe(`Forge contract: ${name}`, () => {
+    test('optional observation scope preserves concurrent reads and fresh mutation readback', async () => {
+      await withForge(
+        factory,
+        undefined,
+        async ({ forge, workspacePath, head, base, title, body }) => {
+          if (!forge.withReadScope) return
+          const pr = await forge.openPr({ workspacePath, head, base, title, body })
+          await forge.withReadScope(async () => {
+            const states = await Promise.all([
+              forge.getPrState(workspacePath, pr.number),
+              forge.getPrState(workspacePath, pr.number),
+            ])
+            expect(states[0]).toEqual(states[1])
+            await forge.closePr(workspacePath, pr.number)
+            expect((await forge.getPrState(workspacePath, pr.number)).state).toBe('closed')
+          })
+          await forge.withReadScope(async () => {
+            expect((await forge.getPrState(workspacePath, pr.number)).state).toBe('closed')
+          })
+          await expect(
+            forge.withReadScope(async () => {
+              throw new Error('scope teardown')
+            }),
+          ).rejects.toThrow('scope teardown')
+          expect((await forge.getPrState(workspacePath, pr.number)).state).toBe('closed')
+        },
+      )
+    })
+
     test('optional request observation registers and disposes without requiring legacy adapters', async () => {
       await withForge(factory, undefined, async ({ forge }) => {
         if (!forge.observeRequests) return

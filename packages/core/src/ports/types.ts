@@ -526,6 +526,16 @@ export type {
 } from './forge-failure'
 
 export interface Forge {
+  /** Optional observation epoch. Concurrent operations outside the callback stay independent. */
+  withReadScope?<T>(work: () => Promise<T>): Promise<T>
+  /** Prime opened-node observations; absent capabilities preserve ordinary reads. */
+  primeNodeReads?(input: {
+    workspacePath: string
+    parent: string
+    head: string
+    prNumber?: number
+  }): Promise<void>
+
   /** Optional API 1.8 capability. Absence means unavailable counts. */
   observeRequests?(observer: import('./forge-failure').ForgeRequestObserver): () => void
 

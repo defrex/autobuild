@@ -402,8 +402,8 @@ describe('GitHubForge abort cleanup', () => {
       { status: 304 },
       // The close mutation.
       {},
-      // closePr's `after` read revalidates the same ETag, but the
-      // representation changed: a 200 reports closed and refreshes the entry.
+      // Mutation invalidates the validator before acknowledgement; a fresh
+      // 200 reports closed and refreshes the entry.
       {
         json: { state: 'closed', merged: false, mergeable: null, merge_commit_sha: null },
         headers: { etag: '"etag-after"' },
@@ -421,7 +421,7 @@ describe('GitHubForge abort cleanup', () => {
     ])
     expect(calls[0]?.opts).toBeUndefined()
     expect(calls[1]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-before"' } })
-    expect(calls[3]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-before"' } })
+    expect(calls[3]?.opts).toBeUndefined()
     expect(await forge.getPrState('/repo', 42)).toEqual({ state: 'closed' })
     expect(calls.at(-1)?.opts).toEqual({ headers: { 'If-None-Match': '"etag-after"' } })
   })
@@ -430,7 +430,7 @@ describe('GitHubForge abort cleanup', () => {
     const existing = makeForge([{}, {}])
     await existing.forge.deleteBranch('/repo', 'ab/work')
     expect(paths(existing.calls)).toEqual([
-      'GET repos/acme/app/git/ref/heads/ab/work',
+      'GET repos/acme/app/git/ref/heads/ab%2Fwork',
       'DELETE repos/acme/app/git/refs/heads/ab/work',
     ])
 
@@ -2403,3 +2403,288 @@ test('a cooldown established between wire calls remains a scheduling deferral', 
   ).rejects.toBe(deferred)
   expect(calls).toBe(0)
 })
+
+describe('tick observations', () => {
+  const pr = {
+    state: 'open',
+    merged: false,
+    mergeable: true,
+    merge_commit_sha: null,
+    head: { sha: 'node-sha', ref: 'ab/node', repo: { full_name: 'acme/app' } },
+  }
+  const comparison = { base_commit: { sha: 'parent-sha' }, ahead_by: 2, behind_by: 1 }
+
+  test.each([true, false])(
+    'node priming shares all stages and revalidates three ticks (PR=%s)',
+    async (hasPr) => {
+      const first = hasPr ? pr : { commit: { sha: 'parent-sha' } }
+      const compared = hasPr
+        ? comparison
+        : { base_commit: { sha: 'node-sha' }, ahead_by: 1, behind_by: 2 }
+      const { forge, calls } = makeForge([
+        { json: first, headers: { etag: 'first' } },
+        { json: compared, headers: { etag: 'compare' } },
+        { status: 304 },
+        { status: 304 },
+        { status: 304 },
+        { status: 304 },
+      ])
+      const outcomes: string[] = []
+      forge.observeRequests((ctx) => outcomes.push(ctx.outcome!))
+      for (let tick = 0; tick < 3; tick++) {
+        await forge.withReadScope(async () => {
+          await forge.primeNodeReads({
+            workspacePath: '/ws',
+            parent: 'main',
+            head: 'ab/node',
+            ...(hasPr ? { prNumber: 1 } : {}),
+          })
+          if (hasPr)
+            expect(await forge.getPrState('/ws', 1)).toEqual({ state: 'open', mergeable: true })
+          expect(await forge.remoteBranchSha('main')).toBe('parent-sha')
+          expect(await forge.remoteBranchSha('ab/node')).toBe('node-sha')
+          const results = await Promise.all([
+            forge.compareBranches('main', 'ab/node'),
+            forge.compareBranches('main', 'ab/node'),
+          ])
+          for (const result of results)
+            expect(result).toEqual({ parentSha: 'parent-sha', headSha: 'node-sha', ahead: 2 })
+        })
+        expect(calls).toHaveLength((tick + 1) * 2)
+      }
+      expect(calls.slice(2).map((c) => c.opts?.headers?.['If-None-Match'])).toEqual([
+        'first',
+        'compare',
+        'first',
+        'compare',
+      ])
+      expect(outcomes).toEqual(['restPrimary', 'restPrimary', ...Array(4).fill('restNotModified')])
+      expect(calls[1]!.path).toContain(hasPr ? 'main...node-sha' : 'ab%2Fnode...parent-sha')
+    },
+  )
+
+  test('concurrent reads share promises; separate scopes and outside operations do not', async () => {
+    let calls = 0
+    const forge = new GitHubForge({
+      repository: 'acme/app',
+      transport: async () => {
+        calls++
+        await Promise.resolve()
+        return { status: 200, headers: {}, json: { commit: { sha: String(calls) } } }
+      },
+    })
+    await Promise.all(
+      [1, 2].map(() =>
+        forge.withReadScope(async () => {
+          const results = await Promise.all([
+            forge.remoteBranchSha('main'),
+            forge.remoteBranchSha('main'),
+          ])
+          expect(results[0]).toBe(results[1])
+        }),
+      ),
+    )
+    expect(calls).toBe(2)
+    await forge.remoteBranchSha('main')
+    expect(calls).toBe(3)
+    await expect(
+      forge.withReadScope(async () => {
+        await forge.remoteBranchSha('main')
+        throw new Error('stop')
+      }),
+    ).rejects.toThrow('stop')
+    await forge.withReadScope(() => forge.remoteBranchSha('main'))
+    expect(calls).toBe(5)
+  })
+
+  test('failed and malformed reads drop validators and retry next scope', async () => {
+    const { forge, calls } = makeForge([
+      { json: { commit: { sha: 'old' } }, headers: { etag: 'old' } },
+      { json: { commit: {} }, headers: { etag: 'bad' } },
+      { json: { commit: { sha: 'new' } } },
+      { status: 304 },
+    ])
+    expect(await forge.remoteBranchSha('main')).toBe('old')
+    await expect(forge.withReadScope(() => forge.remoteBranchSha('main'))).rejects.toThrow(
+      'unexpected GitHub',
+    )
+    expect(await forge.withReadScope(() => forge.remoteBranchSha('main'))).toBe('new')
+    expect(calls[2]!.opts).toBeUndefined()
+    await expect(forge.remoteBranchSha('main')).rejects.toThrow('unsolicited')
+  })
+
+  test('uncertain mutation invalidates memoized facts and validators before readback', async () => {
+    const { forge, calls } = makeForge([
+      { json: { commit: { sha: 'before' } }, headers: { etag: 'before' } },
+      { status: 500 },
+      { json: { commit: { sha: 'after' } } },
+    ])
+    await forge.withReadScope(async () => {
+      expect(await forge.remoteBranchSha('main')).toBe('before')
+      await expect(forge.commentOnPr('/ws', 1, 'comment')).rejects.toThrow()
+      expect(await forge.remoteBranchSha('main')).toBe('after')
+    })
+    expect(calls[2]!.opts).toBeUndefined()
+  })
+
+  test('foreign PR heads cannot seed expected branch identity', async () => {
+    const { forge, calls } = makeForge([
+      { json: { ...pr, head: { ...pr.head, repo: { full_name: 'foreign/app' } } } },
+      { json: { commit: { sha: 'actual' } } },
+    ])
+    await forge.withReadScope(async () => {
+      await forge.primeNodeReads({
+        workspacePath: '/ws',
+        parent: 'main',
+        head: 'ab/node',
+        prNumber: 1,
+      })
+      expect(await forge.remoteBranchSha('ab/node')).toBe('actual')
+    })
+    expect(calls).toHaveLength(2)
+  })
+})
+
+test('branch and exact-ref facts share across builds, with conditional ref and comparison reads', async () => {
+  const { withForgeRequestContext } = await import('../forge-request-context')
+  const { forge, calls } = makeForge([
+    { json: { object: { sha: 'parent' } }, headers: { etag: 'parent' } },
+    { json: { object: { sha: 'node' } }, headers: { etag: 'node' } },
+    { json: { ahead_by: 1, behind_by: 0 }, headers: { etag: 'distance' } },
+    { status: 304 },
+    { status: 304 },
+    { status: 304 },
+  ])
+  const attribution: (string | undefined)[] = []
+  forge.observeRequests((ctx) => attribution.push(ctx.build))
+  for (let tick = 0; tick < 2; tick++)
+    await forge.withReadScope(async () => {
+      await withForgeRequestContext({ build: 'first' }, () =>
+        forge.compareBranches('main', 'ab/node'),
+      )
+      await withForgeRequestContext({ build: 'second' }, async () => {
+        expect(await forge.remoteBranchSha('main')).toBe('parent')
+        expect(await forge.remoteBranchSha('ab/node')).toBe('node')
+        await forge.compareBranches('main', 'ab/node')
+      })
+    })
+  expect(calls).toHaveLength(6)
+  expect(attribution).toEqual(Array(6).fill('first'))
+  expect(calls.slice(3).map((c) => c.opts?.headers?.['If-None-Match'])).toEqual([
+    'parent',
+    'node',
+    'distance',
+  ])
+})
+
+test.each([
+  [0, 0],
+  [2, 0],
+  [0, 3],
+  [2, 3],
+])('forward/reverse node comparison normalizes distances (%s,%s)', async (ahead, behind) => {
+  for (const hasPr of [true, false]) {
+    const { forge } = makeForge([
+      {
+        json: hasPr
+          ? {
+              state: 'open',
+              merged: false,
+              mergeable: true,
+              merge_commit_sha: null,
+              head: { ref: 'node', sha: 'head', repo: { full_name: 'acme/app' } },
+            }
+          : { commit: { sha: 'parent' } },
+      },
+      {
+        json: {
+          base_commit: { sha: hasPr ? 'parent' : 'head' },
+          ahead_by: hasPr ? ahead : behind,
+          behind_by: hasPr ? behind : ahead,
+        },
+      },
+    ])
+    await forge.withReadScope(async () => {
+      await forge.primeNodeReads({
+        workspacePath: '/ws',
+        parent: 'main',
+        head: 'node',
+        ...(hasPr ? { prNumber: 1 } : {}),
+      })
+      expect(await forge.compareBranches('main', 'node')).toEqual({
+        parentSha: 'parent',
+        headSha: 'head',
+        ahead,
+      })
+    })
+  }
+})
+
+test('wire outcomes distinguish REST HTTP errors, 304, GraphQL errors and network failures', async () => {
+  let attempt = 0
+  const forge = new GitHubForge({
+    repository: 'acme/app',
+    transport: async (_method, path) => {
+      attempt++
+      if (attempt === 1)
+        return { status: 200, headers: { etag: 'branch' }, json: { commit: { sha: 'one' } } }
+      if (attempt === 2) return { status: 304, headers: {} as Record<string, string> }
+      if (path === 'graphql') throw new Error('network down')
+      if (attempt === 3) throw new GitHubApiError(500, 'failed')
+      throw new Error('network down')
+    },
+  })
+  const outcomes: (string | undefined)[] = []
+  forge.observeRequests((ctx) => outcomes.push(ctx.outcome))
+  await forge.remoteBranchSha('main')
+  await forge.remoteBranchSha('main')
+  await expect(forge.remoteBranchSha('main')).rejects.toThrow()
+  await expect(forge.remoteBranchSha('main')).rejects.toThrow()
+  await expect(forge.setAutoMerge('/ws', 1, true, { buildSlug: 'build' })).resolves.toMatchObject({
+    kind: 'deferred',
+  })
+  expect(outcomes).toEqual(['restPrimary', 'restNotModified', 'restPrimary', undefined, 'graphql'])
+})
+
+test.each(['pushBranch', 'rewrite', 'kernelRewrite'] as const)(
+  'Git publication invalidates observations before %s readback',
+  async (kind) => {
+    let reads = 0
+    let published = false
+    const forge = new GitHubForge({
+      repository: 'acme/app',
+      token: 'test-token',
+      exec: async (cmd) => {
+        if (cmd.includes('push')) published = true
+        return {
+          stdout: cmd.includes('ls-remote')
+            ? `${(published ? 'b' : 'a').repeat(40)}\trefs/heads/ab/work\n`
+            : '',
+          stderr: '',
+          exitCode: 0,
+        }
+      },
+      transport: async (_method, _path, opts) => {
+        reads++
+        expect(opts?.headers?.['If-None-Match']).toBeUndefined()
+        return {
+          status: 200,
+          headers: { etag: String(reads) },
+          json: { commit: { sha: String(reads) } },
+        }
+      },
+    })
+    await forge.withReadScope(async () => {
+      expect(await forge.remoteBranchSha('ab/work')).toBe('1')
+      if (kind === 'pushBranch') await forge.pushBranch('/ws', 'ab/work', 'b'.repeat(40))
+      else
+        await forge[kind].replace({
+          workspacePath: '/ws',
+          branch: 'ab/work',
+          expected: 'a'.repeat(40),
+          sha: 'b'.repeat(40),
+        })
+      expect(await forge.remoteBranchSha('ab/work')).toBe('2')
+    })
+  },
+)

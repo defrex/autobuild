@@ -1396,6 +1396,22 @@ ordered by descending count then build name; repository requests are unattribute
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
 
+GitHub shares in-flight and completed PR, branch/ref and comparison observations
+across builds within one dispatcher tick. Opened nodes prime their tips and
+commit distance with at most two reads: PR plus comparison, or parent branch
+plus reversed comparison without a PR. Every tick revalidates mutable resources
+using exact-resource ETags; authenticated 304s spare the REST primary quota.
+Adapter caches are bounded and restart/eviction falls back to fresh reads.
+Writes, including Git publication and rewrites, invalidate observations before
+attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
+keeps its existing cadence. Readiness and landing inspections remain fresh.
+
+The total includes all attempted requests. Optional `restPrimary`,
+`restNotModified` and `graphql` counts distinguish REST responses charged to the
+primary quota, REST 304s and GraphQL calls. Transport failures and historical or
+legacy observations can remain unclassified; absent fields never imply zero.
+Shared requests are attributed to their first requester; cache hits count zero.
+
 Ticket-source continuity is reduced by `kernel/ticket-migrations.ts` from durable
 repository `tickets.migration-recorded` facts. Import publishes only complete
 mappings; current-operation resolvers leave build records and old events intact.
