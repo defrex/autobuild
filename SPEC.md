@@ -256,7 +256,8 @@ a fresh launcher; unrelated base commits do not reset suppression.
 A successor first validates configuration and the actual selected store without
 starting repository work or terminal input/output. Provider compatibility evidence
 chooses drain when sharing is safe and cutover otherwise. SQLite compares its
-untouched catalog with target requirements; HTTP uses the live service's client
+untouched catalog semantically (columns, indexes, keys and constraints) with target
+requirements, accepting equivalent schemas built by guarded ALTER migrations; HTTP uses the live service's client
 and protocol admission. Missing evidence chooses cutover. Successful durable
 protocol writes are also required: a service that admits the client but rejects
 a new yield fact fails preflight, leaving the predecessor active with target and

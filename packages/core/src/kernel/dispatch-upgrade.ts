@@ -36,7 +36,7 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 2,
+  version: 3,
   initial: () => ({ runs: {} }),
   fold(acc, events) {
     for (const event of events) {
@@ -46,11 +46,12 @@ export const dispatchUpgradeReducer = defineReducer<
       switch (event.type) {
         case 'dispatcher.upgrade-detected':
           state.detected = event
-          state.failure = undefined
           break
         case 'dispatcher.upgrade-failed':
           if (state.handoff?.payload.correlation === event.payload.correlation) break
           state.failure = event
+          if (state.request?.payload.correlation === event.payload.correlation)
+            state.request = undefined
           break
         case 'dispatcher.target-prepared':
           if (state.handoff && !state.completed) break
@@ -60,10 +61,12 @@ export const dispatchUpgradeReducer = defineReducer<
           )
             break
           state.prepared = event
+          state.failure = undefined
           state.request = undefined
           break
         case 'dispatcher.yield-requested':
           if (
+            state.failure ||
             state.request ||
             state.handoff ||
             !state.prepared ||

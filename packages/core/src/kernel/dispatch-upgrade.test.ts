@@ -145,3 +145,55 @@ test('failure before acceptance blocks yield, while a late preflight failure can
   expect(late.handoff).toBeDefined()
   expect(late.failure).toBeUndefined()
 })
+
+test('a failed request stays blocked until a new preparation replaces it, including same-target retries', () => {
+  for (const target of [handoff.target, { ...handoff.target, key: 'later', source: '/later' }]) {
+    const replacement = { ...handoff, correlation: 'retry', target }
+    const identity = ({ correlation, run, lineage, from, target }: Handoff) => ({
+      correlation,
+      run,
+      lineage,
+      from,
+      target,
+    })
+    const failed = [
+      write('dispatcher.upgrade-detected', identity(handoff)),
+      ...accepted().slice(0, 2),
+      write('dispatcher.upgrade-failed', { ...identity(handoff), reason: 'preflight exited' }),
+      write('dispatcher.upgrade-detected', identity(replacement)),
+    ]
+    const blocked = dispatchUpgradeReducer.reduce(log(failed)).runs.old!
+    expect(blocked.failure).toBeDefined()
+    expect(blocked.request).toBeUndefined()
+    const attempts = [
+      ...failed,
+      write('dispatcher.target-prepared', replacement),
+      // Neither replaying the failed request nor accepting it may revive A.
+      accepted()[1]!,
+      accepted()[2]!,
+    ]
+    const prepared = dispatchUpgradeReducer.reduce(log(attempts)).runs.old!
+    expect(prepared.prepared?.payload.correlation).toBe('retry')
+    expect(prepared.failure).toBeUndefined()
+    expect(prepared.request).toBeUndefined()
+    expect(prepared.handoff).toBeUndefined()
+    const events = log([
+      ...attempts,
+      write('dispatcher.yield-requested', {
+        ...replacement,
+        successor: 'retry-run',
+        mode: 'drain',
+        evidence: 'validated again',
+      }),
+      write('dispatcher.handoff-started', {
+        ...replacement,
+        successor: 'retry-run',
+        mode: 'drain',
+      }),
+    ])
+    checkIncremental(dispatchUpgradeReducer, events)
+    expect(dispatchUpgradeReducer.reduce(events).runs.old?.handoff?.payload.correlation).toBe(
+      'retry',
+    )
+  }
+})

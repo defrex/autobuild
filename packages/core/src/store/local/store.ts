@@ -454,12 +454,102 @@ export class SqliteBuildStore implements BuildStore {
     const expected = new Database(':memory:')
     try {
       for (const ddl of BOOTSTRAP_DDL) expected.exec(ddl)
-      const catalog = (database: Database) =>
-        database
+      // ALTER appends columns, and legacy creation-order columns have a DEFAULT
+      // used only for backfill. Neither changes the target's runtime requirements.
+      const catalog = (database: Database) => {
+        const quote = (name: string) => `'${name.replaceAll("'", "''")}'`
+        const objects = database
           .query(
             "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
           )
-          .all()
+          .all() as Array<{ type: string; name: string; sql: string }>
+        return objects.map((object) => {
+          if (object.type !== 'table') return object
+          const columns = database
+            .query(`PRAGMA table_xinfo(${quote(object.name)})`)
+            .all() as Array<{
+            cid: number
+            name: string
+            type: string
+            notnull: number
+            dflt_value: string | null
+            pk: number
+            hidden: number
+          }>
+          const indexes = database
+            .query(`PRAGMA index_list(${quote(object.name)})`)
+            .all() as Array<{
+            name: string
+            unique: number
+            origin: string
+            partial: number
+          }>
+          // Keep key order, collation and uniqueness, but ignore physical column
+          // offsets and the automatically assigned index sequence number.
+          const indexShapes = indexes
+            .map((index) => ({
+              name: index.name,
+              unique: index.unique,
+              origin: index.origin,
+              partial: index.partial,
+              columns: (
+                database.query(`PRAGMA index_xinfo(${quote(index.name)})`).all() as Array<
+                  Record<string, unknown>
+                >
+              ).map(({ cid: _cid, ...column }) => column),
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+          // PRAGMAs expose keys and foreign keys, but not CHECK constraints.
+          // Retain balanced CHECK expressions so an older, narrower streams
+          // constraint still requires cutover rather than being called equivalent.
+          const checks: string[] = []
+          const matcher = /\bCHECK\s*\(/gi
+          for (const match of object.sql.matchAll(matcher)) {
+            const begin = match.index + match[0].length
+            let depth = 1,
+              quoted = false,
+              end = begin
+            for (; end < object.sql.length && depth; end++) {
+              const char = object.sql[end]
+              if (char === "'") {
+                if (quoted && object.sql[end + 1] === "'") {
+                  end++
+                  continue
+                }
+                quoted = !quoted
+              }
+              if (!quoted) {
+                if (char === '(') depth++
+                if (char === ')') depth--
+              }
+            }
+            checks.push(
+              object.sql
+                .slice(begin, end - 1)
+                .replace(/\s+/g, ' ')
+                .trim(),
+            )
+          }
+          return {
+            type: object.type,
+            name: object.name,
+            columns: columns
+              .map(({ cid: _cid, ...column }) => ({
+                ...column,
+                dflt_value:
+                  column.name === 'creation_seq' &&
+                  (object.name === 'sessions' || object.name === 'streams') &&
+                  column.dflt_value === '0'
+                    ? null
+                    : column.dflt_value,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+            indexes: indexShapes,
+            foreignKeys: database.query(`PRAGMA foreign_key_list(${quote(object.name)})`).all(),
+            checks,
+          }
+        })
+      }
       const compatible = JSON.stringify(catalog(this.sqlite)) === JSON.stringify(catalog(expected))
       return {
         compatible,

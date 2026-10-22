@@ -223,7 +223,10 @@ The distinctions that change an administrator's answer:
   failures retain the current generation and raise repository attention, suppressed
   for the same input until target or selected-store compatibility evidence changes or a fresh operator launch. The successor
   preflights config, selected-store compatibility and durable protocol writes before
-  requesting yield. Compatible generations drain: the predecessor releases terminal
+  requesting yield. SQLite compares semantic schema requirements, accepting equivalent
+  migrated catalogs without initializing the live store. A failed request cannot be
+  accepted or revived by detection; a newly prepared attempt must pass preflight.
+  Compatible generations drain: the predecessor releases terminal
   input/rendering and repository authority, then supervises only captured local
   executions while the successor owns ticks and launches. Unknown/incompatible
   provider evidence selects immediate-suspension cutover. Rejected protocol writes

@@ -337,3 +337,72 @@ test('an HTTP provider without admission metadata chooses cutover and still pers
     await store.close()
   }
 })
+
+test('SQLite stores migrated from older DDL drain without changing the inspected catalog', async () => {
+  const { Database } = await import('bun:sqlite')
+  const { SqliteBuildStore, BOOTSTRAP_DDL } = await import('../store/local/store')
+  const { MemoryBlobStore } = await import('../store/memory')
+  const database = new Database(':memory:')
+  for (const ddl of BOOTSTRAP_DDL) {
+    database.exec(
+      ddl
+        .replace(
+          /^\s*(?:compatibility|tick|repo_origin|node_writer_holder|node_writer_expires_at|node_writer_ttl_ms|creation_seq) [^\n]*\n/gm,
+          '',
+        )
+        .replace(/,\s*\)/g, '\n)'),
+    )
+  }
+  const migrated = new SqliteBuildStore({ database, blobs: new MemoryBlobStore() })
+  const columns = database.query("PRAGMA table_info('builds')").all() as Array<{ name: string }>
+  expect(columns.at(-1)?.name).toBe('node_writer_ttl_ms')
+  const store = new SqliteBuildStore({ database, blobs: new MemoryBlobStore(), bootstrap: false })
+  const before = database.query('SELECT sql FROM sqlite_master ORDER BY name').all()
+  const signal = new AbortController().signal
+  try {
+    expect((await store.inspectDispatcherOverlap(signal)).compatible).toBe(true)
+    await store.ensureRepo('repo')
+    await store.claimRepoLease('repo', 'old', 60_000)
+    expect(
+      await prepareDispatcherYield({
+        store,
+        repo: 'repo',
+        handoff,
+        successor: 'new',
+        signal,
+        validate: async () => {},
+        failure: async (reason) => {
+          throw new Error(reason)
+        },
+      }),
+    ).toBe(true)
+    expect((await store.getRepoEvents('repo')).at(-1)).toMatchObject({
+      type: 'dispatcher.yield-requested',
+      payload: { mode: 'drain' },
+    })
+    expect(database.query('SELECT sql FROM sqlite_master ORDER BY name').all()).toEqual(before)
+    database.exec('DROP INDEX events_type_build_seq')
+    expect((await store.inspectDispatcherOverlap(signal)).compatible).toBe(false)
+  } finally {
+    await migrated.close()
+  }
+})
+
+test('SQLite overlap still rejects a narrower CHECK constraint without initializing the store', async () => {
+  const { Database } = await import('bun:sqlite')
+  const { SqliteBuildStore, BOOTSTRAP_DDL } = await import('../store/local/store')
+  const { MemoryBlobStore } = await import('../store/memory')
+  const database = new Database(':memory:')
+  for (const ddl of BOOTSTRAP_DDL)
+    database.exec(ddl.replace("'build','repo','session'", "'build','repo'"))
+  const store = new SqliteBuildStore({ database, blobs: new MemoryBlobStore(), bootstrap: false })
+  try {
+    const before = database.query('SELECT sql FROM sqlite_master ORDER BY name').all()
+    expect((await store.inspectDispatcherOverlap(new AbortController().signal)).compatible).toBe(
+      false,
+    )
+    expect(database.query('SELECT sql FROM sqlite_master ORDER BY name').all()).toEqual(before)
+  } finally {
+    await store.close()
+  }
+})
