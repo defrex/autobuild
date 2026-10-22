@@ -160,6 +160,11 @@ export const repositoryEventPolicy = {
   'harvest.step.completed': 'decisive',
   'harvest.session.started': 'decisive',
   'harvest.session.ended': 'decisive',
+  'harvest.session.native-handle-recorded': 'decisive',
+  'harvest.session.suspended': 'decisive',
+  'harvest.session.resumed': 'decisive',
+  'harvest.session.resume-fallback': 'decisive',
+
   'harvest.proposals.submitted': 'decisive',
   'harvest.review.verdict': 'decisive',
   'harvest.proposal.id-reserved': 'decisive',

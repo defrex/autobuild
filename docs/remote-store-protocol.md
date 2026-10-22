@@ -1006,6 +1006,9 @@ Build grants live until 60 seconds after durable build termination. Phase grants
 also retire 60 seconds after their own session ends, whichever comes first.
 Harvest grants retire 60 seconds after their run stops or their authorized
 execution ends/releases; harvest phases additionally retire on session end.
+Durable harvest suspension immediately closes the phase grant, without a grace interval.
+A resumed local harvest turn opens a new bracket and receives fresh credentials;
+the predecessor grant stays closed.
 The boundary is exclusive: at `end + 60_000ms` the credential is refused. This
 window permits final transcripts, diagnostics, deposits and stream closure.
 Pause/escalation of a build and lease expiry do not end authority. Active grants

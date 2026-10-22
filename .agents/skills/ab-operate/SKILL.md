@@ -400,7 +400,9 @@ for the exceptions above.
 
 - Automatic kernel cutover is product behavior, not agent process authority.
   Native-eligible local sessions resume; others record reasoned fresh fallback.
-  Harvest uses existing interruption/rerun recovery.
+  Local harvest also suspends on clean stop or cutover and resumes automatically
+  with fresh logical credentials. Unavailable native state records a reasoned
+  fresh fallback. Orderly suspension spends no recovery attempt; crashes do.
 - Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode,
   and no dispatcher process-management commands. This applies when the
   dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,

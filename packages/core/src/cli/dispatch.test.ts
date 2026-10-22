@@ -4179,7 +4179,109 @@ async function seedOpenHarvest(
 }
 
 describe('abDispatch watch harvest coordination', () => {
-  test('long harvest work does not block later ticks or SIGINT', async () => {
+  test('shutdown waits for harvest cleanup and atomic suspension before releasing the repository', async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const entered = deferred(),
+      cleanupEntered = deferred(),
+      cleanupGate = deferred(),
+      persistenceEntered = deferred(),
+      persistenceGate = deferred()
+    const stop = new AbortController()
+    const agents = new ScriptedAgentRunner({
+      nativeState: new Map(),
+      script: async ({ opts }) => {
+        entered.resolve()
+        await new Promise<void>((resolve) =>
+          opts.signal!.addEventListener('abort', () => resolve(), { once: true }),
+        )
+        return defaultTurnResult('interrupted')
+      },
+    })
+    const end = agents.end.bind(agents)
+    agents.end = async (session) => {
+      cleanupEntered.resolve()
+      await cleanupGate.promise
+      return end(session)
+    }
+    const append = fx.store.appendRepoWithArtifacts.bind(fx.store)
+    fx.store.appendRepoWithArtifacts = async (...args) => {
+      if (
+        stop.signal.aborted &&
+        args[1].some((artifact) => artifact.kind === 'harvest-transcript')
+      ) {
+        persistenceEntered.resolve()
+        await persistenceGate.promise
+      }
+      return append(...args)
+    }
+    let settled = false
+    let dispatch: Promise<void> | undefined
+    try {
+      await seedOpenHarvest(
+        fx,
+        'h_stop_barriers',
+        'obs-stop-barriers',
+        'suspension is a durable boundary',
+      )
+      dispatch = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          await entered.promise
+          stop.abort()
+        },
+        wire: () => ({
+          ...fx.wire(),
+          runtimes: {
+            claude: { runner: agents, servesModels: [] },
+            scripted: { runner: agents, servesModels: [] },
+          },
+        }),
+      }).then(() => {
+        settled = true
+      })
+      await cleanupEntered.promise
+      expect(settled).toBe(false)
+      expect((await fx.store.getRepo(fx.origin))?.lease).toBeDefined()
+      cleanupGate.resolve()
+      await persistenceEntered.promise
+      expect(settled).toBe(false)
+      expect((await fx.store.getRepo(fx.origin))?.lease).toBeDefined()
+      expect(
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (e) => e.type === 'harvest.session.suspended',
+        ),
+      ).toBe(false)
+      persistenceGate.resolve()
+      await dispatch
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(events.some((e) => e.type === 'harvest.session.suspended')).toBe(true)
+      expect(
+        events.some(
+          (e) => e.type === 'harvest.failed' || e.type === 'dispatcher.harvest-runner-failed',
+        ),
+      ).toBe(false)
+      expect((await fx.store.getRepo(fx.origin))?.lease).toBeUndefined()
+      expect(fx.err).toEqual([])
+    } finally {
+      stop.abort()
+      cleanupGate.resolve()
+      persistenceGate.resolve()
+      await dispatch?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('long harvest work permits ticks and SIGINT durably suspends it', async () => {
     const fx = await makeFixture(
       [],
       happyHandlers(),
@@ -4262,9 +4364,12 @@ describe('abDispatch watch harvest coordination', () => {
       releaseTurn()
       await waitFor(async () =>
         (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) => event.type === 'harvest.step.completed' && event.payload.outcome === 'failed',
+          (event) => event.type === 'harvest.session.suspended',
         ),
       )
+      expect(
+        (await fx.store.getRepoEvents(fx.origin)).some((event) => event.type === 'harvest.failed'),
+      ).toBe(false)
       await waitFor(async () => (await fx.store.getRepo(fx.origin))?.lease === undefined)
       expect(fx.err).toEqual([])
     } finally {

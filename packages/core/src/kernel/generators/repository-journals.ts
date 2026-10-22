@@ -52,6 +52,88 @@ export function randomHarvestJournal(seed: number, length: number): RepositoryEv
     } else if (r < 0.5) {
       specs.push({ type: 'harvest.resumed', payload: {} })
       parked = false
+    } else if (r < 0.6 && !parked) {
+      const session = `hs_${i}`
+      const handle = {
+        version: 1,
+        runner: 'pi',
+        nativeId: session,
+        host: 'capture',
+        workspacePath: '/capture',
+      }
+      specs.push(
+        {
+          type: 'harvest.session.started',
+          payload: {
+            run: open.run,
+            session,
+            role: 'harvest',
+            runner: 'pi',
+            args: [],
+            step: 'synthesize',
+            round: 1,
+          },
+        },
+        {
+          type: 'harvest.session.native-handle-recorded',
+          payload: { run: open.run, session, handle },
+        },
+        {
+          type: 'harvest.session.suspended',
+          payload: {
+            run: open.run,
+            session,
+            cause: 'cutover',
+            transcript: { kind: 'harvest-transcript', rev: i },
+          },
+        },
+        {
+          type: 'harvest.session.started',
+          payload: {
+            run: open.run,
+            session: `${session}_next`,
+            role: 'harvest',
+            runner: 'pi',
+            args: [],
+            step: 'synthesize',
+            round: 1,
+            continuation: { predecessor: session, root: session, handle, cause: 'cutover' },
+          },
+        },
+        ...(rand() < 0.5
+          ? [
+              {
+                type: 'harvest.session.resumed',
+                payload: {
+                  run: open.run,
+                  session: `${session}_next`,
+                  predecessor: session,
+                  root: session,
+                  handle,
+                },
+              },
+            ]
+          : [
+              {
+                type: 'harvest.session.resume-fallback',
+                payload: {
+                  run: open.run,
+                  session: `${session}_next`,
+                  reason: 'missing-state',
+                  message: 'native state unavailable',
+                },
+              },
+            ]),
+        {
+          type: 'harvest.session.ended',
+          payload: {
+            run: open.run,
+            session: `${session}_next`,
+            transcript: { kind: 'harvest-transcript', rev: i + 1 },
+            usage: { inputTokens: 1, outputTokens: 2, turns: 1 },
+          },
+        },
+      )
     } else if (r < 0.7 && !parked) {
       const willRetry = rand() < 0.5
       specs.push({

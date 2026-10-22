@@ -648,6 +648,8 @@ class DispatchLoop {
   private readonly activeBuildRuns = new Map<string, ActiveBuildExecution>()
   private acceptingBuildLaunches = true
   /** Process-local fast path; the repository lease is the cross-process gate. */
+  private readonly localHarvestShutdown = new AbortController()
+  private localHarvestFailure: unknown
   private harvestInFlight: Promise<void> | undefined
   /** Live hosted-harvest execution: the environment-supervised handle whose
    * completion chain classifies, releases, and journals the close fact.
@@ -2263,11 +2265,13 @@ class DispatchLoop {
   private launchHarvest(): void {
     // Do not even start a second local contender while one is active. A second
     // dispatch process is independently excluded by the repository lease.
-    if (this.harvestInFlight !== undefined) return
+    if (this.stopped || this.harvestInFlight !== undefined) return
 
     let tracked: Promise<void>
     tracked = this.launchHarvestIfNeeded()
       .catch((error: unknown) => {
+        if (this.stopped || this.localHarvestShutdown.signal.aborted)
+          this.localHarvestFailure = error
         // The gate may read the backing store after tick work dirties the view.
         // Contain that failure too, without relying on another store write.
         if (!this.stopped) {
@@ -2296,6 +2300,7 @@ class DispatchLoop {
       })
       if (pressure.trigger === undefined) return
     }
+    if (this.stopped) return
     const hosted = this.wiring.workspaces.harvestExecution
     if (hosted !== undefined) {
       const execution = `${this.host}-harvest-${this.wiring.ids('inst')}`
@@ -2310,6 +2315,12 @@ class DispatchLoop {
 
     const { store, tickets, runtimes, ids, uuids, clock, storeRef, token } = this.wiring
     const harvestDeps = {
+      shutdownSignal: AbortSignal.any([
+        this.localHarvestShutdown.signal,
+        this.inputStop.signal,
+        ...(this.opts.signal ? [this.opts.signal] : []),
+      ]),
+      shutdownCause: (): 'cutover' | 'shutdown' => (this.cutoverRequested ? 'cutover' : 'shutdown'),
       store,
       tickets,
       config: this.currentConfig().config,
@@ -2506,6 +2517,10 @@ class DispatchLoop {
         }
       })
       .catch(async (error: unknown) => {
+        if (this.stopped || this.localHarvestShutdown.signal.aborted) {
+          this.localHarvestFailure = error
+          return
+        }
         this.pendingHarvest.harvestFailed += 1
         await this.appendStatus({
           actor: DISPATCHER,
@@ -2833,6 +2848,12 @@ class DispatchLoop {
   /** Teardown: detach the local wait only. The guest keeps running and
    * heartbeating its adopted repository lease; the execution stays open and
    * a later invocation settles it from the Store plus provider liveness. */
+  private async stopLocalHarvest(): Promise<void> {
+    this.localHarvestShutdown.abort()
+    if (this.wiring.workspaces.harvestExecution === undefined) await this.harvestInFlight
+    if (this.localHarvestFailure !== undefined) throw this.localHarvestFailure
+  }
+
   private async stopHostedHarvest(): Promise<void> {
     const entry = this.hostedHarvest
     if (entry === undefined) return
@@ -4139,7 +4160,9 @@ class DispatchLoop {
           this.printReport(emptyTickReport())
         }
       } finally {
+        this.localHarvestShutdown.abort()
         await this.stopBuildExecutions()
+        await this.stopLocalHarvest()
         await this.stopHostedHarvest()
         // Signal provisioning continuations and release their leases before
         // the repository lease, so the next supervisor adopts immediately.
@@ -4184,15 +4207,16 @@ class DispatchLoop {
         this.warn('dispatcher superseded by another invocation — detaching')
       }
     } finally {
+      this.localHarvestShutdown.abort()
       await this.upgradeController?.stop()
       await this.stopBuildExecutions()
+      await this.stopLocalHarvest()
       await this.stopHostedHarvest()
       // Signal provisioning continuations and release their leases before
       // the repository lease, so the next supervisor adopts immediately.
       await this.dispatcher.stopProvisioning()
       // Stop input and join teardown work first so every result that becomes
-      // reportable at that boundary is included. Active Harvest work is still
-      // deliberately not awaited in watch mode.
+      // reportable at that boundary is included. Local harvest suspension is durable before lease release.
       await this.finishRendering()
       for (const report of await this.publishSettlementReports()) {
         this.printReport(report, false)

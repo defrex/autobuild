@@ -1,3 +1,4 @@
+import { nativeSessionHandleSchema } from './native-session'
 import { runtimeIdentitySchema } from './runtime'
 import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
 import { hardReadinessKeys } from '../ports/forge/readiness'
@@ -29,7 +30,7 @@ import {
   type ActorKind,
 } from './envelope'
 import { EventValidationError } from './catalog'
-import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
+import { providerAttemptSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
@@ -224,7 +225,54 @@ export const harvestEventPayloadSchemas = {
     artifact: artifactRefSchema.optional(),
     detail: z.string().optional(),
   }),
+  'harvest.session.native-handle-recorded': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    handle: nativeSessionHandleSchema,
+  }),
+  'harvest.session.suspended': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    cause: z.enum(['shutdown', 'cutover']),
+    transcript: artifactRefSchema,
+    usage: z
+      .strictObject({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        turns: z.number().int().nonnegative(),
+      })
+      .optional(),
+  }),
+  'harvest.session.resumed': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    predecessor: z.string().min(1),
+    root: z.string().min(1),
+    handle: nativeSessionHandleSchema,
+  }),
+  'harvest.session.resume-fallback': z.strictObject({
+    run: z.string().min(1),
+    session: z.string().min(1),
+    reason: z.enum([
+      'missing-handle',
+      'changed-route',
+      'unsupported',
+      'wrong-runner',
+      'wrong-host',
+      'wrong-workspace',
+      'missing-state',
+    ]),
+    message: z.string().min(1),
+  }),
   'harvest.session.started': z.strictObject({
+    continuation: z
+      .strictObject({
+        predecessor: z.string().min(1),
+        root: z.string().min(1),
+        handle: nativeSessionHandleSchema.optional(),
+        cause: z.enum(['shutdown', 'cutover', 'runner-loss']),
+      })
+      .optional(),
     run: z.string().min(1),
     session: z.string().min(1),
     role: z.enum(['harvest', 'harvest-review']),
@@ -237,7 +285,16 @@ export const harvestEventPayloadSchemas = {
     /** Stream id this session's live view writes to (SPEC §9, session
      * streams). Optional only so historical journals replay unchanged. */
     stream: z.string().min(1).optional(),
-    substitution: providerSubstitutionSchema.optional(),
+    // Native continuation can try a configured alternate before index zero.
+    substitution: z
+      .strictObject({
+        failed: providerAttemptSchema,
+        selectedIndex: z.number().int().nonnegative(),
+      })
+      .refine((value) => value.selectedIndex !== value.failed.index, {
+        message: 'substitution must select a different configured target',
+      })
+      .optional(),
   }),
   'harvest.session.ended': z.strictObject({
     run: z.string().min(1),
@@ -297,7 +354,14 @@ export const harvestEventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
     willRetry: z.boolean(),
-    providerAttempts: providerAttemptsSchema.optional(),
+    providerAttempts: z
+      .array(providerAttemptSchema)
+      .min(1)
+      .refine(
+        (attempts) => new Set(attempts.map((attempt) => attempt.index)).size === attempts.length,
+        { message: 'provider attempts must name distinct configured targets' },
+      )
+      .optional(),
   }),
 } as const
 
@@ -681,6 +745,11 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.step.completed': ['kernel'],
   'harvest.session.started': ['kernel'],
   'harvest.session.ended': ['kernel'],
+  'harvest.session.native-handle-recorded': ['kernel'],
+  'harvest.session.suspended': ['kernel'],
+  'harvest.session.resumed': ['kernel'],
+  'harvest.session.resume-fallback': ['kernel'],
+
   'harvest.proposals.submitted': ['agent'],
   'harvest.review.verdict': ['agent'],
   'harvest.proposal.id-reserved': ['kernel'],

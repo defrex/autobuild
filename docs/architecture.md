@@ -440,7 +440,10 @@ are reduced by `kernel/dispatch-upgrade.ts`. The exited immutable generation's
 `dispatch-handoff.ts` reader interprets the journal for the filesystem-only launcher,
 which starts generations sequentially. Local runners finish all suspension writes
 before exit; eligible handles resume natively and others record fresh-session
-fallback. Local harvest is interrupted and rerun by existing recovery. Automatic
+fallback. Local harvest also suspends durably before lease release. The next local
+runner resumes the native session with fresh logical credentials; unavailable
+native state records a reasoned fresh fallback. Suspension spends no recovery
+attempt; real interrupted/crashed turns retain recovery accounting. Automatic
 upgrades can be disabled; launcher contract changes require a manual restart.
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
@@ -921,7 +924,10 @@ alternate targets, and independently inherited build-session budget.
 `build-runner.ts` and `harvest-runner.ts` own the deterministic
 primary-first attempt loop: each substitution opens a new session bracket,
 records provenance on its start, and only complete-chain exhaustion consumes an
-existing phase/session attempt. This keeps runtime availability routing out of
+existing phase/session attempt. A suspended harvest turn first tries its recorded
+route, then the remaining targets in configured order; provider evidence retains
+configured indexes, and only the primary stays live for producer revisions.
+This keeps runtime availability routing out of
 agent judgment while preserving transcript and artifact actor attribution.
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake

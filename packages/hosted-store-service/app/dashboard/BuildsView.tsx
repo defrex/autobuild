@@ -121,6 +121,7 @@ function statusTone(status: DashboardBuild['status'] | DashboardHarvest['status'
       return 'ok'
     case 'pausing':
     case 'paused':
+    case 'suspended':
     case 'cleaning':
     case 'escalated':
       return 'warn'

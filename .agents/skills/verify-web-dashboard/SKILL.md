@@ -60,6 +60,8 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:builds-harvest-suspended-wide:png .ab/web-dashboard-frames/builds-harvest-suspended-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-harvest-suspended-narrow:png .ab/web-dashboard-frames/builds-harvest-suspended-narrow.png --attach
    ab artifact put web-dashboard-frame:capacity-wide:png .ab/web-dashboard-frames/capacity-wide.png --attach
    ab artifact put web-dashboard-frame:capacity-narrow:png .ab/web-dashboard-frames/capacity-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-native-sessions-wide:png .ab/web-dashboard-frames/builds-native-sessions-wide.png --attach

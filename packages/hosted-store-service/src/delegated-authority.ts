@@ -7,7 +7,7 @@ import {
   type RepositoryEvent,
 } from '@defrex/autobuild/remote-store'
 import type { AbEvent, BuildRecord, BuildStore } from '@defrex/autobuild/plugin-sdk'
-import { reduceBuild, reduceHarvest } from '@defrex/autobuild/remote-store'
+import { reduceBuild } from '@defrex/autobuild/remote-store'
 import { MachineAuthError, requireProject, type MachineAuth } from './machine-auth'
 
 export const DELEGATION_TERMINAL_GRACE_MS = 60_000
@@ -63,7 +63,8 @@ export function evaluateDelegationFacts(
     const session = claims.session
       ? facts.sessions[delegationFactKey(claims.id)]?.[delegationFactKey(claims.session)]
       : undefined
-    if (claims.session && !session?.starts.includes(claims.anchor)) return false
+    if (claims.session && (!session?.starts.includes(claims.anchor) || session.suspended))
+      return false
     endings = [
       ...(facts.releases[delegationFactKey(claims.execution!)] ?? []),
       ...[...(facts.endings[delegationFactKey(claims.id)] ?? []), ...(session?.endings ?? [])]
@@ -117,7 +118,19 @@ export function evaluateDelegationLifecycle(
       return false
   } else {
     const events = lifecycle.repositoryEvents ?? []
-    const run = reduceHarvest(events).runs.find((run) => run.run === claims.id)
+    if (
+      claims.session &&
+      events.some(
+        (event) =>
+          event.type === 'harvest.session.suspended' &&
+          event.payload.run === claims.id &&
+          event.payload.session === claims.session,
+      )
+    )
+      return false
+    const run = events.some(
+      (event) => event.type === 'harvest.started' && event.payload.run === claims.id,
+    )
     const authorized = events.find(
       (event) =>
         event.type === 'harvest.execution.authorized' &&
@@ -161,7 +174,8 @@ export function evaluateDelegationLifecycle(
         event.type === 'harvest.escalated' ||
         (event.type === 'harvest.failed' && !event.payload.willRetry) ||
         event.type === 'harvest.recovery-exhausted' ||
-        (event.type === 'harvest.session.ended' && event.payload.session === claims.session)
+        ((event.type === 'harvest.session.ended' || event.type === 'harvest.session.suspended') &&
+          event.payload.session === claims.session)
       )
         endings.push(event.ts)
     }

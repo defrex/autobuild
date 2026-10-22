@@ -1,4 +1,5 @@
 import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
+import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
@@ -46,6 +47,7 @@ type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 
 export interface FrameSpec {
   selection?: DashboardModel['selection']
+  harvestSuspended?: boolean
   nativeSessions?: boolean
   forgeReadiness?: boolean
   id: string
@@ -166,6 +168,22 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  {
+    id: 'harvest-suspended-wide',
+    scenario: 'happy',
+    columns: 180,
+    rows: 42,
+    harvestSuspended: true,
+    requires: ['Harvest', 'SUSPENDED'],
+  },
+  {
+    id: 'harvest-suspended-narrow',
+    scenario: 'happy',
+    columns: 100,
+    rows: 50,
+    harvestSuspended: true,
+    requires: ['Harvest', 'SUSPENDED'],
+  },
   {
     id: 'capacity-wide',
     scenario: 'capacity',
@@ -1587,6 +1605,7 @@ async function capturePaint(
           : []
       const presented = {
         ...model,
+        ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
         ...(spec.selection ? { selection: spec.selection } : {}),
         // Runtime commits include generated fixture bytes; keep their visible
         // provenance stable just like the scripted clock and repository name.
