@@ -1,5 +1,5 @@
 import { projectRollback, type DashboardRollback } from './rollback'
-import { dispatchUpgradeReducer } from '../../kernel/dispatch-upgrade'
+import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
 import { enrichDrainingRow, projectHandoffs, type DashboardHandoff } from './handoff'
 import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
@@ -1309,10 +1309,14 @@ export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
+  // Filtered frontend feeds omit operational facts; use the durable reduced read there.
+  upgrades?: DispatchUpgradeState,
 ): DashboardModel {
-  const upgradeState = Array.isArray(repositoryEvents)
-    ? dispatchUpgradeReducer.reduce(repositoryEvents)
-    : repositoryEvents.upgrades
+  const upgradeState =
+    upgrades ??
+    (Array.isArray(repositoryEvents)
+      ? dispatchUpgradeReducer.reduce(repositoryEvents)
+      : repositoryEvents.upgrades)
   const upgrade = projectHandoffs(upgradeState)
   const rollback = projectRollback(upgradeState)
   const builds = enrichIntegrationRows(
