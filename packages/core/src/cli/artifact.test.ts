@@ -157,6 +157,9 @@ describe('artifact put/get', () => {
     await expect(artifactPut(deps(), 'spec', file)).rejects.toThrow(
       /'ab artifact put spec' is rejected.*immutable.*§6\.3.*ab escalate/s,
     )
+    await expect(artifactPut(deps(), 'spec', file)).rejects.toThrow(
+      /Leaf revisions require an escalation.*operators may revise idle collecting or verification-failed nodes through ab answer/s,
+    )
     // Nothing was deposited: the seeded rev 0 is still the latest.
     const spec = await artifactGet(deps(), 'spec')
     expect(spec.meta.revision).toBe(0)

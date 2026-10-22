@@ -625,7 +625,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.answer',
-    'Answer a blocked build’s open escalations: guidance text, a bare retry, a dismissal of the cited findings, a review-round ceiling, or a spec revision (destructive — replaces the spec and restarts from plan).',
+    'Answer a blocked build’s open escalations: guidance text, a bare retry, a dismissal of the cited findings, a review-round ceiling, or a spec revision (destructive — replaces the spec). Leaves require an escalation and restart from plan; idle collecting or verification-failed nodes may revise without an escalation and recollect for verification.',
     buildsAnswerInput,
     'The controlBuild answer result: {kind: "answered", slug, count, resolution, resumed, …} describing how many escalations were answered and with what.',
     async (raw, ctx) => {

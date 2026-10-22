@@ -265,3 +265,12 @@ test('a changed observed head or parent suppresses an obsolete failure before pr
     expect(await reports(store)).toEqual([])
   }
 })
+
+test('spec revision prevents recovery from reporting the superseded failed cycle', async () => {
+  const store = await seed()
+  await receipt(store)
+  const state = await facts(store)
+  expect(missingIntegrationFailures(state, 'node')).toHaveLength(1)
+  state.restartSince = state.lastSeq + 1
+  expect(missingIntegrationFailures(state, 'node')).toEqual([])
+})

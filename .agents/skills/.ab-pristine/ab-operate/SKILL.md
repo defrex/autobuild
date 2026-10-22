@@ -208,7 +208,11 @@ Read events with a cursor or a small `--events` count; logs are long.
 - `ab answer <slug> [text]` — answer an open escalation with guidance; omit the
   text for a bare retry. `--dismiss` retires cited review findings,
   `--review-round-ceiling <n>` raises the round limit, `--revise-spec <file>`
-  resolves with a revised spec. Run `ab help answer` for the full menu.
+  resolves with a revised spec; `--revise-spec-from-ticket` imports an amended ticket.
+  Idle collecting or verification-failed nodes need no escalation and recollect
+  for verification on the same head; children and contributions remain intact.
+  Active work, pause, pending controls and landing intent refuse revision. Leaves
+  require an escalation and restart from plan. Run `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
   sessions and acknowledges after they stop. Resume continues the same native
@@ -305,7 +309,10 @@ that does the job, and say what you are doing before you do it:
 - `builds.control` — pause, resume, abort, or discard a build. `abort` and
   `discard` are destructive to in-flight work.
 - `builds.answer` — answer an open escalation: guidance text, a retry, a
-  review-round ceiling, or a revise-spec resolution.
+  review-round ceiling, or a revise-spec resolution. Eligible idle collecting or
+  verification-failed nodes accept body/ticket spec revision without an escalation;
+  the caller supplies the amended body for ticket origin. The node recollects and
+  verifies; leaves require an escalation and restart from plan.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket.
 - `tickets.create` — file a new ticket from a conversation.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and

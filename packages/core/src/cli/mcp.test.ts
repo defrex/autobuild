@@ -397,3 +397,62 @@ test('MCP builds.events forwards failed-node attention intact and respects its c
     await client.close()
   }
 })
+
+test('MCP node spec revision needs no escalation and retains transport identity', async () => {
+  await seed()
+  const repo = await realpath(tmp)
+  const local = openLocalStore(storeDir)
+  await local.createBuild({ slug: 'node', repo, ticket: { source: 'file', id: 'NODE' } })
+  await local.append('node', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo, ticket: { source: 'file', id: 'NODE' }, baseBranch: 'main', kind: 'node' },
+  })
+  await local.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'base' } })
+  await local.close()
+  const client = await connect({ ...bareEnv(), USER: 'operator-1' })
+  try {
+    const result = await client.callTool({
+      name: 'builds.answer',
+      arguments: {
+        repo,
+        slug: 'node',
+        resolution: 'revise-spec',
+        origin: 'body',
+        body: '# Revised\n\n## Acceptance criteria\n- Works\n\n## Out of scope\n- Other work\n',
+      },
+    })
+    const leaf = await client.callTool({
+      name: 'builds.answer',
+      arguments: {
+        repo,
+        slug: 'demo',
+        resolution: 'revise-spec',
+        origin: 'body',
+        body: '# Revised\n\n## Acceptance criteria\n- Works\n\n## Out of scope\n- Other work\n',
+      },
+    })
+    expect(leaf.isError).toBe(true)
+    expect(JSON.stringify(leaf.content)).toContain('no open escalation for a spec revision')
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+      kind: 'answered',
+      nodeRevision: true,
+      count: 0,
+      specRev: 0,
+    })
+  } finally {
+    await client.close()
+  }
+  const reopened = openLocalStore(storeDir)
+  expect((await reopened.getEvents('node')).at(-1)).toMatchObject({
+    type: 'spec.revised',
+    payload: {
+      operator: {
+        user: 'operator-1',
+        via: { kind: 'mcp', client: 'mcp-contract-test' },
+      },
+    },
+  })
+  await reopened.close()
+})
