@@ -2667,3 +2667,30 @@ test('node status exposes idle evidence and wakes immediately on durable activit
   })
   expect(JSON.parse(await output(true)).nodePolling).toBeUndefined()
 })
+
+test('node status shares hand-pushed identities in JSON and text and leaves stay unchanged', async () => {
+  const { reduceBuild } = await import('../kernel/reducer')
+  const { summarizeFrom } = await import('./status')
+  const state = reduceBuild([])
+  state.kind = 'node'
+  state.nodeRestack = {
+    items: [],
+    foreignAliases: { rewritten: 'original' },
+    inventory: { head: 'head', builds: ['child'], foreign: ['rewritten', 'direct'] },
+  }
+  const summary = summarizeFrom(record(), state, NOW)
+  expect(JSON.parse(JSON.stringify(summary)).handPushedCommits).toEqual([
+    { sha: 'rewritten', originalSha: 'original' },
+    { sha: 'direct', originalSha: 'direct' },
+  ])
+  const d = { ...detail(record(), [], NOW), ...summary }
+  expect(renderDetail(d, NOW).join('\n')).toContain(
+    'hand-pushed changes (node-owned): rewritten (original original), direct',
+  )
+  state.nodeRestack.inventory!.foreign = []
+  expect(summarizeFrom(record(), state, NOW).handPushedCommits).toEqual([])
+  delete state.nodeRestack.inventory
+  expect(summarizeFrom(record(), state, NOW).handPushedCommits).toBeUndefined()
+  state.kind = 'work'
+  expect(summarizeFrom(record(), state, NOW)).not.toHaveProperty('handPushedCommits')
+})

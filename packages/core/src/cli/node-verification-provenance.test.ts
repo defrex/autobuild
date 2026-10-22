@@ -64,6 +64,7 @@ test('frozen all-commit range includes earlier and nested contributions, ignores
     'acme/app',
     { base, head },
     { exec: spawnExec, workspacePath: workspace },
+    { contributionBase: base },
   )
   expect(result.index.commits.map((c) => c.sha).sort()).toEqual(
     [first, side, repeated, head].sort(),
@@ -91,6 +92,7 @@ test('frozen all-commit range includes earlier and nested contributions, ignores
         'acme/app',
         { base, head },
         { exec: spawnExec, workspacePath: workspace },
+        { contributionBase: base },
       )
     ).specs.get(BUILD),
   ).toBe('unsanctioned')
@@ -112,6 +114,7 @@ for (const [message, diagnostic] of [
         'acme/app',
         { base, head },
         { exec: spawnExec, workspacePath: workspace },
+        { contributionBase: base },
       ),
     ).rejects.toThrow(diagnostic)
   })
@@ -119,7 +122,8 @@ for (const [message, diagnostic] of [
 test('node context materializes allocated paths and removes stale contributions', async () => {
   await source('node', 'acme/app', 'node')
   const base = await commit('base')
-  const head = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  const contributed = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  const head = await commit('A hand-pushed decision\n\nFull intent')
   await writeFile(
     join(workspace, 'autobuild.toml'),
     '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
@@ -130,6 +134,7 @@ test('node context materializes allocated paths and removes stale contributions'
   await git('add', '.ab')
   await git('add', 'autobuild.toml')
   await git('commit', '-m', 'config')
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
   await store.append('node', {
     actor: KERNEL,
     type: 'integration.prepared',
@@ -142,6 +147,14 @@ test('node context materializes allocated paths and removes stale contributions'
     exec: spawnExec,
   }
   const manifest = await buildContext(deps)
+  const intent = [
+    { sha: head, originalSha: head, message: 'A hand-pushed decision\n\nFull intent\n' },
+  ]
+  expect(manifest.nodeVerification!.handPushedCommits).toEqual(intent)
+  expect(
+    JSON.parse(await readFile(join(workspace, manifest.nodeVerification!.indexPath), 'utf8'))
+      .handPushedCommits,
+  ).toEqual(intent)
   const contribution = manifest.nodeVerification!.contributions[0]!
   expect(contribution.specPath).not.toBe(`.ab/contributions/${BUILD}/spec.md`)
   expect(await readFile(join(workspace, '.ab', 'contributions', BUILD, 'spec.md'), 'utf8')).toBe(
@@ -154,7 +167,8 @@ test('node context materializes allocated paths and removes stale contributions'
   expect(
     JSON.parse(await readFile(join(workspace, manifest.nodeVerification!.indexPath), 'utf8'))
       .commits,
-  ).toEqual([{ sha: head, build: BUILD }])
+  ).toEqual([{ sha: contributed, build: BUILD }, { sha: head }])
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
   await store.append('node', {
     actor: KERNEL,
     type: 'integration.prepared',
@@ -168,6 +182,7 @@ test('missing specs and rejected reads fail without publishing a partial manifes
   await source('node', 'acme/app', 'node')
   const base = await commit('base')
   const head = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
   await store.append('node', {
     actor: KERNEL,
     type: 'integration.prepared',
@@ -200,6 +215,7 @@ test('self identity retains own spec, and leaf context has no provenance reads',
     join(workspace, 'autobuild.toml'),
     '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
   )
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
   await store.append('node', {
     actor: KERNEL,
     type: 'integration.prepared',
@@ -223,4 +239,93 @@ test('self identity retains own spec, and leaf context has no provenance reads',
   })
   expect(leaf.nodeVerification).toBeUndefined()
   expect(await Bun.file(join(workspace, '.ab/node-verification.json')).exists()).toBe(false)
+})
+
+test('owned hand-pushed intent excludes inherited and side history and survives real replay', async () => {
+  const root = await commit('root')
+  const inherited = await commit('inherited parent change')
+  const contributed = await commit(`contribution\n\nAutobuild-Build: ${BUILD}`)
+  const message = 'Refine the design\n\nKeep static figures.\nPreserve the hero.'
+  const original = await commit(message)
+  await git('checkout', '-b', 'intent-side', inherited)
+  const side = await commit('side history is not independently owned')
+  await git('checkout', '-')
+  await git('merge', '--no-ff', 'intent-side', '-m', 'Adopt side change')
+  const head = await git('rev-parse', 'HEAD')
+  const deps = { exec: spawnExec, workspacePath: workspace }
+  const result = await collectNodeVerificationProvenance(
+    store,
+    'acme/app',
+    { base: root, head },
+    deps,
+    { contributionBase: inherited },
+  )
+  expect(result.index.handPushedCommits.map((c) => c.sha)).toEqual([original, head])
+  expect(result.index.handPushedCommits[0]).toEqual({
+    sha: original,
+    originalSha: original,
+    message: `${message}\n`,
+  })
+  expect(result.index.handPushedCommits.some((c) => c.sha === inherited || c.sha === side)).toBe(
+    false,
+  )
+  expect(result.index.contributions[0]!.commits).toEqual([contributed])
+
+  const { prepareNodeReplay, replayNodeChange } = await import('../kernel/node-restack')
+  await git('checkout', '--detach', inherited)
+  const parent = await commit('new parent')
+  const inputs = await prepareNodeReplay(deps, { oldBase: inherited, oldHead: original, parent })
+  let rewritten = parent
+  let rewrittenIntent = ''
+  for (let i = 0; i < inputs.changes.length; i++) {
+    const replay = await replayNodeChange(deps, inputs, i, rewritten)
+    expect(replay.kind).toBe('replayed')
+    if (replay.kind !== 'replayed') throw new Error('expected clean replay')
+    rewritten = replay.head
+    if (inputs.changes[i]!.sha === original) rewrittenIntent = rewritten
+  }
+  const replayed = await collectNodeVerificationProvenance(
+    store,
+    'acme/app',
+    { base: parent, head: rewritten },
+    deps,
+    {
+      contributionBase: parent,
+      foreignAliases: { [rewrittenIntent]: 'intermediate', intermediate: original },
+    },
+  )
+  expect(replayed.index.handPushedCommits).toEqual([
+    { sha: rewrittenIntent, originalSha: original, message: `${message}\n` },
+  ])
+  await commit('outside frozen head')
+  expect(
+    (
+      await collectNodeVerificationProvenance(
+        store,
+        'acme/app',
+        { base: rewritten, head: rewritten },
+        deps,
+        { contributionBase: parent },
+      )
+    ).index.handPushedCommits,
+  ).toEqual([])
+})
+
+test('missing durable node ownership boundary fails context hydration', async () => {
+  await source('node', 'acme/app', 'node')
+  const base = await commit('base')
+  const head = await commit('intent')
+  await store.append('node', {
+    actor: KERNEL,
+    type: 'integration.prepared',
+    payload: { id: 'cycle', parent: base, head, config: 'config' },
+  })
+  await expect(
+    buildContext({
+      store,
+      env: makeEnv({ build: 'node', phase: 'verify:visual' }),
+      workspacePath: workspace,
+      exec: spawnExec,
+    }),
+  ).rejects.toThrow('missing its durable contribution boundary')
 })

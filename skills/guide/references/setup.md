@@ -415,7 +415,10 @@ Its session instructions must preserve this contract:
    Node verify sessions also receive `nodeVerification` in the context manifest:
    contribution specs and a provenance index mapping commits to the builds that
    introduced them. Read those specs through the manifest's allocated paths.
-   A node change is authorized when the node spec or the introducing
+   Also read `handPushedCommits: [{sha, originalSha, message}]` from the manifest
+   and index. These hand-pushed node commit messages express maintainer-authorized
+   intent; judge quality and consistency, and never fail them solely for lacking
+   a covering spec. Other node changes are authorized when the node spec or the introducing
    contribution's spec covers it; use the commit index to find that spec.
 2. Exercise each applicable acceptance criterion through the repository's real
    application lifecycle. Prefer the narrowest honest flow that catches a

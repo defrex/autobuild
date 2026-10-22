@@ -1010,7 +1010,7 @@ pins retain ticket-row reads; existing service attachments need no migration,
 and attachments in old local stores are not moved.
 
 In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
-`range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
+`range`, `indexPath`, `contributions`, `handPushedCommits` and `unattributedCommits`. Each contribution
 has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
 `specPath` and `commits`. The JSON index repeats this metadata and adds the
 exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
@@ -1024,8 +1024,14 @@ frozen parent-to-head range, including earlier cycles and merge side history.
 Specs use the current event-authorized revision, never an unsanctioned latest
 deposit or mutable ticket body. Unknown identities, ambiguous or invalid trailers,
 and missing source data fail hydration. Commits without a build trailer are
-listed as unattributed; this introduces no new intent or verdict policy.
-A node change is authorized when the node spec or the spec of the contribution
+listed as unattributed, a mechanical absence of a trailer rather than an authorization verdict.
+`handPushedCommits: [{sha, originalSha, message}]` identifies node-owned hand-pushed
+commits in the frozen range. Ownership uses the durable first-parent contribution
+boundary; inherited and merge-side history are not automatically owned. Confirmed
+rewrite aliases preserve original identity, and `message` is the full commit message.
+These messages express maintainer-authorized intent: judge quality and consistency;
+never fail these commits solely for lacking a covering spec.
+Other node changes are authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
 Leaf verification context is unchanged.
 
@@ -1363,7 +1369,8 @@ columns. Reservations live in the event stream and survive lease expiry.
 The contribution boundary advances only on completed restacks. Reachable build
 identities include inherited parent changes; foreign counts include only the
 node's own contribution, preventing a parent rewrite from inflating descendants'
-foreign inventory. Status text and JSON expose both inventory and active items.
+hand-pushed inventory (node-owned foreign commits). Status text and JSON expose
+both inventory and active items, retaining original identities after rewrites.
 
 
 Integration completion is sampled by `kernel/integration-completeness.ts` from

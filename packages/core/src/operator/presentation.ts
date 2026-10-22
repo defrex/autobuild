@@ -32,3 +32,4 @@ export type { DashboardHandoff } from '../cli/dashboard/handoff'
 
 export { formatRollback } from '../cli/dashboard/rollback'
 export type { DashboardRollback } from '../cli/dashboard/rollback'
+export { handPushedLabel, handPushedText } from '../cli/dashboard/hand-pushed'

@@ -1,6 +1,7 @@
 import { nodeActivityKey, nodePollingSchedule } from '../kernel/node-polling'
 import { buildReadFactsReducer } from '../kernel/read-facts'
 import { formatRuntimeIdentity } from '../events/runtime'
+import { projectHandPushed, handPushedText, type HandPushedChange } from './dashboard/hand-pushed'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, type TreeProjection } from './dashboard/tree'
@@ -107,6 +108,7 @@ export interface BuildSummary {
   target?: string
   integration?: ReturnType<typeof buildVocabulary>['integration']
   integrationState?: BuildState['integration']
+  handPushedCommits?: HandPushedChange[]
   nodeRestack?: BuildState['nodeRestack']
   slug: string
   ticket?: TicketRef
@@ -251,7 +253,9 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
     slug: record.slug,
     ...buildVocabulary(state),
     ...(state.kind === 'node' ? { integrationState: state.integration } : {}),
-    ...(state.kind === 'node' ? { nodeRestack: state.nodeRestack } : {}),
+    ...(state.kind === 'node'
+      ? { nodeRestack: state.nodeRestack, handPushedCommits: projectHandPushed(state.nodeRestack) }
+      : {}),
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
     ...(record.ticket !== undefined ? { ticket: record.ticket } : {}),
@@ -593,6 +597,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     if (d.integration === 'verification failed')
       lines.push('  repair: file a child ticket targeting this node')
   }
+  if (d.kind === 'integration')
+    lines.push(`  hand-pushed changes (node-owned): ${handPushedText(d.handPushedCommits)}`)
   if (d.nodeRestack) {
     const node = d.nodeRestack
     const move = node.parentRequest ?? node.parentChange
@@ -604,7 +610,6 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     if (node.inventory) {
       lines.push(`  node head: ${node.inventory.head}`)
       lines.push(`  build changes: ${node.inventory.builds.join(', ') || 'none'}`)
-      lines.push(`  foreign changes (node-owned): ${node.inventory.foreign.join(', ') || 'none'}`)
     }
     if (!node.active && node.observedParent && node.observedParent.sha !== node.contributionBase)
       lines.push(`  node restack pending: parent ${node.observedParent.sha}`)
