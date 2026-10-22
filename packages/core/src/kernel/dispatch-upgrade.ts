@@ -18,6 +18,7 @@ export interface UpgradeRun {
   suspended: number
 }
 export interface DispatchUpgradeState {
+  authoritativeRun?: string
   runs: Record<string, UpgradeRun>
   lineages: Record<string, string>
   rollbackIds: string[]
@@ -41,15 +42,18 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 5,
+  version: 6,
   initial: () => ({ runs: {}, holds: {}, lineages: {}, rollbackIds: [] }),
   fold(acc, events) {
     for (const event of events) {
       if (event.type === 'dispatcher.run-started' && event.payload.lineage)
         acc.lineages[event.payload.run] = event.payload.lineage
+      // Starts and yielded ticks are not proof of repository authority.
+      if (event.type === 'dispatcher.tick-started') acc.authoritativeRun = event.payload.run
       if (event.type === 'dispatcher.runtime-rolled-back') {
         if (acc.rollbackIds.includes(event.payload.correlation)) continue
         acc.rollbackIds.push(event.payload.correlation)
+        acc.authoritativeRun = event.payload.run
         acc.lastRollback = event
         acc.holds[event.payload.lineage] = event
         continue
@@ -130,8 +134,10 @@ export const dispatchUpgradeReducer = defineReducer<
             state.released &&
             same(state.released.payload, event.payload) &&
             state.request?.payload.successor === event.payload.successor
-          )
+          ) {
             state.takeover ??= event
+            acc.authoritativeRun = event.payload.successor
+          }
           break
         case 'dispatcher.drain-deadline':
           if (!state.completed && state.handoff && same(state.handoff.payload, event.payload))

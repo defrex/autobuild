@@ -229,6 +229,7 @@
     "$: object"
   ],
   "dispatchUpgrade": [
+    "$.authoritativeRun: string",
     "$.holds.launcher.actor.kind: string",
     "$.holds.launcher.actor: object",
     "$.holds.launcher.payload.correlation: string",
@@ -1337,6 +1338,7 @@
     "$.status.warningNotice: undefined",
     "$.status.yieldedHolder: undefined",
     "$.status: object",
+    "$.upgrades.authoritativeRun: string",
     "$.upgrades.holds.launcher.actor.kind: string",
     "$.upgrades.holds.launcher.actor: object",
     "$.upgrades.holds.launcher.payload.correlation: string",

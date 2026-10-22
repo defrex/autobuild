@@ -6,6 +6,7 @@ import type {
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   formatHandoff,
+  formatRollback,
   capacityExplanation,
   displayText,
   pauseResumeHelp,
@@ -210,8 +211,12 @@ export function BuildsView(props: BuildsViewProps) {
   const focused = detailOpen && selectedBuild !== undefined
   return (
     <DashboardSurface>
-      {(model.warningLines?.length || model.availableUpgrade || model.handoffs?.length) && (
+      {(model.warningLines?.length ||
+        model.availableUpgrade ||
+        model.handoffs?.length ||
+        model.rollback) && (
         <div className="messages">
+          {model.rollback && <p className="warn notice">{formatRollback(model.rollback)}</p>}
           {model.handoffs?.map((handoff) => (
             <p className="warn notice" key={`${handoff.run}:${handoff.correlation}`}>
               {formatHandoff(handoff)}
