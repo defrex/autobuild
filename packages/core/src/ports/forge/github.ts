@@ -658,7 +658,7 @@ export class GitHubForge implements Forge {
 
   private memo<T>(key: string, work: () => Promise<T>): Promise<T> {
     const scope = this.reads.getStore()
-    if (!scope) return work()
+    if (!scope || !this.activeScopes.has(scope)) return work()
     const existing = scope.get(key)
     if (existing) return existing as Promise<T>
     const result = Promise.resolve().then(work)
@@ -1019,7 +1019,8 @@ export class GitHubForge implements Forge {
     head: string
     prNumber?: number
   }): Promise<void> {
-    if (!this.reads.getStore()) return
+    const scope = this.reads.getStore()
+    if (!scope || !this.activeScopes.has(scope)) return
     const epoch = this.readEpoch
     const { owner, name } = await this.requireCoordinates()
     const root = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
@@ -1053,7 +1054,7 @@ export class GitHubForge implements Forge {
       ahead = comparison.behind_by
     }
     if (epoch !== this.readEpoch) return this.primeNodeReads(input)
-    const scope = this.reads.getStore()!
+    if (!this.activeScopes.has(scope)) return
     scope.set(`branch:${input.parent}`, Promise.resolve(parentSha))
     scope.set(`branch:${input.head}`, Promise.resolve(headSha))
     scope.set(
