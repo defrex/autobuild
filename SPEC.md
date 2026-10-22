@@ -266,28 +266,57 @@ The kernel records `dispatcher.upgrade-target-resolved` once per changed success
 target observation per run, including equal-content source advances. Repository
 status exposes its mode, base and target SHA independently of the running commit
 and earlier failure or handoff evidence. Identical polls append nothing.
-The kernel records `dispatcher.upgrade-detected`, `dispatcher.upgrade-failed`,
-`dispatcher.handoff-started` and `dispatcher.handoff-completed`, correlated by
-run and launcher lineage. Facts name both runtimes, resolution provenance and
-prepared cache identity where available. After settling the open claim tick,
-cutover prevents new launches, suspends every live local build session and waits
-for provider cleanup, stream closure and durable suspension before releasing
-leases and exiting. Native handles resume where eligible; otherwise the existing
-`session.resume-fallback` records the reason for a fresh session. Graceful
-shutdown has no persistence deadline. Local harvest uses the same durable shutdown boundary: repository session
-suspension closes its credentials and stream, then the next generation resumes
-the same native turn with fresh logical credentials. Unsupported or unavailable
-native state records `harvest.session.resume-fallback` before a fresh turn.
-Orderly suspension spends no harvest recovery attempt; real crashes still do. Remote supervised runners retain detach/recovery behavior.
+A successor first validates configuration and the actual selected store without
+starting repository work or terminal input/output. Provider compatibility evidence
+chooses drain when sharing is safe and cutover otherwise. SQLite compares its
+untouched catalog semantically (columns, indexes, keys and constraints) with target
+requirements, accepting equivalent schemas built by guarded ALTER migrations; HTTP uses the live service's client
+and protocol admission. Missing evidence chooses cutover. Successful durable
+protocol writes are also required: a service that admits the client but rejects
+a new yield fact fails preflight, leaving the predecessor active with target and
+reason in repository attention. Failed targets are not retried every tick; a change in selected-store compatibility
+evidence allows the normal target-check cadence to retry.
 
-The exited generation's runtime-owned reader derives a handoff from the journal;
-the filesystem-only launcher consumes its versioned JSON result, validates its
-run/lineage and starts the next generation sequentially. There is no overlapping
-generation or automatic rollback. The successor records completion only
-after initialization and repository ownership. Operator stop wins over handoff.
-Turning automatic upgrades off cancels preparation and restores manual restart
-behavior; launcher contract changes also require a manual restart. `--once`,
-origin `--repository`, hosted cron and development hot rendering stay direct.
+Local harvest suspends durably before repository lease release on handoff or
+clean stop. The next generation resumes eligible native sessions with fresh
+logical credentials, or records a reasoned `harvest.session.resume-fallback`
+and starts fresh. Orderly suspension spends no recovery attempt; real crashes
+retain recovery accounting.
+
+The predecessor serializes acceptance with ticks and launch admission, joins
+repository-owned harvest and provisioning work, and records the exact local
+executions, start time and deadline. Its terminal frontend removes and joins
+input/render work before acknowledging terminal release. Only after that durable
+acknowledgement and a successful repository lease claim may the successor draw
+or consume input. Only the successor ticks, claims, runs janitor/harvest and
+launches runners. Execution leases remain with existing local runners; remote
+executions detach immediately.
+
+A draining predecessor supervises its captured local executions until they settle
+or `policy.upgradeDrainSeconds` (900 seconds by default) elapses. The deadline
+tracks accepted live policy changes relative to the original start. Remaining
+local sessions suspend through the normal durable native-resume path before
+process-group cleanup. Cutover uses this suspension path immediately and waits
+for predecessor stop before takeover. Retirement completion records drained and
+suspended counts separately from takeover. A successor reconstructs unfinished
+retirement from execution leases and durable build facts after predecessor death.
+An unrelated dispatcher taking the lease still causes ordinary supersession and
+teardown. Rollback and phase-boundary runner replacement remain
+outside this behavior.
+
+The journal records `dispatcher.target-prepared`, `dispatcher.yield-requested`,
+`dispatcher.handoff-started`, `dispatcher.terminal-released`, `dispatcher.takeover`,
+per-execution `dispatcher.drain-settled`, deadline changes and
+`dispatcher.handoff-completed`, correlated by predecessor run, successor run,
+launcher lineage, both runtimes and cached target. Legacy handoffs without a
+mode mean cutover. The launcher first binds the runtime-owned journal transport to its persisted
+repository record, so rejected configuration edits cannot redirect readers away
+from the held run. It reads runtime-owned durable projections while generations overlap; it owns no store or operational authority and keeps each
+live runtime reserved. Overlap requires explicit launcher and target capabilities; unsupported
+targets fail safely with manual-restart attention. Operator stop wins and joins
+all live children. Only the presentation owner installs terminal cleanup.
+`[upgrade] automatic = false` disables target preparation; `--once`, origin
+`--repository`, hosted cron and development hot rendering remain direct.
 
 Cache publication is atomic after validation. Current, distinct previous,
 explicitly held and live process-use entries survive pruning independently of
@@ -2674,7 +2703,12 @@ routing, integration and landing/publication decisions for that build only;
 read-only status/context/dashboard reads retain the lifecycle status. The
 kernel or dispatcher records advisory `build.compatibility-deferred` with the
 decisive boundary, types, versions and diagnostic, deduplicated per boundary.
-Default `ab watch` attention includes it. Diagnostics request a build that
+Default `ab watch` attention includes it. An unsettled dispatcher-written
+`execution.drain-authorized` in the build's own log suppresses that attention
+only for the matching execution instance and predecessor runtime during an
+accepted draining handoff. The decisive-fact fence and exit-for-relaunch remain.
+`execution.ended` or matching `execution.drain-settled` settles authorization;
+a later unrelated execution never inherits it. Diagnostics request a build that
 understands the unsupported types and name the writer releases, even when
 writer and reader share a release string. Upgrading clears deferral through
 local replay without answering an escalation. Repository unknown counts do
@@ -2848,15 +2882,13 @@ answer appended after delivery is a new eligible winner. Destinations remain
 independent, and the kernel derives both the winner and its delivery from the
 event history so replay and restart preserve the result.
 
-Automatic upgrade repository facts are run- and launcher-lineage-correlated:
-`dispatcher.upgrade-detected` is advisory; `dispatcher.upgrade-failed`,
-`dispatcher.handoff-started` and `dispatcher.handoff-completed` are decisive.
-They carry the originating run, correlation, from runtime, target key/mode and
-provenance; prepared handoffs additionally carry the to runtime/cache identity,
-and completion names the successor. Event timestamps mark each boundary. Failure
-is immediate repository attention. A launcher consumes only its own normally
-stopped run's pending handoff, never another host's facts or a stopped-by-operator
-run. See §3.3 for target selection and cutover semantics.
+Automatic upgrade repository facts are run- and launcher-lineage-correlated.
+`dispatcher.upgrade-detected` is advisory; preparation, yield, acceptance,
+terminal release, takeover, drain settlement/deadline, completion and upgrade
+failure are decisive. Start and completion retain runtime/target provenance;
+retirement completion is distinct from takeover. Failure is immediate repository
+attention. A launcher consumes only its exact lineage/run's pending target and
+never an operator-stopped run. See §3.3 for the draining protocol.
 
 Every dispatcher run start is immediately followed by an advisory
 `dispatcher.runtime-recorded {run, startedSeq, runtime}` fact. Every successful
@@ -3385,6 +3417,7 @@ model = "moonshotai/kimi-k3"
 sessionBudgetSeconds = 7200       # optional role override
 
 [policy]
+upgradeDrainSeconds = 900         # local generation drain deadline, hot-reloaded
 sessionBudgetSeconds = 3600       # non-infinite default for build agent sessions
 stallRounds = 3
 maxVerifyAttempts = 3

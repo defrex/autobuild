@@ -2,6 +2,7 @@ import type { SourceLaunch } from './dispatch-upgrade-source'
 import { isAbsolute, join, resolve } from 'node:path'
 
 /** Frozen launcher ABI. Changes require a new version and compatibility fixture. */
+export const DISPATCH_OVERLAP_VERSION = 1
 export const DISPATCH_LAUNCH_VERSION = 1
 export const DISPATCH_GENERATION_ENV = 'AB_DISPATCH_GENERATION'
 export const GENERATION_ENTRY = 'bin/ab-dispatch-generation.ts'
@@ -9,12 +10,16 @@ export const GENERATION_EXITS = { stopped: 80, handoff: 81, failed: 82 } as cons
 export const GENERATION_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGQUIT', 'SIGTERM'] as const
 export interface GenerationLaunch {
   version: 1
+  overlapVersion?: 1
+  journal?: { storeRef: string; repo: string }
   runtimeRoot: string
   checkout: string
   sourceLaunch?: SourceLaunch
   originalInstall?: string
   run?: string
   lineage?: string
+  predecessorRoot?: string
+  predecessorCorrelation?: string
   predecessor?: string
   launcherPid?: number
 }

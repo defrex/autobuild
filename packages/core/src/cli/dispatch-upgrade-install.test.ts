@@ -37,7 +37,7 @@ test('real Bun lock and isolated install validate exact registry integrity, then
     await writeFile(join(source, 'bin', entry), 'export {}')
   await writeFile(
     join(source, 'packages/core/src/cli/dispatch-launch-contract.ts'),
-    'export const DISPATCH_LAUNCH_VERSION = 1\n',
+    'export const DISPATCH_LAUNCH_VERSION = 1\nexport const DISPATCH_OVERLAP_VERSION = 1\n',
   )
   await writeFile(join(source, 'packages/core/src/cli/dispatch-handoff.ts'), 'export {}')
   await writeFile(
@@ -240,7 +240,7 @@ test('source installation publishes exact provenance atomically, reuses a valida
     )
   await writeFile(
     join(repo, 'packages/core/src/cli/dispatch-launch-contract.ts'),
-    'export const DISPATCH_LAUNCH_VERSION = 1\n',
+    'export const DISPATCH_LAUNCH_VERSION = 1\nexport const DISPATCH_OVERLAP_VERSION = 1\n',
   )
   await writeFile(join(repo, 'packages/core/src/cli/dispatch-handoff.ts'), 'export {}')
   await sourceCommand([process.execPath, 'install', '--ignore-scripts'], repo)

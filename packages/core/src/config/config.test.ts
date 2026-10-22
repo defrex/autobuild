@@ -152,6 +152,7 @@ describe('parseConfig — complete flattened surface', () => {
         'code-review': { runtime: 'pi', model: 'kimi-k3', sessionBudgetSeconds: 7200 },
       },
       policy: {
+        upgradeDrainSeconds: 900,
         sessionBudgetSeconds: 1800,
         stallRounds: 3,
         maxVerifyAttempts: 3,
@@ -212,6 +213,7 @@ describe('parseConfig — defaults', () => {
       finalize: { steps: [], stepConfigs: {} },
       roles: {},
       policy: {
+        upgradeDrainSeconds: 900,
         sessionBudgetSeconds: 3600,
         stallRounds: 3,
         maxVerifyAttempts: 3,
@@ -748,6 +750,7 @@ skill = "ab-verify-e2e"
 
   test('partial [policy] keeps every other per-key default', () => {
     expect(parseConfig(`${READY}[policy]\nstallRounds = 7\n`).policy).toEqual({
+      upgradeDrainSeconds: 900,
       sessionBudgetSeconds: 3600,
       stallRounds: 7,
       maxVerifyAttempts: 3,

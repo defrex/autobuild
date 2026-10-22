@@ -329,6 +329,8 @@ interface PreparedArtifact {
 }
 
 export interface SqliteBuildStoreOptions {
+  /** Preflight opens the existing schema without running initialization DDL. */
+  bootstrap?: boolean
   database: Database
   blobs: BlobStore
   clock?: Clock
@@ -368,77 +370,196 @@ export class SqliteBuildStore implements BuildStore {
     // each other's writes (§7.2.1). Cross-process write serialization comes
     // from `writeTx` (BEGIN IMMEDIATE), not from this timeout alone.
     this.sqlite.exec('PRAGMA busy_timeout = 5000')
-    this.sqlite.exec('PRAGMA journal_mode = WAL')
-    for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
-    for (const table of ['events', 'repo_events']) {
-      const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as { name: string }[]
-      if (!columns.some((column) => column.name === 'compatibility'))
-        this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN compatibility TEXT`)
-    }
-    // Stores created before `repo_origin` existed keep working: add the column
-    // idempotently when a pre-existing table lacks it (the bootstrap DDL above
-    // covers fresh stores). No migration framework — one guarded ALTER at open.
-    const repoColumns = this.sqlite.query("PRAGMA table_info('repo_streams')").all() as {
-      name: string
-    }[]
-    if (!repoColumns.some((column) => column.name === 'tick'))
-      this.sqlite.exec('ALTER TABLE repo_streams ADD COLUMN tick TEXT')
-    const columns = this.sqlite.query("PRAGMA table_info('builds')").all() as Array<{
-      name: string
-    }>
-    if (!columns.some((column) => column.name === 'repo_origin')) {
-      this.sqlite.exec('ALTER TABLE builds ADD COLUMN repo_origin TEXT')
-    }
-    for (const [name, type] of [
-      ['node_writer_holder', 'TEXT'],
-      ['node_writer_expires_at', 'TEXT'],
-      ['node_writer_ttl_ms', 'INTEGER'],
-    ]) {
-      if (!columns.some((column) => column.name === name))
-        this.sqlite.exec(`ALTER TABLE builds ADD COLUMN ${name} ${type}`)
-    }
-    // Stores created before session-scoped streams existed keep working: add
-    // the streams.session column idempotently when a pre-existing table lacks
-    // it (the repo_origin precedent). A pre-existing local database also keeps
-    // its old `scope_kind` CHECK, so it cannot host session-scoped streams —
-    // unreachable in product terms because sessions are hosted-only and
-    // nothing local creates one; fresh stores (and every contract-suite
-    // database) get the widened DDL above. Rebuilding the table to widen a
-    // CHECK would risk local data for an unreachable path and is deliberately
-    // not attempted.
-    const streamColumns = this.sqlite.query("PRAGMA table_info('streams')").all() as Array<{
-      name: string
-    }>
-    if (!streamColumns.some((column) => column.name === 'session')) {
-      this.sqlite.exec('ALTER TABLE streams ADD COLUMN session TEXT')
-    }
-    // Stores created before the listStreams creation-order tiebreak existed
-    // keep working: add the streams.creation_seq column idempotently when a
-    // pre-existing table lacks it (the sessions.creation_seq precedent), then
-    // backfill by rowid — rowid equals insertion order because streams are
-    // never deleted (retention prunes stream_chunks only), so the backfill is
-    // consistent with the pinned creation-order contract. Legacy
-    // same-millisecond ties are genuinely unorderable; the pinned guarantee
-    // applies from the migrated store onward.
-    if (!streamColumns.some((column) => column.name === 'creation_seq')) {
-      this.sqlite.exec('ALTER TABLE streams ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
-      this.sqlite.exec('UPDATE streams SET creation_seq = rowid')
-    }
-    // Stores created before the listSessions creation-order tiebreak existed
-    // keep working: add the sessions.creation_seq column idempotently when a
-    // pre-existing table lacks it (the repo_origin precedent), then backfill
-    // by rowid — rowid equals insertion order because sessions are never
-    // deleted, so the backfill is consistent with the pinned creation-order
-    // contract. Legacy same-millisecond ties are genuinely unorderable; the
-    // pinned guarantee applies from the migrated store onward.
-    const sessionColumns = this.sqlite.query("PRAGMA table_info('sessions')").all() as Array<{
-      name: string
-    }>
-    if (!sessionColumns.some((column) => column.name === 'creation_seq')) {
-      this.sqlite.exec('ALTER TABLE sessions ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
-      this.sqlite.exec('UPDATE sessions SET creation_seq = rowid')
+    if (opts.bootstrap !== false) {
+      this.sqlite.exec('PRAGMA journal_mode = WAL')
+      for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
+      for (const table of ['events', 'repo_events']) {
+        const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as {
+          name: string
+        }[]
+        if (!columns.some((column) => column.name === 'compatibility'))
+          this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN compatibility TEXT`)
+      }
+      // Stores created before `repo_origin` existed keep working: add the column
+      // idempotently when a pre-existing table lacks it (the bootstrap DDL above
+      // covers fresh stores). No migration framework — one guarded ALTER at open.
+      const repoColumns = this.sqlite.query("PRAGMA table_info('repo_streams')").all() as {
+        name: string
+      }[]
+      if (!repoColumns.some((column) => column.name === 'tick'))
+        this.sqlite.exec('ALTER TABLE repo_streams ADD COLUMN tick TEXT')
+      const columns = this.sqlite.query("PRAGMA table_info('builds')").all() as Array<{
+        name: string
+      }>
+      if (!columns.some((column) => column.name === 'repo_origin')) {
+        this.sqlite.exec('ALTER TABLE builds ADD COLUMN repo_origin TEXT')
+      }
+      for (const [name, type] of [
+        ['node_writer_holder', 'TEXT'],
+        ['node_writer_expires_at', 'TEXT'],
+        ['node_writer_ttl_ms', 'INTEGER'],
+      ]) {
+        if (!columns.some((column) => column.name === name))
+          this.sqlite.exec(`ALTER TABLE builds ADD COLUMN ${name} ${type}`)
+      }
+      // Stores created before session-scoped streams existed keep working: add
+      // the streams.session column idempotently when a pre-existing table lacks
+      // it (the repo_origin precedent). A pre-existing local database also keeps
+      // its old `scope_kind` CHECK, so it cannot host session-scoped streams —
+      // unreachable in product terms because sessions are hosted-only and
+      // nothing local creates one; fresh stores (and every contract-suite
+      // database) get the widened DDL above. Rebuilding the table to widen a
+      // CHECK would risk local data for an unreachable path and is deliberately
+      // not attempted.
+      const streamColumns = this.sqlite.query("PRAGMA table_info('streams')").all() as Array<{
+        name: string
+      }>
+      if (!streamColumns.some((column) => column.name === 'session')) {
+        this.sqlite.exec('ALTER TABLE streams ADD COLUMN session TEXT')
+      }
+      // Stores created before the listStreams creation-order tiebreak existed
+      // keep working: add the streams.creation_seq column idempotently when a
+      // pre-existing table lacks it (the sessions.creation_seq precedent), then
+      // backfill by rowid — rowid equals insertion order because streams are
+      // never deleted (retention prunes stream_chunks only), so the backfill is
+      // consistent with the pinned creation-order contract. Legacy
+      // same-millisecond ties are genuinely unorderable; the pinned guarantee
+      // applies from the migrated store onward.
+      if (!streamColumns.some((column) => column.name === 'creation_seq')) {
+        this.sqlite.exec('ALTER TABLE streams ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
+        this.sqlite.exec('UPDATE streams SET creation_seq = rowid')
+      }
+      // Stores created before the listSessions creation-order tiebreak existed
+      // keep working: add the sessions.creation_seq column idempotently when a
+      // pre-existing table lacks it (the repo_origin precedent), then backfill
+      // by rowid — rowid equals insertion order because sessions are never
+      // deleted, so the backfill is consistent with the pinned creation-order
+      // contract. Legacy same-millisecond ties are genuinely unorderable; the
+      // pinned guarantee applies from the migrated store onward.
+      const sessionColumns = this.sqlite.query("PRAGMA table_info('sessions')").all() as Array<{
+        name: string
+      }>
+      if (!sessionColumns.some((column) => column.name === 'creation_seq')) {
+        this.sqlite.exec('ALTER TABLE sessions ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
+        this.sqlite.exec('UPDATE sessions SET creation_seq = rowid')
+      }
     }
     this.db = drizzle(this.sqlite)
+  }
+
+  async inspectDispatcherOverlap(signal: AbortSignal) {
+    signal.throwIfAborted()
+    // Compare the actual, untouched catalog with this provider's requirements.
+    // No migrations are run against the live database during preflight.
+    const expected = new Database(':memory:')
+    try {
+      for (const ddl of BOOTSTRAP_DDL) expected.exec(ddl)
+      // ALTER appends columns, and legacy creation-order columns have a DEFAULT
+      // used only for backfill. Neither changes the target's runtime requirements.
+      const catalog = (database: Database) => {
+        const quote = (name: string) => `'${name.replaceAll("'", "''")}'`
+        const objects = database
+          .query(
+            "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+          )
+          .all() as Array<{ type: string; name: string; sql: string }>
+        return objects.map((object) => {
+          if (object.type !== 'table') return object
+          const columns = database
+            .query(`PRAGMA table_xinfo(${quote(object.name)})`)
+            .all() as Array<{
+            cid: number
+            name: string
+            type: string
+            notnull: number
+            dflt_value: string | null
+            pk: number
+            hidden: number
+          }>
+          const indexes = database
+            .query(`PRAGMA index_list(${quote(object.name)})`)
+            .all() as Array<{
+            name: string
+            unique: number
+            origin: string
+            partial: number
+          }>
+          // Keep key order, collation and uniqueness, but ignore physical column
+          // offsets and the automatically assigned index sequence number.
+          const indexShapes = indexes
+            .map((index) => ({
+              name: index.name,
+              unique: index.unique,
+              origin: index.origin,
+              partial: index.partial,
+              columns: (
+                database.query(`PRAGMA index_xinfo(${quote(index.name)})`).all() as Array<
+                  Record<string, unknown>
+                >
+              ).map(({ cid: _cid, ...column }) => column),
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+          // PRAGMAs expose keys and foreign keys, but not CHECK constraints.
+          // Retain balanced CHECK expressions so an older, narrower streams
+          // constraint still requires cutover rather than being called equivalent.
+          const checks: string[] = []
+          const matcher = /\bCHECK\s*\(/gi
+          for (const match of object.sql.matchAll(matcher)) {
+            const begin = match.index + match[0].length
+            let depth = 1,
+              quoted = false,
+              end = begin
+            for (; end < object.sql.length && depth; end++) {
+              const char = object.sql[end]
+              if (char === "'") {
+                if (quoted && object.sql[end + 1] === "'") {
+                  end++
+                  continue
+                }
+                quoted = !quoted
+              }
+              if (!quoted) {
+                if (char === '(') depth++
+                if (char === ')') depth--
+              }
+            }
+            checks.push(
+              object.sql
+                .slice(begin, end - 1)
+                .replace(/\s+/g, ' ')
+                .trim(),
+            )
+          }
+          return {
+            type: object.type,
+            name: object.name,
+            columns: columns
+              .map(({ cid: _cid, ...column }) => ({
+                ...column,
+                dflt_value:
+                  column.name === 'creation_seq' &&
+                  (object.name === 'sessions' || object.name === 'streams') &&
+                  column.dflt_value === '0'
+                    ? null
+                    : column.dflt_value,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+            indexes: indexShapes,
+            foreignKeys: database.query(`PRAGMA foreign_key_list(${quote(object.name)})`).all(),
+            checks,
+          }
+        })
+      }
+      const compatible = JSON.stringify(catalog(this.sqlite)) === JSON.stringify(catalog(expected))
+      return {
+        compatible,
+        evidence: compatible
+          ? 'SQLite catalog matches target provider requirements without migration'
+          : 'SQLite catalog differs from target provider requirements; cutover required before initialization',
+      }
+    } finally {
+      expected.close()
+    }
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -2447,14 +2568,18 @@ export async function inspectLocalStoreSnapshot(rootDir: string): Promise<LocalS
  */
 export function openLocalStore(
   rootDir: string,
-  opts: { clock?: Clock; retention?: { maxRevisions?: number } } = {},
+  opts: { clock?: Clock; retention?: { maxRevisions?: number }; bootstrap?: boolean } = {},
 ): SqliteBuildStore {
-  mkdirSync(rootDir, { recursive: true })
-  const database = new Database(join(rootDir, 'autobuild.sqlite'), { create: true })
+  if (opts.bootstrap !== false) mkdirSync(rootDir, { recursive: true })
+  const database = new Database(join(rootDir, 'autobuild.sqlite'), {
+    readwrite: true,
+    create: opts.bootstrap !== false,
+  })
   const blobs = new DirBlobStore(join(rootDir, 'blobs'))
   return new SqliteBuildStore({
     database,
     blobs,
+    bootstrap: opts.bootstrap,
     ...(opts.clock ? { clock: opts.clock } : {}),
     ...(opts.retention ? { retention: opts.retention } : {}),
   })
