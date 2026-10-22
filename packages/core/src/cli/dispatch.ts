@@ -4026,9 +4026,10 @@ class DispatchLoop {
       from: RUNTIME_IDENTITY,
       runningBunTag: (await readDistributionIdentity(distributionRoot())).bunTag,
       reservationOwner: launch.launcherPid,
+      resolved: upgrades.runs[this.runId]?.resolved,
       currentKey: launch.predecessor
         ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key
-        : undefined,
+        : launch.sourceLaunch?.baseline,
       failedKeys: Object.values(upgrades.runs).flatMap((state) =>
         state.failure && state.failure.payload.lineage === launch.lineage
           ? [state.failure.payload.target.key]
@@ -4041,6 +4042,7 @@ class DispatchLoop {
           checkout: this.opts.targetRepo,
           base: this.currentConfig().config.baseBranch,
           originalInstall: launch.originalInstall!,
+          sourceLaunch: launch.sourceLaunch,
           forge: this.wiring.forge,
           exec: this.opts.exec,
           signal,

@@ -5,6 +5,7 @@ export interface DispatchUpgradeState {
   runs: Record<
     string,
     {
+      resolved?: Extract<RepositoryEvent, { type: 'dispatcher.upgrade-target-resolved' }>
       detected?: Extract<RepositoryEvent, { type: 'dispatcher.upgrade-detected' }>
       failure?: Extract<RepositoryEvent, { type: 'dispatcher.upgrade-failed' }>
       handoff?: Extract<RepositoryEvent, { type: 'dispatcher.handoff-started' }>
@@ -17,11 +18,12 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 1,
+  version: 2,
   initial: () => ({ runs: {} }),
   fold(acc, events) {
     for (const event of events) {
       if (
+        event.type !== 'dispatcher.upgrade-target-resolved' &&
         event.type !== 'dispatcher.upgrade-detected' &&
         event.type !== 'dispatcher.upgrade-failed' &&
         event.type !== 'dispatcher.handoff-started' &&
@@ -31,6 +33,9 @@ export const dispatchUpgradeReducer = defineReducer<
       acc.runs[event.payload.run] ??= {}
       const state = acc.runs[event.payload.run]!
       switch (event.type) {
+        case 'dispatcher.upgrade-target-resolved':
+          state.resolved = event
+          break
         case 'dispatcher.upgrade-detected':
           state.detected = event
           state.failure = undefined
