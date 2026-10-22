@@ -108,8 +108,12 @@ range, a JSON index path, contribution build slugs, current stored ticket
 identities, event-authorized spec revisions and spec paths, and their commits.
 The index maps every commit in the range using build identity trailers,
 including earlier-cycle contributions and merge side history. Commits without
-an identity are listed as unattributed, without adding an intent or verdict
-policy. A node change is authorized when covered by the node spec or the spec
+an identity are listed as unattributed (a mechanical classification). The manifest
+and index also expose `handPushedCommits: [{sha, originalSha, message}]` for owned
+hand-pushed commits in the frozen range, preserving original identity across restacks.
+Their full messages express maintainer-authorized intent: judge quality and
+consistency, and never fail them solely for lacking a covering spec. Other node
+changes are authorized when covered by the node spec or the spec
 of the contribution introducing it; use the commit mapping to find that spec.
 Missing or ambiguous provenance fails hydration. Leaf context is unchanged.
 
