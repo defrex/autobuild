@@ -1,3 +1,4 @@
+import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import { readDispatchUpgrade } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
@@ -309,6 +310,7 @@ export class DispatchFrontend {
 
   private readonly repositoryPoll = new RepositoryPollCache<{
     repositoryEvents: RepositoryEvent[]
+    upgrades: DispatchUpgradeState
     status: DispatchStatus
     config: Config
     observationCount: number
@@ -327,6 +329,9 @@ export class DispatchFrontend {
       nextPollMs: this.refresh?.intervalMs ?? 0,
       read: async ({ fullEnrichment }) => {
         const repositoryEvents = await this.events()
+        // Authority and rollback holds need the full durable reduction, not the
+        // low-volume replay feed (which deliberately discards per-tick facts).
+        const upgrades = (await readDispatchUpgrade(this.reader, this.opts.repo)).value
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
         if (ref === undefined) {
@@ -354,11 +359,11 @@ export class DispatchFrontend {
           await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
         await this.repositoryFeed.save()
         if (!this.cache.isCurrent(snapshot)) return undefined
-        return { repositoryEvents, status, config, observationCount, snapshot }
+        return { repositoryEvents, upgrades, status, config, observationCount, snapshot }
       },
     })
     if (frame === undefined) return
-    let { repositoryEvents, status } = frame
+    let { repositoryEvents, upgrades, status } = frame
     const { config, snapshot } = frame
     const standby = this.opts.once
       ? undefined
@@ -378,6 +383,7 @@ export class DispatchFrontend {
       if (!validAbortConfirmation(snapshot.states.get(slug))) {
         await this.dismissStaleAbortConfirmation(slug)
         repositoryEvents = await this.events()
+        upgrades = (await readDispatchUpgrade(this.reader, this.opts.repo)).value
         status = this.dispatchStatus
       }
     }
@@ -411,6 +417,7 @@ export class DispatchFrontend {
         ...(warningLines.length > 0 ? { warningLines } : {}),
       },
       repositoryEvents,
+      upgrades,
     )
     this.selection = reconcileSelection(previous, dashboardSelections(projected), this.selection)
     if (

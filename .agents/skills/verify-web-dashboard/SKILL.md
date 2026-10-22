@@ -63,6 +63,8 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:builds-rollback-wide:png .ab/web-dashboard-frames/builds-rollback-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-rollback-narrow:png .ab/web-dashboard-frames/builds-rollback-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-handoff-wide:png .ab/web-dashboard-frames/builds-handoff-wide.png --attach
    ab artifact put web-dashboard-frame:builds-handoff-narrow:png .ab/web-dashboard-frames/builds-handoff-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-handoff-dimmed:png .ab/web-dashboard-frames/builds-handoff-dimmed.png --attach
@@ -132,6 +134,9 @@ inspect the diff and not to decide applicability again.
    ```
    ab verdict fail --report .ab/web-dashboard-frames/verify-report.md
    ```
+
+Rollback wide/narrow frames must name failed, restored and held runtime versions
+and commits, plus the rollback event timestamp, using the existing yellow notice.
 
 ## Verdict rules
 
