@@ -1,3 +1,4 @@
+import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
 import { nativeSessionCapture } from '../../../tools/native-session-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
@@ -246,6 +247,20 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 1000,
     requires: ['intake', 'harvest', 'no active builds'],
     forbids: ['repository RUNNING'],
+  },
+  {
+    id: 'builds-harvest-suspended-wide',
+    width: 1440,
+    height: 1000,
+    requires: ['Harvest', 'SUSPENDED'],
+    forbids: ['RESUME'],
+  },
+  {
+    id: 'builds-harvest-suspended-narrow',
+    width: 390,
+    height: 1700,
+    requires: ['Harvest', 'SUSPENDED'],
+    forbids: ['RESUME'],
   },
   {
     id: 'builds-harvest-wide',
@@ -684,6 +699,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'builds-empty-wide':
     case 'builds-empty-narrow': {
       const model = emptyModel(models.happy)
+      return shell(builds(model), { model })
+    }
+    case 'builds-harvest-suspended-wide':
+    case 'builds-harvest-suspended-narrow': {
+      const model = { ...models.happy, harvest: harvestSuspensionCapture() }
       return shell(builds(model), { model })
     }
     case 'builds-harvest-wide':

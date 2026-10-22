@@ -48,7 +48,7 @@ export interface BuildDelegationFacts {
 export interface HarvestDelegationFacts {
   lastSeq: number
   runs: Record<string, true>
-  sessions: Record<string, Record<string, SessionFacts>>
+  sessions: Record<string, Record<string, SessionFacts & { suspended?: true }>>
   authorizations: Record<string, Record<string, { seq: number; leaseHolder: string }>>
   releases: Record<string, string[]>
   endings: Record<string, EndingFact[]>
@@ -82,7 +82,7 @@ export const harvestDelegationReducer = defineReducer<
   RepositoryEvent,
   HarvestDelegationFacts
 >({
-  version: 1,
+  version: 2,
   initial: () => ({
     lastSeq: 0,
     runs: {},
@@ -104,7 +104,11 @@ export const harvestDelegationReducer = defineReducer<
           leaseHolder: event.payload.leaseHolder,
         }
       }
-      if (event.type === 'harvest.session.started' || event.type === 'harvest.session.ended') {
+      if (
+        event.type === 'harvest.session.started' ||
+        event.type === 'harvest.session.ended' ||
+        event.type === 'harvest.session.suspended'
+      ) {
         const runKey = delegationFactKey(event.payload.run)
         acc.sessions[runKey] ??= {}
         const run = acc.sessions[runKey]!
@@ -112,7 +116,10 @@ export const harvestDelegationReducer = defineReducer<
         run[sessionKey] ??= { starts: [], endings: [] }
         const session = run[sessionKey]!
         if (event.type === 'harvest.session.started') session.starts.push(event.seq)
-        else session.endings.push({ seq: event.seq, at: event.ts })
+        else {
+          session.endings.push({ seq: event.seq, at: event.ts })
+          if (event.type === 'harvest.session.suspended') session.suspended = true
+        }
       }
       if (event.type === 'harvest.execution.released' || event.type === 'harvest.execution.ended') {
         const key = delegationFactKey(event.payload.execution)

@@ -825,3 +825,70 @@ test('forge readiness notices only accept hard check keys and dispatcher authors
   ).toThrow()
   expect(() => validateRepositoryEventWrite({ ...notice, actor: humanActor('user') })).toThrow()
 })
+
+test('harvest provider evidence retains configured indexes after native alternate reordering', () => {
+  const failed = {
+    index: 2,
+    session: 'alt',
+    runner: 'scripted',
+    error: 'unavailable',
+    cause: 'availability' as const,
+  }
+  const start = {
+    run: 'h',
+    session: 'primary',
+    role: 'harvest' as const,
+    runner: 'scripted',
+    step: 'synthesize' as const,
+    round: 1,
+  }
+  expect(
+    validateRepositoryEventWrite({
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        ...start,
+        substitution: { failed, selectedIndex: 0 },
+      },
+    }).payload,
+  ).toMatchObject({ substitution: { failed, selectedIndex: 0 } })
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        ...start,
+        substitution: { failed, selectedIndex: 2 },
+      },
+    }),
+  ).toThrow('different configured target')
+  const failure = {
+    run: 'h',
+    step: 'synthesize' as const,
+    round: 1,
+    attempt: 1,
+    error: 'unavailable',
+    willRetry: true,
+  }
+  const attempts = [failed, { ...failed, index: 0, session: 'primary' }]
+  expect(
+    validateRepositoryEventWrite({
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        ...failure,
+        providerAttempts: attempts,
+      },
+    }).payload,
+  ).toMatchObject({ providerAttempts: attempts })
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        ...failure,
+        providerAttempts: [failed, failed],
+      },
+    }),
+  ).toThrow('distinct configured targets')
+})

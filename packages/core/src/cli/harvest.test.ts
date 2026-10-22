@@ -698,6 +698,7 @@ describe('harvest session stream discoverability', () => {
         stream: 'st_payload',
         streamStatus: 'closed',
         status: 'ended',
+        transcript: { kind: 'harvest-transcript:hs_1', rev: 0 },
       },
       {
         session: 'hs_2',
@@ -763,6 +764,7 @@ describe('harvest session stream discoverability', () => {
         stream: closed.id,
         streamStatus: 'closed',
         status: 'ended',
+        transcript: { kind: 'harvest-transcript:hs_1', rev: 0 },
       },
       {
         session: 'hs_2',
@@ -776,8 +778,9 @@ describe('harvest session stream discoverability', () => {
     ])
   })
 
-  test('sessions of runs outside the projected window are excluded', async () => {
+  test('sessions referencing an unknown run do not break repository status', async () => {
     const deps = await fixture()
+    const before = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     await deps.store.appendRepo('/repo', {
       actor: KERNEL,
       type: 'harvest.session.started',
@@ -790,8 +793,8 @@ describe('harvest session stream discoverability', () => {
         round: 1,
       },
     })
-    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
-    expect(view.runs[0]!.sessions).toEqual([])
+    const events = await deps.store.getRepoEvents('/repo')
+    expect(projectHarvestStatus('/repo', events)).toEqual(before)
   })
 
   test('rendered rows show stream id and status; JSON carries the additive sessions array', async () => {
@@ -804,9 +807,11 @@ describe('harvest session stream discoverability', () => {
       ...(await deps.store.listStreams({ kind: 'repo', repo: '/repo' })),
     ])
     const rendered = renderHarvestStatus(view).join('\n')
-    expect(rendered).toContain(`session hs_1 (harvest, synthesize@1) stream ${closed.id} (closed)`)
     expect(rendered).toContain(
-      `session hs_2 (harvest-review, review@1) stream ${stillOpen.id} (open)`,
+      `session hs_1 (harvest, synthesize@1, ended) stream ${closed.id} (closed)`,
+    )
+    expect(rendered).toContain(
+      `session hs_2 (harvest-review, review@1, open) stream ${stillOpen.id} (open)`,
     )
     expect(JSON.parse(JSON.stringify(view)).runs[0].sessions).toHaveLength(2)
   })
@@ -836,7 +841,7 @@ describe('harvest session stream discoverability', () => {
     }
     await abHarvestStatus(common)
     expect(lines.join('\n')).toContain(
-      `session hs_1 (harvest, synthesize@1) stream ${closed.id} (closed)`,
+      `session hs_1 (harvest, synthesize@1, ended) stream ${closed.id} (closed)`,
     )
 
     // Prototype delegation keeps every other store method; the own
@@ -852,8 +857,10 @@ describe('harvest session stream discoverability', () => {
       stdout: (line: string) => degradedLines.push(line),
     })
     const degraded = degradedLines.join('\n')
-    expect(degraded).toContain('session hs_1 (harvest, synthesize@1) stream st_payload (closed)')
-    expect(degraded).toContain('session hs_2 (harvest-review, review@1)')
+    expect(degraded).toContain(
+      'session hs_1 (harvest, synthesize@1, ended) stream st_payload (closed)',
+    )
+    expect(degraded).toContain('session hs_2 (harvest-review, review@1, open)')
     expect(degraded).not.toContain('(open)')
   })
 
@@ -889,7 +896,7 @@ describe('harvest session stream discoverability', () => {
     const text = lines.join('\n')
     // The payload projection stands in: the foreign-keyed stream contributed
     // nothing to the session rows.
-    expect(text).toContain('session hs_1 (harvest, synthesize@1) stream st_payload (closed)')
+    expect(text).toContain('session hs_1 (harvest, synthesize@1, ended) stream st_payload (closed)')
     expect(text).not.toContain(foreign.id)
   })
 })

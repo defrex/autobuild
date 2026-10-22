@@ -607,6 +607,12 @@ export const repositoryReadFactsReducer = defineReducer({
       if (event.type === 'harvest.execution.authorized')
         acc.harvestAuthorizations[JSON.stringify(event.payload.execution)] ??= event
       if (event.type === 'harvest.resumed') acc.latestHarvestResumedSeq = event.seq
+      if (event.type === 'harvest.session.started' && event.payload.continuation) {
+        const prior = acc.harvestSessions.find(
+          (s) => s.session === event.payload.continuation!.predecessor,
+        )
+        if (prior) prior.status = 'ended'
+      }
       if (event.type === 'harvest.session.started')
         acc.harvestSessions.push({
           run: event.payload.run,
@@ -615,16 +621,18 @@ export const repositoryReadFactsReducer = defineReducer({
           step: event.payload.step,
           round: event.payload.round,
           status: 'open',
+          ...(event.payload.continuation ? { continuation: event.payload.continuation } : {}),
           ...(event.payload.stream === undefined ? {} : { stream: event.payload.stream }),
           streamStatus: event.payload.stream === undefined ? 'closed' : 'open',
         })
-      if (event.type === 'harvest.session.ended') {
+      if (event.type === 'harvest.session.ended' || event.type === 'harvest.session.suspended') {
         acc.harvestSessionEndings[JSON.stringify(event.payload.session)] ??= event.seq
         const session = acc.harvestSessions.findLast(
           (session) => session.session === event.payload.session && session.status === 'open',
         )
         if (session) {
-          session.status = 'ended'
+          session.status = event.type === 'harvest.session.suspended' ? 'suspended' : 'ended'
+          session.transcript = event.payload.transcript
           session.streamStatus = 'closed'
         }
       }

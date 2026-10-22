@@ -118,11 +118,6 @@
     "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
     "cursor": true
   },
-  "packages/core/src/processes/harvest-runner.ts::HarvestRunner/executeSingleSession::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
-    "cursor": true
-  },
   "packages/core/src/processes/harvest.ts::evaluateHarvestPressureFromDigests::reduceHarvest": {
     "kind": "reduction",
     "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
@@ -594,10 +589,6 @@
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
   },
   "packages/hosted-store-service/src/delegated-authority.ts::evaluateDelegationLifecycle::reduceBuild": {
-    "kind": "reduction",
-    "reason": "Prerequisite delegated request-policy reference projection; request/auth plumbing is explicitly outside this migration."
-  },
-  "packages/hosted-store-service/src/delegated-authority.ts::evaluateDelegationLifecycle::reduceHarvest": {
     "kind": "reduction",
     "reason": "Prerequisite delegated request-policy reference projection; request/auth plumbing is explicitly outside this migration."
   },

@@ -2562,6 +2562,173 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     }
   }
 
+  for (const step of ['synthesize', 'review'] as const) {
+    for (const failure of ['start', 'cleanup'] as const) {
+      test(`${step} ${failure} failure closes the bracket and retries without crash recovery`, async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-failed-bracket-'))
+        roots.push(workspace)
+        const store = new MemoryBuildStore({ clock: steppingClock() })
+        const tickets = new FakeTicketSource()
+        const ids = sequentialIds()
+        const seeded = await seedOpenRun({
+          store,
+          tickets,
+          ids,
+          workspace,
+          stage: step === 'synthesize' ? 'started' : 'proposals',
+        })
+        let fail = true
+        let failedHandle: string | undefined
+        const happy = happyScript(workspace, { store, ids })
+        const scripted = new ScriptedAgentRunner({
+          nativeState: new Map(),
+          script: async (ctx) => {
+            if (failure === 'cleanup' && fail && ctx.opts.env.AB_PHASE === `${step}@1`) {
+              fail = false
+              failedHandle = ctx.session.id
+              return failedTurnResult('provider temporarily unavailable', false)
+            }
+            return happy(ctx)
+          },
+        })
+        const start = scripted.start.bind(scripted)
+        scripted.start = async (opts) => {
+          if (failure === 'start' && fail && opts.env.AB_PHASE === `${step}@1`) {
+            fail = false
+            throw new Error('spawn ENOENT')
+          }
+          return start(opts)
+        }
+        const end = scripted.end.bind(scripted)
+        scripted.end = async (session) => {
+          if (session.id === failedHandle) throw new Error('adapter transcript unavailable')
+          return end(session)
+        }
+        const run = (instance: string) =>
+          new HarvestRunner({
+            store,
+            tickets,
+            config: config(1),
+            runtimes: {
+              scripted: {
+                runner: scripted,
+                servesModels: [''],
+                openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+              },
+            },
+            repo: '/repo',
+            workspacePath: workspace,
+            ids,
+            uuids: randomUuids(),
+            clock: steppingClock(),
+            instance,
+            opts: { heartbeatMs: 100_000, maxSessionAttempts: 2, maxRecoveryAttempts: 1 },
+          }).run()
+
+        expect((await run('first')).outcome).toBe('failed')
+        const first = await store.getRepoEvents('/repo')
+        const started = first.find((event) => event.type === 'harvest.session.started')!
+        const ended = first.find((event) => event.type === 'harvest.session.ended')!
+        const failed = first.find((event) => event.type === 'harvest.failed')!
+        expect(ended?.payload.session).toBe(started.payload.session)
+        expect(ended.seq).toBeLessThan(failed.seq)
+        expect(ended.payload.usage).toEqual({
+          inputTokens: 0,
+          outputTokens: 0,
+          turns: failure === 'start' ? 0 : 1,
+        })
+        expect(failed.payload).toMatchObject({
+          run: seeded.run,
+          step,
+          round: 1,
+          attempt: 1,
+          error: failure === 'start' ? 'spawn ENOENT' : 'provider temporarily unavailable',
+          willRetry: true,
+        })
+        expect(reduceHarvest(first).latest?.sessions.at(-1)?.status).toBe('ended')
+        const transcript = await store.getRepoArtifact(
+          '/repo',
+          ended.payload.transcript.kind,
+          ended.payload.transcript.rev,
+        )
+        expect(new TextDecoder().decode(transcript!.content)).toContain(
+          failure === 'start' ? 'spawn ENOENT' : 'adapter transcript unavailable',
+        )
+        expect(await store.getStream(started.payload.stream!)).toMatchObject({
+          status: 'closed',
+          outcome: 'aborted',
+        })
+
+        expect((await run('replacement')).outcome).toBe('completed')
+        const events = await store.getRepoEvents('/repo')
+        expect(events.filter((event) => event.type === 'harvest.failed')).toHaveLength(1)
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'harvest.recovery-requested' ||
+              event.type === 'harvest.session.resume-fallback' ||
+              event.type === 'harvest.session.resumed',
+          ),
+        ).toBe(false)
+        expect(
+          events
+            .filter((event) => event.type === 'harvest.session.started')
+            .every((event) => event.payload.continuation === undefined),
+        ).toBe(true)
+        expect(events.filter((event) => event.type === 'harvest.proposal.filed')).toHaveLength(1)
+      })
+    }
+  }
+
+  test('failed-session transcript persistence errors do not record an ordinary provider failure', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-failed-deposit-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    await seedOpenRun({ store, tickets, ids, workspace, stage: 'started' })
+    const append = store.appendRepoWithArtifacts.bind(store)
+    store.appendRepoWithArtifacts = async (...args) => {
+      if (args[1].some((artifact) => artifact.kind === 'harvest-transcript')) {
+        throw new Error('transcript store unavailable')
+      }
+      return append(...args)
+    }
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('spawn ENOENT')
+      },
+    })
+    const runner = new HarvestRunner({
+      store,
+      tickets,
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'failed-deposit',
+    })
+    await expect(runner.run()).rejects.toThrow(
+      'Harvest failed-session transcript persistence failed',
+    )
+    const events = await store.getRepoEvents('/repo')
+    expect(events.some((event) => event.type === 'harvest.failed')).toBe(false)
+    expect(events.some((event) => event.type === 'harvest.session.ended')).toBe(false)
+    expect(reduceHarvest(events).latest?.sessions.at(-1)?.status).toBe('open')
+    expect(await store.listStreams({ kind: 'repo', repo: '/repo' })).toMatchObject([
+      { status: 'closed', outcome: 'aborted' },
+    ])
+  })
+
   function startedSessionEvents(events: Awaited<ReturnType<MemoryBuildStore['getRepoEvents']>>) {
     return events.filter((event) => event.type === 'harvest.session.started')
   }
@@ -3059,4 +3226,280 @@ test('resuming an approved join canonicalizes a legacy ledger target without cha
   } finally {
     await rm(workspace, { recursive: true, force: true })
   }
+})
+
+describe('local harvest native suspension', () => {
+  for (const step of ['synthesize', 'review', 'continue'] as const) {
+    for (const native of [true, false]) {
+      test(`${step}: repeated clean stops ${native ? 'resume native identity' : 'record fresh fallback'} without recovery`, async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-suspend-'))
+        roots.push(workspace)
+        const store = new MemoryBuildStore({ clock: steppingClock() })
+        const tickets = new FakeTicketSource()
+        const ids = sequentialIds()
+        await seedObservation(store, 'suspension', 'retain this turn')
+        const nativeState = native ? new Map<string, string[]>() : undefined
+        const logicalSessions: string[] = []
+        let stops = 0
+        let stop = new AbortController()
+        const deps = {
+          store,
+          tickets,
+          config: config(1),
+          repo: '/repo',
+          workspacePath: workspace,
+          ids,
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          opts: { heartbeatMs: 100_000, maxRecoveryAttempts: 1 },
+        }
+        const makeRunner = () =>
+          new ScriptedAgentRunner({
+            nativeState,
+            script: async ({ opts, message }) => {
+              const env = resolveHarvestCliEnv(opts.env)
+              const cli = { store, env, workspacePath: workspace, ids }
+              if (
+                env.phase === step ||
+                (step === 'continue' && env.phase === 'synthesize' && env.round === 2)
+              ) {
+                logicalSessions.push(env.session)
+                if (stops++ < 3) {
+                  stop.abort()
+                  return defaultTurnResult('partial work')
+                }
+                if (native) expect(message).toContain('ab harvest context')
+              }
+              await buildHarvestContext(cli)
+              if (env.phase === 'synthesize') {
+                const observations = JSON.parse(
+                  await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
+                )
+                const file = join(workspace, '.ab/proposals.json')
+                await writeFile(file, JSON.stringify(proposalSet(observations)))
+                await submitHarvestProposals(cli, file)
+              } else {
+                const notes = join(workspace, '.ab/review.md')
+                await writeFile(notes, 'approved')
+                if (step === 'continue' && env.round === 1) {
+                  const findings = join(workspace, '.ab/findings-input.json')
+                  await writeFile(
+                    findings,
+                    JSON.stringify([{ severity: 'important', summary: 'Clarify the proposal' }]),
+                  )
+                  await submitHarvestVerdict(cli, { verdict: 'revise', notes, findings })
+                } else await submitHarvestVerdict(cli, { verdict: 'approve', notes })
+              }
+              return defaultTurnResult('done')
+            },
+          })
+        for (let generation = 0; generation < 4; generation++) {
+          stop = new AbortController()
+          const runner = makeRunner()
+          const result = await new HarvestRunner({
+            ...deps,
+            instance: `generation-${generation}`,
+            shutdownSignal: stop.signal,
+            runtimes: { scripted: { runner, servesModels: [''] } },
+          }).run()
+          expect(result.outcome).toBe(generation < 3 ? 'suspended' : 'completed')
+          const events = await store.getRepoEvents('/repo')
+          expect(
+            events.filter(
+              (e) => e.type === 'harvest.failed' || e.type === 'harvest.recovery-requested',
+            ),
+          ).toHaveLength(0)
+          const { readRepositoryFacts } = await import('../store/reduced-reads')
+          const { projectHarvestStatus } = await import('../cli/harvest')
+          const { projectHarvest } = await import('../cli/dashboard/model')
+          const facts = (await readRepositoryFacts(store, '/repo')).value
+          expect(projectHarvestStatus('/repo', facts)).toEqual(
+            projectHarvestStatus('/repo', events),
+          )
+          if (generation < 3) {
+            expect(projectHarvestStatus('/repo', facts).status).toBe('suspended')
+            expect(projectHarvest(events)?.status).toBe('suspended')
+            expect(projectHarvest(events)?.action).toBeUndefined()
+            const paused = projectHarvest([
+              ...events,
+              {
+                repo: '/repo',
+                actor: KERNEL,
+                type: 'harvest.paused',
+                payload: {},
+                seq: events.at(-1)!.seq + 1,
+                ts: '2099-01-01T00:00:00Z',
+              },
+            ])
+            expect(paused?.steps).toEqual(projectHarvest(events)?.steps)
+            const bracket = facts.harvest.runs[0]!.sessions.at(-1)!
+            expect(bracket.status).toBe('suspended')
+            expect(bracket.transcript).toBeDefined()
+            if (native) expect(bracket.nativeHandle?.nativeId).toBeDefined()
+          }
+        }
+        const events = await store.getRepoEvents('/repo')
+        expect(new Set(logicalSessions).size).toBe(4)
+        expect(events.filter((e) => e.type === 'harvest.session.suspended')).toHaveLength(3)
+        expect(
+          events.filter(
+            (e) =>
+              e.type === (native ? 'harvest.session.resumed' : 'harvest.session.resume-fallback'),
+          ),
+        ).toHaveLength(3)
+        expect(events.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
+        if (native) {
+          const accepted = events.filter((e) => e.type === 'harvest.session.resumed')
+          expect(new Set(accepted.map((e) => e.payload.handle.nativeId)).size).toBe(1)
+        }
+      })
+    }
+  }
+
+  test('a durable terminal wins an abort and stops before launching review', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-terminal-stop-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedObservation(store, 'terminal', 'terminal wins')
+    const ids = sequentialIds()
+    const stop = new AbortController()
+    const runner = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const cli = { store, env: resolveHarvestCliEnv(opts.env), workspacePath: workspace, ids }
+        await buildHarvestContext(cli)
+        const observations = JSON.parse(
+          await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
+        )
+        const file = join(workspace, '.ab/proposals.json')
+        await writeFile(file, JSON.stringify(proposalSet(observations)))
+        await submitHarvestProposals(cli, file)
+        stop.abort()
+        throw new Error('abort after typed terminal')
+      },
+    })
+    expect(
+      (
+        await new HarvestRunner({
+          store,
+          tickets: new FakeTicketSource(),
+          config: config(1),
+          runtimes: { scripted: { runner, servesModels: [''] } },
+          repo: '/repo',
+          workspacePath: workspace,
+          ids,
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          instance: 'terminal',
+          shutdownSignal: stop.signal,
+        }).run()
+      ).outcome,
+    ).toBe('suspended')
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((e) => e.type === 'harvest.session.suspended' || e.type === 'harvest.failed'),
+    ).toHaveLength(0)
+    expect(events.filter((e) => e.type === 'harvest.session.started')).toHaveLength(1)
+    expect(
+      events.some((e) => e.type === 'harvest.step.completed' && e.payload.step === 'synthesize'),
+    ).toBe(true)
+  })
+})
+
+test('a resumed alternate sharing the primary runner is not retained as the primary producer', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alternate-producer-'))
+  roots.push(workspace)
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const tickets = new FakeTicketSource()
+  const ids = sequentialIds()
+  const { run } = await seedOpenRun({ store, tickets, ids, workspace, stage: 'started' })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.step.started',
+    payload: { run, step: 'synthesize', round: 1 },
+  })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.session.started',
+    payload: {
+      run,
+      session: 'old-alternate',
+      role: 'harvest',
+      runner: 'scripted',
+      args: ['alternate'],
+      step: 'synthesize',
+      round: 1,
+    },
+  })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.session.suspended',
+    payload: {
+      run,
+      session: 'old-alternate',
+      cause: 'shutdown',
+      transcript: { kind: 'harvest-transcript', rev: 0 },
+    },
+  })
+  const producerTurns: Array<{ args: readonly string[]; turn: number }> = []
+  let reviews = 0
+  const scripted = new ScriptedAgentRunner({
+    script: async ({ opts, turn }) => {
+      const env = resolveHarvestCliEnv(opts.env)
+      const deps = { store, env, workspacePath: workspace, ids }
+      await buildHarvestContext(deps)
+      if (opts.skill === 'ab-harvest') {
+        producerTurns.push({ args: opts.args ?? [], turn })
+        const observations = JSON.parse(
+          await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+        )
+        const file = join(workspace, '.ab', `proposals-${producerTurns.length}.json`)
+        await writeFile(
+          file,
+          JSON.stringify(proposalSet(observations, `Specific defect ${producerTurns.length}`)),
+        )
+        await submitHarvestProposals(deps, file)
+      } else {
+        reviews += 1
+        const notes = join(workspace, '.ab', 'review.md')
+        await writeFile(notes, reviews === 1 ? 'revise' : 'approve')
+        if (reviews === 1) {
+          const findings = join(workspace, '.ab', 'review-findings.json')
+          await writeFile(
+            findings,
+            JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
+          )
+          await submitHarvestVerdict(deps, { verdict: 'revise', notes, findings })
+        } else await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+      }
+      return defaultTurnResult('done')
+    },
+  })
+  const cfg = config(1)
+  cfg.roles.default!.args = ['primary']
+  cfg.roles.default!.alternates = [{ runtime: 'scripted', args: ['alternate'] }]
+  const result = await new HarvestRunner({
+    store,
+    tickets,
+    config: cfg,
+    runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+    repo: '/repo',
+    workspacePath: workspace,
+    ids,
+    uuids: randomUuids(),
+    clock: steppingClock(),
+    instance: 'next',
+  }).run()
+  expect(result.outcome).toBe('completed')
+  expect(producerTurns).toEqual([
+    { args: ['alternate'], turn: 1 },
+    { args: ['primary'], turn: 1 },
+  ])
+  const events = await store.getRepoEvents('/repo')
+  expect(
+    events
+      .filter((e) => e.type === 'harvest.session.started')
+      .filter((e) => e.payload.role === 'harvest')
+      .map((e) => e.payload.args),
+  ).toEqual([['alternate'], ['alternate'], ['primary']])
+  expect(events.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
 })
