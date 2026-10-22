@@ -778,8 +778,9 @@ describe('harvest session stream discoverability', () => {
     ])
   })
 
-  test('sessions referencing an unknown run are rejected', async () => {
+  test('sessions referencing an unknown run do not break repository status', async () => {
     const deps = await fixture()
+    const before = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     await deps.store.appendRepo('/repo', {
       actor: KERNEL,
       type: 'harvest.session.started',
@@ -793,7 +794,7 @@ describe('harvest session stream discoverability', () => {
       },
     })
     const events = await deps.store.getRepoEvents('/repo')
-    expect(() => projectHarvestStatus('/repo', events)).toThrow('unknown harvest run')
+    expect(projectHarvestStatus('/repo', events)).toEqual(before)
   })
 
   test('rendered rows show stream id and status; JSON carries the additive sessions array', async () => {
