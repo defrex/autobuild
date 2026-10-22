@@ -18,6 +18,29 @@ async function addStack(h: Awaited<ReturnType<typeof makeHarness>>, branch: stri
   await git(['worktree', 'remove', cwd], h.origin)
 }
 
+async function seedContributors(h: Awaited<ReturnType<typeof makeHarness>>, repo: string) {
+  for (const slug of ['first-child', 'second-child']) {
+    const ticket = { source: 'fake', id: slug }
+    await h.store.createBuild({ slug, repo, ticket })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo, baseBranch: 'main' },
+    })
+    await h.store.putArtifact(slug, { kind: 'spec', content: `Authorize ${slug}` })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'spec.imported',
+      payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+  }
+}
+
 test('nested node landing preserves both child commits and parent lands the stack without wrappers', async () => {
   const h = await makeHarness({
     localGitForge: true,
@@ -345,27 +368,7 @@ test('integration agent verification receives exact commit range without produce
   try {
     await h.dispatcher.tick()
     const node = (await h.store.listBuilds())[0]!
-    // Trailer identities must resolve to durable contributing builds and specs.
-    for (const slug of ['first-child', 'second-child']) {
-      const ticket = { source: 'fake', id: slug }
-      await h.store.createBuild({ slug, repo: node.repo, ticket })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'build.created',
-        payload: { ticket, repo: node.repo, baseBranch: 'main' },
-      })
-      await h.store.putArtifact(slug, { kind: 'spec', content: `Authorize ${slug}` })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'spec.imported',
-        payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
-      })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'build.completed',
-        payload: { outcome: 'merged' },
-      })
-    }
+    await seedContributors(h, node.repo)
     await addStack(h, node.branch!)
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await h.runLatest()
@@ -535,12 +538,41 @@ test('dispatcher recovers a failed receipt without a runner, workspace or succes
 })
 
 test('agent verification failure reports the exact node cycle once without an escalation', async () => {
+  let verdictSubmitted = false
+  let handPushedSha = ''
+  const message =
+    'Document integration repair intent\n\nExercise agent failure with hand-pushed changes.'
   const handlers = happyHandlers()
   handlers['ab-verify-feature'] = async (cli) => {
     await cli.run(['context'])
+    const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+    const cycle = reduceBuild(await h.events(cli.env.build)).integration!.cycle!
+    expect(manifest.commitRange).toEqual({ base: cycle.parent, head: cycle.head })
+    expect(manifest.commitRange.head).toBe(await git(['rev-parse', 'HEAD'], cli.ws))
+    const provenance = manifest.nodeVerification
+    expect(provenance.range).toEqual(manifest.commitRange)
+    expect(provenance.contributions.map((entry: { build: string }) => entry.build)).toEqual([
+      'first-child',
+      'second-child',
+    ])
+    for (const contribution of provenance.contributions) {
+      expect(contribution.ticket).toEqual({ source: 'fake', id: contribution.build })
+      expect(contribution.spec).toEqual({ kind: 'spec', rev: 0 })
+      expect(await Bun.file(join(cli.ws, contribution.specPath)).text()).toBe(
+        `Authorize ${contribution.build}`,
+      )
+      expect(manifest.materialized[contribution.specPath.slice(4)]).toBe('derived')
+    }
+    const index = await Bun.file(join(cli.ws, provenance.indexPath)).json()
+    expect(index.contributions).toEqual(provenance.contributions)
+    const intent = [{ sha: handPushedSha, originalSha: handPushedSha, message: `${message}\n` }]
+    expect(provenance.handPushedCommits).toEqual(intent)
+    expect(index.handPushedCommits).toEqual(intent)
+    expect(index.unattributedCommits).toEqual([handPushedSha])
     const report = join(cli.ws, '.ab/feature-report.md')
     await Bun.write(report, 'Feature verification failed: repair the integration.')
     await cli.run(['verdict', 'fail', '--report', report])
+    verdictSubmitted = true
   }
   const h = await makeHarness({
     localGitForge: true,
@@ -553,33 +585,40 @@ test('agent verification failure reports the exact node cycle once without an es
   try {
     await h.dispatcher.tick()
     const node = (await h.store.listBuilds())[0]!
-    // Trailer identities must resolve to durable contributing builds and specs.
-    for (const slug of ['first-child', 'second-child']) {
-      const ticket = { source: 'fake', id: slug }
-      await h.store.createBuild({ slug, repo: node.repo, ticket })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'build.created',
-        payload: { ticket, repo: node.repo, baseBranch: 'main' },
-      })
-      await h.store.putArtifact(slug, { kind: 'spec', content: `Authorize ${slug}` })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'spec.imported',
-        payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
-      })
-      await h.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'build.completed',
-        payload: { outcome: 'merged' },
-      })
-    }
+    await seedContributors(h, node.repo)
     await addStack(h, node.branch!)
+    const cwd = join(h.tmp, 'hand-pushed')
+    await git(['worktree', 'add', cwd, node.branch!], h.origin)
+    try {
+      await Bun.write(
+        join(cwd, 'repair-intent.txt'),
+        'Review the integrated feature before landing.',
+      )
+      handPushedSha = await commitAll(cwd, message)
+    } finally {
+      await git(['worktree', 'remove', cwd], h.origin)
+    }
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await h.runLatest()
     await h.dispatcher.tick()
     const events = await h.events(node.slug)
     const state = reduceBuild(events)
+    expect(verdictSubmitted).toBe(true)
+    expect(h.cliErrors).toEqual([])
+    const cycle = state.integration!.cycle!
+    expect(state.verify.results).toEqual(
+      expect.arrayContaining(
+        ['unit', 'feature'].map((step) =>
+          expect.objectContaining({
+            step,
+            outcome: step === 'unit' ? 'pass' : 'fail',
+            restackId: cycle.id,
+            headSha: cycle.head,
+            baseSha: cycle.parent,
+          }),
+        ),
+      ),
+    )
     expect(state.status).toBe('blocked')
     const reports = events.filter((event) => event.type === 'integration.verification-failed')
     expect(reports).toHaveLength(1)
@@ -588,8 +627,15 @@ test('agent verification failure reports the exact node cycle once without an es
       head: state.integration!.cycle!.head,
       parent: state.integration!.cycle!.parent,
       steps: ['feature'],
+      guidance: `file a repair child targeting this node: ${node.slug}`,
     })
     expect(events.filter((event) => event.type === 'escalation.raised')).toHaveLength(0)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const retried = await h.events(node.slug)
+    expect(
+      retried.filter((event) => event.type === 'integration.verification-failed'),
+    ).toHaveLength(1)
+    expect(retried.filter((event) => event.type === 'escalation.raised')).toHaveLength(0)
   } finally {
     await h.cleanup()
   }
