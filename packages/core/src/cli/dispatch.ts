@@ -9,7 +9,7 @@ import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { prepareUpgrade } from './dispatch-upgrade-install'
 import { readDispatchUpgrade } from '../store/reduced-reads'
-import type { Handoff } from '../kernel/dispatch-upgrade'
+import type { Handoff, UpgradeRun } from '../kernel/dispatch-upgrade'
 import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
@@ -3315,6 +3315,13 @@ class DispatchLoop {
     )
   }
 
+  /** An unresolved yield keeps watching until durable state decides it. */
+  private get watchStopped(): boolean {
+    return this.yieldPending
+      ? this.opts.signal?.aborted === true || this.inputStop.signal.aborted
+      : this.stopped
+  }
+
   /** `--once` awaits everything in `inFlight` that is not tagged
    * 'environment': `local-parent` build executions, locally run harvest, and
    * hosted harvest. Hosted harvest runs in a disposable guest but carries no
@@ -4004,6 +4011,7 @@ class DispatchLoop {
     deadline: string
     builds: Array<{ slug: string; instance: string }>
   }
+  private yieldPending = false
   private presentationReleased = false
   private upgradeRetirementSettled = true
   private handledPreflightFailure?: string
@@ -4013,7 +4021,7 @@ class DispatchLoop {
     const launch = launchContext(this.opts.env)
     if (
       launch?.overlapVersion !== 1 ||
-      this.stopped ||
+      this.watchStopped ||
       this.superseded ||
       this.repoLeaseHolder !== this.runId
     )
@@ -4028,6 +4036,10 @@ class DispatchLoop {
     const state = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
       this.runId
     ]
+    // A prior attempt may have committed acceptance before a read or build
+    // authorization failed. Resume that decision before any repository work.
+    if (state?.handoff && state.handoff.payload.lineage === launch.lineage)
+      return this.adoptUpgradeYield(state.handoff)
     if (
       state?.failure &&
       state.prepared &&
@@ -4047,11 +4059,16 @@ class DispatchLoop {
       state.handoff ||
       request.lineage !== launch.lineage ||
       !this.currentConfig().config.upgrade.automatic
-    )
+    ) {
+      this.abandonUpgradeYield()
       return false
+    }
     const facts = (await readDispatcherRunFacts(this.wiring.store, this.repoIdentity, this.runId))
       .value
-    if (facts.stopRequest) return false
+    if (facts.stopRequest) {
+      this.abandonUpgradeYield()
+      return false
+    }
     const lease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
     if (
       lease?.holder !== this.runId ||
@@ -4061,6 +4078,7 @@ class DispatchLoop {
       return false
     }
     // No launch, claim, tick or target continuation may cross this boundary.
+    this.yieldPending = true
     this.acceptingBuildLaunches = false
     this.cutoverRequested = true
     // Suspend local harvest durably before transferring repository authority.
@@ -4120,16 +4138,13 @@ class DispatchLoop {
 
     // An append can commit before its response is lost. Only durable state
     // decides whether repository authority must transfer. If this read fails,
-    // keep admission closed and let ordered shutdown/recovery fence authority.
+    // keep admission closed; a later watch attempt adopts the durable acceptance
+    // before it can tick, claim or launch again.
     const accepted = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
       this.runId
     ]?.handoff
     if (accepted?.payload.correlation !== handoff.correlation) {
-      // The joined local workflow is suspended, but subsequent ticks must be
-      // able to resume it with a fresh shutdown signal after rejected yield.
-      this.localHarvestShutdown = new AbortController()
-      this.cutoverRequested = false
-      this.acceptingBuildLaunches = true
+      this.abandonUpgradeYield()
       if (acceptanceError !== undefined)
         await this.repoView.appendRepo(this.repoIdentity, {
           actor: DISPATCHER,
@@ -4149,15 +4164,37 @@ class DispatchLoop {
         })
       return false
     }
-    this.retirement = {
-      handoff,
-      successor: accepted.payload.successor!,
-      mode: accepted.payload.mode!,
-      startedAt: accepted.payload.startedAt!,
-      deadline: accepted.payload.deadline!,
-      builds: accepted.payload.builds!,
-    }
-    for (const build of this.retirement.builds)
+    return this.adoptUpgradeYield(accepted)
+  }
+
+  /** Reopen admission after a yield that did not durably transfer authority. */
+  private abandonUpgradeYield(): void {
+    if (!this.yieldPending) return
+    // The joined local workflow is suspended, but subsequent ticks must be
+    // able to resume it with a fresh shutdown signal.
+    this.localHarvestShutdown = new AbortController()
+    this.yieldPending = false
+    this.cutoverRequested = false
+    this.acceptingBuildLaunches = true
+  }
+
+  /** Enter retirement from the persisted acceptance, which may predate this tick. */
+  private async adoptUpgradeYield(accepted: NonNullable<UpgradeRun['handoff']>): Promise<boolean> {
+    const handoff = accepted.payload
+    // Legacy cutovers do not have the negotiated overlap capture.
+    if (
+      handoff.run !== this.runId ||
+      handoff.successor === undefined ||
+      handoff.mode === undefined ||
+      handoff.startedAt === undefined ||
+      handoff.deadline === undefined ||
+      handoff.builds === undefined
+    )
+      return false
+    this.yieldPending = true
+    this.acceptingBuildLaunches = false
+    this.cutoverRequested = true
+    for (const build of handoff.builds)
       await this.repoView.append(build.slug, {
         actor: DISPATCHER,
         type: 'execution.drain-authorized',
@@ -4168,6 +4205,24 @@ class DispatchLoop {
           instance: build.instance,
         },
       })
+    this.retirement = {
+      handoff: {
+        correlation: handoff.correlation,
+        run: handoff.run,
+        lineage: handoff.lineage,
+        from: handoff.from,
+        to: handoff.to,
+        root: handoff.root,
+        cacheId: handoff.cacheId,
+        target: handoff.target,
+      },
+      successor: handoff.successor,
+      mode: handoff.mode,
+      startedAt: handoff.startedAt,
+      deadline: handoff.deadline,
+      builds: handoff.builds,
+    }
+    this.yieldPending = false
     this.inputStop.abort()
     return true
   }
@@ -4474,7 +4529,7 @@ class DispatchLoop {
       this.startUpgradeChecks()
       await this.initializeAutomaticUpgrade()
       let startup = true
-      while (!this.stopped && !this.superseded) {
+      while (!this.watchStopped && !this.superseded) {
         try {
           const report = await this.dispatcherTick(startup)
           this.printReport(report, this.harvestInFlight === undefined)
@@ -4485,7 +4540,7 @@ class DispatchLoop {
           await this.publishTickFailure(error)
           this.warn(`tick failed: ${message}`)
         }
-        if (this.stopped || this.superseded) break
+        if (this.watchStopped || this.superseded) break
         await sleep(intervalMs)
       }
       if (this.superseded) {

@@ -11757,7 +11757,15 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
   }
 })
 
-for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as const)
+for (const scenario of [
+  'natural',
+  'deadline',
+  'committed-error',
+  'read-error',
+  'uncommitted-read-error',
+  'authorization-error',
+  'rejected',
+] as const)
   test(`handoff acceptance preserves execution fencing (${scenario})`, async () => {
     const deadline = scenario === 'deadline'
     const harvested = deferred()
@@ -11799,6 +11807,29 @@ for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as
       return claim(repo, holder, ttl)
     }
 
+    let rejectRead = false
+    let readFailures = 0
+    let lostAcceptances = 0
+    let authorizationFailures = 0
+    const getReducerValue = fx.store.getReducerValue.bind(fx.store)
+    fx.store.getReducerValue = async (...args) => {
+      if (rejectRead && args[1].reducer === 'dispatchUpgrade') {
+        rejectRead = false
+        readFailures++
+        throw new Error('acceptance read unavailable')
+      }
+      return getReducerValue(...args)
+    }
+    const appendBuild = fx.store.append.bind(fx.store)
+    fx.store.append = async (...args) => {
+      if (
+        scenario === 'authorization-error' &&
+        args[1].type === 'execution.drain-authorized' &&
+        authorizationFailures++ === 0
+      )
+        throw new Error('authorization unavailable')
+      return appendBuild(...args)
+    }
     const appendRepo = fx.store.appendRepo.bind(fx.store)
     fx.store.appendRepo = async (...args) => {
       if (args[1].type === 'dispatcher.handoff-started') {
@@ -11811,9 +11842,16 @@ for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as
           )
           throw new Error('acceptance rejected')
         }
-        if (scenario === 'committed-error') {
+        if (scenario === 'committed-error' || scenario === 'read-error') {
           await appendRepo(...args)
+          rejectRead = scenario === 'read-error'
           throw new Error('acceptance response lost')
+        }
+        // The first attempt never commits and its decision is unreadable;
+        // a later tick must retry acceptance rather than wedge or cut over.
+        if (scenario === 'uncommitted-read-error' && lostAcceptances++ === 0) {
+          rejectRead = true
+          throw new Error('acceptance unavailable')
         }
       }
       return appendRepo(...args)
@@ -11961,6 +11999,15 @@ for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as
         return
       }
       await yielded.promise
+      if (scenario === 'read-error' || scenario === 'uncommitted-read-error')
+        expect(readFailures).toBe(1)
+      if (scenario === 'uncommitted-read-error') expect(lostAcceptances).toBe(2)
+      if (scenario === 'authorization-error') expect(authorizationFailures).toBe(2)
+      expect(
+        (await fx.store.getEvents(slug)).some(
+          (event) => event.type === 'execution.drain-authorized',
+        ),
+      ).toBe(true)
       const oldTicks = tickCalls.filter((holder) => holder === 'predecessor').length
       const oldClaims = claimCalls.filter((holder) => holder === 'predecessor').length
       expect((await fx.store.getBuild(slug))!.lease?.holder).toBe(lease.holder)
@@ -11986,6 +12033,9 @@ for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as
       expect(tickCalls.some((holder) => holder !== 'predecessor')).toBe(true)
       const events = await fx.store.getRepoEvents(fx.origin)
       const accepted = events.find((event) => event.type === 'dispatcher.handoff-started')!
+      expect(events.filter((event) => event.type === 'dispatcher.handoff-started')).toHaveLength(1)
+      if (scenario.endsWith('read-error') || scenario === 'authorization-error')
+        expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(true)
       expect(
         events.filter(
           (event) =>
