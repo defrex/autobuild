@@ -134,3 +134,65 @@ test('a new cycle with identical SHAs cannot borrow historical verification', ()
   expect(integrationNeedsRunner(state)).toBe(true)
   expect(integrationVerified(state, config)).toBe(false)
 })
+
+test('spec boundary invalidates same-head failure and success without erasing audit evidence', async () => {
+  const { integrationFailed, integrationHeadVerified, integrationCycleVerified } = await import(
+    './integration-state'
+  )
+  for (const outcome of ['fail', 'pass'] as const) {
+    const state = prepared()
+    for (const step of config.verify.steps)
+      state.verify.results.push({
+        step,
+        seq: 2,
+        attempt: 1,
+        outcome,
+        headSha: 'head',
+        baseSha: 'parent',
+        restackId: 'cycle',
+      })
+    expect(integrationFailed(state)).toBe(outcome === 'fail')
+    expect(integrationCycleVerified(state)).toBe(outcome === 'pass')
+    state.restartSince = 3
+    expect(integrationCurrent(state)).toBe(false)
+    expect(integrationFailed(state)).toBe(false)
+    expect(integrationCycleVerified(state)).toBe(false)
+    expect(integrationHeadVerified(state, 'head')).toBe(outcome === 'pass')
+    state.integration!.cycles = [state.integration!.cycle!]
+    state.integration!.cycle = { ...state.integration!.cycle!, seq: 4, id: 'revised-cycle' }
+    expect(integrationNeedsRunner(state)).toBe(true)
+    expect(decideNextFromFacts(state, indexLog([]), config).kind).toBe('run-check')
+  }
+})
+
+test('a node spec revision immediately withdraws passed-cycle landing readiness and command admission', async () => {
+  const { landingReady, landPreconditions } = await import('./landing-readiness')
+  const state = prepared()
+  state.prState = 'open'
+  state.landing = {
+    decision: {
+      seq: 3,
+      candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  }
+  for (const step of config.verify.steps)
+    state.verify.results.push({
+      step,
+      seq: 2,
+      attempt: 1,
+      outcome: 'pass',
+      headSha: 'head',
+      baseSha: 'parent',
+      restackId: 'cycle',
+    })
+  expect(landingReady(state, indexLog([]).restack)).toBe(true)
+  expect(landPreconditions(state, indexLog([]).restack)).toBe(true)
+  state.restartSince = 4
+  expect(landingReady(state, indexLog([]).restack)).toBe(false)
+  expect(landPreconditions(state, indexLog([]).restack)).toBe(false)
+})

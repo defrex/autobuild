@@ -1259,3 +1259,30 @@ describe('native session handle facts', () => {
       )
   })
 })
+
+test('spec revisions require exactly one strict durable origin and stay kernel-owned', () => {
+  const schema = eventPayloadSchemas['spec.revised']
+  const artifact = { kind: 'spec', rev: 1 }
+  expect(schema.safeParse({ artifact, escalation: 1 }).success).toBe(true)
+  expect(
+    schema.safeParse({
+      artifact,
+      operator: { user: 'operator', via: { kind: 'mcp', client: 'client' } },
+    }).success,
+  ).toBe(true)
+  for (const origin of [
+    {},
+    { escalation: 0 },
+    { operator: { user: '' } },
+    { escalation: 1, operator: { user: 'operator' } },
+  ]) {
+    expect(schema.safeParse({ artifact, ...origin }).success).toBe(false)
+  }
+  expect(() =>
+    validateEventWrite({
+      actor: humanActor('operator'),
+      type: 'spec.revised',
+      payload: { artifact, operator: { user: 'operator' } },
+    }),
+  ).toThrow()
+})

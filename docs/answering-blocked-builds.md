@@ -11,7 +11,7 @@ Every action below is sessionless, records a human-authored fact, and accepts
 | Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent. |
 | Widen an exhausted review loop | `ab answer <slug> [<text>] --review-round-ceiling <n>` | Answers the open `review-round-limit` escalation and replaces the configured cap with absolute ceiling `n` for that loop and spec revision only. |
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
-| Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts at `plan`. |
+| Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts leaves at `plan`; nodes recollect and verify. |
 | Re-import an amended ticket | `ab answer <slug> --revise-spec-from-ticket` | Reads the build's recorded ticket and performs the same revision. |
 | Abandon the build | `ab abort <slug>` | Irrevocably requests abort; cleanup returns the ticket to Triage. |
 
@@ -66,14 +66,14 @@ problem in the same file under a new finding id.
 
 ## Revising the spec
 
-Revision requires an open escalation because the spec is the contract against
+Leaf revision requires an open escalation because the spec is the contract against
 which every downstream approval is measured. The replacement must satisfy the
 same spec-standard quality gate used at dispatch; a non-conforming body is
 rejected before an artifact or event is recorded, leaving the build blocked on
 its current revision.
 
 A successful answer records a human `escalation.answered` fact naming the exact
-replacement artifact, followed by kernel `spec.revised`. The build re-plans and
+replacement artifact, followed by kernel `spec.revised`. The leaf re-plans and
 pre-revision reviews, verification, and finalize completion do not satisfy the
 new run. Historical phase runs remain pinned to the revision they saw. An
 already-open pull request is retained and updated rather than duplicated.
@@ -87,3 +87,21 @@ A build that has already become terminal cannot restart. This includes the
 short windows where its PR has merged or closed and completion is underway, or
 where an abort request is pending. Abort is irrevocable; after cleanup, dispatch
 the returned ticket as a fresh build if work should continue.
+
+Operators may explicitly revise an opened idle collecting node or a node blocked on failed
+integration verification without an escalation. Use
+`ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
+`ab answer <node> --revise-spec-from-ticket`. Ticket edits alone do not revise
+the build. Both forms enforce the same spec standard as leaf revisions.
+Each kernel `spec.revised` records the exact artifact and operator identity
+(with optional transport provenance); earlier revisions remain readable.
+Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
+The node recollects and verifies the new revision, including on the same head
+and parent after a failed cycle. Earlier cycles remain historical evidence
+and cannot block or authorize landing under the replacement. Children keep
+their specs, claims and targets; contributions are not restarted.
+Active verification/reconcile or writer work, restack/reparent work, pause,
+pending controls, landing intent and ended PRs refuse the no-escalation path.
+A concurrent state change refuses publication with a retry explanation;
+uncited artifacts are inert. Leaves still require an open escalation and
+restart from `plan`.

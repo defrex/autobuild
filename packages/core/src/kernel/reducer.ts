@@ -1,3 +1,4 @@
+import { integrationFailed } from './integration-state'
 import {
   advanceCompatibility,
   initialCompatibility,
@@ -261,11 +262,11 @@ export interface BuildState {
    * `spec.revised` that carries `assets` (§6.3). Empty for historical logs. */
   pinnedAssets: PinnedAsset[]
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
-   * `spec.revised` bumps it (§6.3: rev N+1 restarts the build from plan). */
+   * `spec.revised` bumps it (§6.3: rev N+1 restarts leaves from plan and nodes from collection). */
   specRev?: number
   /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3).
-   * Rev N+1 restarts the build from plan, so every approval and result at or
-   * before this seq describes a spec that no longer exists. Mirrors
+   * Rev N+1 restarts leaves from plan and nodes from collection; earlier
+   * approvals and results describe the previous spec revision. Mirrors
    * engine.ts's `restartSeq` (engine.ts:126). */
   restartSince: number
   /** `approved` ≡ the latest `plan-review.verdict` is 'approve' (§10);
@@ -738,7 +739,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'spec.revised':
         specRev = event.payload.artifact.rev
         if (event.payload.assets !== undefined) pinnedAssets = event.payload.assets
-        // §6.3: rev N+1 restarts the build from plan. The restart boundary
+        // §6.3: rev N+1 restarts leaves from plan and nodes from collection. The restart boundary
         // invalidates every approval and result at or before it, so it is also
         // a verify cycle boundary. Finalize post-steps remain in full-log
         // history; consumers use this boundary to select the current spec,
@@ -1146,14 +1147,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     terminal ??
     (pausedFlag
       ? 'paused'
-      : acc.openEscalations.length > 0 ||
-          (acc.integration?.cycle &&
-            acc.nodeComparison?.headSha === acc.integration.cycle.head &&
-            acc.nodeComparison?.parentSha === acc.integration.cycle.parent &&
-            acc.verify.results.some(
-              (result) =>
-                result.restackId === acc.integration!.cycle!.id && result.outcome === 'fail',
-            ))
+      : acc.openEscalations.length > 0 || integrationFailed(acc)
         ? 'blocked'
         : acc.kind === 'node' && acc.nodeOpened !== undefined
           ? 'collecting'
