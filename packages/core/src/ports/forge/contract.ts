@@ -95,7 +95,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         factory,
         undefined,
         async ({ forge, workspacePath, head, base, title, body }) => {
-          if (!forge.withReadScope) return
+          if (!forge.withReadScope || !forge.closePr) return
           const pr = await forge.openPr({ workspacePath, head, base, title, body })
           await forge.withReadScope(async () => {
             const states = await Promise.all([
@@ -103,7 +103,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
               forge.getPrState(workspacePath, pr.number),
             ])
             expect(states[0]).toEqual(states[1])
-            await forge.closePr(workspacePath, pr.number)
+            await forge.closePr!(workspacePath, pr.number)
             expect((await forge.getPrState(workspacePath, pr.number)).state).toBe('closed')
           })
           await forge.withReadScope(async () => {
