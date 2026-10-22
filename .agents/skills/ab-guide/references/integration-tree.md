@@ -103,6 +103,16 @@ source targets, while build status shows the effective destination.
 
 ## Collect, verify and land
 
+Node `verify:*` context additionally exposes `nodeVerification`: the frozen
+range, a JSON index path, contribution build slugs, current stored ticket
+identities, event-authorized spec revisions and spec paths, and their commits.
+The index maps every commit in the range using build identity trailers,
+including earlier-cycle contributions and merge side history. Commits without
+an identity are listed as unattributed, without adding an intent or verdict
+policy. A node change is authorized when covered by the node spec or the spec
+of the contribution introducing it; use the commit mapping to find that spec.
+Missing or ambiguous provenance fails hydration. Leaf context is unchanged.
+
 Create a node and direct work into it (replace ids with those returned by your
 source):
 
