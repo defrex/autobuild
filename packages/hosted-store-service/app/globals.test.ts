@@ -174,10 +174,13 @@ test('sign-in uses the primary outline', () => {
 
 test('held queued builds keep their canonical yellow warning while rows dim', () => {
   expect(buildsView).toContain('<span className="warn held">(held)</span>')
-  expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
+  expect(buildsView).toContain('<span className="warn draining">(draining)</span>')
+  expect(stylesheet).toMatch(
+    /\.tokens \.held,\s*\.tokens \.draining\s*\{\s*color:\s*var\(--title\);\s*\}/,
+  )
 
   const documentedException =
-    'STATUS words, the yellow `(held)` annotation, red alert lines, and yellow integration consent alerts'
+    'STATUS words, the yellow `(held)` and `(draining)` annotations, red alert lines, and yellow integration consent alerts'
   expect(designRule('The Alert Never Dims Rule')).toContain(documentedException)
   expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
 })

@@ -26,3 +26,6 @@ export type {
 
 export type { IntegrationDetail, IntegrationChild } from '../cli/dashboard/integration-detail'
 export { displayText } from '../cli/dashboard/cells'
+
+export { formatHandoff } from '../cli/dashboard/handoff'
+export type { DashboardHandoff } from '../cli/dashboard/handoff'
