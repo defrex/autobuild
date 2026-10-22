@@ -1,13 +1,18 @@
 import type { BuildState } from './reducer'
 import { discardInFlight } from './reducer'
 import type { LeafRestackState } from './leaf-restack-state'
-import { integrationCurrent, integrationCycleVerified } from './integration-state'
+import {
+  integrationCurrent,
+  integrationCycleVerified,
+  integrationCycleCurrent,
+} from './integration-state'
 
 /** The deterministic part of land's guard. Live completeness and CAS remain at the write boundary. */
 export function landPreconditions(state: BuildState, restack: LeafRestackState): boolean {
   const decision = state.landing?.decision
   return (
     !!decision &&
+    (state.kind !== 'node' || integrationCycleCurrent(state)) &&
     state.status !== 'paused' &&
     !state.currentPhase &&
     !state.openEscalations.length &&

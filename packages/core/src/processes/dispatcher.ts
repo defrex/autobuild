@@ -5190,7 +5190,7 @@ export class Dispatcher {
       this.integrationPollDue(
         this.integrationPolls,
         record.slug,
-        `${comparison.headSha}:${comparison.parentSha}:${state.nodeRestack?.inventory?.head ?? ''}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${claims}`,
+        `${state.restartSince}:${comparison.headSha}:${comparison.parentSha}:${state.nodeRestack?.inventory?.head ?? ''}:${state.landing?.command?.seq ?? state.landing?.decision?.seq ?? ''}:${claims}`,
       )
     ) {
       await this.observeIntegration(record.slug)

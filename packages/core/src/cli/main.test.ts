@@ -8,7 +8,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KERNEL, agentActor, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
 import { MemoryBuildStore } from '../store/memory'
@@ -143,7 +143,8 @@ describe('runCli — routing and exit codes', () => {
     ]) {
       expect(help).toContain(command)
     }
-    expect(help).toContain('restarts from plan while keeping an open PR')
+    expect(help).toContain('Leaves require an open escalation and restart from plan')
+    expect(help).toContain('Idle collecting or verification-failed nodes need no escalation')
   })
 
   test('plugin help documents the sessionless diagnostics and contract verb', async () => {
@@ -994,6 +995,33 @@ describe('runCli — sessionless build controls', () => {
     await after.close()
   })
 
+  test('node file revision reports collection without an escalation', async () => {
+    const storeRef = join(tmp, 'node-revision-store')
+    await seedControlStore(storeRef, { escalations: [] })
+    const local = openLocalStore(storeRef)
+    await local.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: tmp,
+        ticket: { source: 'file', id: 'NODE' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await local.append(slug, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'base' } })
+    await local.close()
+    const path = join(tmp, 'node-replacement.md')
+    await writeFile(
+      path,
+      '# Revised\n\n## Acceptance criteria\n- Works\n\n## Out of scope\n- Other work\n',
+    )
+    const d = controlDeps(storeRef)
+    expect(await runCli(['answer', slug, '--revise-spec', path], d)).toBe(0)
+    expect(d.out.join('\n')).toContain('collecting for a new verification cycle')
+    expect(d.out.join('\n')).not.toContain('restarting from plan')
+  })
+
   test('from-ticket accepts a hosted legacy alias returning its canonical readable id', async () => {
     const storeRef = join(tmp, 'hosted-alias-store')
     await writeFile(
@@ -1042,6 +1070,75 @@ describe('runCli — sessionless build controls', () => {
         openStore: () => openLocalStore(storeRef),
       }
       expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(0)
+      expect(requests).toEqual(['ticket-legacy', 'ticket-legacy'])
+      const after = openLocalStore(storeRef)
+      expect(new TextDecoder().decode((await after.getArtifact(slug, 'spec'))!.content)).toBe(body)
+      await after.close()
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test('node from-ticket revision imports the amended body without an escalation', async () => {
+    const storeRef = join(tmp, 'node-hosted-alias-store')
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n',
+    )
+    await seedControlStore(storeRef, {
+      escalations: [],
+      ticket: { source: 'hosted', id: 'ticket-legacy' },
+    })
+    const local = openLocalStore(storeRef)
+    await local.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: tmp,
+        ticket: { source: 'hosted', id: 'ticket-legacy' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await local.append(slug, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'base' } })
+    const original = await local.putArtifact(slug, { kind: 'spec', content: 'old' })
+    await local.append(slug, {
+      actor: agentActor('spec', 'source-spec'),
+      type: 'spec.authored',
+      payload: { artifact: { kind: 'spec', rev: original.revision }, session: 'source-spec' },
+    })
+    await local.close()
+    const body =
+      'Fix the defect.\n\n## Acceptance criteria\n- Works.\n\n## Out of scope\n- Other work.\n'
+    const requests: string[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async (request) => {
+        if (new URL(request.url).pathname.endsWith('/assets/list')) return Response.json([])
+        if (new URL(request.url).pathname.endsWith('/tickets/policy')) {
+          return Response.json({ ok: true })
+        }
+        const input = (await request.json()) as { input: { id: string } }
+        requests.push(input.input.id)
+        return Response.json({
+          ref: { source: 'database', id: 'ENG-1' },
+          revision: '1',
+          title: 'Canonical',
+          body,
+          state: 'Doing',
+          resolved: false,
+          labels: [],
+        })
+      },
+    })
+    try {
+      const d = {
+        ...controlDeps(`http://127.0.0.1:${server.port}`, { AB_TOKEN: 'test' }),
+        openStore: () => openLocalStore(storeRef),
+      }
+      expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(0)
+      expect(d.out.join('\n')).toContain('collecting for a new verification cycle')
       expect(requests).toEqual(['ticket-legacy', 'ticket-legacy'])
       const after = openLocalStore(storeRef)
       expect(new TextDecoder().decode((await after.getArtifact(slug, 'spec'))!.content)).toBe(body)

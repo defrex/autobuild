@@ -1407,3 +1407,23 @@ A failed node verification cycle records `integration.verification-failed` with 
 Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
 
 `packages/core/src/kernel/integration-state.ts` retains reported cycle identities and selects missing failures from exact receipts. `kernel/integration-attention.ts` owns their CAS append; `processes/build-runner.ts` reports after verification and `processes/dispatcher.ts` recovers missing facts before per-build janitor gates. The shared `cli/dashboard/model.ts` projects current failure as blocked attention for both frontends.
+
+## Operator node spec revisions
+
+Operators may explicitly revise an opened idle collecting node or a node blocked on failed
+integration verification without an escalation. Use
+`ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
+`ab answer <node> --revise-spec-from-ticket`. Ticket edits alone do not revise
+the build. Both forms enforce the same spec standard as leaf revisions.
+Each kernel `spec.revised` records the exact artifact and operator identity
+(with optional transport provenance); earlier revisions remain readable.
+Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
+The node recollects and verifies the new revision, including on the same head
+and parent after a failed cycle. Earlier cycles remain historical evidence
+and cannot block or authorize landing under the replacement. Children keep
+their specs, claims and targets; contributions are not restarted.
+Active verification/reconcile or writer work, restack/reparent work, pause,
+pending controls, landing intent and ended PRs refuse the no-escalation path.
+A concurrent state change refuses publication with a retry explanation;
+uncited artifacts are inert. Leaves still require an open escalation and
+restart from `plan`.
