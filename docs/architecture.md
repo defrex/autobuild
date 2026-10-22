@@ -1399,7 +1399,10 @@ and more than half of attributed requests. Telemetry never controls workflow.
 GitHub shares in-flight and completed PR, branch/ref and comparison observations
 across builds within one dispatcher tick. Opened nodes prime their tips and
 commit distance with at most two reads: PR plus comparison, or parent branch
-plus reversed comparison without a PR. Every tick revalidates mutable resources
+plus reversed comparison without a PR. Priming is best-effort: failures add a
+diagnostic and ordinary parent/target observations continue, so a deleted parent
+can still be replaced. Forge cooldowns and rate limits retain their gates.
+Every tick revalidates mutable resources
 using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before

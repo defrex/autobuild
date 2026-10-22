@@ -10256,3 +10256,156 @@ test('GitHub leaf-only ticks retain their standalone request count', async () =>
     expect(h.launches).toEqual([])
   }
 })
+
+test.each(
+  [true, false].flatMap((hasPr) =>
+    [
+      new GitHubApiError(404, 'parent deleted'),
+      new GitHubApiError(503, 'comparison unavailable'),
+      new Error('network timeout'),
+    ].map((failure) => [hasPr, failure] as const),
+  ),
+)('failed GitHub node priming preserves parent recovery (PR=%s, %s)', async (hasPr, failure) => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  const slug = 'orphan-node'
+  const branch = `ab-node/${slug}`
+  const ticket = { source: 'fake', id: 'N' }
+  await h.store.createBuild({
+    slug,
+    repo: REPO,
+    branch,
+    ticket,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'gone-parent', kind: 'node' },
+    },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: BASE_SHA },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.parent-requested',
+    payload: {
+      id: 'recover-parent',
+      old: { target: null, branch: 'gone-parent' },
+      next: { target: null, branch: 'main' },
+      revision: (await h.tickets.get('N'))!.revision,
+    },
+  })
+  if (hasPr)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 1, url: 'https://github.com/acme/repo/pull/1', headSha: BASE_SHA },
+      },
+    })
+  const get = h.tickets.get.bind(h.tickets)
+  let ticketReads = 0
+  h.tickets.get = async (id) => {
+    ticketReads++
+    return get(id)
+  }
+  const paths: string[] = []
+  const github = new GitHubForge({
+    repository: 'acme/repo',
+    token: 'test-token',
+    exec: async (cmd) => ({
+      stdout: cmd.includes('ls-remote')
+        ? `${BASE_SHA}\t${cmd.at(-1)}\n`
+        : cmd.includes('rev-parse')
+          ? BASE_SHA
+          : cmd.includes('rev-list')
+            ? '0'
+            : '',
+      stderr: '',
+      exitCode: 0,
+    }),
+    transport: async (_method, path) => {
+      paths.push(path)
+      if (path.includes('/branches/gone-parent') || path.includes('/compare/gone-parent...'))
+        throw failure
+      if (path.includes('/pulls/'))
+        return {
+          status: 200,
+          headers: {},
+          json: {
+            node_id: 'pr-1',
+            draft: false,
+            base: { ref: 'main' },
+            state: 'open',
+            merged: false,
+            mergeable: true,
+            merge_commit_sha: null,
+            auto_merge: null,
+            head: { ref: branch, sha: BASE_SHA, repo: { full_name: 'acme/repo' } },
+          },
+        }
+      if (path.includes('/branches/'))
+        return { status: 200, headers: {}, json: { commit: { sha: BASE_SHA } } }
+      if (path.includes('/compare/'))
+        return {
+          status: 200,
+          headers: {},
+          json: { base_commit: { sha: BASE_SHA }, ahead_by: 0, behind_by: 0 },
+        }
+      throw new Error(`unexpected recovery read ${path}`)
+    },
+  })
+  const run = harness({ store: h.store, wrapTickets: () => h.tickets, dispatchForge: github })
+  const report = await run.dispatcher.tick({ acceptNewWork: false })
+  expect(report.janitorFailed).toBe(0)
+  expect(ticketReads).toBeGreaterThan(0)
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('node read priming failed')),
+  ).toBe(true)
+  expect(
+    (await h.store.getEvents(slug)).some(
+      (e) => e.type === 'node.parent-accepted' && e.payload.id === 'recover-parent',
+    ),
+  ).toBe(true)
+  expect(reduceBuild(await h.store.getEvents(slug)).baseBranch).toBe('main')
+  expect(paths.some((path) => path.includes('gone-parent'))).toBe(true)
+  expect((await run.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+  expect(
+    (await h.store.getEvents(slug)).some(
+      (e) => e.type === 'node.parent-completed' && e.payload.id === 'recover-parent',
+    ),
+  ).toBe(true)
+})
+
+test('node read priming still defers parent observation during forge cooldown', async () => {
+  const { ForgeCooldown } = await import('../kernel/guarded-forge')
+  const initial = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  initial.forge.remoteBranches.set('main', BASE_SHA)
+  await initial.dispatcher.tick()
+  let ticketReads = 0
+  const get = initial.tickets.get.bind(initial.tickets)
+  initial.tickets.get = async (id) => {
+    ticketReads++
+    return get(id)
+  }
+  const forge = new Proxy(initial.forge, {
+    get(target, key) {
+      if (key === 'primeNodeReads')
+        return async () => {
+          throw new ForgeCooldown('cooldown')
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const h = harness({
+    store: initial.store,
+    wrapTickets: () => initial.tickets,
+    dispatchForge: forge,
+  })
+  const report = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(ticketReads).toBe(0)
+  expect(report.janitorFailed).toBe(0)
+  expect(report.janitorDiagnostics).toEqual([])
+})

@@ -2045,20 +2045,16 @@ export class Dispatcher {
               return
             }
             if (state.nodeOpened) {
+              let primed = false
               if (
                 record.branch &&
                 state.baseBranch &&
                 !((state.status === 'paused' || state.status === 'blocked') && !state.pr)
               ) {
-                await this.deps.forge.primeNodeReads?.({
-                  workspacePath: this.deps.checkout ?? this.deps.repo,
-                  parent: state.baseBranch,
-                  head: record.branch,
-                  ...(state.pr ? { prNumber: state.pr.number } : {}),
-                })
+                primed = await this.primeNodeReads(record, state, report)
               }
               if (
-                this.deps.forge.primeNodeReads &&
+                primed &&
                 state.pr &&
                 (
                   await this.deps.forge.getPrState(
@@ -2082,12 +2078,7 @@ export class Dispatcher {
               loaded = undefined
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
               if (record.branch && state.baseBranch && previousParent !== state.baseBranch) {
-                await this.deps.forge.primeNodeReads?.({
-                  workspacePath: this.deps.checkout ?? this.deps.repo,
-                  parent: state.baseBranch,
-                  head: record.branch,
-                  ...(state.pr ? { prNumber: state.pr.number } : {}),
-                })
+                await this.primeNodeReads(record, state, report)
               }
             }
             if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) return
@@ -2214,6 +2205,34 @@ export class Dispatcher {
             })
         }
       })
+    }
+  }
+
+  /** Priming saves requests but must not block parent recovery or ordinary observations. */
+  private async primeNodeReads(
+    record: BuildRecord,
+    state: BuildState,
+    report: TickReport,
+  ): Promise<boolean> {
+    if (!this.deps.forge.primeNodeReads || !record.branch || !state.baseBranch) return false
+    try {
+      await this.deps.forge.primeNodeReads({
+        workspacePath: this.deps.checkout ?? this.deps.repo,
+        parent: state.baseBranch,
+        head: record.branch,
+        ...(state.pr ? { prNumber: state.pr.number } : {}),
+      })
+      return true
+    } catch (error) {
+      if (
+        error instanceof ForgeRequestDeferred ||
+        (isForgeFailure(error) && error.details.kind === 'rate-limited')
+      )
+        throw error
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: node read priming failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
+      )
+      return false
     }
   }
 

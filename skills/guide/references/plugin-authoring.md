@@ -106,7 +106,10 @@ for (const observer of this.observers) {
 Optional `withReadScope(work)` wraps a complete dispatcher tick, sharing promises
 and observations across builds, and tears down on rejection too. Keep concurrent
 operations outside that scope independent. Optional `primeNodeReads({workspacePath,
-parent, head, prNumber?})` seeds opened-node facts. Neither capability changes the
+parent, head, prNumber?})` seeds opened-node facts. Priming is an optimization:
+non-cooldown failures produce a diagnostic and fall through to ordinary stage
+reads, preserving parent recovery when the previous parent disappeared.
+Neither capability changes the
 plugin API version requirement. Invalidate observations before writes, including
 uncertain writes and Git pushes; acknowledgement and readiness reads must stay
 fresh. Branch and ref endpoints share normalized facts, never HTTP validators.
