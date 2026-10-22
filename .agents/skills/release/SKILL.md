@@ -44,6 +44,28 @@ rather than discovering them through a failed run:
 - `CHANGELOG.md` has exactly one `## Unreleased` heading with at least one
   pending entry, either beneath it or in `.changelog/<PR-number>.md`.
 
+## Launcher contract preflight
+
+Before dry-run, identify the actual most recently published GitHub Release,
+including prereleases (exclude drafts and compare publication timestamps across
+all pages, for example `gh api --paginate repos/{owner}/{repo}/releases`). Do not
+infer it from sorted tags, the stable-only latest endpoint, or package versions.
+Resolve absent or ambiguous publication/tag evidence before releasing. Read
+`packages/core/src/cli/dispatch-launch-contract.ts` at that release's tag and at
+HEAD with `git show <tag>:<path>` and `git show HEAD:<path>`.
+
+Compare `DISPATCH_LAUNCH_VERSION`, `DISPATCH_OVERLAP_VERSION`, and their frozen
+ABI. Independently negotiated rollback capability is not itself a launcher ABI
+bump. If the previous release predates the launcher, require a one-time adoption
+restart warning. For a launcher ABI change, require a pending
+`.changelog/<PR-number>.md` entry explicitly saying that maintainers must
+**gracefully restart the launcher manually** to adopt the change. Create or
+amend the relevant fragment before dry-run and commit it first, preserving the
+release command's clean-worktree precondition. Do not hand-edit a cut release
+section. Verify that the warning survives the dry-run candidate notes and,
+after publication, the published GitHub Release notes. The command still owns
+versioning, changelog cutting, tagging and publishing.
+
 ## Running it
 
 **Always dry-run first.** It performs the full preflight, runs the gates, and
