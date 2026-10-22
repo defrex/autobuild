@@ -400,8 +400,10 @@ for the exceptions above.
 - Automatic generation handoff is product behavior, not agent process authority.
   Passing preflight permits draining when the selected store can be shared; unknown
   compatibility chooses cutover. Rejected protocol writes preserve the predecessor.
-  Old local executions retain leases while the successor owns repository work;
-  remaining sessions suspend at the policy deadline and resume natively where
+  Old local executions retain leases while the successor owns repository work.
+  At completed phase boundaries they durably request relaunch when the accepted
+  target differs; the current owner resumes them on its immutable runtime without
+  spending failure budgets or raising attention. Remaining sessions suspend at the policy deadline and resume natively where
   eligible, with reasoned fresh fallback otherwise. Harvest/provisioning work joins
   before repository authority transfers.
 

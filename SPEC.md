@@ -301,8 +301,18 @@ for predecessor stop before takeover. Retirement completion records drained and
 suspended counts separately from takeover. A successor reconstructs unfinished
 retirement from execution leases and durable build facts after predecessor death.
 An unrelated dispatcher taking the lease still causes ordinary supersession and
-teardown. Rollback and phase-boundary runner replacement remain
-outside this behavior.
+teardown. Rollback remains outside this behavior.
+
+At each completed phase boundary, a local build runner compares its immutable
+attach runtime with the accepted handoff target mirrored in its instance-scoped
+build-log drain authorization. The comparison uses existing boundary facts and
+adds no Store read. A mismatch records `execution.relaunch-requested` and exits
+after normal phase completion, publication settlement and session cleanup.
+Confirmed teardown records the neutral `relaunch` execution outcome; it consumes
+no failure or no-progress allowance. The current repository lease holder
+relaunches from durable state on its own immutable runtime, including after an
+ownership gap. Equal or absent targets preserve normal execution. Remote runners
+are unchanged; deadline suspension remains the mechanism for unfinished phases.
 
 The journal records `dispatcher.target-prepared`, `dispatcher.yield-requested`,
 `dispatcher.handoff-started`, `dispatcher.terminal-released`, `dispatcher.takeover`,

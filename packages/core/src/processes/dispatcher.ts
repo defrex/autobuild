@@ -4121,7 +4121,7 @@ export class Dispatcher {
       if (record.lease) {
         if (new Date(record.lease.expiresAt).getTime() > now) continue // healthy
       } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
-        continue // absent lease within the first-claim grace (see DispatcherOpts)
+        if ((await this.store.buildFacts(record.slug)).lastExecution !== 'relaunch') continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
       const facts = await this.store.buildFacts(record.slug)
       const state = facts.state
@@ -4168,7 +4168,7 @@ export class Dispatcher {
       // place: the guest finished its work, the workspace is still the
       // build's, and replacing the environment would discard a healthy
       // generation. Only an unproven stale lease or a proved loss reaps.
-      let endedInPlace = facts.lastExecution === 'completed'
+      let endedInPlace = facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch'
       if (
         foreignExecution !== null &&
         foreignExecution.commandId !== undefined &&
