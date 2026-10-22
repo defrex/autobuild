@@ -625,6 +625,16 @@ should treat a `design` asset as part of the contract, a contract on observable
 visual and reference outcomes, not on implementation, and judge the result
 against it.
 
+Node `verify:*` context additionally exposes `nodeVerification`: the frozen
+range, a JSON index path, contribution build slugs, current stored ticket
+identities, event-authorized spec revisions and spec paths, and their commits.
+The index maps every commit in the range using build identity trailers,
+including earlier-cycle contributions and merge side history. Commits without
+an identity are listed as unattributed, without adding an intent or verdict
+policy. A node change is authorized when covered by the node spec or the spec
+of the contribution introducing it; use the commit mapping to find that spec.
+Missing or ambiguous provenance fails hydration. Leaf context is unchanged.
+
 An agent verify step selects `[roles.<step>]` by its **logical step name** —
 the name in `[verify].steps`, not the skill it runs. An agent finalize
 post-step follows the same rule.

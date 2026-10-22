@@ -1002,11 +1002,32 @@ A claim freezes the ticket's current assets into the build (SPEC §6.3):
 `spec.revised.assets`) record the pinned revisions, `state.pinnedAssets` in the
 reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
 and `ab context` writes them under `.ab/assets/`.
+
 For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
 into chunked immutable repository artifacts in the build store before pinning.
 Reads use explicit manifest/chunk revisions without a ticket connection. Old
 pins retain ticket-row reads; existing service attachments need no migration,
 and attachments in old local stores are not moved.
+
+In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
+`range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
+has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
+`specPath` and `commits`. The JSON index repeats this metadata and adds the
+exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
+and reflect scratch allocation, including legacy tracked-file collisions.
+Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
+normally lives at `.ab/node-verification.json`. These files are marked `derived`
+in `materialized`, with their source build and revision recorded in the metadata.
+
+Membership comes from build identity trailers on every commit reachable in the
+frozen parent-to-head range, including earlier cycles and merge side history.
+Specs use the current event-authorized revision, never an unsanctioned latest
+deposit or mutable ticket body. Unknown identities, ambiguous or invalid trailers,
+and missing source data fail hydration. Commits without a build trailer are
+listed as unattributed; this introduces no new intent or verdict policy.
+A node change is authorized when the node spec or the spec of the contribution
+that introduced it covers it; use the commit mapping to find that spec.
+Leaf verification context is unchanged.
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
