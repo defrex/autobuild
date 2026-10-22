@@ -247,7 +247,11 @@ async function validateRuntimeImports(root: string, checkout: string): Promise<v
   if (code !== 0) throw new Error(`cached runtime import validation failed: ${stderr}`)
 }
 
-export async function prepareRuntime(source: string, checkout: string): Promise<CachedRuntime> {
+export async function prepareRuntime(
+  source: string,
+  checkout: string,
+  publication?: { upgradeKey: string; commit: string },
+): Promise<CachedRuntime> {
   source = await realpath(source)
   checkout = await realpath(checkout)
   const cache = join(checkout, '.autobuild', 'runtime')
@@ -341,6 +345,8 @@ export async function prepareRuntime(source: string, checkout: string): Promise<
       archiveDigest,
     }
     await writeFile(join(stage, 'runtime.json'), JSON.stringify(runtime))
+    if (publication)
+      await writeFile(join(stage, 'source-receipt.json'), JSON.stringify(publication))
     reservePreparedRuntime(cache, id)
     const existing = await cachedRuntime(runtime.root)
     if (existing) await validateRuntime(existing)
