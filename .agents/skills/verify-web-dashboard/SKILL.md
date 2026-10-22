@@ -51,6 +51,9 @@ inspect the diff and not to decide applicability again.
    human evidence and may help identify a frame, but they are not a basis for
    your verdict. Confirm the signed-in control line has no surface tab words,
    while the multi-repository frame retains its repository selector.
+   Check the handoff wide/narrow and dimmed frames: both runtimes, mode and
+   deadline wrap in flow; `(draining)` remains yellow beside lifecycle status,
+   including on the unfocused row.
 6. Append criterion-by-criterion visual observations to the generated report,
    ticking or failing each checklist item. In its **Web dashboard visual
    verdict** section, record pass or fail explicitly. On a guidance-assisted
@@ -60,6 +63,9 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:builds-handoff-wide:png .ab/web-dashboard-frames/builds-handoff-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-handoff-narrow:png .ab/web-dashboard-frames/builds-handoff-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-handoff-dimmed:png .ab/web-dashboard-frames/builds-handoff-dimmed.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-suspended-wide:png .ab/web-dashboard-frames/builds-harvest-suspended-wide.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-suspended-narrow:png .ab/web-dashboard-frames/builds-harvest-suspended-narrow.png --attach
    ab artifact put web-dashboard-frame:capacity-wide:png .ab/web-dashboard-frames/capacity-wide.png --attach

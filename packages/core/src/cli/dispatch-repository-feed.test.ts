@@ -59,7 +59,7 @@ test('persisted projection advances past discarded events and restarts with only
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
   const snapshot = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 2,
+    version: 3,
   })
   expect(snapshot?.cursor).toBe(3)
   expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
@@ -82,7 +82,7 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
     await start(store, 'old')
     if (bad !== 'missing')
       await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-        version: bad === 'version' ? 1 : 2,
+        version: bad === 'version' ? 2 : 3,
         cursor: bad === 'ahead' ? 999 : 1,
         state: { retained: bad === 'malformed' ? [{}] : [], incompleteIdentities: true },
       })
@@ -267,7 +267,7 @@ test('foreign repository cache facts are rejected and missing repositories are n
   await store.ensureRepo(repo)
   const fact = await setting(store)
   await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 2,
+    version: 3,
     cursor: 1,
     state: { retained: [{ ...fact, repo: '/other' }], incompleteIdentities: true },
   })
@@ -289,7 +289,7 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
   await current.save(true)
   await stale.save(true)
   expect(
-    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 2 }))
+    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 3 }))
       ?.cursor,
   ).toBe(2)
 })
@@ -434,4 +434,51 @@ test('persisted holder correlation keeps unqueried identities incomplete without
   const restarted = new DispatchRepositoryFeed(store, repo, clock)
   await restarted.warm()
   expect(restarted.incompleteIdentities).toBe(true)
+})
+
+test('handoff seed, deadline delta and restored completion agree with the full journal across run anchors', async () => {
+  const { handoffEvents } = await import('../../../../tools/handoff-capture')
+  const { dispatchUpgradeReducer } = await import('../kernel/dispatch-upgrade')
+  const { projectHandoffs } = await import('./dashboard/handoff')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const events = handoffEvents('old-build')
+  for (const event of events) await store.appendRepo(repo, event)
+  await start(store, 'successor')
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  const expected = async () =>
+    projectHandoffs(dispatchUpgradeReducer.reduce(await store.getRepoEvents(repo)))
+  expect(projectHandoffs(dispatchUpgradeReducer.reduce(feed.events))).toEqual(await expected())
+  const startEvent = events[2]!
+  if (startEvent.type !== 'dispatcher.handoff-started') throw new Error('fixture')
+  const {
+    successor: _successor,
+    mode: _mode,
+    deadline: _deadline,
+    builds: _builds,
+    ...identity
+  } = startEvent.payload
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.drain-deadline',
+    payload: { ...identity, deadline: '2026-07-15T12:30:00.000Z' },
+  })
+  await feed.refresh()
+  expect(projectHandoffs(dispatchUpgradeReducer.reduce(feed.events)).handoffs[0]?.deadline).toBe(
+    '2026-07-15T12:30:00.000Z',
+  )
+  for (const event of handoffEvents('old-build', 'completed').slice(3))
+    await store.appendRepo(repo, event)
+  await start(store, 'next-generation')
+  await feed.refresh()
+  await feed.save(true)
+  const full = await expected()
+  expect(full.handoffs).toEqual([])
+  store.getRepoStateEvents = async () => {
+    throw new Error('snapshot should restore')
+  }
+  const restored = new DispatchRepositoryFeed(store, repo, clock)
+  await restored.refresh()
+  expect(projectHandoffs(dispatchUpgradeReducer.reduce(restored.events))).toEqual(full)
 })
