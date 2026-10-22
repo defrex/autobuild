@@ -11,7 +11,7 @@ import {
 import type { CachedRuntime } from './dispatch-runtime-cache'
 import { releasePreparedRuntime, reservePreparedRuntime } from './dispatch-runtime-use'
 import { captureRuntimeIdentity } from '../runtime-identity'
-import type { Handoff } from '../kernel/dispatch-upgrade'
+import type { DispatchUpgradeState, Handoff } from '../kernel/dispatch-upgrade'
 
 export function publicTarget(target: UpgradeTarget) {
   const { mode, key, source, version, base, sha } = target
@@ -59,6 +59,7 @@ export interface UpgradeControllerInput {
   lineage: string
   from: RuntimeIdentity
   failedKeys: string[]
+  resolved?: DispatchUpgradeState['runs'][string]['resolved']
   currentKey?: string
   runningBunTag?: string
   reservationOwner?: number
@@ -77,8 +78,10 @@ export class DispatchUpgradeController {
   private pending?: Promise<void>
   private preparation?: AbortController
   private readonly failed: Set<string>
+  private resolved?: string
   constructor(private readonly input: UpgradeControllerInput) {
     this.failed = new Set(input.failedKeys)
+    this.resolved = input.resolved ? JSON.stringify(input.resolved.payload.target) : undefined
   }
   start(): void {
     this.schedule(0)
@@ -127,9 +130,22 @@ export class DispatchUpgradeController {
         AbortSignal.any([preparation.signal, AbortSignal.timeout(30_000)]),
       )
       if (preparation.signal.aborted || !this.input.enabled()) return
+      const observation = JSON.stringify(publicTarget(target))
+      if (observation !== this.resolved) {
+        await this.input.append({
+          actor: DISPATCHER,
+          type: 'dispatcher.upgrade-target-resolved',
+          payload: {
+            run: this.input.run,
+            lineage: this.input.lineage,
+            target: publicTarget(target),
+          },
+        })
+        this.resolved = observation
+      }
       if (this.failed.has(target.key) || target.key === this.input.currentKey) return
       if (matchesRunningForge(target, this.input.from, this.input.runningBunTag)) return
-      if (target.version === this.input.from.version) return
+      if (target.mode !== 'source' && target.version === this.input.from.version) return
       await this.input.append({
         actor: DISPATCHER,
         type: 'dispatcher.upgrade-detected',
