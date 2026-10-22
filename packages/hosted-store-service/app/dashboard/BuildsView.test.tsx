@@ -130,6 +130,7 @@ test('integration detail uses the shared facts and text progress within the exis
     steps: [{ label: 'collect', state: 'current' }],
   }
   build.integrationDetail = {
+    handPushedCommits: [{ sha: 'a'.repeat(40), originalSha: 'b'.repeat(40) }],
     destination: 'main (the configured base branch)',
     branch: 'ab-node/demo',
     restack: 'conflicted',
@@ -152,6 +153,8 @@ test('integration detail uses the shared facts and text progress within the exis
   }
   const html = renderBuildsView(build)
   for (const fact of [
+    'Hand-pushed changes',
+    'original',
     'Integration',
     'Progress',
     'Branch',
