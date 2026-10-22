@@ -16,6 +16,24 @@ session.
 
 ## Node tickets and targets
 
+Write a node ticket as a **charter**: the integration goal, checkable completion
+conditions for the whole, and its destination and landing expectations under the
+repository's effective policy. Put evolving feature specifics in child tickets.
+The charter still follows all four parts of the spec standard: what and why,
+verifiable acceptance criteria, out of scope, and evidence.
+
+For example: “Integrate a coherent account-management flow so users can manage
+their account in one place. Done means the child-delivered account settings and
+account closure flows work together and pass integration verification. Land the
+complete flow into its parent under the configured landing policy.” Record the
+scope exclusions and supporting evidence alongside these criteria; describe each
+flow's detailed requirements in its child spec.
+
+A charter can evolve while the node is open. See
+[iterating inside a node](../ab-guide/references/integration-tree.md#iterating-inside-a-node)
+for adding children, hand-pushed tweaks, explicit charter revisions, and what
+verification judges each against.
+
 For node lifecycle, target validation and source-specific storage, read
 [nodes and targets](../ab-guide/references/integration-tree.md). When filing
 related work, follow the shared
@@ -107,7 +125,7 @@ placement question. Never assume the source default is non-ready.
 
 For a dependency chain explicitly chosen to ship together under a node, create
 in dependency order and obtain each new id from the command's complete JSON
-result. Write a spec-standard node body in `integration.md` as well as the child
+result. Write a spec-standard node charter in `integration.md` as well as the child
 specs. This example assumes the repository's triage state is `Triage`, its ready
 state is `Ready`, and the human requested ready placement for the whole set.
 Use the repository's actual states; if final placement is non-ready, leave the

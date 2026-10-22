@@ -113,9 +113,11 @@ and index also expose `handPushedCommits: [{sha, originalSha, message}]` for own
 hand-pushed commits in the frozen range, preserving original identity across restacks.
 Their full messages express maintainer-authorized intent: judge quality and
 consistency, and never fail them solely for lacking a covering spec. Other node
-changes are authorized when covered by the node spec or the spec
+changes are authorized when covered by the current event-authorized node spec or the spec
 of the contribution introducing it; use the commit mapping to find that spec.
 Missing or ambiguous provenance fails hydration. Leaf context is unchanged.
+See [iterating inside a node](#iterating-inside-a-node) for authoring and evolving
+these sources of intent.
 
 Create a node and direct work into it (replace ids with those returned by your
 source):
@@ -160,6 +162,38 @@ paused or unverified. The janitor records human provenance and whether the actua
 merged head was verified, then completes the ticket. Closing without merge or
 aborting closes admission and returns the ticket to triage; already claimed
 children retain their frozen destination.
+
+## Iterating inside a node
+
+Write the node spec as a finite integration charter: its goal, observable
+completion conditions for the whole, and destination and landing expectations
+under the effective policy. Put feature specifics in spec-standard children.
+An open node supports three ways to iterate:
+
+- **Add children.** Create spec-standard tickets targeting the node's ticket id,
+  for example `ab ticket create "Account settings" --body settings.md --target <node-id>`.
+  Ordinary children run their normal pipeline. Verification uses the provenance
+  mapping to judge changes against the introducing child's spec or the current
+  event-authorized node charter; a child contribution need not also be promised
+  independently by the charter.
+- **Push small maintainer-authorized tweaks.** Push to the node's recorded branch
+  with meaningful commit messages describing intent. Verification reads the frozen
+  range's owned `handPushedCommits` messages, judges quality and consistency, and
+  cannot fail a tweak solely because it lacks a covering spec. This is maintainer
+  iteration, not permission for phase agents to bypass their publication boundary.
+- **Revise the charter when the charter itself changes.** Use
+  `ab answer <node> --revise-spec replacement.md`, or update the ticket and import
+  it with `ab answer <node> --revise-spec-from-ticket`. A ticket edit alone does
+  not revise an active build. Children retain their specs, claims and targets;
+  the node recollects and verifies the replacement revision, including on the
+  same head and parent after failed verification. See
+  [operator node spec revisions](#operator-node-spec-revisions) for admission
+  restrictions.
+
+Open children keep the node incomplete, including triage, backlog and ready
+children. Completion remains finite: landed or otherwise ended nodes close
+admission. Iteration does not relax verification of the exact head and parent,
+or the configured readiness, consent and landing gates described above.
 
 ## Changing a parent
 
