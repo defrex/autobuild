@@ -26,6 +26,7 @@ interface Retention {
   current?: string
   previous?: string
   held: string[]
+  rollback?: { lineage: string; id: string }
   claims: Record<string, { id: string; process: Claim; extensions?: string[] }>
 }
 function identity(pid: number): string | null {
@@ -182,6 +183,7 @@ export function pruneRuntimes(cache: string): void {
       state.current,
       state.previous,
       ...state.held,
+      state.rollback?.id,
       ...Object.values(state.claims).map((c) => c.id),
     ])
     const liveExtensions = new Set(Object.values(state.claims).flatMap((c) => c.extensions ?? []))
@@ -310,4 +312,25 @@ export function reserveExistingRuntime(root: string): boolean {
     }
     return true
   })
+}
+
+/** Cache retention follows the authoritative generation hold; it is not lifecycle state. */
+export function syncRollbackRetention(cache: string, lineage: string, root?: string): void {
+  locked(cache, (state) => {
+    const runtime = root ? ownCachedRuntime(root) : undefined
+    if (root && (!runtime || runtime.cache !== cache)) throw new Error('invalid held runtime')
+    state.rollback = runtime ? { lineage, id: runtime.id } : undefined
+  })
+}
+
+/** Publication acknowledgement requires the retention transfer to be on disk. */
+export function rollbackRuntimeRetained(root: string, lineage: string): boolean {
+  const runtime = ownCachedRuntime(root)
+  return (
+    !!runtime &&
+    locked(
+      runtime.cache,
+      (state) => state.rollback?.lineage === lineage && state.rollback.id === runtime.id,
+    )
+  )
 }
