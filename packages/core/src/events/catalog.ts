@@ -67,6 +67,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'integration.prepared': ['kernel', 'dispatcher'],
   'integration.landing-intended': ['kernel', 'dispatcher'],
   'integration.landed': ['kernel', 'dispatcher'],
+  'integration.verification-failed': ['kernel', 'dispatcher'],
   'integration.audited': ['kernel', 'dispatcher'],
   'node.restack-requested': ['dispatcher', 'human'],
   'node.restack-satisfied': ['kernel', 'dispatcher'],
