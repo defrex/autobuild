@@ -1,3 +1,8 @@
+import { authorizeRemoteHandoffs } from '../kernel/dispatch-drain-recovery'
+import { readBuildFacts } from '../store/reduced-reads'
+import { relaunchTarget } from '../processes/execution-relaunch'
+import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { distributionStampFor } from '../ports/workspace/distribution-archive'
 import { expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -456,339 +461,462 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
  * invocation wires a fresh provider, exactly as separate invocation processes
  * do, so the detached execution's in-memory supervision never leaks into the
  * invocation that settles it. */
-test('a guest that exits after the launching invocation detached is settled by the next tick', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-detached-'))
-  const repo = join(tmp, 'repo')
-  const store = new MemoryBuildStore()
-  const ids = sequentialIds()
-  const forge = new FakeForge({ headSha: SHA })
-  const remote = { head: null as string | null }
-  const commands: Array<Record<string, unknown>> = []
-
-  class DetachedSandboxDouble implements VercelSandboxHandle {
-    readonly name = 'autobuild-detached'
-    provisioned = false
-    deleted = false
-    /** Simulated `/opt/autobuild/.distribution-version` marker content. */
-    distributionVersion: string | undefined
-    /** Observed exit per command id: what the plain lookup reports, `null`
-     * until some wait has observed an exit — the provider's behavior. */
-    readonly observed = new Map<string, number | null>()
-    /** Wait calls per command id. The first wait on a command is the
-     * launching invocation's supervision long-poll, which blocks until its
-     * teardown detach aborts it; the guest keeps running. */
-    private readonly waits = new Map<string, number>()
-    /** Durable acts the guest performs when a later invocation's bounded
-     * observation wait reaches its exit; one-shot, then the guest is gone. */
-    guestActs: (() => Promise<void>) | undefined
-    launches = 0
-
-    getCommand(cmdId: string): Promise<VercelCommandLookup> {
-      if (!this.observed.has(cmdId)) {
-        return Promise.reject(
-          Object.assign(new Error('command not found'), { response: { status: 404 } }),
-        )
-      }
-      return Promise.resolve({
-        exitCode: this.observed.get(cmdId) ?? null,
-        wait: (waitParams?: { signal?: AbortSignal }) => this.waitCommand(cmdId, waitParams),
-      })
+for (const upgrading of [false, true])
+  test(`a detached guest settles and reattaches (runtime handoff: ${upgrading})`, async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-detached-'))
+    const repo = join(tmp, 'repo')
+    const store = new MemoryBuildStore()
+    const ids = sequentialIds()
+    const forge = new FakeForge({ headSha: SHA })
+    const remote = { head: null as string | null }
+    const commands: Array<Record<string, unknown>> = []
+    let archiveByte = 1
+    const installed: Uint8Array[] = []
+    const guestRuntime = {
+      ...RUNTIME_IDENTITY,
+      source: { kind: 'package' as const, location: VERCEL_AUTOBUILD_PATH },
+    }
+    const target = {
+      ...RUNTIME_IDENTITY,
+      commit: 'f'.repeat(40),
+      source: { kind: 'package' as const, location: '/host/cache/new' },
     }
 
-    private waitCommand(
-      cmdId: string,
-      params?: { signal?: AbortSignal },
-    ): Promise<{ exitCode: number }> {
-      const count = (this.waits.get(cmdId) ?? 0) + 1
-      this.waits.set(cmdId, count)
-      if (count > 1 && this.guestActs !== undefined) {
-        // A later invocation's bounded observation wait reaches the guest's
-        // exit: the guest performs its final acts and exits 0, and the plain
-        // lookup reports the exit from now on.
-        const acts = this.guestActs
-        this.guestActs = undefined
-        return acts().then(() => {
-          this.observed.set(cmdId, 0)
-          return { exitCode: 0 }
+    class DetachedSandboxDouble implements VercelSandboxHandle {
+      readonly name = 'autobuild-detached'
+      provisioned = false
+      deleted = false
+      /** Simulated `/opt/autobuild/.distribution-version` marker content. */
+      distributionVersion: string | undefined
+      /** Observed exit per command id: what the plain lookup reports, `null`
+       * until some wait has observed an exit — the provider's behavior. */
+      readonly observed = new Map<string, number | null>()
+      /** Wait calls per command id. The first wait on a command is the
+       * launching invocation's supervision long-poll, which blocks until its
+       * teardown detach aborts it; the guest keeps running. */
+      private readonly waits = new Map<string, number>()
+      /** Durable acts the guest performs when a later invocation's bounded
+       * observation wait reaches its exit; one-shot, then the guest is gone. */
+      guestActs: (() => Promise<void>) | undefined
+      launches = 0
+
+      getCommand(cmdId: string): Promise<VercelCommandLookup> {
+        if (!this.observed.has(cmdId)) {
+          return Promise.reject(
+            Object.assign(new Error('command not found'), { response: { status: 404 } }),
+          )
+        }
+        return Promise.resolve({
+          exitCode: this.observed.get(cmdId) ?? null,
+          wait: (waitParams?: { signal?: AbortSignal }) => this.waitCommand(cmdId, waitParams),
         })
       }
-      // The launching invocation's supervision long-poll (first wait), or an
-      // observation of a guest still running: blocks until its signal
-      // aborts, modelling an interrupted long-poll.
-      return new Promise<never>((_, reject) => {
-        params?.signal?.addEventListener(
-          'abort',
-          () => reject(params.signal!.reason ?? new Error('aborted')),
-          { once: true },
-        )
-      })
-    }
 
-    async runCommand(params: Record<string, unknown>) {
-      commands.push(params)
-      if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
-      if (params.cmd === 'touch') this.provisioned = true
-      if (
-        params.cmd === 'cat' &&
-        (params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER
-      ) {
-        if (this.distributionVersion === undefined) return { exitCode: 1 }
-        return { exitCode: 0, stdout: async () => this.distributionVersion }
-      }
-      if (
-        params.cmd === 'sh' &&
-        (params.args as string[])?.[1] === 'printf %s "$1" > "$2"' &&
-        (params.args as string[])?.[4] === VERCEL_DISTRIBUTION_VERSION_MARKER
-      ) {
-        this.distributionVersion = (params.args as string[])![3] as string
-        return { exitCode: 0 }
-      }
-      if (params.cmd === 'git' && (params.args as string[] | undefined)?.includes('push')) {
-        const [sha, ref] = (params.args as string[]).at(-1)!.split(':')
-        remote.head = sha!
-        forge.seedBranch(ref!.replace(/^refs\/heads\//, ''), sha!)
-      }
-      if (params.detached === true) {
-        this.launches += 1
-        const cmdId = `cmd-e2e-${this.launches}`
-        this.observed.set(cmdId, null)
-        const command: VercelCommand = {
-          exitCode: null,
-          cmdId,
-          kill: async () => undefined,
-          wait: (waitParams?: { signal?: AbortSignal }) => this.waitCommand(cmdId, waitParams),
+      private waitCommand(
+        cmdId: string,
+        params?: { signal?: AbortSignal },
+      ): Promise<{ exitCode: number }> {
+        const count = (this.waits.get(cmdId) ?? 0) + 1
+        this.waits.set(cmdId, count)
+        if (count > 1 && this.guestActs !== undefined) {
+          // A later invocation's bounded observation wait reaches the guest's
+          // exit: the guest performs its final acts and exits 0, and the plain
+          // lookup reports the exit from now on.
+          const acts = this.guestActs
+          this.guestActs = undefined
+          return acts().then(() => {
+            this.observed.set(cmdId, 0)
+            return { exitCode: 0 }
+          })
         }
-        return command
+        // The launching invocation's supervision long-poll (first wait), or an
+        // observation of a guest still running: blocks until its signal
+        // aborts, modelling an interrupted long-poll.
+        return new Promise<never>((_, reject) => {
+          params?.signal?.addEventListener(
+            'abort',
+            () => reject(params.signal!.reason ?? new Error('aborted')),
+            { once: true },
+          )
+        })
       }
-      return {
-        exitCode:
-          params.cmd === 'git' && (params.args as string[] | undefined)?.includes('--unset-all')
-            ? 5
-            : 0,
+
+      async runCommand(params: Record<string, unknown>) {
+        commands.push(params)
+        if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
+        if (params.cmd === 'touch') this.provisioned = true
+        if (
+          params.cmd === 'cat' &&
+          (params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER
+        ) {
+          if (this.distributionVersion === undefined) return { exitCode: 1 }
+          return { exitCode: 0, stdout: async () => this.distributionVersion }
+        }
+        if (
+          params.cmd === 'sh' &&
+          (params.args as string[])?.[1] === 'printf %s "$1" > "$2"' &&
+          (params.args as string[])?.[4] === VERCEL_DISTRIBUTION_VERSION_MARKER
+        ) {
+          this.distributionVersion = (params.args as string[])![3] as string
+          return { exitCode: 0 }
+        }
+        if (params.cmd === 'git' && (params.args as string[] | undefined)?.includes('push')) {
+          const [sha, ref] = (params.args as string[]).at(-1)!.split(':')
+          remote.head = sha!
+          forge.seedBranch(ref!.replace(/^refs\/heads\//, ''), sha!)
+        }
+        if (params.detached === true) {
+          this.launches += 1
+          if (upgrading && this.launches === 2) {
+            expect(installed.map((bytes) => [...bytes])).toEqual([[1], [2]])
+            expect(this.distributionVersion).toBe(await distributionStampFor(new Uint8Array([2])))
+            const launch = JSON.parse(
+              (params.env as Record<string, string>).AB_BUILD_RUNNER_OPTIONS!,
+            ) as { slug: string; instance: string }
+            const attach = await store.append(launch.slug, {
+              actor: KERNEL,
+              type: 'runner.attached',
+              payload: { instance: launch.instance, host: 'guest' },
+            })
+            await store.append(launch.slug, {
+              actor: KERNEL,
+              type: 'runner.runtime-recorded',
+              payload: {
+                instance: launch.instance,
+                attachedSeq: attach.seq,
+                runtime: { ...target, source: guestRuntime.source },
+              },
+            })
+          }
+          const cmdId = `cmd-e2e-${this.launches}`
+          this.observed.set(cmdId, null)
+          const command: VercelCommand = {
+            exitCode: null,
+            cmdId,
+            kill: async () => undefined,
+            wait: (waitParams?: { signal?: AbortSignal }) => this.waitCommand(cmdId, waitParams),
+          }
+          return command
+        }
+        return {
+          exitCode:
+            params.cmd === 'git' && (params.args as string[] | undefined)?.includes('--unset-all')
+              ? 5
+              : 0,
+        }
       }
+      async writeFiles(files: Array<{ path: string; content: Uint8Array }>) {
+        for (const file of files)
+          if (file.path.endsWith('.tgz')) installed.push(file.content.slice())
+      }
+      async stop() {}
+      async delete() {
+        this.deleted = true
+      }
+      async update(_params: { networkPolicy: NetworkPolicy }) {}
     }
-    async writeFiles() {}
-    async stop() {}
-    async delete() {
-      this.deleted = true
-    }
-    async update(_params: { networkPolicy: NetworkPolicy }) {}
-  }
 
-  const sandbox = new DetachedSandboxDouble()
-  let created = false
-  let creates = 0
-  const facade: VercelSandboxFacade = {
-    get: async () => (created && !sandbox.deleted ? sandbox : null),
-    create: async () => {
-      created = true
-      creates += 1
-      sandbox.deleted = false
-      return sandbox
-    },
-    listSnapshots: async () => [],
-    deleteSnapshot: async () => {},
-  }
-  const hostCommands: string[][] = []
-  const exec: Exec = async (cmd, options) => {
-    hostCommands.push([...cmd])
-    const ref = cmd.at(-1)
-    if (cmd.includes('get-url'))
-      return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
-    if (cmd.includes('ls-remote')) {
-      const sha = ref === 'refs/heads/main' ? BASE : remote.head
-      return { stdout: sha === null ? '' : `${sha}\t${ref}\n`, stderr: '', exitCode: 0 }
-    }
-    return spawnExec(cmd, options)
-  }
-
-  try {
-    await mkdir(repo, { recursive: true })
-    await Bun.write(
-      join(repo, 'autobuild.toml'),
-      '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "claude"\n',
-    )
-    await writeFile(join(repo, 'README.md'), 'fixture')
-    await spawnExec(['git', 'init', '-q', '-b', 'main'], { cwd: repo })
-    await spawnExec(['git', 'add', '.'], { cwd: repo })
-    await spawnExec(
-      [
-        'git',
-        '-c',
-        'user.name=Autobuild Test',
-        '-c',
-        'user.email=test@invalid',
-        'commit',
-        '-qm',
-        'fixture',
-      ],
-      { cwd: repo },
-    )
-    const tickets = new FakeTicketSource([
-      {
-        revision: 'fixture',
-        ref: { source: 'file', id: 'T-1', title: 'Detached guest settlement' },
-        title: 'Detached guest settlement',
-        body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',
-        state: 'Ready',
-        resolved: false,
-        labels: [],
+    const sandbox = new DetachedSandboxDouble()
+    let created = false
+    let creates = 0
+    const facade: VercelSandboxFacade = {
+      get: async () => (created && !sandbox.deleted ? sandbox : null),
+      create: async () => {
+        created = true
+        creates += 1
+        sandbox.deleted = false
+        return sandbox
       },
-    ])
-    const runner = new ScriptedAgentRunner({
-      script: async () => defaultTurnResult('unused local runtime'),
-    })
-    // Fresh provider per invocation, sharing the one environment double: the
-    // model of separate invocation processes around one persistent sandbox.
-    const makeWiring = (): DispatchWiring => {
-      const provider = new VercelSandboxProvider({
-        config: {
-          image: 'vercel/sandbox/universal:latest',
-          vcpus: 4,
-          timeoutSeconds: 2700,
-          failoverRegions: [],
-          environmentVariables: [],
-        },
-        env: { GITHUB_TOKEN: 'publication-secret' },
-        storeRef: 'https://store.example.test',
-        storeToken: 'scoped-token',
-        delegateCredential: async () => 'delegated-token',
-        repo,
-        facade,
-        exec,
-        // Bounded observation waits resolve in milliseconds, never the 5 s
-        // default.
-        observeWaitMs: 25,
-        packageArchive: async () => new Uint8Array([1]),
-      })
-      return {
-        credentialIssuer: async () => 'delegated-token',
-        store,
-        tickets,
-        forge,
-        workspaces: provider,
-        buildExecution: provider.buildExecution,
-        runtimes: { claude: { runner, servesModels: [] } },
-        storeRef: 'https://store.example.test',
-        token: 'scoped-token',
-        ids,
-        uuids: randomUuids(),
-        clock: systemClock,
-      }
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
-    const dispatch = () =>
-      abDispatch({
-        targetRepo: repo,
-        env: { GITHUB_TOKEN: 'publication-secret' },
-        exec,
-        stdout: () => undefined,
-        stderr: () => undefined,
-        once: true,
-        plain: true,
-        wire: () => makeWiring(),
-      })
+    const hostCommands: string[][] = []
+    const exec: Exec = async (cmd, options) => {
+      hostCommands.push([...cmd])
+      const ref = cmd.at(-1)
+      if (cmd.includes('get-url'))
+        return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+      if (cmd.includes('ls-remote')) {
+        const sha = ref === 'refs/heads/main' ? BASE : remote.head
+        return { stdout: sha === null ? '' : `${sha}\t${ref}\n`, stderr: '', exitCode: 0 }
+      }
+      return spawnExec(cmd, options)
+    }
 
-    // The guest's final acts, performed when the settlement invocation's
-    // bounded observation wait reaches the detached command: the same
-    // durable sequence the incident evidence recorded (plan, approved plan
-    // review, implement notes, and the implement publication request).
-    sandbox.guestActs = async () => {
+    try {
+      await mkdir(repo, { recursive: true })
+      await Bun.write(
+        join(repo, 'autobuild.toml'),
+        '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "claude"\n',
+      )
+      await writeFile(join(repo, 'README.md'), 'fixture')
+      await spawnExec(['git', 'init', '-q', '-b', 'main'], { cwd: repo })
+      await spawnExec(['git', 'add', '.'], { cwd: repo })
+      await spawnExec(
+        [
+          'git',
+          '-c',
+          'user.name=Autobuild Test',
+          '-c',
+          'user.email=test@invalid',
+          'commit',
+          '-qm',
+          'fixture',
+        ],
+        { cwd: repo },
+      )
+      const tickets = new FakeTicketSource([
+        {
+          revision: 'fixture',
+          ref: { source: 'file', id: 'T-1', title: 'Detached guest settlement' },
+          title: 'Detached guest settlement',
+          body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',
+          state: 'Ready',
+          resolved: false,
+          labels: [],
+        },
+      ])
+      const runner = new ScriptedAgentRunner({
+        script: async () => defaultTurnResult('unused local runtime'),
+      })
+      // Fresh provider per invocation, sharing the one environment double: the
+      // model of separate invocation processes around one persistent sandbox.
+      const makeWiring = (): DispatchWiring => {
+        const provider = new VercelSandboxProvider({
+          config: {
+            image: 'vercel/sandbox/universal:latest',
+            vcpus: 4,
+            timeoutSeconds: 2700,
+            failoverRegions: [],
+            environmentVariables: [],
+          },
+          env: { GITHUB_TOKEN: 'publication-secret' },
+          storeRef: 'https://store.example.test',
+          storeToken: 'scoped-token',
+          delegateCredential: async () => 'delegated-token',
+          repo,
+          facade,
+          exec,
+          // Bounded observation waits resolve in milliseconds, never the 5 s
+          // default.
+          observeWaitMs: 25,
+          packageArchive: async () => new Uint8Array([archiveByte]),
+        })
+        return {
+          credentialIssuer: async () => 'delegated-token',
+          store,
+          tickets,
+          forge,
+          workspaces: provider,
+          buildExecution: provider.buildExecution,
+          runtimes: { claude: { runner, servesModels: [] } },
+          storeRef: 'https://store.example.test',
+          token: 'scoped-token',
+          ids,
+          uuids: randomUuids(),
+          clock: systemClock,
+        }
+      }
+      const dispatch = () =>
+        abDispatch({
+          targetRepo: repo,
+          env: { GITHUB_TOKEN: 'publication-secret' },
+          exec,
+          stdout: () => undefined,
+          stderr: () => undefined,
+          once: true,
+          plain: true,
+          wire: () => makeWiring(),
+        })
+
+      // The guest's final acts, performed when the settlement invocation's
+      // bounded observation wait reaches the detached command: the same
+      // durable sequence the incident evidence recorded (plan, approved plan
+      // review, implement notes, and the implement publication request).
+      sandbox.guestActs = async () => {
+        const slug = (await store.listBuilds())[0]!.slug
+        const plan = await store.putArtifact(slug, { kind: 'plan', content: '# Plan' })
+        await store.append(slug, {
+          actor: agentActor('plan', 's-plan'),
+          type: 'plan.completed',
+          payload: {
+            round: 1,
+            artifact: { kind: plan.kind, rev: plan.revision },
+            verifySteps: [],
+          },
+        })
+        const review = await store.putArtifact(slug, {
+          kind: 'plan-review',
+          content: 'approved',
+        })
+        await store.append(slug, {
+          actor: agentActor('plan-review', 's-plan-review'),
+          type: 'plan-review.verdict',
+          payload: {
+            round: 1,
+            verdict: 'approve',
+            findings: [],
+            artifact: { kind: review.kind, rev: review.revision },
+          },
+        })
+        const notes = await store.putArtifact(slug, {
+          kind: 'implement-notes',
+          content: 'implemented',
+        })
+        await store.append(slug, {
+          actor: agentActor('implement', 's-implement'),
+          type: 'publication.requested',
+          payload: {
+            operation: 'implement',
+            branch: `ab/${slug}`,
+            sha: SHA,
+            round: 1,
+            base: BASE,
+            artifact: { kind: notes.kind, rev: notes.revision },
+          },
+        })
+      }
+
+      const countEvents = async (type: string): Promise<number> => {
+        const slug = (await store.listBuilds())[0]?.slug
+        if (slug === undefined) return 0
+        return (await store.getEvents(slug)).filter((event) => event.type === type).length
+      }
+      const dispatchUntil = async (predicate: () => Promise<boolean>): Promise<void> => {
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          await dispatch()
+          if (await predicate()) return
+        }
+        throw new Error('log never reached the expected state')
+      }
+
+      // First invocation: provisions, launches the implement guest, and
+      // detaches at teardown while the guest is still running — its
+      // supervision long-poll blocks and is aborted, so no exit is observed.
+      await dispatchUntil(async () => (await countEvents('execution.started')) >= 1)
       const slug = (await store.listBuilds())[0]!.slug
-      const plan = await store.putArtifact(slug, { kind: 'plan', content: '# Plan' })
-      await store.append(slug, {
-        actor: agentActor('plan', 's-plan'),
-        type: 'plan.completed',
-        payload: {
-          round: 1,
-          artifact: { kind: plan.kind, rev: plan.revision },
-          verifySteps: [],
-        },
-      })
-      const review = await store.putArtifact(slug, {
-        kind: 'plan-review',
-        content: 'approved',
-      })
-      await store.append(slug, {
-        actor: agentActor('plan-review', 's-plan-review'),
-        type: 'plan-review.verdict',
-        payload: {
-          round: 1,
-          verdict: 'approve',
-          findings: [],
-          artifact: { kind: review.kind, rev: review.revision },
-        },
-      })
-      const notes = await store.putArtifact(slug, {
-        kind: 'implement-notes',
-        content: 'implemented',
-      })
-      await store.append(slug, {
-        actor: agentActor('implement', 's-implement'),
-        type: 'publication.requested',
-        payload: {
-          operation: 'implement',
-          branch: `ab/${slug}`,
-          sha: SHA,
-          round: 1,
-          base: BASE,
-          artifact: { kind: notes.kind, rev: notes.revision },
-        },
-      })
-    }
+      const firstCommandId = [...sandbox.observed.keys()][0]!
+      expect(sandbox.launches).toBe(1)
+      // The provider's plain lookup still reports no exit: nothing has waited.
+      expect(sandbox.observed.get(firstCommandId)).toBeNull()
 
-    const countEvents = async (type: string): Promise<number> => {
-      const slug = (await store.listBuilds())[0]?.slug
-      if (slug === undefined) return 0
-      return (await store.getEvents(slug)).filter((event) => event.type === type).length
-    }
-    const dispatchUntil = async (predicate: () => Promise<boolean>): Promise<void> => {
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        await dispatch()
-        if (await predicate()) return
+      if (upgrading) {
+        const started = (await store.getEvents(slug)).findLast(
+          (e) => e.type === 'execution.started',
+        )!
+        if (started.type !== 'execution.started') throw new Error('missing execution')
+        const instance = started.payload.instance
+        await store.claimLease(slug, instance, 60_000)
+        const attach = await store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.attached',
+          payload: { instance, host: 'guest' },
+        })
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.runtime-recorded',
+          payload: { instance, attachedSeq: attach.seq, runtime: guestRuntime },
+        })
+        const build = (await store.getBuild(slug))!
+        const handoff = {
+          correlation: 'remote-upgrade',
+          run: 'predecessor',
+          lineage: 'launcher',
+          from: RUNTIME_IDENTITY,
+          to: target,
+          root: target.source.location,
+          cacheId: 'target',
+          target: { mode: 'installed' as const, key: 'target', source: '/install' },
+        }
+        await store.appendRepo(build.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.target-prepared',
+          payload: handoff,
+        })
+        await store.appendRepo(build.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.yield-requested',
+          payload: { ...handoff, successor: 'successor', mode: 'drain', evidence: 'compatible' },
+        })
+        await store.appendRepo(build.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.handoff-started',
+          payload: {
+            ...handoff,
+            successor: 'successor',
+            mode: 'drain',
+            builds: [],
+            remoteBuilds: [{ slug, instance, runtime: guestRuntime }],
+          },
+        })
+        // The predecessor is already gone while the old guest still holds its lease.
+        await store.appendRepo(build.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.handoff-completed',
+          payload: { ...handoff, successor: 'successor' },
+        })
+        await authorizeRemoteHandoffs(store, build.repo)
+        expect((await store.getBuild(slug))!.lease).toEqual(build.lease)
+        expect(await store.heartbeat(slug, instance)).toBe(true)
+        expect((await store.getEvents(slug)).some((e) => e.type === 'execution.ended')).toBe(false)
+        const finishPhase = sandbox.guestActs!
+        sandbox.guestActs = async () => {
+          await finishPhase()
+          const facts = (await readBuildFacts(store, slug)).value
+          const request = relaunchTarget(facts.state, instance, guestRuntime)
+          expect(request).toBeDefined()
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'execution.relaunch-requested',
+            payload: request!,
+          })
+        }
+        archiveByte = 2
       }
-      throw new Error('log never reached the expected state')
+
+      // Second invocation: settlement observes the recorded command — the
+      // lookup shows no exit, so its bounded wait performs the guest's final
+      // acts and observes exit 0 — and settles the execution, lease, and
+      // publication.
+      await dispatchUntil(async () => (await countEvents('execution.ended')) >= 1)
+      const events = await store.getEvents(slug)
+      const ended = events.find((event) => event.type === 'execution.ended')
+      expect(ended?.payload).toMatchObject({
+        outcome: upgrading ? 'relaunch' : 'completed',
+        exitCode: 0,
+      })
+      expect((ended!.payload as { workspaceRef: string }).workspaceRef).toMatch(
+        /^autobuild-detached-guest-settlement-g0-/,
+      )
+      expect(events.some((event) => event.type === 'implement.completed')).toBe(true)
+      expect(remote.head).toBe(SHA)
+      // The lookup now reports the exit the wait observed.
+      expect(sandbox.observed.get(firstCommandId)).toBe(0)
+
+      // The next phase re-attaches in place: a second runner launches on the
+      // same environment, and nothing reaps it.
+      await dispatchUntil(async () => (await countEvents('execution.started')) >= 2)
+      const detached = commands.filter((command) => command.detached === true)
+      expect(detached).toHaveLength(2)
+      expect(sandbox.launches).toBe(2)
+      expect(sandbox.deleted).toBe(false)
+      expect(creates).toBe(1)
+      if (upgrading) {
+        expect(installed.map((bytes) => [...bytes])).toEqual([[1], [2]])
+        expect(sandbox.distributionVersion).toBe(await distributionStampFor(new Uint8Array([2])))
+        const finalEvents = await store.getEvents(slug)
+        expect(finalEvents.filter((e) => e.type === 'execution.relaunch-requested')).toHaveLength(1)
+        const attaches = (await readBuildFacts(store, slug)).value.runnerAttaches
+        expect(attaches.at(-1)?.runtime).toEqual({ ...target, source: guestRuntime.source })
+        const relaunch = finalEvents.find((e) => e.type === 'execution.relaunch-requested')!
+        const ended = finalEvents.find((e) => e.type === 'execution.ended')!
+        expect(relaunch.seq).toBeLessThan(ended.seq)
+        expect(ended.seq).toBeLessThan(attaches.at(-1)!.seq)
+        expect(finalEvents.some((e) => e.type === 'infrastructure.failed')).toBe(false)
+      }
+      expect(hostCommands.some((command) => command.includes('worktree'))).toBe(false)
+    } finally {
+      await store.close()
+      await rm(tmp, { recursive: true, force: true })
     }
-
-    // First invocation: provisions, launches the implement guest, and
-    // detaches at teardown while the guest is still running — its
-    // supervision long-poll blocks and is aborted, so no exit is observed.
-    await dispatchUntil(async () => (await countEvents('execution.started')) >= 1)
-    const slug = (await store.listBuilds())[0]!.slug
-    const firstCommandId = [...sandbox.observed.keys()][0]!
-    expect(sandbox.launches).toBe(1)
-    // The provider's plain lookup still reports no exit: nothing has waited.
-    expect(sandbox.observed.get(firstCommandId)).toBeNull()
-
-    // Second invocation: settlement observes the recorded command — the
-    // lookup shows no exit, so its bounded wait performs the guest's final
-    // acts and observes exit 0 — and settles the execution, lease, and
-    // publication.
-    await dispatchUntil(async () => (await countEvents('execution.ended')) >= 1)
-    const events = await store.getEvents(slug)
-    const ended = events.find((event) => event.type === 'execution.ended')
-    expect(ended?.payload).toMatchObject({
-      outcome: 'completed',
-      exitCode: 0,
-    })
-    expect((ended!.payload as { workspaceRef: string }).workspaceRef).toMatch(
-      /^autobuild-detached-guest-settlement-g0-/,
-    )
-    expect(events.some((event) => event.type === 'implement.completed')).toBe(true)
-    expect(remote.head).toBe(SHA)
-    // The lookup now reports the exit the wait observed.
-    expect(sandbox.observed.get(firstCommandId)).toBe(0)
-
-    // The next phase re-attaches in place: a second runner launches on the
-    // same environment, and nothing reaps it.
-    await dispatchUntil(async () => (await countEvents('execution.started')) >= 2)
-    const detached = commands.filter((command) => command.detached === true)
-    expect(detached).toHaveLength(2)
-    expect(sandbox.launches).toBe(2)
-    expect(sandbox.deleted).toBe(false)
-    expect(creates).toBe(1)
-    expect(hostCommands.some((command) => command.includes('worktree'))).toBe(false)
-  } finally {
-    await store.close()
-    await rm(tmp, { recursive: true, force: true })
-  }
-}, 30_000)
+  }, 30_000)

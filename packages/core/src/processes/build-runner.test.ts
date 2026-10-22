@@ -7486,34 +7486,36 @@ describe('accepted runtime relaunch at phase boundaries', () => {
     })
   }
 
-  test('a target accepted during plan lets plan finish but starts no review', async () => {
-    const h = await makeHarness({
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        return {
-          ...handlers,
-          plan: async (ctx) => {
-            await authorize(store)
-            return handlers.plan!(ctx)
-          },
-        }
-      },
+  for (const remote of [false, true])
+    test(`a target accepted during plan lets plan finish but starts no review (remote: ${remote})`, async () => {
+      const h = await makeHarness({
+        workspaceRemote: remote,
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          return {
+            ...handlers,
+            plan: async (ctx) => {
+              await authorize(store)
+              return handlers.plan!(ctx)
+            },
+          }
+        },
+      })
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'plan.completed')).toHaveLength(1)
+      expect(ofType(events, 'session.ended')).toHaveLength(1)
+      expect(ofType(events, 'plan-review.started')).toHaveLength(0)
+      expect(ofType(events, 'execution.relaunch-requested')).toHaveLength(1)
+      expect(ofType(events, 'execution.relaunch-requested')[0]!.payload).toEqual({
+        instance: 'runner-1',
+        correlation: 'handoff-1',
+        from: RUNTIME_IDENTITY,
+        to: target,
+      })
+      await h.br.run()
+      expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(1)
     })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'plan.completed')).toHaveLength(1)
-    expect(ofType(events, 'session.ended')).toHaveLength(1)
-    expect(ofType(events, 'plan-review.started')).toHaveLength(0)
-    expect(ofType(events, 'execution.relaunch-requested')).toHaveLength(1)
-    expect(ofType(events, 'execution.relaunch-requested')[0]!.payload).toEqual({
-      instance: 'runner-1',
-      correlation: 'handoff-1',
-      from: RUNTIME_IDENTITY,
-      to: target,
-    })
-    await h.br.run()
-    expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(1)
-  })
 
   test('a fresh owner resumes the next phase on the accepted runtime from durable state', async () => {
     const old = await makeHarness({
@@ -7600,9 +7602,9 @@ describe('accepted runtime relaunch at phase boundaries', () => {
     }
   })
 
-  for (const kind of ['equal', 'foreign', 'settled', 'remote'] as const) {
+  for (const kind of ['equal', 'foreign', 'settled'] as const) {
     test(`${kind} target does not request relaunch`, async () => {
-      const h = await makeHarness({ workspaceRemote: kind === 'remote' })
+      const h = await makeHarness()
       await authorize(
         h.store,
         kind === 'foreign' ? 'another-runner' : 'runner-1',
