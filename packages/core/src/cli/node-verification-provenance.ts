@@ -1,5 +1,6 @@
 import { buildTrailers, validateBuildSlug } from '../kernel/build-identity'
-import { history, type NodeGit } from '../kernel/node-restack'
+import { originalForeign } from '../kernel/change-presence'
+import { history, nodeInventory, type NodeGit } from '../kernel/node-restack'
 import type { CommitRange, TicketRef } from '../ontology'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
@@ -13,6 +14,7 @@ export interface NodeContribution {
 }
 export interface NodeVerificationIndex {
   range: CommitRange
+  handPushedCommits: { sha: string; originalSha: string; message: string }[]
   contributions: NodeContribution[]
   unattributedCommits: string[]
   commits: { sha: string; build?: string }[]
@@ -24,13 +26,17 @@ export async function collectNodeVerificationProvenance(
   repo: string,
   range: CommitRange,
   git: NodeGit,
+  ownership: { contributionBase: string; foreignAliases?: Record<string, string> },
 ): Promise<{ index: NodeVerificationIndex; specs: Map<string, string> }> {
   const index: NodeVerificationIndex = {
     range,
+    handPushedCommits: [],
     contributions: [],
     unattributedCommits: [],
     commits: [],
   }
+  const owned = new Set((await nodeInventory(git, range.head, ownership.contributionBase)).foreign)
+  const aliases = new Map(Object.entries(ownership.foreignAliases ?? {}))
   const specs = new Map<string, string>()
   const byBuild = new Map<string, NodeContribution>()
   for (const commit of await history(
@@ -38,6 +44,12 @@ export async function collectNodeVerificationProvenance(
     [`${range.base}..${range.head}`],
     ['--reverse', '--topo-order'],
   )) {
+    if (owned.has(commit.sha))
+      index.handPushedCommits.push({
+        sha: commit.sha,
+        originalSha: originalForeign(commit.sha, aliases),
+        message: commit.message,
+      })
     const trailers = buildTrailers(commit.message)
     if (trailers.length > 1) throw new Error(`ambiguous build identity on ${commit.sha}`)
     const build = trailers[0]
