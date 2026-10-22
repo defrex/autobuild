@@ -1102,7 +1102,6 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
     truncate(`  session ${displayText(view.sessionId)}`, width),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
-    ...handoffLines(model, color, width),
   ]
   const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
   const controls = truncate(
@@ -1180,7 +1179,6 @@ function renderSessionView(model: DashboardModel, opts: RenderOpts): string[] {
     ),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
-    ...handoffLines(model, color, width),
   ]
   const content = sessionContentLines(view, width).map((line) => truncate(line, width))
   const controls = truncate(
