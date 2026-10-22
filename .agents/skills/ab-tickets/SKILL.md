@@ -11,6 +11,25 @@ content and blocker relationships. The default file source needs no secret.
 
 ## Node tickets and targets
 
+Use a spec-standard charter for the node's integration goal, whole-level
+completion and policy-controlled landing; put feature specifics in children.
+While the node is open, iterate by adding spec-standard children targeting its
+ticket id, pushing small maintainer-authorized tweaks to its recorded branch
+with meaningful intent in commit messages, or explicitly revising its charter.
+Node verification judges ordinary changes against the current event-authorized
+charter or the introducing child's spec through the provenance mapping. Owned
+hand-pushed commit messages authorize tweaks, judged for quality and consistency;
+a missing covering spec alone is not a failure.
+
+A ticket edit alone does not revise the active build. Use
+`ab answer <node> --revise-spec replacement.md` or
+`ab answer <node> --revise-spec-from-ticket`; children keep their specs, claims
+and targets while the node recollects and verifies the new revision, including
+on the same head after failure. See
+[iterating inside a node](../ab-guide/references/integration-tree.md#iterating-inside-a-node)
+and [revision restrictions](../ab-guide/references/integration-tree.md#operator-node-spec-revisions).
+Open children keep the node incomplete; completed nodes close admission.
+
 For node lifecycle, target validation and source-specific storage, read
 [nodes and targets](../ab-guide/references/integration-tree.md). When filing
 related work, follow the shared
