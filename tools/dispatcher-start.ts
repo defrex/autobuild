@@ -1,4 +1,5 @@
-/** Maintainer-only foreground entry. No process management lives here. */
+/** Maintainer-only entry: the public binary enters the product launcher for long-running dispatch.
+ * The v1 record identifies this launcher ancestor across generation handoffs. */
 import { realpath } from 'node:fs/promises'
 import { canonicalRoot, capture, command } from './dispatcher-check'
 
