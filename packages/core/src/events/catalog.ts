@@ -99,6 +99,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.provision-started': ['dispatcher'],
   'workspace.released': ['dispatcher', 'kernel'],
+  'execution.relaunch-requested': ['kernel'],
   'execution.drain-authorized': ['dispatcher'],
   'execution.drain-settled': ['dispatcher'],
   'execution.started': ['dispatcher'],

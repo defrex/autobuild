@@ -12003,11 +12003,14 @@ for (const scenario of [
         expect(readFailures).toBe(1)
       if (scenario === 'uncommitted-read-error') expect(lostAcceptances).toBe(2)
       if (scenario === 'authorization-error') expect(authorizationFailures).toBe(2)
-      expect(
-        (await fx.store.getEvents(slug)).some(
-          (event) => event.type === 'execution.drain-authorized',
-        ),
-      ).toBe(true)
+      const authorization = (await fx.store.getEvents(slug)).findLast(
+        (event) => event.type === 'execution.drain-authorized',
+      )
+      const targetHandoff = (await fx.store.getRepoEvents(fx.origin)).findLast(
+        (event) => event.type === 'dispatcher.handoff-started',
+      )
+      expect(authorization?.payload.targetRuntime).toEqual(targetHandoff?.payload.to)
+      expect(authorization?.payload.instance).toBe(lease.holder)
       const oldTicks = tickCalls.filter((holder) => holder === 'predecessor').length
       const oldClaims = claimCalls.filter((holder) => holder === 'predecessor').length
       expect((await fx.store.getBuild(slug))!.lease?.holder).toBe(lease.holder)

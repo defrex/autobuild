@@ -1,6 +1,7 @@
 import { executionNoProgressReducer } from './execution-no-progress'
 import { describe, expect, test } from 'bun:test'
-import { DISPATCHER } from '../events/envelope'
+import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { KERNEL, DISPATCHER } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
@@ -90,6 +91,55 @@ describe('settleExecution', () => {
         await store.createBuild({ slug: 'build', repo: 'repo', branch: 'ab/build' })
       },
     }
+  }
+
+  for (const exitCode of [0, 1]) {
+    test(`durable relaunch intent survives supervisor loss; exit ${exitCode} remains factual`, async () => {
+      const h = harness({ state: 'ended', exitCode })
+      await h.seed()
+      const start = started({ instance: 'i1', commandId: 'cmd-1' })
+      await h.store.append('build', {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: start.payload as never,
+      })
+      const runtime = RUNTIME_IDENTITY
+      await h.store.append('build', {
+        actor: DISPATCHER,
+        type: 'execution.drain-authorized',
+        payload: {
+          instance: 'i1',
+          correlation: 'h',
+          run: 'old',
+          runtime,
+          targetRuntime: { ...runtime, commit: 'f'.repeat(40) },
+        },
+      })
+      await h.store.append('build', {
+        actor: KERNEL,
+        type: 'execution.relaunch-requested',
+        payload: {
+          instance: 'i1',
+          correlation: 'h',
+          from: runtime,
+          to: { ...runtime, commit: 'f'.repeat(40) },
+        },
+      })
+      await h.store.claimLease('build', 'i1', 60_000)
+      await settleExecution(
+        { store: h.store, execution: h.execution },
+        'build',
+        await h.store.getEvents('build'),
+      )
+      const events = await h.store.getEvents('build')
+      expect(events.findLast((e) => e.type === 'execution.ended')?.payload).toMatchObject({
+        instance: 'i1',
+        outcome: exitCode === 0 ? 'relaunch' : 'completed',
+        exitCode,
+      })
+      expect(executionNoProgressReducer.reduce(events).count).toBe(0)
+      expect((await h.store.getBuild('build'))?.lease).toBeUndefined()
+    })
   }
 
   test('running observations write nothing', async () => {
