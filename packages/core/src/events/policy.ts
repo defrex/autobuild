@@ -38,6 +38,7 @@ export const buildEventPolicy = {
   'integration.audited': 'decisive',
   'node.restack-requested': 'decisive',
   'node.restack-satisfied': 'decisive',
+  'node.poll-checked': 'advisory',
   'node.parent-distance': 'advisory',
   'node.parent-requested': 'decisive',
   'node.parent-accepted': 'decisive',

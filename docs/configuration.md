@@ -1210,6 +1210,8 @@ Optional. Every field receives its own default. All are positive integers except
 | `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `janitorFailureAttentionSeconds` | `600` | positive integer | Consecutive janitor failure duration before build attention. |
+| `nodeIdleAfterSeconds` | `600` | positive integer | Quiet period before opened integration nodes enter idle polling. |
+| `nodeIdlePollSeconds` | `120` | positive integer | Interval between idle node checks; durable activity wakes the next tick. |
 | `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
 

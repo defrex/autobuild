@@ -499,6 +499,12 @@ export const eventPayloadSchemas = {
     landedTree: z.string().min(1),
     identities: z.array(z.string()),
   }),
+  'node.poll-checked': z.strictObject({
+    activityKey: z.string().min(1),
+    unchangedSince: z.iso.datetime(),
+    nodeIdleAfterSeconds: z.number().int().positive(),
+    nodeIdlePollSeconds: z.number().int().positive(),
+  }),
   'node.compared': z.strictObject({
     parentSha: z.string().min(1),
     headSha: z.string().min(1),
