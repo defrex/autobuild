@@ -6,7 +6,7 @@ import { openLocalStore } from '../store/local/store'
 import { DISPATCHER } from '../events/envelope'
 import { readHandoff } from './dispatch-handoff'
 import { repositoryNeedsAttention } from './attention'
-import { projectRepositoryStatus } from './repository-status'
+import { projectRepositoryStatus, renderRepositoryStatus } from './repository-status'
 
 test('handoff reader follows only its stopped run and rejects operator stop; status exposes failure', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'ab-handoff-'))
@@ -68,8 +68,33 @@ test('handoff reader follows only its stopped run and rejects operator stop; sta
       type: 'dispatcher.upgrade-failed',
       payload: { ...identity, run: 'foreign', reason: 'registry unavailable' },
     })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.upgrade-target-resolved',
+      payload: {
+        run: 'foreign',
+        lineage: 'launcher',
+        target: {
+          mode: 'source',
+          key: 'content',
+          source: '/repo/.git',
+          base: 'main',
+          sha: 'b'.repeat(40),
+        },
+      },
+    })
     const events = await store.getRepoEvents(repo)
-    expect(repositoryNeedsAttention(events.at(-1)!)).toBe(true)
+    expect(repositoryNeedsAttention(events.at(-1)!)).toBe(false)
+    expect(
+      repositoryNeedsAttention(events.findLast((e) => e.type === 'dispatcher.upgrade-failed')!),
+    ).toBe(true)
+    const status = projectRepositoryStatus(repo, events)
+    expect(renderRepositoryStatus(status).join('\n')).toContain(
+      `source; base main; source /repo/.git at ${'b'.repeat(40)}`,
+    )
+    expect(
+      JSON.parse(JSON.stringify(status)).upgrades.runs.foreign.resolved.payload.target.sha,
+    ).toBe('b'.repeat(40))
     expect(
       projectRepositoryStatus(repo, events).upgrades.runs.foreign?.failure?.payload.reason,
     ).toBe('registry unavailable')

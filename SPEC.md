@@ -244,7 +244,16 @@ branch commit through the forge, never from a feature branch, checkout pin or
 stale tracking ref. A declared dependency selects pinned mode; unsupported or
 inconsistent metadata is an attention failure. With no declaration (including
 no root manifest), installed mode rereads the original public installation
-pathname retained across handoffs. Source commits remain fixed snapshots.
+pathname retained across handoffs. A launch from a source root in the dispatched
+repository's Git common-directory topology selects source mode instead. That
+eligibility and its initial packaged snapshot are frozen across successors. The
+target is the forge-authoritative base commit, exported into private cache staging
+without changing any operator or build worktree. A frozen-lockfile, script-free
+Bun install supplies dependencies; the completed immutable runtime records the
+exact commit and follows ordinary cache retention and pruning. Source adoption
+compares packaged contents and production-reachable dependency resolution rather
+than version or commit: excluded-file advances do not hand off. Included shipped
+documentation counts as packaged content.
 
 A changed exact version (including a downgrade) is installed in isolation and
 validated in the immutable cache before cutover. The operator's installation
@@ -253,6 +262,10 @@ failures retain the running generation and record repository attention. Failed
 inputs are suppressed until their target metadata changes or an operator starts
 a fresh launcher; unrelated base commits do not reset suppression.
 
+The kernel records `dispatcher.upgrade-target-resolved` once per changed successful
+target observation per run, including equal-content source advances. Repository
+status exposes its mode, base and target SHA independently of the running commit
+and earlier failure or handoff evidence. Identical polls append nothing.
 The kernel records `dispatcher.upgrade-detected`, `dispatcher.upgrade-failed`,
 `dispatcher.handoff-started` and `dispatcher.handoff-completed`, correlated by
 run and launcher lineage. Facts name both runtimes, resolution provenance and
@@ -268,7 +281,7 @@ suspension. Remote supervised runners retain detach/recovery behavior.
 The exited generation's runtime-owned reader derives a handoff from the journal;
 the filesystem-only launcher consumes its versioned JSON result, validates its
 run/lineage and starts the next generation sequentially. There is no overlapping
-generation, rollback or source tracking. The successor records completion only
+generation or automatic rollback. The successor records completion only
 after initialization and repository ownership. Operator stop wins over handoff.
 Turning automatic upgrades off cancels preparation and restores manual restart
 behavior; launcher contract changes also require a manual restart. `--once`,
