@@ -1,3 +1,5 @@
+import { captureRuntimeIdentity } from '../runtime-identity'
+import { withSourceExport, sourceContent } from './dispatch-upgrade-source'
 import { mkdtemp, readFile, readdir, rm, writeFile, copyFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -92,11 +94,17 @@ export async function prepareUpgrade(input: {
   }
   const cache = join(checkout, '.autobuild/runtime')
   // Cached targets retain their authoritative lock fingerprint, without registry credentials.
-  if (target.mode === 'pinned') {
+  if (target.mode === 'pinned' || target.mode === 'source') {
     for (const name of await readdir(cache).catch(() => [] as string[])) {
       let key: string
       try {
-        key = await readFile(join(cache, name, 'upgrade-key'), 'utf8')
+        if (target.mode === 'source') {
+          const receipt = JSON.parse(
+            await readFile(join(cache, name, 'source-receipt.json'), 'utf8'),
+          )
+          if (receipt.commit !== target.sha) continue
+          key = receipt.upgradeKey
+        } else key = await readFile(join(cache, name, 'upgrade-key'), 'utf8')
       } catch {
         continue
       }
@@ -105,6 +113,8 @@ export async function prepareUpgrade(input: {
       if (!runtime || !reserveExistingRuntime(runtime.root)) continue
       try {
         await validateRuntime(runtime)
+        if (target.mode === 'source' && captureRuntimeIdentity(runtime.root).commit !== target.sha)
+          throw new Error('cached source runtime commit contradicts target')
         signal.throwIfAborted()
         return await validate(runtime)
       } catch (error) {
@@ -112,6 +122,45 @@ export async function prepareUpgrade(input: {
         throw error
       }
     }
+  }
+  if (target.mode === 'source') {
+    return withSourceExport({ checkout, sha: target.sha!, signal }, async (root) => {
+      const content = await sourceContent(root, target.source, signal)
+      if (content.key !== target.key) throw new Error('source target changed during preparation')
+      // Require a committed lock explicitly: frozen-lockfile alone permits a missing lock.
+      await readFile(join(root, 'bun.lock'))
+      const child = Bun.spawn(
+        [process.execPath, 'install', '--frozen-lockfile', '--ignore-scripts', '--no-progress'],
+        {
+          cwd: root,
+          env: input.env,
+          stdout: 'ignore',
+          stderr: 'pipe',
+          signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
+        },
+      )
+      const [code] = await Promise.all([child.exited, new Response(child.stderr).text()])
+      signal.throwIfAborted()
+      if (code !== 0) throw new Error('source dependency installation failed')
+      const path = join(root, 'package.json')
+      const manifest = JSON.parse(await readFile(path, 'utf8'))
+      manifest.gitHead = target.sha
+      await writeFile(path, JSON.stringify(manifest))
+      let runtime: CachedRuntime | undefined
+      try {
+        runtime = await prepareRuntime(root, checkout, {
+          upgradeKey: target.key,
+          commit: target.sha!,
+        })
+        if (captureRuntimeIdentity(runtime.root).commit !== target.sha)
+          throw new Error('source runtime commit contradicts target')
+        signal.throwIfAborted()
+        return await validate(runtime)
+      } catch (error) {
+        if (runtime) releasePreparedRuntime(runtime.root)
+        throw error
+      }
+    })
   }
   if (target.mode === 'installed') {
     const identity = await readDistributionIdentity(target.installRoot!)

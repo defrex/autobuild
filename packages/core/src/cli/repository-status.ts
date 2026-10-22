@@ -200,9 +200,16 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   return [
     ...Object.entries(status.upgrades.runs).flatMap(([run, state]) => {
       const event = state.completed ?? state.failure ?? state.handoff ?? state.detected
-      if (!event) return []
+      const resolved = state.resolved?.payload.target
+      const lines = resolved
+        ? [
+            `resolved target ${run}: ${resolved.mode}; base ${resolved.base ?? '-'}; source ${resolved.source}${resolved.sha ? ` at ${resolved.sha}` : ''}`,
+          ]
+        : []
+      if (!event) return lines
       const target = event.payload.target
       return [
+        ...lines,
         `upgrade ${run}: ${event.type.slice('dispatcher.'.length)}; ${target.mode} ${target.version ?? target.source}; source ${target.source}${target.sha ? ` at ${target.sha}` : ''}${event.type === 'dispatcher.upgrade-failed' ? `; ${event.payload.reason}` : ''}`,
       ]
     }),
