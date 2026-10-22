@@ -29,7 +29,15 @@ const record: LaunchRecord = {
 }
 function fixture() {
   const status: Status = {
-    dispatcher: { state: 'held', holder: { run: 'run-1', pid: 11, host: 'local' } },
+    dispatcher: {
+      state: 'held',
+      holder: {
+        run: 'run-1',
+        pid: 11,
+        host: 'local',
+        runtime: { version: '1.0', commit: sha, source: { kind: 'source', location: '/cache' } },
+      },
+    },
   }
   const e: Evidence = {
     status: async () => status,
@@ -49,7 +57,8 @@ describe('dispatcher revision evidence', () => {
   test('correlates interactive child and displays both revisions', async () => {
     const { e } = fixture()
     const output = await inspect(e)
-    expect(output).toContain(`Dispatcher starting SHA: ${sha}\nCheckout HEAD: ${sha}`)
+    expect(output).toContain(`commit ${sha}`)
+    expect(output).toContain(`Checkout HEAD: ${sha}`)
     expect(output).toContain('Comparison: equal')
   })
   test('direct holder', async () => {
@@ -79,7 +88,7 @@ describe('dispatcher revision evidence', () => {
     'disappeared',
     'object',
     'changed',
-  ])('%s evidence stays unknown', async (reason) => {
+  ])('%s launcher evidence does not override durable runtime', async (reason) => {
     const { e, status } = fixture()
     if (reason === 'dirty') e.records = async () => [{ ...record, dirty: true }]
     if (reason === 'missing') e.records = async () => []
@@ -106,8 +115,11 @@ describe('dispatcher revision evidence', () => {
             }
     }
     const output = await inspect(e)
-    expect(output).toContain('Comparison: unknown')
-    expect(output).not.toContain('Comparison: equal')
+    expect(output).toContain(
+      reason === 'object' || reason === 'changed' ? 'Comparison: unknown' : 'Comparison: equal',
+    )
+    if (reason !== 'object' && reason !== 'changed')
+      expect(output).toContain('Local launcher evidence:')
     if (reason === 'dirty') expect(output).toContain('captured base only')
   })
   test.each(['absent', 'lost', 'stopped'])('%s holder', async (state) => {
@@ -125,7 +137,115 @@ describe('dispatcher revision evidence', () => {
         ticks: ++reads > 2 ? '999' : pid === 11 ? '110' : '100',
       })
     else e.git = async (args) => (args[0] === 'rev-parse' && ++reads > 2 ? head : sha)
-    expect(await inspect(e)).toContain('Comparison: unknown')
+    expect(await inspect(e)).toContain(
+      kind === 'identity' ? 'process identity changed; retry' : 'Comparison: unknown',
+    )
+  })
+  test('held successor commit overrides the launcher base', async () => {
+    const { e, status } = fixture()
+    status.dispatcher.holder!.runtime!.commit = head
+    e.git = async (args) => (args[0] === 'rev-parse' ? head : '')
+    const output = await inspect(e)
+    expect(output).toContain(`Running generation: autobuild 1.0; commit ${head}`)
+    expect(output).toContain(`captured launch base ${sha}`)
+    expect(output).toContain(`git diff --name-only ${head} ${head}`)
+  })
+  test.each(['source', 'installed', 'pinned', 'unknown'])(
+    'mode %s needs durable evidence',
+    async (mode) => {
+      const { e, status } = fixture()
+      status.upgrades = JSON.parse(
+        JSON.stringify({
+          runs:
+            mode === 'unknown'
+              ? {}
+              : { 'run-1': { resolved: { payload: { target: { mode } } }, outstanding: {} } },
+          holds: {},
+          lineages: {},
+          rollbackIds: [],
+        }),
+      )
+      expect(await inspect(e)).toContain(`Upgrade mode: ${mode}`)
+    },
+  )
+  test.each([null, 'unknown'])(
+    'missing runtime commit %s never uses launch SHA',
+    async (commit) => {
+      const { e, status } = fixture()
+      if (commit === null) status.dispatcher.holder!.runtime = null
+      else status.dispatcher.holder!.runtime!.commit = commit
+      expect(await inspect(e)).toContain('Comparison: unknown')
+    },
+  )
+  test.each(['runtime', 'upgrade'])('%s mutation requests retry', async (kind) => {
+    const { e, status } = fixture()
+    let reads = 0
+    e.status = async () => {
+      if (++reads > 1) {
+        if (kind === 'runtime') status.dispatcher.holder!.runtime!.commit = head
+        else status.upgrades = { runs: {}, holds: {}, lineages: {}, rollbackIds: [] }
+      }
+      return status
+    }
+    expect(await inspect(e)).toContain('unstable snapshot; retry')
+  })
+  test.each(['pending', 'draining', 'completed'])(
+    'handoff %s and rollback history',
+    async (phase) => {
+      const { e, status } = fixture()
+      const runtime = status.dispatcher.holder!.runtime
+      const payload = {
+        from: runtime,
+        to: { ...runtime, commit: head },
+        successor: 'run-2',
+        target: { key: 'target', mode: 'source' },
+      }
+      status.upgrades = JSON.parse(
+        JSON.stringify({
+          runs: {
+            predecessor: {
+              request: { payload },
+              handoff: { payload },
+              outstanding: { build: 'instance' },
+              deadline: 'tomorrow',
+              ...(phase !== 'pending' ? { takeover: { payload } } : {}),
+              ...(phase === 'completed' ? { completed: { payload } } : {}),
+            },
+          },
+          holds: {},
+          lineages: {},
+          rollbackIds: [],
+          lastRollback: {
+            payload: {
+              failed: runtime,
+              restored: runtime,
+              reason: 'crashed',
+              target: { key: 'held-target' },
+            },
+          },
+        }),
+      )
+      if (phase !== 'pending') status.dispatcher.holder!.run = 'run-2'
+      let output = await inspect(e)
+      if (phase !== 'pending') expect(output).toContain('Upgrade mode: source')
+      expect(output).toContain(
+        phase === 'completed' ? 'Completed handoff (history)' : 'Active handoff',
+      )
+      expect(output).toContain(phase === 'pending' ? 'awaiting takeover' : 'taken over')
+      expect(output).toContain('draining build (instance); deadline tomorrow')
+      expect(output).toContain('Last rollback (history)')
+      expect(output).toContain('Active rollback hold: none')
+      status.rollbackHold = status.upgrades!.lastRollback
+      output = await inspect(e)
+      expect(output).toContain('Active rollback hold: held-target')
+    },
+  )
+  test('failed preparation is reported', async () => {
+    const { e, status } = fixture()
+    status.upgrades = JSON.parse(
+      ' {"runs":{"run-1":{"failure":{"payload":{"reason":"preflight failed"}},"outstanding":{}}},"holds":{},"lineages":{},"rollbackIds":[]}',
+    )
+    expect(await inspect(e)).toContain('Upgrade failure run-1: preflight failed')
   })
   test('launcher never loads dispatch after failed preparation', async () => {
     let loaded = false
@@ -212,7 +332,16 @@ describe('dispatcher revision evidence', () => {
         e.status = async () => ({
           dispatcher: {
             state: 'held',
-            holder: { run: 'fixture', pid: child.pid, host: saved.host },
+            holder: {
+              run: 'fixture',
+              pid: child.pid,
+              host: saved.host,
+              runtime: {
+                version: '1',
+                commit: original,
+                source: { kind: 'source', location: '/fixture' },
+              },
+            },
           },
         })
         e.git = (args) => git(...args)
