@@ -80,6 +80,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'rollback-wide',
+    'rollback-narrow',
     'handoff-wide',
     'handoff-narrow',
     'harvest-suspended-wide',
@@ -129,7 +131,13 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id.startsWith('handoff-')) {
+    if (frame.id.startsWith('rollback-')) {
+      expect(frame.text.replace(/\s+/g, ' ')).toContain(
+        'rollback: failed 1.1.0 bbbbbbbbbbbb; restored 1.0.0 aaaaaaaaaaaa; held 1.1.0 bbbbbbbbbbbb; at 2026-07-15T12:10:00.000Z',
+      )
+      expect(frame.model.rollback?.correlation).toBe('capture-rollback')
+      expect(frame.model.builds.every((row) => row.status === 'running')).toBe(true)
+    } else if (frame.id.startsWith('handoff-')) {
       expect(frame.text).toContain('handoff 1.0.0 aaaaaaaaaaaa to 1.1.0 bbbbbbbbbbbb; mode drain;')
       expect(frame.text).toContain('2026-07-15T12:15:00.000Z')
       expect(frame.text).toContain('(draining)')
@@ -227,6 +235,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id !== 'website-hero' &&
       !frame.id.startsWith('harvest-suspended-') &&
       !frame.id.startsWith('handoff-') &&
+      !frame.id.startsWith('rollback-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-')
     ) {

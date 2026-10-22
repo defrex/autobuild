@@ -34,6 +34,7 @@ export function elapsedMilliseconds(
 }
 
 export interface DashboardParityProjection {
+  rollback?: DashboardModel['rollback']
   handoffs?: DashboardModel['handoffs']
   builds: Array<{
     identity: string
@@ -69,6 +70,7 @@ export function projectWebParity(model: DashboardModel): DashboardParityProjecti
       ...(step.reason !== undefined ? { reason: step.reason } : {}),
     }))
   return {
+    ...(model.rollback ? { rollback: model.rollback } : {}),
     ...(model.handoffs ? { handoffs: model.handoffs } : {}),
     builds: model.builds.map((build) => ({
       identity: build.slug,
