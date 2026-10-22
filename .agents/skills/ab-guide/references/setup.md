@@ -222,6 +222,18 @@ requires a published release.
 
 ### Guest distribution version selection and delivery
 
+Cached generations retain explicit archive provenance. A registry generation
+resolves its manifest version’s GitHub release asset on first guest use, validates
+version and digest, and atomically caches it separately from the host archive.
+Local launch requires no GitHub fetch. Isolated and hoisted Bun installations
+retain registry provenance through store-path or lock evidence. Source, Git and local package
+generations deliver their exact packed code. Missing or invalid release assets
+fail guest delivery and remain retryable, without falling back to packing the
+registry installation.
+Remote guests finish their phase before requesting relaunch; re-attachment
+refreshes the archive and marker before the next runner starts. They retain
+independent leases and never hold local retirement open.
+
 The guest's distribution version is selected by the archive source, and both
 sources agree with the running system by construction:
 
