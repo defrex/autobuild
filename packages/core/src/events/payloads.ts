@@ -552,7 +552,14 @@ export const eventPayloadSchemas = {
   }),
   /** Dispatcher-owned identity and provider lifecycle evidence. These facts do
    * not carry pipeline progress; they make disposable execution observable. */
+  'execution.relaunch-requested': z.strictObject({
+    instance: z.string().min(1),
+    correlation: z.string().min(1),
+    from: runtimeIdentitySchema,
+    to: runtimeIdentitySchema,
+  }),
   'execution.drain-authorized': z.strictObject({
+    targetRuntime: runtimeIdentitySchema.optional(),
     correlation: z.string().min(1),
     run: z.string().min(1),
     runtime: runtimeIdentitySchema,
@@ -577,7 +584,7 @@ export const eventPayloadSchemas = {
   'execution.ended': z.strictObject({
     instance: z.string().min(1),
     workspaceRef: z.string().min(1),
-    outcome: z.enum(['completed', 'stopped', 'lost']),
+    outcome: z.enum(['completed', 'stopped', 'lost', 'relaunch']),
     exitCode: z.number().int().nullable().optional(),
   }),
   'infrastructure.failed': z.strictObject({

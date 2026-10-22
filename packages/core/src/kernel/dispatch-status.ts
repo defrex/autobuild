@@ -123,7 +123,9 @@ export function reduceDispatchStatus(
         state.warningNotice = state.notice
         break
       case 'dispatcher.runner-settled':
-        if (event.payload.outcome === 'parked') {
+        if (event.payload.outcome === 'relaunch') {
+          state.notice = `build ${event.payload.slug} relaunching on the accepted runtime`
+        } else if (event.payload.outcome === 'parked') {
           state.notice = `build ${event.payload.slug} parked (${event.payload.status ?? 'unknown'})`
         } else if (event.payload.outcome === 'lease-held') {
           state.notice = `build ${event.payload.slug} already held by another runner — skipped`
@@ -163,7 +165,7 @@ export function reduceDispatchStatus(
 
 /** Bump when `DispatchStatus`'s shape or fold semantics change (it is its own
  * accumulator: `lastSeq` makes the fold skip already-seen events). */
-export const DISPATCH_STATUS_REDUCER_VERSION = 3
+export const DISPATCH_STATUS_REDUCER_VERSION = 4
 
 /** The incremental form of `reduceDispatchStatus` for one run. The run is a
  * parameter, so this is a factory. */

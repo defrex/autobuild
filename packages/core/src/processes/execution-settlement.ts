@@ -18,6 +18,7 @@ import type {
   BuildExecutionIdentity,
   ExecutionObservation,
 } from '../ports/workspace/build-execution'
+import { readBuildFacts } from '../store/reduced-reads'
 import { defineReducer } from '../kernel/incremental'
 import type { BuildStore } from '../store/types'
 
@@ -65,24 +66,29 @@ export function openExecution(events: AbEvent[]): OpenExecution | null {
   return openExecutionReducer.reduce(events)
 }
 
-export type ExecutionOutcome = 'open' | 'completed' | 'stopped' | 'lost' | 'none'
+export type ExecutionOutcome = 'open' | 'completed' | 'stopped' | 'lost' | 'relaunch' | 'none'
 
-export const LAST_EXECUTION_OUTCOME_REDUCER_VERSION = 1
+export const LAST_EXECUTION_OUTCOME_REDUCER_VERSION = 2
 
 /** The lifecycle state of the latest recorded execution: `open` (no matching
- * end yet), `completed`/`stopped`/`lost` (its recorded end), or `none`. */
+ * end yet), `completed`/`stopped`/`lost`/`relaunch` (its recorded end), or `none`. */
 export const lastExecutionOutcomeReducer = defineReducer<
-  { state: ExecutionOutcome },
+  { state: ExecutionOutcome; instance: string | null },
   AbEvent,
   ExecutionOutcome
 >({
   version: LAST_EXECUTION_OUTCOME_REDUCER_VERSION,
-  initial: () => ({ state: 'none' }),
+  initial: () => ({ state: 'none', instance: null }),
   fold(acc, events) {
     for (const event of events) {
       if (event.type === 'execution.started') {
         acc.state = 'open'
-      } else if (event.type === 'execution.ended' && acc.state === 'open') {
+        acc.instance = event.payload.instance
+      } else if (
+        event.type === 'execution.ended' &&
+        acc.state === 'open' &&
+        acc.instance === event.payload.instance
+      ) {
         acc.state = event.payload.outcome
       }
     }
@@ -173,6 +179,9 @@ export async function settleOpenExecution(
   }
   if (observation.state === 'running') return 'running'
 
+  const request = (await readBuildFacts(deps.store, slug)).value.state.drainingExecutions?.[
+    open.instance
+  ]?.relaunch
   const ended: EventWrite<'execution.ended'> =
     observation.state === 'ended'
       ? {
@@ -181,7 +190,7 @@ export async function settleOpenExecution(
           payload: {
             instance: open.instance,
             workspaceRef: open.workspaceRef,
-            outcome: 'completed',
+            outcome: observation.exitCode === 0 && request ? 'relaunch' : 'completed',
             exitCode: observation.exitCode ?? null,
           },
         }
