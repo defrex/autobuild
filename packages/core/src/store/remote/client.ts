@@ -1,3 +1,9 @@
+import {
+  clientIdentityError,
+  classifyClient,
+  releaseVersion,
+  supportedClientRangeSchema,
+} from './compatibility'
 import { stampCompatibility, buildEventPolicy, repositoryEventPolicy } from '../../events/policy'
 import { READ_CATALOG_IDENTITY, projectStoredEvents } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER } from './version'
@@ -194,6 +200,43 @@ export class RemoteBuildStore implements BuildStore {
     this.identity = {
       autobuildVersion: opts.identity?.autobuildVersion ?? AUTOBUILD_VERSION,
       protocolVersion: opts.identity?.protocolVersion ?? REMOTE_STORE_PROTOCOL_VERSION,
+    }
+  }
+
+  async inspectDispatcherOverlap(signal: AbortSignal) {
+    const response = await this.raw('GET', '/health', undefined, signal)
+    if (response.status === 404 || response.status === 405)
+      return { compatible: false, evidence: 'hosted admission metadata unavailable' }
+    if (!response.ok) throw await this.toError(response)
+    const health = (await response.json().catch(() => null)) as {
+      autobuildVersion?: string
+      protocolVersion?: string
+      supportedClientRange?: unknown
+    } | null
+    const range = supportedClientRangeSchema.safeParse(health?.supportedClientRange)
+    if (
+      !range.success ||
+      !health?.autobuildVersion ||
+      !releaseVersion(health.autobuildVersion) ||
+      !health.protocolVersion
+    )
+      return { compatible: false, evidence: 'hosted admission metadata unavailable' }
+    if (classifyClient(this.identity.autobuildVersion, range.data) !== 'supported')
+      return {
+        compatible: false,
+        evidence: `hosted service rejects client ${this.identity.autobuildVersion}; supported >=${range.data.minVersion} <${range.data.maxVersionExclusive}`,
+      }
+    const error = clientIdentityError(
+      this.identity.autobuildVersion,
+      this.identity.protocolVersion,
+      health.autobuildVersion,
+      health.protocolVersion,
+    )
+    return {
+      compatible: !error,
+      evidence:
+        error ??
+        `hosted service ${health.autobuildVersion} admits client ${this.identity.autobuildVersion} protocol ${this.identity.protocolVersion}`,
     }
   }
 

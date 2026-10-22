@@ -11756,3 +11756,315 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
     await fx.cleanup()
   }
 })
+
+for (const scenario of [
+  'natural',
+  'deadline',
+  'committed-error',
+  'read-error',
+  'uncommitted-read-error',
+  'authorization-error',
+  'rejected',
+] as const)
+  test(`handoff acceptance preserves execution fencing (${scenario})`, async () => {
+    const deadline = scenario === 'deadline'
+    const harvested = deferred()
+    const agents = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        expect(opts.signal?.aborted).toBe(false)
+        harvested.resolve()
+        await new Promise<void>((resolve) =>
+          opts.signal!.addEventListener('abort', () => resolve(), { once: true }),
+        )
+        return defaultTurnResult('interrupted')
+      },
+    })
+    const clock = manualClock()
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nupgradeDrainSeconds = 1'),
+      clock,
+    )
+    const completion = deferred(),
+      ready = deferred(),
+      request = deferred(),
+      yielded = deferred()
+    const abort = new AbortController()
+    const slug = 'draining-build'
+    let starts = 0,
+      stops = 0
+    const tickCalls: string[] = [],
+      claimCalls: string[] = []
+    const begin = fx.store.beginRepoTick.bind(fx.store),
+      claim = fx.store.claimRepoLease.bind(fx.store)
+    fx.store.beginRepoTick = (repo, holder) => {
+      tickCalls.push(holder)
+      return begin(repo, holder)
+    }
+    fx.store.claimRepoLease = (repo, holder, ttl) => {
+      claimCalls.push(holder)
+      return claim(repo, holder, ttl)
+    }
+
+    let rejectRead = false
+    let readFailures = 0
+    let lostAcceptances = 0
+    let authorizationFailures = 0
+    const getReducerValue = fx.store.getReducerValue.bind(fx.store)
+    fx.store.getReducerValue = async (...args) => {
+      if (rejectRead && args[1].reducer === 'dispatchUpgrade') {
+        rejectRead = false
+        readFailures++
+        throw new Error('acceptance read unavailable')
+      }
+      return getReducerValue(...args)
+    }
+    const appendBuild = fx.store.append.bind(fx.store)
+    fx.store.append = async (...args) => {
+      if (
+        scenario === 'authorization-error' &&
+        args[1].type === 'execution.drain-authorized' &&
+        authorizationFailures++ === 0
+      )
+        throw new Error('authorization unavailable')
+      return appendBuild(...args)
+    }
+    const appendRepo = fx.store.appendRepo.bind(fx.store)
+    fx.store.appendRepo = async (...args) => {
+      if (args[1].type === 'dispatcher.handoff-started') {
+        if (scenario === 'rejected') {
+          await seedOpenHarvest(
+            fx,
+            'h_rejected_yield',
+            'obs-rejected-yield',
+            'resume after rejection',
+          )
+          throw new Error('acceptance rejected')
+        }
+        if (scenario === 'committed-error' || scenario === 'read-error') {
+          await appendRepo(...args)
+          rejectRead = scenario === 'read-error'
+          throw new Error('acceptance response lost')
+        }
+        // The first attempt never commits and its decision is unreadable;
+        // a later tick must retry acceptance rather than wedge or cut over.
+        if (scenario === 'uncommitted-read-error' && lostAcceptances++ === 0) {
+          rejectRead = true
+          throw new Error('acceptance unavailable')
+        }
+      }
+      return appendRepo(...args)
+    }
+    const root = (await import('../distribution')).distributionRoot()
+    const handoff = {
+      correlation: 'test-handoff',
+      run: 'predecessor',
+      lineage: 'test-launcher',
+      from: RUNTIME_IDENTITY,
+      to: { ...RUNTIME_IDENTITY, version: '2.0.0' },
+      root: '/cached/target',
+      cacheId: 'target',
+      target: { mode: 'installed' as const, key: 'target', source: '/installation' },
+    }
+    const release = fx.store.releaseRepoLease.bind(fx.store)
+    fx.store.releaseRepoLease = async (repo, holder) => {
+      await release(repo, holder)
+      if (holder === 'predecessor') yielded.resolve()
+    }
+    const execution: BuildExecution = {
+      async start(input) {
+        starts++
+        return {
+          supervision: 'local-parent',
+          identity: { provider: 'fake', workspaceRef: input.workspaceRef },
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          stop: async () => {
+            stops++
+            completion.resolve()
+            return { outcome: 'confirmed' }
+          },
+          detach: async () => {},
+        }
+      },
+    }
+    await fx.store.createBuild({ slug, repo: fx.origin, branch: `ab/${slug}` })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-drain', title: 'draining' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: 'ws-drain',
+        path: '/draining/workspace',
+        branch: `ab/${slug}`,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: 'spec', rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-drain', title: 'draining' },
+        },
+      }),
+    )
+    await fx.store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    let sleeps = 0
+    const running = abDispatch({
+      targetRepo: fx.checkout,
+      env: {
+        AB_DISPATCH_LAUNCH_CONTEXT: JSON.stringify({
+          version: 1,
+          overlapVersion: 1,
+          runtimeRoot: root,
+          checkout: fx.checkout,
+          originalInstall: root,
+          run: 'predecessor',
+          lineage: 'test-launcher',
+        }),
+      },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      plain: true,
+      signal: abort.signal,
+      sleep: async () => {
+        if (sleeps++ === 0) {
+          ready.resolve()
+          await request.promise
+        } else if (scenario === 'rejected') {
+          await harvested.promise
+          abort.abort()
+        }
+      },
+      wire: () => ({
+        ...fx.wire(),
+        buildExecution: execution,
+        runtimes: {
+          scripted: { runner: agents, servesModels: [] },
+          claude: { runner: agents, servesModels: [] },
+        },
+      }),
+    })
+    try {
+      await ready.promise
+      expect(starts).toBe(1)
+      const lease = (await fx.store.getBuild(slug))!.lease!
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.upgrade-detected',
+        payload: {
+          correlation: handoff.correlation,
+          run: handoff.run,
+          lineage: handoff.lineage,
+          from: handoff.from,
+          target: handoff.target,
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.target-prepared',
+        payload: handoff,
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.yield-requested',
+        payload: {
+          ...handoff,
+          successor: 'successor',
+          mode: 'drain',
+          evidence: 'test shared store',
+        },
+      })
+      request.resolve()
+      if (scenario === 'rejected') {
+        await running
+        const events = await fx.store.getRepoEvents(fx.origin)
+        expect(events.some((event) => event.type === 'dispatcher.upgrade-failed')).toBe(true)
+        expect(events.some((event) => event.type === 'dispatcher.handoff-started')).toBe(false)
+        expect(events.some((event) => event.type === 'harvest.session.suspended')).toBe(true)
+        return
+      }
+      await yielded.promise
+      if (scenario === 'read-error' || scenario === 'uncommitted-read-error')
+        expect(readFailures).toBe(1)
+      if (scenario === 'uncommitted-read-error') expect(lostAcceptances).toBe(2)
+      if (scenario === 'authorization-error') expect(authorizationFailures).toBe(2)
+      expect(
+        (await fx.store.getEvents(slug)).some(
+          (event) => event.type === 'execution.drain-authorized',
+        ),
+      ).toBe(true)
+      const oldTicks = tickCalls.filter((holder) => holder === 'predecessor').length
+      const oldClaims = claimCalls.filter((holder) => holder === 'predecessor').length
+      expect((await fx.store.getBuild(slug))!.lease?.holder).toBe(lease.holder)
+      expect(stops).toBe(0)
+      // A successor performs a real tick while the old execution is still held.
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: () => ({ ...fx.wire(), buildExecution: execution }),
+      })
+      expect(starts).toBe(1)
+      if (deadline) clock.advance(1_001)
+      else completion.resolve()
+      await running
+      expect(stops).toBe(deadline ? 1 : 0)
+      expect(tickCalls.filter((holder) => holder === 'predecessor')).toHaveLength(oldTicks)
+      expect(claimCalls.filter((holder) => holder === 'predecessor')).toHaveLength(oldClaims)
+      expect(tickCalls.some((holder) => holder !== 'predecessor')).toBe(true)
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const accepted = events.find((event) => event.type === 'dispatcher.handoff-started')!
+      expect(events.filter((event) => event.type === 'dispatcher.handoff-started')).toHaveLength(1)
+      if (scenario.endsWith('read-error') || scenario === 'authorization-error')
+        expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(true)
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'dispatcher.tick-started' &&
+            event.payload.run === 'predecessor' &&
+            event.seq > accepted.seq,
+        ),
+      ).toHaveLength(0)
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'dispatcher.tick-started' &&
+            event.payload.run !== 'predecessor' &&
+            event.seq > accepted.seq,
+        ),
+      ).toBe(true)
+      expect(events.some((event) => event.type === 'dispatcher.handoff-completed')).toBe(true)
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'dispatcher.upgrade-failed' &&
+            event.payload.correlation === handoff.correlation,
+        ),
+      ).toBe(false)
+    } finally {
+      abort.abort()
+      request.resolve()
+      completion.resolve()
+      await running
+      await fx.cleanup()
+    }
+  }, 15_000)

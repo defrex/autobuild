@@ -272,6 +272,13 @@ export interface SubscribeOptions {
 }
 
 export interface BuildStore {
+  /** Optional provider-owned evidence. Absent/unknown evidence requires
+   * cutover; journal write admission is checked separately before yield. */
+  inspectDispatcherOverlap?(signal: AbortSignal): Promise<{
+    compatible: boolean
+    evidence: string
+  }>
+
   /** Catalog used for event-derived batch answers, when known by this adapter. */
   readonly catalogIdentity?: string
   /** Reads cross a network boundary; presentation polling may use a relaxed cadence. */
