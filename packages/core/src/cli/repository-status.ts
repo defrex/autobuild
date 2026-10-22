@@ -199,7 +199,13 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const active = status.ticketSourceDegradation
   return [
     ...Object.entries(status.upgrades.runs).flatMap(([run, state]) => {
-      const event = state.completed ?? state.failure ?? state.handoff ?? state.detected
+      const event =
+        state.completed ??
+        state.failure ??
+        state.handoff ??
+        state.request ??
+        state.prepared ??
+        state.detected
       const resolved = state.resolved?.payload.target
       const lines = resolved
         ? [
@@ -208,8 +214,19 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
         : []
       if (!event) return lines
       const target = event.payload.target
+      const overlap =
+        state.handoff && state.request && !state.completed
+          ? [
+              `handoff ${run} (${state.handoff.payload.from.version}) → ${state.request.payload.successor} (${state.handoff.payload.to.version}): ${state.request.payload.mode}; ${state.takeover ? 'taken over' : 'awaiting takeover'}; draining ${
+                Object.entries(state.outstanding)
+                  .map(([slug, instance]) => `${slug} (${instance})`)
+                  .join(', ') || 'none'
+              }; deadline ${state.deadline ?? 'unknown'}`,
+            ]
+          : []
       return [
         ...lines,
+        ...overlap,
         `upgrade ${run}: ${event.type.slice('dispatcher.'.length)}; ${target.mode} ${target.version ?? target.source}; source ${target.source}${target.sha ? ` at ${target.sha}` : ''}${event.type === 'dispatcher.upgrade-failed' ? `; ${event.payload.reason}` : ''}`,
       ]
     }),

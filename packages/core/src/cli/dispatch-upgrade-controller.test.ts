@@ -305,3 +305,36 @@ test('source observations survive equality, failed inputs and reducer replay wit
   expect(replay().runs.source?.failure).toBeDefined()
   expect(replay().runs.source?.resolved?.payload.target.sha).toBe(target.sha)
 })
+
+test('a failed target retries only after selected-store compatibility evidence changes', async () => {
+  let changed = false,
+    calls = 0
+  const controller = new DispatchUpgradeController({
+    run: 'old',
+    lineage: 'launcher',
+    from,
+    failedKeys: ['two'],
+    enabled: () => true,
+    resolve: async () => ({ mode: 'installed', key: 'two', source: '/original', version: '2.0.0' }),
+    storeChangedSinceFailure: async () => {
+      const result = changed
+      changed = false
+      return result
+    },
+    prepare: async () => {
+      calls++
+      throw new Error('store still rejects target protocol')
+    },
+    append: async () => {},
+    cutover: async () => false,
+  })
+  await controller.check()
+  await controller.check()
+  expect(calls).toBe(0)
+  changed = true
+  await controller.check()
+  expect(calls).toBe(1)
+  await controller.check()
+  expect(calls).toBe(1)
+  await controller.stop()
+})

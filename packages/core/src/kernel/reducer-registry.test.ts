@@ -54,7 +54,84 @@ function corpora(): unknown[][] {
     root: '/cache',
     cacheId: 'id',
   }
+  const draining = { ...handoff, run: 'run-drain', correlation: 'drain' }
+  const drainCorpus = [
+    { type: 'dispatcher.target-prepared', payload: draining },
+    {
+      type: 'dispatcher.yield-requested',
+      payload: { ...draining, successor: 'next', mode: 'drain', evidence: 'same schema' },
+    },
+    {
+      type: 'dispatcher.handoff-started',
+      payload: {
+        ...draining,
+        successor: 'next',
+        mode: 'drain',
+        startedAt: '2026-10-21T00:00:00Z',
+        deadline: '2026-10-21T00:15:00Z',
+        builds: [{ slug: 'build', instance: 'execution' }],
+      },
+    },
+    { type: 'dispatcher.terminal-released', payload: draining },
+    { type: 'dispatcher.takeover', payload: { ...draining, successor: 'next' } },
+    {
+      type: 'dispatcher.drain-deadline',
+      payload: { ...draining, deadline: '2026-10-21T00:10:00Z' },
+    },
+    {
+      type: 'dispatcher.drain-settled',
+      payload: { ...draining, slug: 'build', instance: 'execution', outcome: 'suspended' },
+    },
+    {
+      type: 'dispatcher.handoff-completed',
+      payload: {
+        ...draining,
+        successor: 'next',
+        mode: 'drain',
+        startedAt: '2026-10-21T00:00:00Z',
+        endedAt: '2026-10-21T00:10:00Z',
+        drained: 0,
+        suspended: 1,
+      },
+    },
+  ].map((event, index) => ({ ...event, seq: index + 1, ts: '2026-10-21T00:00:00Z' }))
+  const buildDrain = [
+    {
+      type: 'execution.drain-authorized',
+      payload: {
+        correlation: 'drain',
+        run: 'run-drain',
+        runtime: identity.from,
+        instance: 'execution',
+      },
+    },
+    {
+      type: 'session.suspended',
+      payload: {
+        session: 'session',
+        phase: 'implement',
+        round: 1,
+        activeMs: 1,
+        cause: 'shutdown',
+        transcript: { kind: 'transcript', rev: 0 },
+      },
+    },
+    {
+      type: 'execution.ended',
+      payload: { instance: 'execution', workspaceRef: 'ws', outcome: 'completed' },
+    },
+    { type: 'execution.drain-settled', payload: { correlation: 'drain', instance: 'execution' } },
+  ].map((event, index) => ({
+    ...event,
+    build: 'build',
+    actor: { kind: event.type === 'session.suspended' ? 'kernel' : 'dispatcher' },
+    seq: index + 1,
+    ts: '2026-10-21T00:00:00Z',
+  }))
   return [
+    drainCorpus,
+    buildDrain.slice(0, 1),
+    buildDrain,
     [
       {
         type: 'tickets.migration-recorded',
@@ -265,11 +342,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 19,
+        "build": 20,
         "buildDelegation": 1,
         "buildDigest": 10,
-        "buildReadFacts": 58,
-        "buildStreamSeed": 29,
+        "buildReadFacts": 59,
+        "buildStreamSeed": 30,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 2,
@@ -277,7 +354,7 @@ describe('reducer registry', () => {
         "dispatchFrontend": 3,
         "dispatchSettings": 1,
         "dispatchStatus": 3,
-        "dispatchUpgrade": 2,
+        "dispatchUpgrade": 3,
         "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
         "executionNoProgress": 5,
@@ -308,7 +385,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 26,
+        "repositoryReadFacts": 27,
         "repositoryStateEvents": 5,
         "sandboxStates": 1,
         "session": 1,

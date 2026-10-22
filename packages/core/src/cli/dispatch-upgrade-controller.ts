@@ -61,6 +61,7 @@ export interface UpgradeControllerInput {
   failedKeys: string[]
   resolved?: DispatchUpgradeState['runs'][string]['resolved']
   currentKey?: string
+  storeChangedSinceFailure?(): Promise<boolean>
   runningBunTag?: string
   reservationOwner?: number
   enabled(): boolean
@@ -143,7 +144,11 @@ export class DispatchUpgradeController {
         })
         this.resolved = observation
       }
-      if (this.failed.has(target.key) || target.key === this.input.currentKey) return
+      if (this.failed.has(target.key)) {
+        if (!(await this.input.storeChangedSinceFailure?.())) return
+        this.failed.delete(target.key)
+      }
+      if (target.key === this.input.currentKey) return
       if (matchesRunningForge(target, this.input.from, this.input.runningBunTag)) return
       if (target.mode !== 'source' && target.version === this.input.from.version) return
       await this.input.append({

@@ -1201,6 +1201,7 @@ Optional. Every field receives its own default. All are positive integers except
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
+| `upgradeDrainSeconds` | `900` | positive integer | Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain. |
 | `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it. |
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
@@ -2110,28 +2111,58 @@ RFC, website or test change does not hand off; documentation included by the
 package's files rules does. Unrelated workspace lock records do not trigger an
 upgrade. Unsupported reachable dependency metadata raises attention.
 
-An exact changed target, including a downgrade, is prepared in the immutable
-runtime cache without updating the operator's installation. A successful cutover
-settles the open claim tick, suspends every local build session, waits for its
-stream and suspension writes, exits the old generation, then starts the successor.
-Native resume applies where eligible; other sessions record `session.resume-fallback`
-with a reason. Local harvest suspends on clean stop and cutover, closing its stream and
-recording partial transcript evidence before lease release. The next generation
-resumes eligible native sessions with fresh credentials, or records a reasoned
-fresh fallback. Suspension does not spend harvest recovery attempts; crashes do. Remote supervised runners retain detach/recovery behavior.
+A successor first validates configuration and the actual selected store without
+starting repository work or terminal input/output. Provider compatibility evidence
+chooses drain when sharing is safe and cutover otherwise. SQLite compares its
+untouched catalog with target requirements; HTTP uses the live service's client
+and protocol admission. Missing evidence chooses cutover. Successful durable
+protocol writes are also required: a service that admits the client but rejects
+a new yield fact fails preflight, leaving the predecessor active with target and
+reason in repository attention. Failed targets are not retried every tick; a change in selected-store compatibility
+evidence allows the normal target-check cadence to retry.
+
+Local harvest suspends durably before repository lease release on handoff or
+clean stop. The next generation resumes eligible native sessions with fresh
+logical credentials, or records a reasoned `harvest.session.resume-fallback`
+and starts fresh. Orderly suspension spends no recovery attempt; real crashes
+retain recovery accounting.
+
+The predecessor serializes acceptance with ticks and launch admission, joins
+repository-owned harvest and provisioning work, and records the exact local
+executions, start time and deadline. Its terminal frontend removes and joins
+input/render work before acknowledging terminal release. Only after that durable
+acknowledgement and a successful repository lease claim may the successor draw
+or consume input. Only the successor ticks, claims, runs janitor/harvest and
+launches runners. Execution leases remain with existing local runners; remote
+executions detach immediately.
+
+A draining predecessor supervises its captured local executions until they settle
+or `policy.upgradeDrainSeconds` (900 seconds by default) elapses. The deadline
+tracks accepted live policy changes relative to the original start. Remaining
+local sessions suspend through the normal durable native-resume path before
+process-group cleanup. Cutover uses this suspension path immediately and waits
+for predecessor stop before takeover. Retirement completion records drained and
+suspended counts separately from takeover. A successor reconstructs unfinished
+retirement from execution leases and durable build facts after predecessor death.
+An unrelated dispatcher taking the lease still causes ordinary supersession and
+teardown. Rollback and phase-boundary runner replacement remain
+outside this behavior.
 
 Repository status exposes per-run resolved target, handoff and failure details.
 `dispatcher.upgrade-target-resolved` records the first successful resolution and
 later changed observations, including equal-content advances. Its source mode,
 base and target SHA remain visible separately from the running commit and earlier
-handoff/failure facts. Repeated identical polls append no resolution facts. Upgrade
+handoff/failure facts. Repeated identical polls append no resolution facts.
+
+Repository status exposes both generations, mode, takeover, outstanding draining executions and deadline, plus per-run target and failure details. Upgrade
 failure is repository attention, naming the target and reason. Resolution/install
 failure leaves the running generation active and suppresses the same failed input
-until metadata changes or a fresh operator launch. Unrelated base advances do not
+until target or selected-store compatibility evidence changes or a fresh operator launch. Unrelated base advances do not
 retry failed installs. Operator stop always wins over replacement startup.
 
 Set `automatic = false` to cancel pending preparation and retain manual restart
-behavior. A launcher contract change also requires a manual restart. `--once`,
+behavior. A launcher contract change also requires a manual restart. A legacy v1 launcher
+without overlap supervision requires restart before another automatic adoption. `--once`,
 origin/hosted dispatch and direct development presentation modes do not auto-upgrade.
 `ab upgrade` still updates the pin/installation and merges skills locally, commits
 when eligible, and never pushes. Pinned dispatchers follow after that commit

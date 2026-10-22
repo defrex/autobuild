@@ -1,7 +1,11 @@
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
-import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
+import {
+  deferMixedVersion,
+  MixedVersionDeferral,
+  withDrainingExecution,
+} from '../kernel/mixed-version'
 import { hostname } from 'node:os'
 import { resumeAgent } from '../ports/runner/native-session'
 import type { AgentStartOpts } from '../ports/types'
@@ -830,6 +834,10 @@ export class BuildRunner {
   private boundaryResolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
+    this.deps = {
+      ...deps,
+      store: withDrainingExecution(deps.store, deps.instance, RUNTIME_IDENTITY),
+    }
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? BUILD_EXECUTION_LEASE_TTL_MS

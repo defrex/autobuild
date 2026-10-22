@@ -180,7 +180,15 @@ export interface AutoMergeProjection {
 
 export type ObservationRecord = EventPayload<'observation.recorded'>
 
+export interface DrainExecution {
+  authorization?: EventPayload<'execution.drain-authorized'>
+  correlation: string
+  ended?: true
+  suspended?: true
+}
+
 export interface BuildState {
+  drainingExecutions?: Record<string, DrainExecution>
   compatibility: CompatibilityState
   compatibilityDeferredBoundary?: number
   kind?: 'work' | 'node'
@@ -368,6 +376,8 @@ export function discardInFlight(state: Pick<BuildState, 'discardRequest'>): bool
  * trip through `JSON.stringify` — the foundation for incremental advancement
  * and cached state. */
 export interface BuildAcc {
+  endedExecutionInstances: Record<string, true>
+  drainingExecutions: Record<string, DrainExecution>
   compatibility: CompatibilityState
   compatibilityDeferredBoundary: number
   kind?: 'work' | 'node'
@@ -435,10 +445,12 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 19
+export const BUILD_REDUCER_VERSION = 20
 
 function initialBuildAcc(): BuildAcc {
   return {
+    endedExecutionInstances: {},
+    drainingExecutions: {},
     compatibility: initialCompatibility(),
     compatibilityDeferredBoundary: 0,
     attached: false,
@@ -484,9 +496,30 @@ function initialBuildAcc(): BuildAcc {
 function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   advanceCompatibility(acc.compatibility, events)
   events = projectEvents(events)
-  for (const event of events)
+  for (const event of events) {
     if (event.type === 'build.compatibility-deferred')
       acc.compatibilityDeferredBoundary = event.payload.boundary
+    if (event.type === 'execution.drain-authorized')
+      acc.drainingExecutions[event.payload.instance] ??= {
+        correlation: event.payload.correlation,
+        ...(acc.endedExecutionInstances[event.payload.instance]
+          ? { ended: true as const }
+          : { authorization: event.payload }),
+      }
+    if (event.type === 'session.suspended' && event.payload.cause === 'shutdown')
+      for (const entry of Object.values(acc.drainingExecutions))
+        if (entry.authorization && !entry.ended) entry.suspended = true
+    if (event.type === 'execution.ended') acc.endedExecutionInstances[event.payload.instance] = true
+    if (event.type === 'execution.ended' && acc.drainingExecutions[event.payload.instance]) {
+      const entry = acc.drainingExecutions[event.payload.instance]!
+      entry.ended = true
+      delete entry.authorization
+    }
+    if (event.type === 'execution.drain-settled') {
+      const entry = acc.drainingExecutions[event.payload.instance]
+      if (entry?.correlation === event.payload.correlation) delete entry.authorization
+    }
+  }
   let attached = acc.attached
   let pausedFlag = acc.pausedFlag
   let terminal = acc.terminal
@@ -1205,6 +1238,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     lastSeq: Math.max(lastEvent?.seq ?? 0, acc.compatibility.lastSeq),
     compatibility: structuredClone(acc.compatibility),
     compatibilityDeferredBoundary: acc.compatibilityDeferredBoundary,
+    ...(Object.keys(acc.drainingExecutions).length
+      ? { drainingExecutions: structuredClone(acc.drainingExecutions) }
+      : {}),
     pinnedAssets: acc.pinnedAssets,
     specRev: acc.specRev,
     restartSince: acc.restartSince,
