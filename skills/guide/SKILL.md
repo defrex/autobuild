@@ -250,9 +250,12 @@ The distinctions that change an administrator's answer:
   natively where eligible, with reasoned fresh fallback otherwise. Remote runners
   detach with leases and heartbeats intact. Their exact instances and guest runtimes
   are captured separately, authorize boundary relaunch even after local retirement,
-  and never delay predecessor exit. Re-attachment reinstalls the target archive.
-  Cached registry generations use their version’s validated GitHub release asset;
-  source generations deliver their exact packed code. Repository-owned harvest/provisioning work joins before lease release.
+  and never delay predecessor exit. Recovery reads only open-execution builds,
+  once per build per tick, so ended historical captures add no build reads.
+  Re-attachment reinstalls the target archive.
+  Cached registry generations resolve and cache their version’s validated GitHub
+  release asset on first guest use; local launch requires no GitHub fetch.
+  Source generations deliver their exact packed code. Repository-owned harvest/provisioning work joins before lease release.
   Durable takeover and retirement completion are separate; status exposes both
   runtimes, outstanding draining executions and deadline. The launcher keeps live
   runtimes reserved and joins all children on operator stop. `[upgrade] automatic =

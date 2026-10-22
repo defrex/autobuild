@@ -68,18 +68,32 @@ export async function authorizeRemoteHandoffs(
   store: BuildStore,
   repo: string,
   upgrades?: DispatchUpgradeState,
+  openSlugs?: ReadonlySet<string>,
 ): Promise<void> {
   const runs = Object.values((upgrades ?? (await readDispatchUpgrade(store, repo)).value).runs)
     .filter((run) => run.handoff)
     .sort((a, b) => b.handoff!.seq - a.handoff!.seq)
+  const live =
+    openSlugs ??
+    new Set(
+      [...(await store.getRepoBuildDigests(repo))]
+        .filter(([, digest]) => digest.executionOpen)
+        .map(([slug]) => slug),
+    )
+  const factsBySlug = new Map<string, Awaited<ReturnType<typeof readBuildFacts>>['value']>()
   const seen = new Set<string>()
   for (const run of runs) {
     const handoff = run.handoff!.payload
     for (const capture of handoff.remoteBuilds ?? []) {
+      if (!live.has(capture.slug)) continue
       const key = JSON.stringify([capture.slug, capture.instance])
       if (seen.has(key)) continue
       seen.add(key)
-      const facts = (await readBuildFacts(store, capture.slug)).value
+      let facts = factsBySlug.get(capture.slug)
+      if (!facts) {
+        facts = (await readBuildFacts(store, capture.slug)).value
+        factsBySlug.set(capture.slug, facts)
+      }
       if (facts.open?.instance !== capture.instance) continue
       const runtime = facts.runnerAttaches.findLast((a) => a.instance === capture.instance)?.runtime
       if (!runtime) continue // A guest may attach after its predecessor retires.

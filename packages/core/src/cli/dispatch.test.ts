@@ -11216,6 +11216,25 @@ for (const intake of [true, false]) {
     test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted})`, async () => {
       const clock = manualClock()
       const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.handoff-started',
+        payload: {
+          correlation: 'historical-remote',
+          run: 'historical-predecessor',
+          lineage: 'old-launcher',
+          from: RUNTIME_IDENTITY,
+          to: RUNTIME_IDENTITY,
+          root: '/cache',
+          cacheId: 'old',
+          target: { mode: 'installed', key: 'old', source: '/old' },
+          remoteBuilds: Array.from({ length: 100 }, (_, i) => ({
+            slug: `finished-${i}`,
+            instance: `old-${i}`,
+          })),
+        },
+      })
       const stop = new AbortController()
       const calls: string[] = []
       let measuring = false

@@ -228,11 +228,12 @@ alone never selects a snapshot. Completed distribution roots are immutable.
 The generation, kernel, later local runners and agent PATH `ab` all execute
 from that same root. Run/attach runtime identities name the cached directory.
 Source generations capture their guest archive from that exact snapshot.
-Registry generations preserve the normalized host archive and separately fetch
-their manifest version's published GitHub release asset for guests. Version and
-SHA256 validation precede cache completion; missing, corrupt or wrong-version
-assets fail preparation. Completed metadata retains explicit provenance and both
-digests; older entries without guest provenance are not silently reused.
+Registry generations preserve the normalized host archive and resolve their
+manifest version's published GitHub release asset on first guest use. Host launch
+is offline; version and SHA256 validation precede atomic guest-asset completion.
+Missing, corrupt or wrong-version assets fail guest delivery and remain retryable.
+Metadata retains explicit provenance and the host digest, adding the guest digest
+after resolution; older entries without provenance are not silently reused.
 
 The versioned v1 launch contract consists of argv, a consumed one-shot
 `AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
@@ -300,7 +301,9 @@ launches runners. Execution leases remain with existing local runners; remote
 executions detach immediately. Their exact instances and recorded guest runtimes
 are captured separately on `dispatcher.handoff-started.remoteBuilds`. This
 authorization work survives local retirement completion and late attachment;
-it never adds to local drain counts or delays predecessor exit. Guests retain
+it never adds to local drain counts or delays predecessor exit. Recovery reads
+only builds whose repository digest records an open execution, at most once per
+build per tick; historical captures of ended executions add no build reads. Guests retain
 their leases and heartbeats and request neutral relaunch after their current
 phase completes. The successor re-attaches with refreshed guest bytes.
 

@@ -429,12 +429,15 @@ dependencies offline under `.autobuild/runtime/`, then starts
 only filesystem/process helpers and never opens a Store. The generation's
 frontend, kernel, local runners and agent CLI use one completed immutable root;
 `dispatch-runtime-use.ts` protects current/previous/held/live entries during
-spawn and pruning. Cached guest archives are captured at installation. Source generations deliver
+spawn and pruning. Source guest archives are captured at installation. Source generations deliver
 the exact packed source archive; registry generations keep a separate,
-digest-validated GitHub release asset matching the cached manifest version.
-The normalized host archive retains its independent compiler boundary. A bounded
-release-resolution child keeps provider authentication and HTTP code outside the
-resident launcher’s eager filesystem/process import graph.
+digest-validated GitHub release asset matching the cached manifest version,
+resolved and atomically cached at first guest use. Local launch remains offline.
+Installation provenance uses Bun store/lock evidence across isolated and hoisted
+layouts, preserving source/forge markers before staging.
+The normalized host archive retains its independent compiler boundary. Guest
+archive delivery uses the authenticated provider transport after launcher startup,
+keeping HTTP code outside the resident launcher’s eager filesystem/process graph.
 `--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
 `dispatch-upgrade-target.ts` reads manifest and lock blobs from one authoritative
 base snapshot, or rereads the original install pathname when unpinned. Frozen
@@ -466,6 +469,8 @@ relaunch request and clean up. Confirmed teardown records a neutral relaunch
 outcome. The current owner's ordinary lease sweep resumes durable work promptly,
 including after an ownership gap. Remote captures authorize exact guest runtimes
 independently of local retirement, including late attachment after completion.
+The existing repository execution digests bound recovery and handoff capture reads
+to open executions; multiple historical captures share one read per live build.
 Guests detach without losing leases; re-attachment refreshes their archive before
 the next phase. Deadline suspension applies only to local runners. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
 after a predecessor dies. Cutover suspends immediately when provider evidence

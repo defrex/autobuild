@@ -109,10 +109,6 @@ test('real Bun lock and isolated install validate exact registry integrity, then
       target,
       signal,
       env,
-      fetchGuestRelease: async (version) => {
-        expect(version).toBe('2.0.0')
-        return bytes
-      },
     })
     expect(JSON.parse(await readFile(join(runtime.root, 'package.json'), 'utf8')).version).toBe(
       '2.0.0',

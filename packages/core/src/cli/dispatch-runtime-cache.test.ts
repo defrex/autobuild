@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import {
   prepareRuntime,
+  resolveCachedGuestArchive,
+  guestArchiveProvenance,
+  cachedRuntime,
   validateRuntime,
   RUNTIME_CONFIG,
   validateCoreConfigs,
@@ -422,40 +425,51 @@ test('cached and archived forge runtimes preserve abbreviated Bun provenance for
   }
 })
 
-test('registry guests use the exact version release asset, retain host archive and reject corrupt guest bytes', async () => {
+test('registry guest delivery is lazy, version-validated and reusable offline', async () => {
   const { source, checkout } = await fixture()
   const { packageDistribution } = await import('../distribution-packaging')
   const bytes = await packageDistribution(source)
-  const versions: string[] = []
-  const runtime = await prepareRuntime(source, checkout, undefined, {
-    provenance: 'registry',
-    fetchRelease: async (version) => {
-      versions.push(version)
-      return bytes
-    },
+  const runtime = await prepareRuntime(source, checkout, undefined, { provenance: 'registry' })
+  expect(runtime.guestArchive?.digest).toBeUndefined()
+  await validateRuntime(runtime) // Host launch needs no GitHub connectivity.
+  expect((await prepareRuntime(source, checkout, undefined, { provenance: 'registry' })).id).toBe(
+    runtime.id,
+  )
+  let calls = 0
+  const delivered = await resolveCachedGuestArchive(runtime, async (version) => {
+    calls++
+    expect(version).toBe('1.2.3')
+    return bytes
   })
-  expect(versions).toEqual(['1.2.3'])
-  expect(runtime.guestArchive?.provenance).toBe('registry')
-  expect(await Bun.file(join(dirname(runtime.root), 'guest-distribution.tgz')).bytes()).toEqual(
-    new Uint8Array(bytes),
-  )
-  expect(runtime.guestArchive?.digest).toBe(
-    new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
-  )
-  await validateRuntime(runtime)
+  expect([...delivered]).toEqual([...bytes])
+  expect([
+    ...(await resolveCachedGuestArchive(runtime, async () => {
+      throw new Error('offline')
+    })),
+  ]).toEqual([...bytes])
+  expect(calls).toBe(1)
   const sourceRuntime = await prepareRuntime(source, checkout)
   expect(sourceRuntime.id).not.toBe(runtime.id)
+  const sourceBytes = await resolveCachedGuestArchive(sourceRuntime, async () => {
+    throw new Error('source archive must be offline')
+  })
+  expect(new Bun.CryptoHasher('sha256').update(sourceBytes).digest('hex')).toBe(
+    sourceRuntime.archiveDigest,
+  )
   expect(sourceRuntime.guestArchive).toMatchObject({
     provenance: 'source',
     digest: sourceRuntime.archiveDigest,
   })
   await writeFile(join(dirname(runtime.root), 'guest-distribution.tgz'), 'corrupt')
-  await expect(validateRuntime(runtime)).rejects.toThrow('corrupt guest archive')
+  await expect(validateRuntime((await cachedRuntime(runtime.root))!)).rejects.toThrow(
+    'corrupt guest archive',
+  )
 })
 
-test('failed or wrong-version registry guest resolution never publishes a completed entry and can retry', async () => {
+test('failed or wrong-version lazy guest resolution keeps host usable and can retry', async () => {
   const { source, checkout } = await fixture()
   const { packageDistribution } = await import('../distribution-packaging')
+  const runtime = await prepareRuntime(source, checkout, undefined, { provenance: 'registry' })
   for (const fetchRelease of [
     async () => new Uint8Array(),
     async () => new Uint8Array([1, 2, 3]),
@@ -463,26 +477,51 @@ test('failed or wrong-version registry guest resolution never publishes a comple
       throw new Error('asset missing')
     },
   ]) {
-    await expect(
-      prepareRuntime(source, checkout, undefined, { provenance: 'registry', fetchRelease }),
-    ).rejects.toThrow()
+    await expect(resolveCachedGuestArchive(runtime, fetchRelease)).rejects.toThrow()
+    await validateRuntime(runtime)
   }
   const manifestPath = join(source, 'package.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   await writeFile(manifestPath, JSON.stringify({ ...manifest, version: '9.9.9' }))
   const wrong = await packageDistribution(source)
   await writeFile(manifestPath, JSON.stringify(manifest))
-  await expect(
-    prepareRuntime(source, checkout, undefined, {
-      provenance: 'registry',
-      fetchRelease: async () => wrong,
-    }),
-  ).rejects.toThrow('version contradicts')
-  const correct = await packageDistribution(source)
-  await validateRuntime(
-    await prepareRuntime(source, checkout, undefined, {
-      provenance: 'registry',
-      fetchRelease: async () => correct,
-    }),
+  await expect(resolveCachedGuestArchive(runtime, async () => wrong)).rejects.toThrow(
+    'version contradicts',
   )
+  const correct = await packageDistribution(source)
+  await resolveCachedGuestArchive(runtime, async () => correct)
 })
+
+for (const layout of ['isolated', 'hoisted', 'local', 'local-copy', 'forge'] as const)
+  test(`guest provenance survives ${layout} installation layout`, async () => {
+    const owner = await temp()
+    const source =
+      layout === 'isolated'
+        ? join(owner, 'node_modules/.bun/@defrex+autobuild@1.2.3/node_modules/@defrex/autobuild')
+        : join(owner, 'node_modules/@defrex/autobuild')
+    await file(
+      join(source, 'package.json'),
+      JSON.stringify({ name: '@defrex/autobuild', version: '1.2.3' }),
+    )
+    if (layout === 'local') {
+      const local = join(owner, 'packages/autobuild')
+      await mkdir(local, { recursive: true })
+      await file(join(local, 'package.json'), '{"version":"1.2.3"}')
+      await rm(source, { recursive: true })
+      await symlink(local, source)
+    }
+    if (layout === 'local-copy')
+      await file(
+        join(owner, 'bun.lock'),
+        '{"packages":{"@defrex/autobuild":["@defrex/autobuild@file:packages/autobuild",{}]}}',
+      )
+    if (layout === 'forge') await file(join(source, '.bun-tag'), 'github-abcdef0')
+    if (layout === 'hoisted')
+      await file(
+        join(owner, 'bun.lock'),
+        '{"workspaces":{"packages/app":{"devDependencies":{"@defrex/autobuild":"1.2.3"}}},"packages":{"@defrex/autobuild":["@defrex/autobuild@1.2.3","https://registry.example/package.tgz",{},"sha512-example"]}}',
+      )
+    expect(await guestArchiveProvenance(source)).toBe(
+      layout === 'isolated' || layout === 'hoisted' ? 'registry' : 'source',
+    )
+  })

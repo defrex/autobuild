@@ -679,8 +679,8 @@ protocol version and SHA256 of the exact installed archive — is recorded in th
 no longer matches the identity the current system would deliver is refreshed
 by reinstalling the archive before reuse, so an upgraded dispatcher retrofits
 its persistent guests. Cached registry generations deliver their own manifest
-version’s validated GitHub release asset, separately from the normalized host
-archive; source generations deliver exact packed source bytes (see "Guest distribution version selection and delivery"
+version’s validated GitHub release asset, resolved on first guest use and cached
+separately from the normalized host archive. Local launches need no asset fetch; source generations deliver exact packed source bytes (see "Guest distribution version selection and delivery"
 in docs/setup.md for the release-and-upgrade delivery path and the hosted
 store's supported client window). Immediately
 before every build-child launch, the adapter verifies the

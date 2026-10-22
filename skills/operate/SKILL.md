@@ -406,8 +406,9 @@ for the exceptions above.
   spending failure budgets or raising attention. Remote guests detach independently
   of local retirement, continue heartbeats, and refresh their archive on re-attach.
   Their captured authorization survives predecessor exit and late attachment.
-  Cached registry runtimes deliver their own version’s validated release asset;
-  source runtimes deliver exact packed code. Remaining local sessions suspend at the policy deadline and resume natively where
+  Cached registry runtimes resolve and cache their own version’s validated release
+  asset on first guest use, so local launch requires no GitHub fetch.
+  Source runtimes deliver exact packed code. Remaining local sessions suspend at the policy deadline and resume natively where
   eligible, with reasoned fresh fallback otherwise. Harvest/provisioning work joins
   before repository authority transfers.
 

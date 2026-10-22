@@ -1,5 +1,4 @@
-import { fetchRuntimeGuestRelease } from './dispatch-runtime-release'
-import { existsSync, renameSync } from 'node:fs'
+import { existsSync, renameSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   reservePreparedRuntime,
   mutateRuntimeCache,
@@ -58,7 +57,7 @@ export interface CachedRuntime {
   guestArchive?: {
     provenance: 'source' | 'registry'
     file: 'distribution.tgz' | 'guest-distribution.tgz'
-    digest: string
+    digest?: string
   }
 }
 export async function cachedRuntime(root: string): Promise<CachedRuntime | undefined> {
@@ -237,32 +236,57 @@ export async function guestArchiveProvenance(source: string): Promise<'source' |
     await validateRuntime(cached)
     return cached.guestArchive!.provenance
   }
-  // Resolve provenance before staging removes checkout and package-manager evidence.
+  // Resolve installation evidence before staging removes package-manager paths.
+  source = await realpath(source)
   if (existsSync(join(source, '.git')) || existsSync(join(source, '.bun-tag'))) return 'source'
   const manifest = await readManifest(source)
-  const marker = `${join('node_modules', '@defrex', 'autobuild')}`
-  const index = source.lastIndexOf(marker)
-  if (index >= 0) {
-    const owner = await readManifest(source.slice(0, index))
-    const declared =
-      owner.dependencies?.['@defrex/autobuild'] ?? owner.devDependencies?.['@defrex/autobuild']
-    if (
-      typeof declared === 'string' &&
-      !/^(file:|link:|workspace:|github:|git|https?:)/.test(declared)
+  const segments = source.split('/')
+  if (!segments.includes('node_modules')) return 'source'
+  if (
+    segments.some(
+      (part, index) =>
+        segments[index - 1] === '.bun' &&
+        (part === `@defrex+autobuild@${manifest.version}` ||
+          part.startsWith(`@defrex+autobuild@${manifest.version}_`)),
     )
-      return 'registry'
+  )
+    return 'registry'
+  for (let owner = dirname(source); ; owner = dirname(owner)) {
+    try {
+      const lock = Bun.JSONC.parse(await readFile(join(owner, 'bun.lock'), 'utf8')) as {
+        packages?: Record<string, unknown>
+      }
+      const record = lock?.packages?.['@defrex/autobuild']
+      if (
+        Array.isArray(record) &&
+        typeof record[0] === 'string' &&
+        /^@defrex\/autobuild@(file:|link:|workspace:|github:|git|https?:)/.test(record[0])
+      )
+        return 'source'
+      if (
+        Array.isArray(record) &&
+        record[0] === `@defrex/autobuild@${manifest.version}` &&
+        typeof record[1] === 'string'
+      )
+        return 'registry'
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    if (dirname(owner) === owner) break
   }
-  if (typeof manifest.gitHead === 'string') return 'source'
-  return 'source'
+  throw new Error(
+    `cannot establish guest archive provenance for ${source}; retain the installation's Bun lock or forge tag`,
+  )
 }
 
 export async function validateRuntime(runtime: CachedRuntime): Promise<void> {
-  if (!(await cachedRuntime(runtime.root)) || (await treeDigest(runtime.root)) !== runtime.digest)
+  const recorded = await cachedRuntime(runtime.root)
+  if (!recorded || (await treeDigest(runtime.root)) !== runtime.digest)
     throw new Error(`corrupt completed runtime: ${runtime.root}`)
   const archive = await Bun.file(join(dirname(runtime.root), 'distribution.tgz')).arrayBuffer()
   if (new Bun.CryptoHasher('sha256').update(archive).digest('hex') !== runtime.archiveDigest)
     throw new Error(`corrupt runtime archive: ${runtime.root}`)
-  const guest = runtime.guestArchive
+  const guest = recorded.guestArchive
   if (
     !guest ||
     !['distribution.tgz', 'guest-distribution.tgz'].includes(guest.file) ||
@@ -273,6 +297,11 @@ export async function validateRuntime(runtime: CachedRuntime): Promise<void> {
     throw new Error(
       `runtime lacks guest archive provenance; prepare a fresh runtime: ${runtime.root}`,
     )
+  if (guest.digest === undefined) {
+    if (guest.provenance !== 'registry')
+      throw new Error(`source runtime lacks guest archive digest: ${runtime.root}`)
+    return // Registry assets are resolved only when a guest first needs them.
+  }
   const bytes = await readFile(join(dirname(runtime.root), guest.file))
   if (new Bun.CryptoHasher('sha256').update(bytes).digest('hex') !== guest.digest)
     throw new Error(`corrupt guest archive: ${runtime.root}`)
@@ -323,7 +352,6 @@ export async function prepareRuntime(
   publication?: { upgradeKey: string; commit: string },
   guest: {
     provenance: 'source' | 'registry'
-    fetchRelease?: (version: string) => Promise<Uint8Array>
   } = { provenance: 'source' },
 ): Promise<CachedRuntime> {
   source = await realpath(source)
@@ -416,37 +444,10 @@ export async function prepareRuntime(
     await validateRuntimeImports(extracted, checkout)
     await rm(extracted, { recursive: true })
     await writeFile(join(stage, 'distribution.tgz'), archive)
-    let guestArchive: NonNullable<CachedRuntime['guestArchive']> = {
-      provenance: 'source',
-      file: 'distribution.tgz',
-      digest: archiveDigest,
-    }
-    if (guest.provenance === 'registry') {
-      const bytes = await fetchGuestArchive(
-        String(manifest.version),
-        guest.fetchRelease ?? fetchRuntimeGuestRelease,
-      )
-      if (!bytes.byteLength) throw new Error('published guest archive is empty')
-      const path = join(stage, 'guest-distribution.tgz')
-      await writeFile(path, bytes)
-      const inspect = Bun.spawn(['tar', '-xOzf', path, 'package/package.json'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      })
-      const [text, error, code] = await Promise.all([
-        new Response(inspect.stdout).text(),
-        new Response(inspect.stderr).text(),
-        inspect.exited,
-      ])
-      if (code !== 0) throw new Error(`invalid published guest archive: ${error}`)
-      if (JSON.parse(text).version !== manifest.version)
-        throw new Error('published guest archive version contradicts runtime')
-      guestArchive = {
-        provenance: 'registry',
-        file: 'guest-distribution.tgz',
-        digest: new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
-      }
-    }
+    const guestArchive: NonNullable<CachedRuntime['guestArchive']> =
+      guest.provenance === 'registry'
+        ? { provenance: 'registry', file: 'guest-distribution.tgz' }
+        : { provenance: 'source', file: 'distribution.tgz', digest: archiveDigest }
     const runtime: CachedRuntime = {
       version: 1,
       id,
@@ -468,6 +469,53 @@ export async function prepareRuntime(
     const completed = await cachedRuntime(runtime.root)
     if (!completed) throw new Error(`runtime publication incomplete: ${destination}`)
     return completed
+  } finally {
+    await rm(stage, { recursive: true, force: true })
+  }
+}
+
+/** Complete guest delivery lazily; host launch and validation never fetch assets.
+ * Publication happens under the cache lock and updates only sibling metadata. */
+export async function resolveCachedGuestArchive(
+  runtime: CachedRuntime,
+  fetchRelease: (version: string) => Promise<Uint8Array>,
+): Promise<Uint8Array> {
+  let current = (await cachedRuntime(runtime.root))!
+  await validateRuntime(current)
+  if (current.guestArchive!.digest)
+    return new Uint8Array(await readFile(join(dirname(current.root), current.guestArchive!.file)))
+  const version = String((await readManifest(current.root)).version)
+  const bytes = await fetchGuestArchive(version, fetchRelease)
+  if (!bytes.byteLength) throw new Error('published guest archive is empty')
+  const entry = dirname(current.root)
+  const stage = await mkdtemp(join(entry, '.guest-'))
+  try {
+    const archive = join(stage, 'guest-distribution.tgz')
+    await writeFile(archive, bytes)
+    const inspect = Bun.spawn(['tar', '-xOzf', archive, 'package/package.json'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [text, error, code] = await Promise.all([
+      new Response(inspect.stdout).text(),
+      new Response(inspect.stderr).text(),
+      inspect.exited,
+    ])
+    if (code !== 0) throw new Error(`invalid published guest archive: ${error}`)
+    if (JSON.parse(text).version !== version)
+      throw new Error('published guest archive version contradicts runtime')
+    const digest = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
+    withCacheLock(dirname(entry), () => {
+      current = JSON.parse(readFileSync(join(entry, 'runtime.json'), 'utf8')) as CachedRuntime
+      if (current.guestArchive?.digest) return
+      renameSync(archive, join(entry, 'guest-distribution.tgz'))
+      current.guestArchive = { provenance: 'registry', file: 'guest-distribution.tgz', digest }
+      const metadata = join(stage, 'runtime.json')
+      writeFileSync(metadata, JSON.stringify(current))
+      renameSync(metadata, join(entry, 'runtime.json'))
+    })
+    await validateRuntime(current)
+    return new Uint8Array(await readFile(join(entry, current.guestArchive!.file)))
   } finally {
     await rm(stage, { recursive: true, force: true })
   }

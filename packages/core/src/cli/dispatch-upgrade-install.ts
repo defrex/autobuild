@@ -1,4 +1,3 @@
-import { fetchRuntimeGuestRelease } from './dispatch-runtime-release'
 import { captureRuntimeIdentity } from '../runtime-identity'
 import { withSourceExport, sourceContent } from './dispatch-upgrade-source'
 import { mkdtemp, readFile, readdir, rm, writeFile, copyFile } from 'node:fs/promises'
@@ -46,7 +45,6 @@ export async function prepareUpgrade(input: {
   checkout: string
   signal: AbortSignal
   env: Record<string, string | undefined>
-  fetchGuestRelease?: (version: string) => Promise<Uint8Array>
 }): Promise<CachedRuntime> {
   const { target, checkout, signal } = input
   signal.throwIfAborted()
@@ -178,9 +176,6 @@ export async function prepareUpgrade(input: {
       throw new Error('original installation changed during preparation')
     const runtime = await prepareRuntime(identity.root, checkout, undefined, {
       provenance: await guestArchiveProvenance(identity.root),
-      fetchRelease:
-        input.fetchGuestRelease ??
-        ((version) => fetchRuntimeGuestRelease(version, undefined, input.env)),
     })
     try {
       signal.throwIfAborted()
@@ -249,9 +244,6 @@ export async function prepareUpgrade(input: {
       throw new Error('installed version contradicts target')
     runtime = await prepareRuntime(installed.root, checkout, undefined, {
       provenance: String(target.record![0]).includes('@github:') ? 'source' : 'registry',
-      fetchRelease:
-        input.fetchGuestRelease ??
-        ((version) => fetchRuntimeGuestRelease(version, undefined, input.env)),
     })
     await validate(runtime)
     signal.throwIfAborted()

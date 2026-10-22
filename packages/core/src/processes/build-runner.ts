@@ -1288,7 +1288,7 @@ export class BuildRunner {
           const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
           // Inert controls cannot start more work under unsettled publication.
           // A local paused resolver needs resume acknowledged before this
-          // runner can settle its publication, including detached guests.
+          // runner can settle its publication; remote guests still park.
           const localResume =
             next.kind === 'acknowledge' &&
             next.command === 'resume' &&

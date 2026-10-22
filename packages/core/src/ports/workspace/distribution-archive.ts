@@ -1,10 +1,9 @@
-import { cachedRuntime, validateRuntime } from '../../cli/dispatch-runtime-cache'
-import { dirname } from 'node:path'
+import { cachedRuntime, resolveCachedGuestArchive } from '../../cli/dispatch-runtime-cache'
 /**
  * The Autobuild distribution archive installed into guests.
  *
  * Source and registry caches retain distinct guest archive provenance. Registry
- * caches install the version-validated GitHub release asset; source caches use
+ * caches lazily install the version-validated GitHub release asset; source caches use
  * their exact packed code. Outside the cache, the sources below apply.
  *
  * Two sources, one archive layout (`autobuild-<version>.tgz`, the same bytes
@@ -322,8 +321,9 @@ export async function defaultDistributionArchive(
 ): Promise<Uint8Array> {
   const runtime = await cachedRuntime(distributionRoot())
   if (runtime) {
-    await validateRuntime(runtime)
-    return new Uint8Array(await readFile(join(dirname(runtime.root), runtime.guestArchive!.file)))
+    return resolveCachedGuestArchive(runtime, (version) =>
+      fetchDistributionReleaseAsset(version, env, transport),
+    )
   }
   const prebuilt = await findPrebuiltDistributionArchive(env)
   if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))

@@ -215,3 +215,66 @@ test('remote authorization survives completed retirement, late attach and succes
   ).toHaveLength(2)
   await store.close()
 })
+
+test('historical remote captures add no build reads; repeated instances cost one read per open build', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  await store.createBuild({ slug: 'live', repo: 'repo' })
+  await store.append('live', {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'vercel-sandbox', workspaceRef: 'ws', instance: 'current' },
+  })
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/old' },
+  }
+  const upgrades: import('./dispatch-upgrade').DispatchUpgradeState = { runs: {} }
+  for (let i = 0; i < 100; i++) {
+    const run = `old-${i}`
+    upgrades.runs[run] = {
+      outstanding: {},
+      drained: 0,
+      suspended: 0,
+      handoff: {
+        repo: 'repo',
+        seq: i + 1,
+        ts: '2026-10-22T00:00:00Z',
+        actor: DISPATCHER,
+        type: 'dispatcher.handoff-started',
+        payload: {
+          correlation: run,
+          run,
+          lineage: 'launcher',
+          from: runtime,
+          to: { ...runtime, version: '2.0.0' },
+          root: '/new',
+          cacheId: 'new',
+          target: { mode: 'installed', key: 'new', source: '/install' },
+          remoteBuilds: [
+            { slug: `finished-${i}`, instance: run },
+            { slug: 'live', instance: run },
+          ],
+        },
+      },
+    }
+  }
+  let reads = 0
+  const read = store.getReducerValue.bind(store)
+  store.getReducerValue = async (...args) => {
+    if (args[0].kind === 'build' && args[1].reducer === 'buildReadFacts') reads++
+    return read(...args)
+  }
+  await authorizeRemoteHandoffs(store, 'repo', upgrades)
+  expect(reads).toBe(1)
+  await store.append('live', {
+    actor: DISPATCHER,
+    type: 'execution.ended',
+    payload: { instance: 'current', workspaceRef: 'ws', outcome: 'completed' },
+  })
+  reads = 0
+  await authorizeRemoteHandoffs(store, 'repo', upgrades)
+  expect(reads).toBe(0)
+  await store.close()
+})

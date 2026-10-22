@@ -43,6 +43,16 @@ async function gitExec(cmd: string[], options: { cwd?: string }) {
   ])
   return { exitCode, stdout, stderr }
 }
+/** Launcher seam: preserve installation evidence before freezing the runtime. */
+export async function prepareLaunchRuntime(
+  source: string,
+  originalInstall: string,
+  checkout: string,
+) {
+  return prepareRuntime(source, checkout, undefined, {
+    provenance: await guestArchiveProvenance(originalInstall),
+  })
+}
 export async function launchDispatcher(argv: string[]): Promise<number> {
   const checkout = await resolveMainRepo(process.cwd(), gitExec)
   // Keep the public installation pathname rather than its realpath into Bun's version store.
@@ -60,9 +70,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     const baseline = await sourceContent(distributionRoot(), repository)
     sourceLaunch = { repository, commit, baseline: baseline.key }
   }
-  let runtime = await prepareRuntime(distributionRoot(), checkout, undefined, {
-    provenance: await guestArchiveProvenance(originalInstall),
-  })
+  let runtime = await prepareLaunchRuntime(distributionRoot(), originalInstall, checkout)
   if (sourceLaunch) {
     const frozen = JSON.parse(await readFile(join(runtime.root, 'package.json'), 'utf8'))
     if (
