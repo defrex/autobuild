@@ -1,7 +1,10 @@
-import { cachedRuntime, validateRuntime } from '../../cli/dispatch-runtime-cache'
-import { dirname } from 'node:path'
+import { cachedRuntime, resolveCachedGuestArchive } from '../../cli/dispatch-runtime-cache'
 /**
  * The Autobuild distribution archive installed into guests.
+ *
+ * Source and registry caches retain distinct guest archive provenance. Registry
+ * caches lazily install the version-validated GitHub release asset; source caches use
+ * their exact packed code. Outside the cache, the sources below apply.
  *
  * Two sources, one archive layout (`autobuild-<version>.tgz`, the same bytes
  * `bun pm pack` produces and the guest bootstrap extracts):
@@ -42,19 +45,15 @@ import { join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
 import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
 import { registryBaseUrl, registryVersionUrl } from '../../registry'
-import { parseRepoCoordinates } from '../forge/github'
-import {
-  createGitHubFetchTransport,
-  GitHubApiError,
-  githubTokenFromEnv,
-  type GitHubRequest,
-} from '../forge/github-transport'
+import type { GitHubRequest } from '../forge/github-transport'
+import { fetchDistributionReleaseAsset, distributionAssetName } from './distribution-release'
+export {
+  fetchDistributionReleaseAsset,
+  distributionAssetName,
+  CANONICAL_REPOSITORY_URL,
+} from './distribution-release'
 import { packageDistribution } from '../../distribution-packaging'
 import { spawnExec } from './git-worktree'
-
-/** The canonical repository the release assets are published to. Shared with
- * `tools/release.ts`, which uploads them. */
-export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild'
 
 /** The shipped manifest `readDistributionPackage()` reads. A bundled
  * deployment must carry this exact file into its function bundle; the hosted
@@ -159,11 +158,6 @@ export async function readDistributionIdentityStamp(): Promise<string> {
   return distributionStampFor(archive)
 }
 
-/** The release asset a version's distribution ships under. */
-export function distributionAssetName(version: string): string {
-  return `autobuild-${version}.tgz`
-}
-
 /** Minimal fetch seam for registry reads: the global `fetch` in production. */
 export type RegistryFetch = (
   url: string,
@@ -234,54 +228,6 @@ async function fetchPublishedDistribution(
       )
     }
   }
-}
-
-/** Fetch the published `autobuild-<version>.tgz` release asset for the
- * running version. Uses the dispatcher's GitHub credentials when present
- * (required for a private canonical repository). */
-export async function fetchDistributionReleaseAsset(
-  version: string,
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  transport: GitHubRequest = createGitHubFetchTransport({
-    token: githubTokenFromEnv(env),
-  }),
-): Promise<Uint8Array> {
-  const coordinates = parseRepoCoordinates(CANONICAL_REPOSITORY_URL)
-  if (coordinates === null) {
-    throw new Error(`the canonical repository URL is not parseable: ${CANONICAL_REPOSITORY_URL}`)
-  }
-  const repo = `repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.name)}`
-  const tag = `v${version}`
-  const release = await transport('GET', `${repo}/releases/tags/${tag}`).catch((error: unknown) => {
-    if (error instanceof GitHubApiError && error.status === 404) {
-      throw new Error(
-        `Autobuild release ${tag} has no published GitHub release; origin-mode dispatch ` +
-          'installs the guest distribution from the release asset autobuild-' +
-          `${version}.tgz — cut a release with tools/release.ts first`,
-        { cause: error },
-      )
-    }
-    throw error
-  })
-  const assets = (
-    release.json as { assets?: { name?: unknown; browser_download_url?: unknown }[] } | undefined
-  )?.assets
-  const assetName = distributionAssetName(version)
-  const asset = (assets ?? []).find((candidate) => candidate.name === assetName)
-  if (asset === undefined || typeof asset.browser_download_url !== 'string') {
-    throw new Error(
-      `Autobuild release ${tag} does not carry the ${assetName} distribution asset; ` +
-        'origin-mode dispatch cannot install a guest distribution without it — ' +
-        'cut a release with tools/release.ts first',
-    )
-  }
-  const download = await transport('GET', asset.browser_download_url, {
-    headers: { Accept: 'application/octet-stream' },
-  })
-  if (download.bytes === undefined) {
-    throw new Error(`the ${assetName} release asset downloaded no bytes`)
-  }
-  return download.bytes
 }
 
 /** Directory, relative to a distribution root, where a deployment ships the
@@ -375,8 +321,9 @@ export async function defaultDistributionArchive(
 ): Promise<Uint8Array> {
   const runtime = await cachedRuntime(distributionRoot())
   if (runtime) {
-    await validateRuntime(runtime)
-    return new Uint8Array(await readFile(join(dirname(runtime.root), 'distribution.tgz')))
+    return resolveCachedGuestArchive(runtime, (version) =>
+      fetchDistributionReleaseAsset(version, env, transport),
+    )
   }
   const prebuilt = await findPrebuiltDistributionArchive(env)
   if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))

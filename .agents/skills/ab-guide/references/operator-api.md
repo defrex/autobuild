@@ -332,6 +332,8 @@ installation provenance, plus prepared cache identity. Completion names the succ
 and records completed retirement separately from takeover. During a handoff the
 projection includes both generations, chosen mode, outstanding draining builds
 and deadline. The successor owns repository work after terminal release and lease
-claim, while old local runners retain execution leases until settlement or deadline. `dispatcher.upgrade-failed` is immediate repository
+claim, while old local runners retain execution leases until settlement or deadline.
+Remote guests retain independent leases, finish their phase and request neutral
+relaunch; their separate handoff capture never holds retirement open. `dispatcher.upgrade-failed` is immediate repository
 attention; the current generation remains active and identical failed inputs are
 suppressed across native handoff until target or selected-store compatibility evidence changes or a fresh operator launch.
