@@ -11757,8 +11757,20 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
   }
 })
 
-for (const deadline of [false, true])
-  test(`accepted handoff preserves a live execution lease and stops old ticks (${deadline ? 'deadline' : 'natural completion'})`, async () => {
+for (const scenario of ['natural', 'deadline', 'committed-error', 'rejected'] as const)
+  test(`handoff acceptance preserves execution fencing (${scenario})`, async () => {
+    const deadline = scenario === 'deadline'
+    const harvested = deferred()
+    const agents = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        expect(opts.signal?.aborted).toBe(false)
+        harvested.resolve()
+        await new Promise<void>((resolve) =>
+          opts.signal!.addEventListener('abort', () => resolve(), { once: true }),
+        )
+        return defaultTurnResult('interrupted')
+      },
+    })
     const clock = manualClock()
     const fx = await makeFixture(
       [],
@@ -11787,6 +11799,25 @@ for (const deadline of [false, true])
       return claim(repo, holder, ttl)
     }
 
+    const appendRepo = fx.store.appendRepo.bind(fx.store)
+    fx.store.appendRepo = async (...args) => {
+      if (args[1].type === 'dispatcher.handoff-started') {
+        if (scenario === 'rejected') {
+          await seedOpenHarvest(
+            fx,
+            'h_rejected_yield',
+            'obs-rejected-yield',
+            'resume after rejection',
+          )
+          throw new Error('acceptance rejected')
+        }
+        if (scenario === 'committed-error') {
+          await appendRepo(...args)
+          throw new Error('acceptance response lost')
+        }
+      }
+      return appendRepo(...args)
+    }
     const root = (await import('../distribution')).distributionRoot()
     const handoff = {
       correlation: 'test-handoff',
@@ -11853,6 +11884,7 @@ for (const deadline of [false, true])
       }),
     )
     await fx.store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    let sleeps = 0
     const running = abDispatch({
       targetRepo: fx.checkout,
       env: {
@@ -11872,10 +11904,22 @@ for (const deadline of [false, true])
       plain: true,
       signal: abort.signal,
       sleep: async () => {
-        ready.resolve()
-        await request.promise
+        if (sleeps++ === 0) {
+          ready.resolve()
+          await request.promise
+        } else if (scenario === 'rejected') {
+          await harvested.promise
+          abort.abort()
+        }
       },
-      wire: () => ({ ...fx.wire(), buildExecution: execution }),
+      wire: () => ({
+        ...fx.wire(),
+        buildExecution: execution,
+        runtimes: {
+          scripted: { runner: agents, servesModels: [] },
+          claude: { runner: agents, servesModels: [] },
+        },
+      }),
     })
     try {
       await ready.promise
@@ -11908,6 +11952,14 @@ for (const deadline of [false, true])
         },
       })
       request.resolve()
+      if (scenario === 'rejected') {
+        await running
+        const events = await fx.store.getRepoEvents(fx.origin)
+        expect(events.some((event) => event.type === 'dispatcher.upgrade-failed')).toBe(true)
+        expect(events.some((event) => event.type === 'dispatcher.handoff-started')).toBe(false)
+        expect(events.some((event) => event.type === 'harvest.session.suspended')).toBe(true)
+        return
+      }
       await yielded.promise
       const oldTicks = tickCalls.filter((holder) => holder === 'predecessor').length
       const oldClaims = claimCalls.filter((holder) => holder === 'predecessor').length
@@ -11951,6 +12003,13 @@ for (const deadline of [false, true])
         ),
       ).toBe(true)
       expect(events.some((event) => event.type === 'dispatcher.handoff-completed')).toBe(true)
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'dispatcher.upgrade-failed' &&
+            event.payload.correlation === handoff.correlation,
+        ),
+      ).toBe(false)
     } finally {
       abort.abort()
       request.resolve()

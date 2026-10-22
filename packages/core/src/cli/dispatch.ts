@@ -621,7 +621,7 @@ class DispatchLoop {
   private readonly activeBuildRuns = new Map<string, ActiveBuildExecution>()
   private acceptingBuildLaunches = true
   /** Process-local fast path; the repository lease is the cross-process gate. */
-  private readonly localHarvestShutdown = new AbortController()
+  private localHarvestShutdown = new AbortController()
   private localHarvestFailure: unknown
   private harvestInFlight: Promise<void> | undefined
   /** Live hosted-harvest execution: the environment-supervised handle whose
@@ -4100,6 +4100,7 @@ class DispatchLoop {
       cacheId: request.cacheId,
       target: request.target,
     }
+    let acceptanceError: unknown
     try {
       await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
@@ -4114,42 +4115,49 @@ class DispatchLoop {
         },
       })
     } catch (error) {
-      this.cutoverRequested = false
-      this.acceptingBuildLaunches = true
-      await this.repoView.appendRepo(this.repoIdentity, {
-        actor: DISPATCHER,
-        type: 'dispatcher.upgrade-failed',
-        payload: {
-          correlation: handoff.correlation,
-          run: handoff.run,
-          lineage: handoff.lineage,
-          from: handoff.from,
-          target: handoff.target,
-          reason: createReadinessRedactor(this.opts.env)(
-            error instanceof Error ? error.message : 'handoff preparation rejected',
-          ),
-        },
-      })
-      return false
+      acceptanceError = error
     }
 
+    // An append can commit before its response is lost. Only durable state
+    // decides whether repository authority must transfer. If this read fails,
+    // keep admission closed and let ordered shutdown/recovery fence authority.
     const accepted = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
       this.runId
     ]?.handoff
     if (accepted?.payload.correlation !== handoff.correlation) {
+      // The joined local workflow is suspended, but subsequent ticks must be
+      // able to resume it with a fresh shutdown signal after rejected yield.
+      this.localHarvestShutdown = new AbortController()
       this.cutoverRequested = false
       this.acceptingBuildLaunches = true
+      if (acceptanceError !== undefined)
+        await this.repoView.appendRepo(this.repoIdentity, {
+          actor: DISPATCHER,
+          type: 'dispatcher.upgrade-failed',
+          payload: {
+            correlation: handoff.correlation,
+            run: handoff.run,
+            lineage: handoff.lineage,
+            from: handoff.from,
+            target: handoff.target,
+            reason: createReadinessRedactor(this.opts.env)(
+              acceptanceError instanceof Error
+                ? acceptanceError.message
+                : 'handoff preparation rejected',
+            ),
+          },
+        })
       return false
     }
     this.retirement = {
       handoff,
-      successor: request.successor,
-      mode: request.mode,
-      startedAt,
-      deadline,
-      builds,
+      successor: accepted.payload.successor!,
+      mode: accepted.payload.mode!,
+      startedAt: accepted.payload.startedAt!,
+      deadline: accepted.payload.deadline!,
+      builds: accepted.payload.builds!,
     }
-    for (const build of builds)
+    for (const build of this.retirement.builds)
       await this.repoView.append(build.slug, {
         actor: DISPATCHER,
         type: 'execution.drain-authorized',
