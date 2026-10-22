@@ -690,6 +690,49 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('accepted targets and relaunch requests survive validated reductions and neutral settlement', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'relaunch-contract'
+          await store.createBuild(sampleBuildInput(slug))
+          await store.append(slug, buildCreatedWrite())
+          const runtime = {
+            version: '1',
+            commit: 'unknown',
+            source: { kind: 'package' as const, location: '/old' },
+          }
+          const targetRuntime = { ...runtime, source: { ...runtime.source, location: '/new' } }
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'execution.started',
+            payload: { provider: 'local', workspaceRef: 'w', instance: 'i' },
+          })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'execution.drain-authorized',
+            payload: { instance: 'i', correlation: 'h', run: 'old', runtime, targetRuntime },
+          })
+          const request = { instance: 'i', correlation: 'h', from: runtime, to: targetRuntime }
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'execution.relaunch-requested',
+            payload: request,
+          })
+          expect(
+            (await readBuildFacts(store, slug)).value.state.drainingExecutions?.i?.relaunch,
+          ).toEqual(request)
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'execution.ended',
+            payload: { instance: 'i', workspaceRef: 'w', outcome: 'relaunch', exitCode: 0 },
+          })
+          const facts = (await readBuildFacts(store, slug)).value
+          expect(facts.lastExecution).toBe('relaunch')
+          expect(facts.executionNoProgress.count).toBe(0)
+          expect(facts.state.drainingExecutions?.i?.relaunch).toEqual(request)
+          expect(facts.state.drainingExecutions?.i?.authorization).toBeUndefined()
+        })
+      })
+
       test('executionOpen and reclaimPending follow the openExecution and pendingPrAttachmentReclaims rules', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/dg-work'

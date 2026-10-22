@@ -36,9 +36,17 @@ function referenceOpenExecution(events: readonly AbEvent[]) {
 
 function referenceOutcome(events: readonly AbEvent[]) {
   let state: string = 'none'
+  let instance: string | undefined
   for (const event of events) {
-    if (event.type === 'execution.started') state = 'open'
-    else if (event.type === 'execution.ended' && state === 'open') state = event.payload.outcome
+    if (event.type === 'execution.started') {
+      state = 'open'
+      instance = event.payload.instance
+    } else if (
+      event.type === 'execution.ended' &&
+      state === 'open' &&
+      event.payload.instance === instance
+    )
+      state = event.payload.outcome
   }
   return state
 }

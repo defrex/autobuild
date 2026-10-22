@@ -66,6 +66,7 @@ export const buildEventPolicy = {
   'workspace.provisioned': 'decisive',
   'workspace.provision-started': 'decisive',
   'workspace.released': 'decisive',
+  'execution.relaunch-requested': 'decisive',
   'execution.drain-authorized': 'decisive',
   'execution.drain-settled': 'decisive',
   'execution.started': 'decisive',
