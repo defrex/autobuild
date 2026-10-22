@@ -5733,6 +5733,33 @@ describe('Dispatcher lease sweep', () => {
     expect(h.launches).toEqual([])
   })
 
+  test('a confirmed relaunch bypasses absent-lease grace, while a held execution still excludes launch', async () => {
+    const h = harness({
+      opts: { leaseTtlMs: 60_000 },
+      onLaunch: async (slug, store) => {
+        await store.claimLease(slug, 'successor', 60_000)
+      },
+    })
+    const slug = await seedBuild(h)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'local', workspaceRef: 'workspace', instance: 'old' },
+    })
+    await h.store.claimLease(slug, 'old', 60_000)
+    expect((await h.dispatcher.tick()).swept).toBe(0)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'old', workspaceRef: 'workspace', outcome: 'relaunch', exitCode: 0 },
+    })
+    await h.store.releaseLease(slug, 'old')
+    expect((await h.dispatcher.tick()).swept).toBe(1)
+    expect(h.launches).toEqual([slug])
+    await h.dispatcher.tick()
+    expect(h.launches).toEqual([slug])
+  })
+
   test('absent lease: swept only after the leaseTtlMs grace', async () => {
     const h = harness({ opts: { leaseTtlMs: 60_000 } })
     const slug = await seedBuild(h, { attached: false }) // queued, never claimed

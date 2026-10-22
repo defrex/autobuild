@@ -180,6 +180,8 @@ export interface AutoMergeProjection {
 export type ObservationRecord = EventPayload<'observation.recorded'>
 
 export interface DrainExecution {
+  correlations?: string[]
+  relaunch?: EventPayload<'execution.relaunch-requested'>
   authorization?: EventPayload<'execution.drain-authorized'>
   correlation: string
   ended?: true
@@ -440,7 +442,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 18
+export const BUILD_REDUCER_VERSION = 19
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -494,13 +496,30 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   for (const event of events) {
     if (event.type === 'build.compatibility-deferred')
       acc.compatibilityDeferredBoundary = event.payload.boundary
-    if (event.type === 'execution.drain-authorized')
-      acc.drainingExecutions[event.payload.instance] ??= {
+    if (event.type === 'execution.drain-authorized') {
+      const previous = acc.drainingExecutions[event.payload.instance]
+      if (
+        previous?.correlation === event.payload.correlation ||
+        previous?.correlations?.includes(event.payload.correlation)
+      )
+        continue
+      acc.drainingExecutions[event.payload.instance] = {
+        ...previous,
+        correlations: [
+          ...(previous?.correlations ?? []),
+          ...(previous ? [previous.correlation] : []),
+        ],
         correlation: event.payload.correlation,
         ...(acc.endedExecutionInstances[event.payload.instance]
           ? { ended: true as const }
           : { authorization: event.payload }),
       }
+    }
+    if (event.type === 'execution.relaunch-requested') {
+      const entry = acc.drainingExecutions[event.payload.instance]
+      if (entry?.authorization?.correlation === event.payload.correlation && !entry.ended)
+        entry.relaunch = event.payload
+    }
     if (event.type === 'session.suspended' && event.payload.cause === 'shutdown')
       for (const entry of Object.values(acc.drainingExecutions))
         if (entry.authorization && !entry.ended) entry.suspended = true

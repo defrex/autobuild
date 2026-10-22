@@ -238,7 +238,12 @@ The distinctions that change an administrator's answer:
   accepted or revived by detection; a newly prepared attempt must pass preflight.
   Compatible generations drain: the predecessor releases terminal
   input/rendering and repository authority, then supervises only captured local
-  executions while the successor owns ticks and launches. Unknown/incompatible
+  executions while the successor owns ticks and launches. Local runners finish
+  their current phase, compare their immutable attach runtime with the accepted
+  target using existing boundary facts, and durably request relaunch on mismatch.
+  Confirmed teardown has the neutral `relaunch` outcome; the current repository
+  owner resumes from durable state on its runtime, even after an ownership gap.
+  Equal or absent targets preserve normal execution. Unknown/incompatible
   provider evidence selects immediate-suspension cutover. Rejected protocol writes
   fail preflight and preserve the predecessor. The hot `policy.upgradeDrainSeconds`
   defaults to 900; remaining local sessions suspend at that deadline and resume
@@ -666,7 +671,9 @@ Classified session deferrals consume no phase failures. Unsupported decisive
 facts retain the mixed-version wait gate and durable compatibility diagnostic.
 During an accepted drain, an unsettled build-log authorization suppresses restart
 attention only for the exact predecessor runtime and execution instance. The old
-runner still exits for relaunch; a later execution never inherits authorization.
+runner records relaunch intent when the accepted target is known and exits
+without crossing the decisive-fact fence; a later execution never inherits
+authorization.
 When the scoped `ab context` initial own-build read fails, the CLI best-effort
 writes `session.build-read-failed` with exact session, phase, round, operation
 `context`, reason `own-build-read`, and diagnostic. A valid terminal from that
@@ -896,7 +903,8 @@ progress. Execution start/end, runner attachment and workspace lifecycle
 bookkeeping do not count as progress. Pipeline, session, spec, publication/PR,
 observation and acknowledged operator facts reset the streak; infrastructure,
 budget and provider failures do not consume the allowance and retain their own
-retry limits. Before a fourth actionable launch, the dispatcher raises one
+retry limits. Phase-boundary relaunch outcomes consume no allowance or failure
+budget and raise no attention. Before a fourth actionable launch, the dispatcher raises one
 setup-targeted `execution-no-progress` policy escalation naming the count and
 the next action it expected the runner to take. Waiting, paused and terminal
 builds are left parked, and pending operator commands remain executable.
@@ -1248,7 +1256,9 @@ repository's vendored-skill-only merge does not change the installed runtime.
 The successor passes config/store and
 protocol-write preflight before yield; compatible generations drain, otherwise
 cutover suspends immediately. Existing runners keep execution leases while the
-successor owns repository work. Remaining local sessions suspend at the hot drain
+successor owns repository work. At completed phase boundaries local runners
+request relaunch onto the accepted target; the current owner resumes them from
+durable state. Remaining local sessions suspend at the hot drain
 deadline and resume through their durable session records.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
