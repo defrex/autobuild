@@ -613,7 +613,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
     }
   }, 240_000)
 
-for (const scenario of ['immediate', 'phases', 'legacy'])
+for (const scenario of ['immediate', 'phases', 'legacy', 'expired-reader'])
   test(`real launcher supervises post-takeover crashes (${scenario})`, async () => {
     const phaseWork = scenario === 'phases'
     const root = await mkdtemp(join(tmpdir(), 'ab-rollback-'))
@@ -634,6 +634,7 @@ for (const scenario of ['immediate', 'phases', 'legacy'])
     const broken = `JSON.parse(await Bun.file(new URL('../package.json', import.meta.url)).text()).version === '2.0.0'`
     const crashGate = join(root, 'crash-now'),
       reviewGate = join(root, 'review-now')
+    const expiredReader = scenario === 'expired-reader'
     // The cached predecessor remains healthy. Every new process of B dies after
     // preflight has committed takeover; B's upgrade reader cannot import either.
     await writeFile(
@@ -641,13 +642,15 @@ for (const scenario of ['immediate', 'phases', 'legacy'])
       bytes
         .replace(
           "  if (process.argv[2] === '--read-upgrade') {",
-          `  if (process.argv[2] === '--read-upgrade' && ${broken}) throw new Error('broken reader');\n  if (process.argv[2] === '--read-upgrade') {`,
+          `  if (process.argv[2] === '--read-upgrade' && (${broken} || (${expiredReader} && await Bun.file(${JSON.stringify(crashGate)}).exists()))) throw new Error('broken reader');\n  if (process.argv[2] === '--read-upgrade') {`,
         )
         .replace(
           '  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]',
-          phaseWork
+          expiredReader
             ? `  if (${broken}) setInterval(async () => { if (await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82) }, 25);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`
-            : `  if (${broken}) process.exit(82);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`,
+            : phaseWork
+              ? `  if (${broken}) setInterval(async () => { if (await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82) }, 25);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`
+              : `  if (${broken}) process.exit(82);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`,
         ),
     )
     if (scenario === 'legacy') {
@@ -655,6 +658,35 @@ for (const scenario of ['immediate', 'phases', 'legacy'])
       await writeFile(
         handoff,
         (await readFile(handoff, 'utf8')).replaceAll('rollbackVersion: 1,', ''),
+      )
+    } else if (expiredReader) {
+      const launcher = join(original, 'packages/core/src/cli/dispatch-launcher.ts')
+      await writeFile(
+        launcher,
+        (await readFile(launcher, 'utf8')).replace(
+          'new DispatchCrashBudget(projection.takeoverAt)',
+          `new DispatchCrashBudget((await Bun.write(${JSON.stringify(crashGate)}, 'takeover observed'), new Date(Date.now() - 600_001).toISOString()))`,
+        ),
+      )
+    } else {
+      // Fail one actual store operation during restored-generation initialization.
+      // The same process must retry, publish rollback once, and still adopt C.
+      const handoff = join(original, 'packages/core/src/cli/dispatch-handoff.ts')
+      const operation = phaseWork ? 'appendRepo' : 'getRepo'
+      await writeFile(
+        handoff,
+        'let injectedRollbackFailure = false;\n' +
+          (await readFile(handoff, 'utf8')).replace(
+            '  const context = launch.rollback',
+            `  if (launch.rollback) store = new Proxy(store, { get(target, key) {
+              const value = Reflect.get(target, key);
+              if (key === '${operation}') return (...args) => {
+                if (!injectedRollbackFailure) { injectedRollbackFailure = true; throw new Error('injected rollback ${operation} failure'); }
+                return value.apply(target, args);
+              };
+              return typeof value === 'function' ? value.bind(target) : value;
+            }});\n  const context = launch.rollback`,
+          ),
       )
     }
     await writeFile(join(repo, 'package.json'), '{}')
@@ -741,6 +773,21 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
     try {
       await wait((events) => events.some((e) => e.type === 'dispatcher.runtime-recorded'))
       await replace('2.0.0')
+      if (expiredReader) {
+        // Both readers fail after B exits, beyond the original crash window.
+        // Bound the join so the regression cannot spin readers for four minutes.
+        const code = await Promise.race([
+          child.exited,
+          Bun.sleep(30_000).then(() => {
+            throw new Error('expired recovery did not exit')
+          }),
+        ])
+        expect(code).toBe(1)
+        const events = await store.getRepoEvents(repo)
+        expect(events.filter((e) => e.type === 'dispatcher.takeover')).toHaveLength(1)
+        expect(events.filter((e) => e.type === 'dispatcher.runtime-rolled-back')).toHaveLength(0)
+        return
+      }
       let proofSlug: string | undefined, futureSlug: string | undefined
       if (phaseWork) {
         await wait((events) =>
@@ -874,6 +921,14 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
       ).toHaveLength(1)
       child.kill('SIGINT')
       expect(await child.exited).toBe(0)
+      expect(await stderr).toContain(
+        `injected rollback ${phaseWork ? 'appendRepo' : 'getRepo'} failure`,
+      )
+      expect(
+        (await store.getRepoEvents(repo)).filter(
+          (e) => e.type === 'dispatcher.runtime-rolled-back',
+        ),
+      ).toHaveLength(1)
     } finally {
       if (child.exitCode === null) {
         child.kill('SIGINT')

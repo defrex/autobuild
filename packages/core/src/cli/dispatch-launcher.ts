@@ -270,6 +270,13 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     )
     for (;;) {
       if (signal) break
+      // Once recovery has expired, a failed child must retain its ordinary
+      // exit behavior even when neither cached reader can reach the store.
+      if (active.result && !pending && recovery && !recovery.budget.withinWindow(Date.now())) {
+        clean = active.result.reason === 'stopped'
+        publicCode = active.result.publicCode
+        break
+      }
       // Projection is produced by the running immutable runtime. This module
       // has no store, config, compatibility or target-resolution dependencies.
       let projection: {

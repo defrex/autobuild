@@ -4,6 +4,8 @@ const anchor = '2026-01-01T00:00:00.000Z'
 const now = Date.parse(anchor)
 test('three distinct failures use the original takeover anchor, inclusive at ten minutes', () => {
   const budget = new DispatchCrashBudget(anchor)
+  expect(budget.withinWindow(now + 600_000)).toBe(true)
+  expect(budget.withinWindow(now + 600_001)).toBe(false)
   expect(budget.failed('one', now)).toBe('restart')
   expect(budget.failed('one', now + 1)).toBeUndefined()
   expect(budget.failed('two', now + 59_999)).toBe('restart')

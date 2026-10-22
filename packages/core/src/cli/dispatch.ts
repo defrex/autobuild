@@ -1143,6 +1143,9 @@ class DispatchLoop {
         await this.recordTickYielded()
         return emptyTickReport()
       }
+      // Initialization can read/write the store. Retry it at the tick boundary
+      // after a transient failure, even while our repository lease stays valid.
+      await this.initializeAutomaticUpgrade()
       await this.reportForgeReadiness()
       const startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
       if (startedAt === null) {
@@ -3941,7 +3944,6 @@ class DispatchLoop {
     if (this.repoLeaseHolder === undefined) {
       this.repoLeaseHolder = holder
       this.startRepoLeaseHeartbeat(holder)
-      await this.initializeAutomaticUpgrade()
     }
     return true
   }
@@ -4350,6 +4352,7 @@ class DispatchLoop {
   }
 
   private async initializeAutomaticUpgrade(): Promise<void> {
+    if (this.upgradeController) return
     const launch = launchContext(this.opts.env)
     if (!launch || this.opts.once || this.opts.repository || this.repoLeaseHolder !== this.runId)
       return
@@ -4557,7 +4560,6 @@ class DispatchLoop {
       this.startInput()
       this.startRendering()
       this.startUpgradeChecks()
-      await this.initializeAutomaticUpgrade()
       let startup = true
       while (!this.watchStopped && !this.superseded) {
         try {
