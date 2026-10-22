@@ -19,6 +19,10 @@ export interface UpgradeRun {
 }
 export interface DispatchUpgradeState {
   runs: Record<string, UpgradeRun>
+  lineages: Record<string, string>
+  rollbackIds: string[]
+  lastRollback?: Fact<'dispatcher.runtime-rolled-back'>
+  holds: Record<string, Fact<'dispatcher.runtime-rolled-back'>>
 }
 function same(a: Handoff, b: Handoff): boolean {
   return (
@@ -37,10 +41,28 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 4,
-  initial: () => ({ runs: {} }),
+  version: 5,
+  initial: () => ({ runs: {}, holds: {}, lineages: {}, rollbackIds: [] }),
   fold(acc, events) {
     for (const event of events) {
+      if (event.type === 'dispatcher.run-started' && event.payload.lineage)
+        acc.lineages[event.payload.run] = event.payload.lineage
+      if (event.type === 'dispatcher.runtime-rolled-back') {
+        if (acc.rollbackIds.includes(event.payload.correlation)) continue
+        acc.rollbackIds.push(event.payload.correlation)
+        acc.lastRollback = event
+        acc.holds[event.payload.lineage] = event
+        continue
+      }
+      if (event.type === 'dispatcher.rollback-hold-cleared') {
+        const hold = acc.holds[event.payload.lineage]
+        if (
+          hold?.payload.correlation === event.payload.correlation &&
+          hold.payload.target.key !== event.payload.target.key
+        )
+          delete acc.holds[event.payload.lineage]
+        continue
+      }
       if (event.type !== 'dispatcher.upgrade-target-resolved' && !('correlation' in event.payload))
         continue
       if (!('run' in event.payload) || typeof event.payload.run !== 'string') continue

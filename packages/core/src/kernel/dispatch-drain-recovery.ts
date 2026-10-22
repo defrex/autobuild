@@ -9,13 +9,19 @@ export async function recoverDispatchDrain(
   repo: string,
   predecessor: string,
   now: Date,
+  recoveryRun?: string,
 ): Promise<boolean> {
-  let state = (await readDispatchUpgrade(store, repo)).value.runs[predecessor]
+  const upgrades = (await readDispatchUpgrade(store, repo)).value
+  let state = upgrades.runs[predecessor]
   if (!state?.request || !state.handoff || state.completed) return true
   if (!state.released) return false
+  // A validated launcher recovery acquires a fresh run identity. Keep the
+  // original successor in retirement facts while fencing writes by the actual
+  // current holder in the same launcher lineage.
+  if (recoveryRun && upgrades.lineages[recoveryRun] !== state.handoff.payload.lineage) return false
   const lease = (await store.getRepo(repo))?.lease
   if (
-    lease?.holder !== state.request.payload.successor ||
+    lease?.holder !== (recoveryRun ?? state.request.payload.successor) ||
     Date.parse(lease.expiresAt) <= now.getTime()
   )
     return false

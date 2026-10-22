@@ -316,7 +316,7 @@ for predecessor stop before takeover. Retirement completion records drained and
 suspended counts separately from takeover. A successor reconstructs unfinished
 retirement from execution leases and durable build facts after predecessor death.
 An unrelated dispatcher taking the lease still causes ordinary supersession and
-teardown. Rollback remains outside this behavior.
+teardown.
 
 At each completed phase boundary, a local or remote build runner compares its immutable
 attach runtime with the accepted handoff target mirrored in its instance-scoped
@@ -330,10 +330,26 @@ ownership gap. Equal or absent targets preserve normal execution. Remote guests
 re-attach through the provider, which reinstalls the accepted generation’s archive
 before launching the next execution. Deadline suspension applies only to local phases.
 
+With rollback-capable launcher and generation peers, three failed successor exits
+within ten minutes of the original durable takeover restore the immediately previous
+cached runtime. The first two failures restart the same runtime without repeating
+preflight. Preflight failures never count; outside that window ordinary failure
+exit behavior applies. Rollback goes back one runtime only. The launcher opens no
+store: it passes a validated, versioned recovery context to the restored generation,
+which records `dispatcher.runtime-rolled-back` under repository authority and holds
+the failed target for that launcher lineage. Store compatibility changes, resolution
+errors and disabling/re-enabling upgrades do not clear this hold. A successfully
+resolved different target records `dispatcher.rollback-hold-cleared`; a fresh operator
+launch starts a new lineage. Both previous and held runtimes remain protected from
+cache pruning. Existing phase executions keep their leases and continue on the
+restored runtime at the next boundary; unreadable decisive facts defer a build with
+attention before any action. Peers without negotiated rollback capability retain
+existing failure behavior and report that capable runtimes are required.
+
 The journal records `dispatcher.target-prepared`, `dispatcher.yield-requested`,
 `dispatcher.handoff-started`, `dispatcher.terminal-released`, `dispatcher.takeover`,
 per-execution `dispatcher.drain-settled`, deadline changes and
-`dispatcher.handoff-completed`, correlated by predecessor run, successor run,
+`dispatcher.handoff-completed`, plus rollback and hold-clear facts, correlated by predecessor run, successor run,
 launcher lineage, both runtimes and cached target. Legacy handoffs without a
 mode mean cutover. The launcher first binds the runtime-owned journal transport to its persisted
 repository record, so rejected configuration edits cannot redirect readers away
@@ -2916,7 +2932,11 @@ event history so replay and restart preserve the result.
 Automatic upgrade repository facts are run- and launcher-lineage-correlated.
 `dispatcher.upgrade-detected` is advisory; preparation, yield, acceptance,
 terminal release, takeover, drain settlement/deadline, completion and upgrade
-failure are decisive. Start and completion retain runtime/target provenance;
+failure, `dispatcher.runtime-rolled-back` and `dispatcher.rollback-hold-cleared`
+are decisive. Rollback is immediate repository attention naming failed and restored
+runtimes. A run-start fact may carry its launcher lineage for effective-hold
+projection; historical rollback remains visible after a hold clears or lineage changes.
+Start and completion retain runtime/target provenance;
 retirement completion is distinct from takeover. Failure is immediate repository
 attention. A launcher consumes only its exact lineage/run's pending target and
 never an operator-stopped run. See §3.3 for the draining protocol.

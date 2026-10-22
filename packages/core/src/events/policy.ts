@@ -189,6 +189,8 @@ export const repositoryEventPolicy = {
   'dispatcher.drain-deadline': 'decisive',
   'dispatcher.upgrade-detected': 'advisory',
   'dispatcher.upgrade-failed': 'decisive',
+  'dispatcher.runtime-rolled-back': 'decisive',
+  'dispatcher.rollback-hold-cleared': 'decisive',
   'dispatcher.handoff-started': 'decisive',
   'dispatcher.handoff-completed': 'decisive',
   'dispatcher.runtime-recorded': 'advisory',

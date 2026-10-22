@@ -1,3 +1,4 @@
+import { rollbackRuntimeRetained } from './dispatch-runtime-use'
 import { join, resolve, dirname } from 'node:path'
 import { openSessionlessStore, openProductionStore, type StoreOpener } from './store-opening'
 import { projectToken } from './project-credentials'
@@ -43,6 +44,7 @@ export async function readGenerationJournal(
     await opened.store.ensureRepo(opened.repo)
     return {
       version: 1,
+      rollbackVersion: 1,
       journal: { storeRef: opened.storeRef, repo: (await opened.store.getRepo(opened.repo))!.repo },
     }
   } finally {
@@ -104,12 +106,22 @@ export async function readUpgradeProjection(
         : undefined)
     if (!journal) return { version: 1, handoff: null, takeover: false }
     const handoff = await readHandoff({ ...launch, journal }, argv, env, true)
-    const state = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[launch.run!]
+    const upgrades = (await readDispatchUpgrade(opened.store, opened.repo)).value
+    const state = upgrades.runs[launch.run!]
+    const rollbackRecorded =
+      !!launch.rollback && upgrades.rollbackIds.includes(launch.rollback.correlation)
+    const hold = launch.lineage ? upgrades.holds[launch.lineage] : undefined
     return {
       version: 1,
       journal,
       handoff: handoff ?? null,
+      rollbackVersion: 1,
+      rollbackRetained:
+        rollbackRecorded &&
+        (!hold || rollbackRuntimeRetained(hold.payload.failedRoot, launch.lineage!)),
       takeover: !!state?.takeover,
+      takeoverAt: state?.takeover?.ts,
+      takeoverPayload: state?.takeover?.payload,
       completed: !!state?.completed,
       accepted: !!state?.handoff,
       successor: state?.request?.payload.successor,
@@ -183,4 +195,82 @@ export async function recoverTerminalRelease(
   } finally {
     await opened.store.close()
   }
+}
+
+/** Validate against durable takeover, then publish only under repository authority. */
+export async function recordRuntimeRollback(
+  store: import('../store/types').BuildStore,
+  repo: string,
+  launch: GenerationLaunch,
+  run: string,
+): Promise<void> {
+  const context = launch.rollback
+  if (launch.recovery) {
+    const recovery = launch.recovery
+    const state = (await readDispatchUpgrade(store, repo)).value.runs[recovery.predecessor]
+    if (
+      !state?.takeover ||
+      state.takeover.payload.successor !== recovery.successor ||
+      state.takeover.payload.correlation !== recovery.handoff ||
+      state.takeover.payload.lineage !== launch.lineage ||
+      state.takeover.payload.root !== launch.runtimeRoot
+    )
+      throw new Error('recovery has no matching durable takeover')
+  }
+  if (!context) return
+  const { validRecoveryContext } = await import('./dispatch-launch-contract')
+  if (!validRecoveryContext(launch)) throw new Error('invalid rollback launch context')
+  const upgrades = (await readDispatchUpgrade(store, repo)).value
+  const takeover = upgrades.runs[context.predecessor]?.takeover
+  const payload = takeover?.payload
+  if (
+    !payload ||
+    takeover.ts !== context.takeoverAt ||
+    payload.correlation !== context.handoff ||
+    payload.lineage !== context.lineage ||
+    payload.successor !== context.successor ||
+    payload.root !== context.failed.root ||
+    payload.from.source.location !== context.restored.root ||
+    payload.cacheId !== context.failed.cacheId
+  )
+    throw new Error('rollback has no matching durable takeover and cached runtimes')
+  if ((await store.getRepo(repo))?.lease?.holder !== run)
+    throw new Error('rollback requires repository authority')
+  // A cleared hold may already have released its cache entry. Its correlation
+  // remains durable and must never republish/revalidate that consumed launch.
+  if (upgrades.rollbackIds.includes(context.correlation)) return
+  const [failed, restored] = await Promise.all([
+    cachedRuntime(context.failed.root),
+    cachedRuntime(context.restored.root),
+  ])
+  const { captureRuntimeIdentity } = await import('../runtime-identity')
+  const sameRuntime = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  if (
+    failed?.id !== context.failed.cacheId ||
+    restored?.id !== context.restored.cacheId ||
+    !sameRuntime(payload.from, captureRuntimeIdentity(context.restored.root)) ||
+    !sameRuntime(payload.to, captureRuntimeIdentity(context.failed.root))
+  )
+    throw new Error('rollback has no matching durable takeover and cached runtimes')
+  const { DISPATCHER } = await import('../events/envelope')
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.runtime-rolled-back',
+    payload: {
+      correlation: context.correlation,
+      run,
+      lineage: context.lineage,
+      predecessor: context.predecessor,
+      successor: context.successor,
+      handoff: context.handoff,
+      takeoverAt: context.takeoverAt,
+      failures: 3,
+      failed: payload.to,
+      restored: payload.from,
+      failedRoot: context.failed.root,
+      restoredRoot: context.restored.root,
+      target: payload.target,
+      reason: 'three failed generation exits within ten minutes of takeover',
+    },
+  })
 }
