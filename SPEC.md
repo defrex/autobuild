@@ -1235,6 +1235,8 @@ A phase-scoped hydration into the gitignored scratch dir:
   context.json      # manifest: build, phase, round, artifact revs,
                     #   required deposits, allowed terminal commands
   spec.md
+  node-verification.json # node verify: exhaustive commit provenance index
+  contributions/    # node verify: <build>/spec.md
   plan.md           # per phase needs (see table)
   findings.json     # current feedback, when round > 1
   history/          # prior-round artifacts where the phase needs them
@@ -1259,9 +1261,29 @@ terminals:
 | `plan-review` | spec, plan@latest, all prior rounds' findings (for `persists` marking) | `verdict` (requires notes artifact) |
 | `implement` | spec, approved plan, feedback (findings **or** verify report), own prior notes | `done` (requires clean worktree + notes) |
 | `code-review` | spec, plan, commit range `{base, head}`, prior findings, implement-notes | `verdict` |
-| `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range | `verdict pass` \| `verdict fail --report` \| `verdict skip --reason` |
+| `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range; node contribution specs and provenance | `verdict pass` \| `verdict fail --report` \| `verdict skip --reason` |
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
 | `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` and kernel-prepared replay transaction | `done` (requires one replayed commit on the frozen base) |
+
+In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
+`range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
+has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
+`specPath` and `commits`. The JSON index repeats this metadata and adds the
+exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
+and reflect scratch allocation, including legacy tracked-file collisions.
+Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
+normally lives at `.ab/node-verification.json`. These files are marked `derived`
+in `materialized`, with their source build and revision recorded in the metadata.
+
+Membership comes from build identity trailers on every commit reachable in the
+frozen parent-to-head range, including earlier cycles and merge side history.
+Specs use the current event-authorized revision, never an unsanctioned latest
+deposit or mutable ticket body. Unknown identities, ambiguous or invalid trailers,
+and missing source data fail hydration. Commits without a build trailer are
+listed as unattributed; this introduces no new intent or verdict policy.
+A node change is authorized when the node spec or the spec of the contribution
+that introduced it covers it; use the commit mapping to find that spec.
+Leaf verification context is unchanged.
 
 Scoping is deliberate: the planner never sees code-review rounds; the
 reviewer sees prior findings but not the producer's session. What a phase
