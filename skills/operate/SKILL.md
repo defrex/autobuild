@@ -85,7 +85,7 @@ the same resolved working directory.
 
 `ab watch --json` is the standing monitor. Keep its default filter: every
 record calls for action. It reports failed node verification, build escalations, persistent janitor failures and merge decisions,
-harvest escalations/recovery exhaustion, automatic upgrade failures, rejected configuration, reloads needing
+harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
@@ -355,6 +355,15 @@ Treat every default-watch record as a call to act:
   suppressed until target or selected-store compatibility evidence changes or a fresh operator launch. Report
   launcher-contract changes or disabled automatic upgrades as manual restart
   needs. Agents still never manage the process.
+- Automatic runtime rollback: repository status names the failed and restored
+  runtimes and effective hold. Three failed exits within ten minutes of takeover
+  restore one previous cached runtime; preflight failures do not count. The failed
+  target stays held despite store compatibility changes, resolution errors or
+  upgrade opt-out. A different successfully resolved target or a fresh operator
+  launch clears the effective hold. Existing phases keep their leases and continue
+  on the restored runtime at their next boundary; unreadable decisive facts defer
+  with attention. Report the evidence to the operator; agents never restart the
+  dispatcher.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
   persistent tick failure: diagnose through repository status and report the
   condition to the operator. Repository read failures fail the watch tick and

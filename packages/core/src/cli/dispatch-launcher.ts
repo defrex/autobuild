@@ -1,3 +1,4 @@
+import { DispatchCrashBudget } from './dispatch-crash-budget'
 import { readFile } from 'node:fs/promises'
 import {
   sourceRepository,
@@ -23,6 +24,7 @@ import {
   pruneRuntimes,
   spawnUsingRuntime,
   releasePreparedRuntime,
+  reserveExistingRuntime,
 } from './dispatch-runtime-use'
 import {
   DISPATCH_GENERATION_ENV,
@@ -91,6 +93,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
   }
   type Child = {
     runtime: typeof runtime
+    rollbackCapable: boolean
     launch: import('./dispatch-launch-contract').GenerationLaunch
     env: Record<string, string | undefined>
     child: ReturnType<typeof Bun.spawn>
@@ -122,9 +125,14 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     predecessorCorrelation?: string,
     journal?: import('./dispatch-launch-contract').GenerationLaunch['journal'],
     successorRun?: string,
+    recovery?: Pick<import('./dispatch-launch-contract').GenerationLaunch, 'rollback' | 'recovery'>,
+    rollbackCapable = false,
   ): Child => {
+    if (signal) throw new Error('dispatcher launch interrupted')
     const launch: import('./dispatch-launch-contract').GenerationLaunch = {
       version: DISPATCH_LAUNCH_VERSION,
+      ...(rollbackCapable ? { rollbackVersion: 1 as const } : {}),
+      ...recovery,
       overlapVersion: DISPATCH_OVERLAP_VERSION,
       ...(journal ? { journal } : {}),
       runtimeRoot: selected.root,
@@ -152,6 +160,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     )
     const record: Child = {
       runtime: selected,
+      rollbackCapable,
       launch,
       env,
       child: spawned.child,
@@ -197,6 +206,34 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
   }
   let active: Child | undefined
   let pending: { record: Child; correlation: string } | undefined
+  let recovery:
+    | { previous: Child; successor: string; correlation: string; budget: DispatchCrashBudget }
+    | undefined
+  const protectedRoots = new Set<string>()
+  const protect = (root: string) => {
+    if (!reserveExistingRuntime(root)) throw new Error(`rollback runtime unavailable: ${root}`)
+    protectedRoots.add(root)
+  }
+  const supportsRollback = async (selected: typeof runtime) => {
+    const result = await reader(
+      {
+        runtime: selected,
+        env: {
+          ...process.env,
+          [DISPATCH_GENERATION_ENV]: JSON.stringify({
+            version: 1,
+            runtimeRoot: selected.root,
+            checkout,
+            originalInstall,
+            lineage,
+            journal: active?.launch.journal,
+          }),
+        },
+      },
+      '--read-journal',
+    ).catch(() => null)
+    return result?.rollbackVersion === 1
+  }
   let clean = false
   let publicCode = 1
   try {
@@ -219,7 +256,11 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
         },
       },
       '--read-journal',
-    )) as { version: number; journal?: { storeRef: string; repo: string } }
+    )) as {
+      version: number
+      rollbackVersion?: number
+      journal?: { storeRef: string; repo: string }
+    }
     if (
       bootstrap.version !== 1 ||
       typeof bootstrap.journal?.storeRef !== 'string' ||
@@ -227,9 +268,25 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     )
       throw new Error('invalid generation journal identity')
     if (signal) throw new Error('dispatcher launch interrupted')
-    active = start(runtime, undefined, undefined, undefined, bootstrap.journal)
+    active = start(
+      runtime,
+      undefined,
+      undefined,
+      undefined,
+      bootstrap.journal,
+      undefined,
+      undefined,
+      bootstrap.rollbackVersion === 1,
+    )
     for (;;) {
       if (signal) break
+      // Once recovery has expired, a failed child must retain its ordinary
+      // exit behavior even when neither cached reader can reach the store.
+      if (active.result && !pending && recovery && !recovery.budget.withinWindow(Date.now())) {
+        clean = active.result.reason === 'stopped'
+        publicCode = active.result.publicCode
+        break
+      }
       // Projection is produced by the running immutable runtime. This module
       // has no store, config, compatibility or target-resolution dependencies.
       let projection: {
@@ -242,6 +299,8 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           correlation: string
         } | null
         takeover: boolean
+        rollbackRetained?: boolean
+        takeoverAt?: string
         journal?: { storeRef: string; repo: string }
         successor?: string
         accepted?: boolean
@@ -264,13 +323,47 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           released?: boolean
         }
       } catch {
-        if (active.result && !pending) {
+        // A broken target may not even load its reader. Use the known cached
+        // predecessor's reader with the same journal/run query identity.
+        const healthy = pending?.record ?? recovery?.previous
+        if (healthy) {
+          try {
+            const query = {
+              ...healthy.launch,
+              runtimeRoot: healthy.runtime.root,
+              run: active.launch.run,
+              predecessor: undefined,
+              rollback: undefined,
+              recovery: undefined,
+            }
+            projection = await reader(
+              {
+                runtime: healthy.runtime,
+                env: { ...healthy.env, [DISPATCH_GENERATION_ENV]: JSON.stringify(query) },
+              },
+              '--read-upgrade',
+            )
+          } catch {
+            await new Promise<void>((resolve) => setTimeout(resolve, 100))
+            continue
+          }
+        } else if (active.result && !pending) {
           clean = active.result.reason === 'stopped'
           publicCode = active.result.publicCode
           break
+        } else {
+          await new Promise<void>((resolve) => setTimeout(resolve, 100))
+          continue
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, 100))
-        continue
+      }
+      if (active.launch.rollback && projection.rollbackRetained) {
+        for (const root of [
+          active.launch.rollback.failed.root,
+          active.launch.rollback.restored.root,
+        ]) {
+          if (protectedRoots.has(root)) releasePreparedRuntime(root)
+          protectedRoots.delete(root)
+        }
       }
       if (projection.version !== 1) throw new Error('incompatible generation upgrade reader')
       if (projection.journal && !active.launch.journal) {
@@ -295,6 +388,27 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       }
 
       if (pending && projection.takeover) {
+        const previous = active
+        if (previous.rollbackCapable && pending.record.rollbackCapable && projection.takeoverAt) {
+          protect(previous.runtime.root)
+          protect(pending.record.runtime.root)
+          for (const root of protectedRoots) {
+            if (root === previous.runtime.root || root === pending.record.runtime.root) continue
+            releasePreparedRuntime(root)
+            protectedRoots.delete(root)
+          }
+          recovery = {
+            previous,
+            successor: pending.record.launch.run!,
+            correlation: pending.correlation,
+            budget: new DispatchCrashBudget(projection.takeoverAt),
+          }
+        } else {
+          recovery = undefined
+          console.error(
+            'automatic runtime rollback requires rollback-capable predecessor and successor runtimes',
+          )
+        }
         active.job?.close()
         active.job = undefined
         active = pending.record
@@ -314,6 +428,8 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
               pending.correlation,
               active.launch.journal,
               projection.successor,
+              undefined,
+              pending.record.rollbackCapable,
             ),
             correlation: pending.correlation,
           }
@@ -344,8 +460,71 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
             handoff.correlation,
             active.launch.journal,
             projection.successor,
+            undefined,
+            await supportsRollback({ ...runtime, root: handoff.root, id: handoff.cacheId }),
           ),
           correlation: handoff.correlation,
+        }
+      }
+      if (active.result?.reason === 'failed' && !pending && recovery) {
+        const action = recovery.budget.failed(active.launch.run!, Date.now())
+        if (action) {
+          if (process.stdin.isTTY) process.stdin.setRawMode(false)
+          if (process.stdout.isTTY)
+            for (const mode of [
+              FOCUS_REPORTING_MODE,
+              KITTY_KEYBOARD_MODE,
+              BRACKETED_PASTE_MODE,
+              ALTERNATE_SCREEN_MODE,
+              HIDDEN_CURSOR_MODE,
+            ])
+              process.stdout.write(mode.restore)
+          active.job?.close()
+          const context = {
+            predecessor: recovery.previous.launch.run!,
+            successor: recovery.successor,
+            handoff: recovery.correlation,
+          }
+          if (action === 'restart') {
+            active = start(
+              active.runtime,
+              undefined,
+              undefined,
+              undefined,
+              active.launch.journal,
+              undefined,
+              { recovery: context },
+              true,
+            )
+          } else {
+            const previous = recovery.previous
+            // Both entries were reserved before activation/releasing child claims.
+            // The restored generation transfers the failed entry to its durable hold.
+            const rollback: import('./dispatch-launch-contract').RollbackContext = {
+              version: 1,
+              correlation: randomUUID(),
+              lineage,
+              ...context,
+              takeoverAt: recovery.budget.takeoverAt,
+              failures: 3,
+              failed: { root: active.runtime.root, cacheId: active.runtime.id },
+              restored: { root: previous.runtime.root, cacheId: previous.runtime.id },
+            }
+            active = start(
+              previous.runtime,
+              undefined,
+              undefined,
+              undefined,
+              active.launch.journal,
+              undefined,
+              { rollback },
+              true,
+            )
+            runtime = active.runtime
+            activateRuntime(runtime.root)
+            recovery = undefined
+          }
+          continue
         }
       }
       if (active.result && !pending) {
@@ -393,6 +572,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
         HIDDEN_CURSOR_MODE,
       ])
         process.stdout.write(mode.restore)
+    for (const root of protectedRoots) releasePreparedRuntime(root)
     pruneRuntimes(dirname(dirname(runtime.root)))
   }
   if (signal && signal !== 'SIGINT') process.kill(process.pid, signal)

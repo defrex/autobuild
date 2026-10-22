@@ -108,3 +108,46 @@ test('optional frozen source launch metadata is validated and preserved in ABI v
       ),
     ).toThrow()
 })
+
+test('rollback capability is independent of v1 and validates owned cache paths and lineage', async () => {
+  const { validRecoveryContext } = await import('./dispatch-launch-contract')
+  const a = `1.0.0-${'a'.repeat(64)}`,
+    b = `2.0.0-${'b'.repeat(64)}`
+  const root = (id: string) => `/repo/.autobuild/runtime/${id}/distribution`
+  const rollback = {
+    version: 1 as const,
+    correlation: 'rollback',
+    lineage: 'launcher',
+    predecessor: 'a',
+    successor: 'b',
+    handoff: 'h',
+    takeoverAt: '2026-01-01T00:00:00.000Z',
+    failures: 3 as const,
+    failed: { root: root(b), cacheId: b },
+    restored: { root: root(a), cacheId: a },
+  }
+  const launch = {
+    version: 1 as const,
+    runtimeRoot: root(a),
+    checkout: '/repo',
+    run: 'restored',
+    lineage: 'launcher',
+    rollbackVersion: 1 as const,
+    rollback,
+  }
+  expect(
+    consumeGenerationMarker({ AB_DISPATCH_GENERATION: JSON.stringify(launch) }, root(a)).rollback,
+  ).toEqual(rollback)
+  for (const changed of [
+    { lineage: 'other' },
+    { runtimeRoot: root(b) },
+    { predecessor: 'a' },
+    { rollbackVersion: undefined },
+    { rollback: { ...rollback, restored: { root: '/foreign/distribution', cacheId: a } } },
+    { rollback: { ...rollback, failed: { root: root(a), cacheId: a } } },
+    { rollback: { ...rollback, takeoverAt: 'invalid' } },
+    { rollback: { ...rollback, failures: 2 } },
+    { rollback: null },
+  ])
+    expect(validRecoveryContext({ ...launch, ...changed } as typeof launch)).toBe(false)
+})

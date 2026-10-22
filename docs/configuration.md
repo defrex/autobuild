@@ -2154,7 +2154,23 @@ for predecessor stop before takeover. Retirement completion records drained and
 suspended counts separately from takeover. A successor reconstructs unfinished
 retirement from execution leases and durable build facts after predecessor death.
 An unrelated dispatcher taking the lease still causes ordinary supersession and
-teardown. Rollback remains outside this behavior.
+teardown.
+
+With rollback-capable launcher and generation peers, three failed successor exits
+within ten minutes of the original durable takeover restore the immediately previous
+cached runtime. The first two failures restart the same runtime without repeating
+preflight. Preflight failures never count; outside that window ordinary failure
+exit behavior applies. Rollback goes back one runtime only. The launcher opens no
+store: it passes a validated, versioned recovery context to the restored generation,
+which records `dispatcher.runtime-rolled-back` under repository authority and holds
+the failed target for that launcher lineage. Store compatibility changes, resolution
+errors and disabling/re-enabling upgrades do not clear this hold. A successfully
+resolved different target records `dispatcher.rollback-hold-cleared`; a fresh operator
+launch starts a new lineage. Both previous and held runtimes remain protected from
+cache pruning. Existing phase executions keep their leases and continue on the
+restored runtime at the next boundary; unreadable decisive facts defer a build with
+attention before any action. Peers without negotiated rollback capability retain
+existing failure behavior and report that capable runtimes are required.
 
 Repository status exposes per-run resolved target, handoff and failure details.
 `dispatcher.upgrade-target-resolved` records the first successful resolution and

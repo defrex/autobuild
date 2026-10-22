@@ -469,6 +469,8 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `dispatcher tick failed: ${singleLine(event.payload.error)}`
     case 'dispatcher.forge-readiness-failed':
       return singleLine(formatReadinessFailure(event.payload))
+    case 'dispatcher.runtime-rolled-back':
+      return `dispatcher runtime rolled back ${event.payload.failed.version} → ${event.payload.restored.version}: ${singleLine(event.payload.reason)}`
     case 'dispatcher.upgrade-failed':
       return `dispatcher upgrade failed (${event.payload.target.mode} ${event.payload.target.version ?? event.payload.target.source}): ${singleLine(event.payload.reason)}`
     case 'dispatcher.config-rejected':
