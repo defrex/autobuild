@@ -261,3 +261,16 @@ test('normalized membership joins a current-source child to a historical parent 
   })
   expect(projected.integrationRow?.children).toMatchObject({ known: true, building: 1 })
 })
+
+test('node detail preserves unknown, empty, and rewritten hand-pushed identities', () => {
+  expect(detail().handPushedCommits).toBeUndefined()
+  const s = state()
+  s.nodeRestack = { items: [], inventory: { head: 'head', builds: ['child'], foreign: [] } }
+  expect(detail(s).handPushedCommits).toEqual([])
+  s.nodeRestack.inventory!.foreign = ['current', 'direct']
+  s.nodeRestack.foreignAliases = { current: 'intermediate', intermediate: 'original' }
+  expect(detail(s).handPushedCommits).toEqual([
+    { sha: 'current', originalSha: 'original' },
+    { sha: 'direct', originalSha: 'direct' },
+  ])
+})
