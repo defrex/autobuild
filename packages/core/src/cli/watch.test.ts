@@ -2793,3 +2793,45 @@ test('failed node cycles use default attention, baseline history and resume with
     next.out.map((line) => JSON.parse(line)).find((record) => record.event)?.event.payload.id,
   ).toBe('cycle-2')
 })
+
+test('runtime rollback is default repository attention and cursor replay delivers it once', async () => {
+  const store = makeStore()
+  await store.ensureRepo(REPO)
+  const first = harness(store)
+  await abWatch({ ...first.base, timeout: '1' })
+  const cursor = JSON.parse(first.out.at(-1)!).cursor
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/cache/old' },
+  }
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.runtime-rolled-back',
+    payload: {
+      correlation: 'rollback',
+      run: 'restored',
+      lineage: 'launcher',
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'handoff',
+      takeoverAt: '2026-01-01T00:00:00.000Z',
+      failures: 3,
+      failed: { ...runtime, version: '2.0.0' },
+      restored: runtime,
+      failedRoot: '/cache/new',
+      restoredRoot: '/cache/old',
+      target: { mode: 'installed', key: 'two', source: '/install', version: '2.0.0' },
+      reason: 'three failed exits',
+    },
+  })
+  const second = harness(store)
+  await abWatch({ ...second.base, since: cursor, timeout: '1' })
+  const records = second.out.slice(0, -1).map((line) => JSON.parse(line))
+  expect(records).toHaveLength(1)
+  expect(records[0].event.type).toBe('dispatcher.runtime-rolled-back')
+  expect(renderWatchLine(records[0].event, null)).toContain('2.0.0 → 1.0.0')
+  const third = harness(store)
+  await abWatch({ ...third.base, since: JSON.parse(second.out.at(-1)!).cursor, timeout: '1' })
+  expect(third.out.slice(0, -1)).toEqual([])
+})

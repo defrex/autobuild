@@ -493,6 +493,28 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.drain-deadline': handoffSchema.extend({ deadline: z.iso.datetime() }),
   'dispatcher.upgrade-detected': upgradeIdentitySchema,
   'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
+  'dispatcher.runtime-rolled-back': z.strictObject({
+    correlation: dispatchRun,
+    run: dispatchRun,
+    lineage: dispatchRun,
+    predecessor: dispatchRun,
+    successor: dispatchRun,
+    handoff: dispatchRun,
+    takeoverAt: z.iso.datetime(),
+    failures: z.literal(3),
+    failed: runtimeIdentitySchema,
+    restored: runtimeIdentitySchema,
+    failedRoot: z.string().min(1),
+    restoredRoot: z.string().min(1),
+    target: upgradeTargetSchema,
+    reason: z.string().min(1),
+  }),
+  'dispatcher.rollback-hold-cleared': z.strictObject({
+    correlation: dispatchRun,
+    run: dispatchRun,
+    lineage: dispatchRun,
+    target: upgradeTargetSchema,
+  }),
   'dispatcher.handoff-started': handoffSchema.extend({
     remoteBuilds: z
       .array(
@@ -526,6 +548,7 @@ export const dispatcherStatusEventPayloadSchemas = {
   }),
   'dispatcher.run-started': z.strictObject({
     run: dispatchRun,
+    lineage: dispatchRun.optional(),
     pid: z.number().int().positive(),
     host: z.string().trim().min(1).optional(),
     effectiveConfig: artifactRefSchema,
@@ -821,6 +844,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.drain-deadline': ['dispatcher'],
   'dispatcher.upgrade-detected': ['dispatcher'],
   'dispatcher.upgrade-failed': ['dispatcher'],
+  'dispatcher.runtime-rolled-back': ['dispatcher'],
+  'dispatcher.rollback-hold-cleared': ['dispatcher'],
   'dispatcher.handoff-started': ['dispatcher'],
   'dispatcher.handoff-completed': ['dispatcher'],
   'dispatcher.runtime-recorded': ['dispatcher'],

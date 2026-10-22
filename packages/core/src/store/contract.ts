@@ -2308,6 +2308,43 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             type: 'dispatcher.handoff-completed',
             payload: { ...handoff, successor: 'new' },
           })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.runtime-rolled-back',
+            payload: {
+              correlation: 'rollback',
+              run: 'restored',
+              lineage: identity.lineage,
+              predecessor: 'old',
+              successor: 'new',
+              handoff: identity.correlation,
+              takeoverAt: '2026-01-01T00:00:00.000Z',
+              failures: 3,
+              failed: handoff.to,
+              restored: handoff.from,
+              failedRoot: '/cache/new',
+              restoredRoot: '/cache/old',
+              target: identity.target,
+              reason: 'three failed exits',
+            },
+          })
+          expect(
+            (await readRepositoryFacts(store, repo)).value.upgrades.holds[identity.lineage]?.payload
+              .failed.version,
+          ).toBe('2.0.0')
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.rollback-hold-cleared',
+            payload: {
+              correlation: 'rollback',
+              run: 'restored',
+              lineage: identity.lineage,
+              target: { ...identity.target, key: 'changed' },
+            },
+          })
+          const rollbackState = (await readRepositoryFacts(store, repo)).value.upgrades
+          expect(rollbackState.holds[identity.lineage]).toBeUndefined()
+          expect(rollbackState.lastRollback?.payload.restored.version).toBe(handoff.from.version)
           const next = (await readRepositoryFacts(store, repo)).value.upgrades
           expect(next.runs.old?.completed?.payload.successor).toBe('new')
           expect(next.runs.foreign?.failure).toBeDefined()

@@ -338,3 +338,85 @@ test('a failed target retries only after selected-store compatibility evidence c
   expect(calls).toBe(1)
   await controller.stop()
 })
+
+test('rollback hold survives store changes, resolution errors and opt-out, clearing only for a different resolved target', async () => {
+  const { validateRepositoryEventWrite } = await import('../events/repository')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { dispatchUpgradeReducer } = await import('../kernel/dispatch-upgrade')
+  const write = validateRepositoryEventWrite({
+    actor: DISPATCHER,
+    type: 'dispatcher.runtime-rolled-back',
+    payload: {
+      correlation: 'rollback',
+      run: 'r',
+      lineage: 'l',
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'h',
+      takeoverAt: '2026-01-01T00:00:00.000Z',
+      failures: 3,
+      failed: { ...from, version: '2.0.0' },
+      restored: from,
+      failedRoot: '/new',
+      restoredRoot: '/old',
+      target: { mode: 'installed', key: 'two', version: '2.0.0', source: '/install' },
+      reason: 'three exits',
+    },
+  })
+  const hold = dispatchUpgradeReducer.reduce([
+    {
+      ...write,
+      repo: 'repo',
+      seq: 1,
+      ts: '2026-01-01T00:00:01.000Z',
+    } as import('../events/repository').RepositoryEvent,
+  ]).lastRollback!
+  let target: UpgradeTarget = hold.payload.target,
+    resolveFails = false,
+    enabled = true,
+    prepared = 0,
+    released = 0
+  const events: RepositoryEventWrite[] = []
+  const controller = new DispatchUpgradeController({
+    run: 'r',
+    lineage: 'l',
+    from,
+    failedKeys: [],
+    hold,
+    storeChangedSinceFailure: async () => true,
+    enabled: () => enabled,
+    resolve: async () => {
+      if (resolveFails) throw new Error('offline')
+      return target
+    },
+    prepare: async () => {
+      prepared++
+      throw new Error('preparation failed')
+    },
+    cutover: async () => false,
+    append: async (e) => {
+      events.push(e)
+    },
+    clearHold: () => {
+      released++
+    },
+  })
+  await controller.check()
+  resolveFails = true
+  await controller.check()
+  enabled = false
+  await controller.check()
+  enabled = true
+  resolveFails = false
+  await controller.check()
+  expect(prepared).toBe(0)
+  expect(released).toBe(0)
+  target = { ...target, key: 'three', version: '3.0.0' }
+  await controller.check()
+  expect(events.filter((e) => e.type === 'dispatcher.rollback-hold-cleared')).toHaveLength(1)
+  expect(released).toBe(1)
+  expect(prepared).toBe(1)
+  target = hold.payload.target
+  await controller.check()
+  expect(prepared).toBe(2)
+})
