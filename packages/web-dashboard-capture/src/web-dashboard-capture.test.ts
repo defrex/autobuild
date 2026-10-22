@@ -679,3 +679,22 @@ test('handoff renders shared vocabulary and retains lifecycle; settlement and co
     expect(text).toContain('RUNNING')
   }
 })
+
+test('Builds shows rollback with other notices and removes it after clearance or restart', async () => {
+  const { rollbackCapture, ROLLBACK_AT } = await import('../../../tools/rollback-capture')
+  const { formatRollback } = await import('@defrex/autobuild/operator-presentation')
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  for (const stage of ['active', 'cleared', 'restarted'] as const) {
+    const fixture = models()
+    fixture.happy = rollbackCapture(fixture.happy, stage)
+    fixture.happy.warningLines = ['independent warning']
+    const text = evidenceText(await renderWebFrame(spec, fixture, { css: '', fontCss: '' }))
+    expect(text.includes('rollback:')).toBe(stage === 'active')
+    if (fixture.happy.rollback) {
+      expect(text).toContain(formatRollback(fixture.happy.rollback))
+      expect(text).toContain(ROLLBACK_AT)
+    }
+    expect(text).toContain('independent warning')
+    expect(text).toContain('RUNNING')
+  }
+})

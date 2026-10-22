@@ -1,3 +1,4 @@
+import { formatRollback } from './rollback'
 import { formatHandoff } from './handoff'
 import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
@@ -909,9 +910,13 @@ function upgradeNoticeLine(
       )
 }
 
-function handoffLines(model: DashboardModel, color: boolean, width: number): string[] {
-  return (model.handoffs ?? []).flatMap((handoff) =>
-    wrappedText(formatHandoff(handoff), width, '  ').map((line) => paint(line, 'yellow', color)),
+function runtimeNoticeLines(model: DashboardModel, color: boolean, width: number): string[] {
+  const notices = [
+    ...(model.rollback ? [formatRollback(model.rollback)] : []),
+    ...(model.handoffs ?? []).map(formatHandoff),
+  ]
+  return notices.flatMap((notice) =>
+    wrappedText(notice, width, '  ').map((line) => paint(line, 'yellow', color)),
   )
 }
 
@@ -929,7 +934,7 @@ function detailGeometry(
     2 +
     (model.standby === undefined ? 0 : 1) +
     (model.availableUpgrade === undefined ? 0 : 1) +
-    handoffLines(model, false, width).length
+    runtimeNoticeLines(model, false, width).length
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, false, width, controlsCapacity(height, topLength))
@@ -991,7 +996,7 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
     ),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
-    ...handoffLines(model, color, width),
+    ...runtimeNoticeLines(model, color, width),
   ]
   const { body } = detailBody(build, view, opts)
   const controls =
@@ -1609,7 +1614,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     toggles,
     ...standbyLine(model, color, width),
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
-    ...handoffLines(model, color, width),
+    ...runtimeNoticeLines(model, color, width),
     ...warnings,
   ]
   // Both structural separators are fixed frame chrome: one between the

@@ -3591,3 +3591,147 @@ test('interactive frontend restores older handoffs from bounded seed and clears 
     await running
   }
 })
+
+test('interactive frontend reads rollback authority beyond its bounded repository feed', async () => {
+  const { rollbackEvents, rollbackFact, rollbackRun } = await import(
+    '../../../../tools/rollback-capture'
+  )
+  const { persistReducerSnapshot, loadReducerSnapshot } = await import('../store/snapshots')
+  const { dispatchFrontendReducer } = await import('./dispatch-repository-feed')
+  const repo = '/frontend-rollback'
+  const store = new MemoryBuildStore({ clock: () => new Date('2026-07-15T12:10:00.000Z') })
+  await store.ensureRepo(repo)
+  const append = (event: ReturnType<typeof rollbackEvents>[number]) =>
+    store.appendRepo(repo, {
+      actor: event.actor,
+      type: event.type,
+      payload: event.payload,
+    } as RepositoryEventWrite)
+  for (const event of rollbackEvents()) await append(event)
+  // A valid existing cache has consumed rollback facts without retaining them.
+  // The reduced upgrade read must recover them even when the feed needs no seed.
+  await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+    version: dispatchFrontendReducer.version,
+    cursor: await store.getRepoHighWater(repo),
+    state: { retained: [], incompleteIdentities: true },
+  })
+  const snapshots: DashboardModel[] = []
+  const startup = deferred<void>()
+  const child = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'test',
+    store,
+    env: {},
+    once: true,
+    input: { start: () => () => {} },
+    terminal: {
+      columns: 120,
+      rows: 30,
+      interactive: true,
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    resolveDashboardRenderer: () => (model, options) => {
+      snapshots.push(model)
+      return renderDashboard(model, options)
+    },
+    launchChild: ({ run }) => {
+      void store
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              lineage: 'frontend-peer',
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+            },
+          }),
+        )
+        .then(() => startup.resolve())
+      return { completed: child.promise, stop: async () => {} }
+    },
+  })
+  const running = frontend.run()
+  try {
+    await startup.promise
+    const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+    const text = () =>
+      stripAnsi(
+        renderDashboard(snapshots.at(-1)!, {
+          width: 120,
+          height: 30,
+          color: false,
+          now: 0,
+        }).join('\n'),
+      ).replace(/\s+/g, ' ')
+    await refresh()
+    expect(snapshots.at(-1)?.rollback?.correlation).toBe('capture-rollback')
+    expect(text()).toContain(
+      'rollback: failed 1.1.0 bbbbbbbbbbbb; restored 1.0.0 aaaaaaaaaaaa; held 1.1.0 bbbbbbbbbbbb; at 2026-07-15T12:10:00.000Z',
+    )
+
+    await append(rollbackEvents('cleared').at(-1)!)
+    await refresh()
+    expect(snapshots.at(-1)?.rollback).toBeUndefined()
+    expect(text()).not.toContain('rollback:')
+
+    const second = structuredClone(rollbackEvents()[1]!)
+    if (second.type !== 'dispatcher.runtime-rolled-back') throw new Error('fixture')
+    second.payload.correlation = 'second-rollback'
+    await append(second)
+    await refresh()
+    expect(snapshots.at(-1)?.rollback?.correlation).toBe('second-rollback')
+
+    await append(rollbackRun('operator', 'fresh'))
+    await append(rollbackFact('dispatcher.tick-yielded', { run: 'operator', holder: 'restored' }))
+    await refresh()
+    expect(snapshots.at(-1)?.rollback?.correlation).toBe('second-rollback')
+    await append(rollbackFact('dispatcher.tick-started', { run: 'operator' }))
+    await refresh()
+    expect(snapshots.at(-1)?.rollback).toBeUndefined()
+    expect(text()).not.toContain('rollback:')
+
+    // Quiet operational ticks advance authority without growing the replay cache.
+    const feedState = async () =>
+      (
+        await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+          version: dispatchFrontendReducer.version,
+        })
+      )?.state
+    const feed = (
+      frontend as unknown as { repositoryFeed: { save(force: boolean): Promise<void> } }
+    ).repositoryFeed
+    await feed.save(true)
+    const initialFeedState = await feedState()
+    expect(initialFeedState).toBeDefined()
+    const before = JSON.stringify(initialFeedState)
+    for (let index = 0; index < 128; index++)
+      await append(rollbackFact('dispatcher.tick-started', { run: 'operator' }))
+    await refresh()
+    await feed.save(true)
+    expect(JSON.stringify(await feedState())).toBe(before)
+    expect(JSON.stringify(await feedState())).not.toContain('tick-started')
+    expect(snapshots.at(-1)?.rollback).toBeUndefined()
+  } finally {
+    child.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+  }
+})

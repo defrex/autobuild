@@ -1,3 +1,4 @@
+import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
 import { handoffCapture } from '../../../tools/handoff-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
 import { nativeSessionCapture } from '../../../tools/native-session-capture'
@@ -83,6 +84,20 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+  ...['wide', 'narrow'].map((size) => ({
+    id: `builds-rollback-${size}`,
+    width: size === 'narrow' ? 390 : 1440,
+    height: 2200,
+    requires: [
+      'rollback: failed 1.1.0',
+      'bbbbbbbbbbbb',
+      'restored 1.0.0',
+      'aaaaaaaaaaaa',
+      'held',
+      ROLLBACK_AT,
+      'RUNNING',
+    ],
+  })),
   ...['wide', 'narrow', 'dimmed'].map((size) => ({
     id: `builds-handoff-${size}`,
     width: size === 'narrow' ? 390 : 1440,
@@ -671,6 +686,10 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       builds(models.integration, { detailOpen: true, selection: { kind: 'build', slug } }),
       { model: models.integration },
     )
+  }
+  if (spec.id.startsWith('builds-rollback-')) {
+    const model = rollbackCapture(models.happy)
+    return shell(builds(model), { model })
   }
   if (spec.id.startsWith('builds-handoff-')) {
     const model = handoffCapture(models.happy)

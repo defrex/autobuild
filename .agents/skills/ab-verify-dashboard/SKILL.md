@@ -21,6 +21,8 @@ the diff and not to decide applicability again.
    dispatch harness and writes `.ab/dashboard-frames/verify-report.md` plus
    PNG/text scratch files. It requires no server, network, forge, or live agent
    runner and does not deposit artifacts itself.
+   The rollback wide/narrow frames must show failed, restored and held runtime
+   versions and commits, plus the rollback event timestamp, as a yellow notice.
    The handoff wide/narrow frames must show both runtimes, mode, deadline and
    `(draining)` beside the independent lifecycle status.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
@@ -53,6 +55,10 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:rollback-wide:text .ab/dashboard-frames/rollback-wide.txt --attach
+   ab artifact put dashboard-frame:rollback-wide:png .ab/dashboard-frames/rollback-wide.png --attach
+   ab artifact put dashboard-frame:rollback-narrow:text .ab/dashboard-frames/rollback-narrow.txt --attach
+   ab artifact put dashboard-frame:rollback-narrow:png .ab/dashboard-frames/rollback-narrow.png --attach
    ab artifact put dashboard-frame:handoff-wide:text .ab/dashboard-frames/handoff-wide.txt --attach
    ab artifact put dashboard-frame:handoff-wide:png .ab/dashboard-frames/handoff-wide.png --attach
    ab artifact put dashboard-frame:handoff-narrow:text .ab/dashboard-frames/handoff-narrow.txt --attach
