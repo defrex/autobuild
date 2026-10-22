@@ -44,30 +44,40 @@ export function integrationComplete(state: Pick<BuildState, 'integration'>): boo
     observation.contributions.length > 0
   )
 }
+type CycleState = Pick<BuildState, 'integration' | 'restartSince' | 'nodeComparison' | 'verify'>
+
+/** A spec revision invalidates execution eligibility, never historical receipts. */
+export function integrationCycleCurrent(
+  state: Pick<CycleState, 'integration' | 'restartSince'>,
+): boolean {
+  return !!state.integration?.cycle && state.integration.cycle.seq > state.restartSince
+}
+
 export function integrationCurrent(state: BuildState): boolean {
   const cycle = state.integration?.cycle
   return (
-    !!cycle &&
+    integrationCycleCurrent(state) &&
     integrationComplete(state) &&
     !state.nodeRestack?.parentRequest &&
     !state.nodeRestack?.parentChange &&
     !state.nodeRestack?.active &&
-    state.nodeComparison?.headSha === cycle.head &&
-    state.nodeComparison?.parentSha === cycle.parent &&
-    (!state.nodeRestack?.observedParent || state.nodeRestack.observedParent.sha === cycle.parent) &&
-    state.nodeRestack?.contributionBase === cycle.parent
+    state.nodeComparison?.headSha === cycle!.head &&
+    state.nodeComparison?.parentSha === cycle!.parent &&
+    (!state.nodeRestack?.observedParent ||
+      state.nodeRestack.observedParent.sha === cycle!.parent) &&
+    state.nodeRestack?.contributionBase === cycle!.parent
   )
 }
 
 export function integrationConfig(config: import('../config/schema').Config): string {
   return JSON.stringify({ verify: config.verify, commands: config.commands })
 }
-export function integrationFailed(state: BuildState): boolean {
+export function integrationFailed(state: CycleState): boolean {
   const cycle = state.integration?.cycle
   return (
-    !!cycle &&
-    state.nodeComparison?.headSha === cycle.head &&
-    state.nodeComparison?.parentSha === cycle.parent &&
+    integrationCycleCurrent(state) &&
+    state.nodeComparison?.headSha === cycle!.head &&
+    state.nodeComparison?.parentSha === cycle!.parent &&
     state.verify.results.some(
       (result) =>
         result.seq > cycle!.seq && result.restackId === cycle!.id && result.outcome === 'fail',
@@ -123,9 +133,16 @@ export function integrationHeadVerified(state: BuildState, head: string): boolea
  * remains available to landing audits, but cannot authorize a new parent. */
 export function integrationCycleVerified(state: BuildState): boolean {
   const cycle = state.integration?.cycle
-  if (!cycle) return false
+  if (!cycle || !integrationCycleCurrent(state)) return false
   return integrationHeadVerified(
-    { ...state, integration: { ...state.integration, cycles: [cycle] } },
+    {
+      ...state,
+      verify: {
+        ...state.verify,
+        results: state.verify.results.filter((result) => result.seq > cycle.seq),
+      },
+      integration: { ...state.integration, cycles: [cycle] },
+    },
     cycle.head,
   )
 }
