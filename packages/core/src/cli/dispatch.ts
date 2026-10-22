@@ -3189,13 +3189,16 @@ class DispatchLoop {
             // supervisor settles the execution from the Store.
             if (active.detaching) return
             try {
+              const request = (await readBuildFacts(this.repoView, slug)).value.state
+                .drainingExecutions?.[instance]?.relaunch
+              const relaunch = !active.stopping && exit.exitCode === 0 && !!request
               await this.repoView.append(slug, {
                 actor: DISPATCHER,
                 type: 'execution.ended',
                 payload: {
                   instance,
                   workspaceRef,
-                  outcome: active.stopping ? 'stopped' : 'completed',
+                  outcome: active.stopping ? 'stopped' : relaunch ? 'relaunch' : 'completed',
                   exitCode: exit.exitCode,
                 },
               })
@@ -3220,11 +3223,15 @@ class DispatchLoop {
                   payload: {
                     run: this.runId,
                     slug,
-                    outcome: 'parked',
+                    outcome: relaunch ? 'relaunch' : 'parked',
                     status: state.status,
                   },
                 })
-                this.failureNotice(`build ${slug} parked (${state.status})`)
+                this.failureNotice(
+                  relaunch
+                    ? `build ${slug} relaunching on the accepted runtime`
+                    : `build ${slug} parked (${state.status})`,
+                )
                 return
               }
 
@@ -4207,6 +4214,7 @@ class DispatchLoop {
           correlation: handoff.correlation,
           run: this.runId,
           runtime: handoff.from,
+          targetRuntime: handoff.to,
           instance: build.instance,
         },
       })

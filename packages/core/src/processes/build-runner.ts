@@ -1,4 +1,6 @@
 import { reportIntegrationFailures } from '../kernel/integration-attention'
+import type { RuntimeIdentity } from '../events/runtime'
+import { relaunchTarget } from './execution-relaunch'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
 import {
@@ -191,6 +193,8 @@ export interface BuildRunnerDeps {
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
+  /** Immutable identity of this execution distribution; defaults to the loaded runtime. */
+  runtimeIdentity?: RuntimeIdentity
   workspacePath: string
   /** Explicit provider eligibility; never inferred from a matching path. */
   workspaceProvider?: string
@@ -836,7 +840,11 @@ export class BuildRunner {
   constructor(private readonly deps: BuildRunnerDeps) {
     this.deps = {
       ...deps,
-      store: withDrainingExecution(deps.store, deps.instance, RUNTIME_IDENTITY),
+      store: withDrainingExecution(
+        deps.store,
+        deps.instance,
+        deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+      ),
     }
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
@@ -957,7 +965,11 @@ export class BuildRunner {
     await store.append(slug, {
       actor: KERNEL,
       type: 'runner.runtime-recorded',
-      payload: { instance, attachedSeq: attached.seq, runtime: RUNTIME_IDENTITY },
+      payload: {
+        instance,
+        attachedSeq: attached.seq,
+        runtime: this.deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+      },
     })
   }
 
@@ -1207,6 +1219,32 @@ export class BuildRunner {
     }
   }
 
+  private async requestRelaunch(
+    facts: Awaited<ReturnType<typeof readBuildFacts>>['value'],
+  ): Promise<boolean> {
+    if (this.deps.workspaceRemote === true) return false
+    const request = relaunchTarget(
+      facts.state,
+      this.deps.instance,
+      this.deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+    )
+    if (!request) return false
+    if (
+      facts.state.drainingExecutions?.[this.deps.instance]?.relaunch?.correlation ===
+      request.correlation
+    )
+      return true
+    const written = await this.deps.store.appendIfCurrent(this.deps.slug, facts.state.lastSeq, {
+      actor: KERNEL,
+      type: 'execution.relaunch-requested',
+      payload: request,
+    })
+    // A concurrent control or authorization must be re-read before deciding.
+    if (!written)
+      return this.requestRelaunch((await readBuildFacts(this.deps.store, this.deps.slug)).value)
+    return true
+  }
+
   /**
    * The pipeline loop (§8): attach if needed, step until the build parks
    * (`wait/*` — §11), return the final reduced state. Releases nothing on
@@ -1215,9 +1253,14 @@ export class BuildRunner {
    * already deposited — see module doc).
    */
   async run(): Promise<BuildState> {
+    const initialFacts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+    if (await this.requestRelaunch(initialFacts)) {
+      this.stopHeartbeat()
+      await this.closeProducerSessions()
+      return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    }
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    const initialFacts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
     const initial = initialFacts.state
     if (
       initial.kind === 'node' &&
@@ -1237,14 +1280,14 @@ export class BuildRunner {
     }
     try {
       await this.settleLocalReconcile()
-      if (await this.refreshSummary())
-        return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
       for (;;) {
         if (this.deps.shutdownSignal?.aborted) break
-        if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) break
         await this.ensureLease()
         await this.settleLocalReconcile()
         const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+        if (await this.requestRelaunch(facts)) break
+        if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) break
+        if (await this.refreshSummary()) break
         if (facts.publication.pending()) {
           const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
           // Inert controls cannot start more work under unsettled publication.
@@ -1268,14 +1311,21 @@ export class BuildRunner {
           if (await this.settlePauseInterruption()) continue
           break
         }
-        if (await this.refreshSummary()) break
-        if (decision.kind === 'wait') break
+        if (decision.kind === 'wait') {
+          if (decision.reason === 'mixed-version')
+            await this.requestRelaunch(
+              (await readBuildFacts(this.deps.store, this.deps.slug)).value,
+            )
+          break
+        }
       }
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } catch (error) {
       if (!(error instanceof SessionShutdown) && !(error instanceof MixedVersionDeferral))
         throw error
-      return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+      const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+      if (error instanceof MixedVersionDeferral) await this.requestRelaunch(facts)
+      return facts.state
     } finally {
       this.stopHeartbeat()
       await this.closeProducerSessions()

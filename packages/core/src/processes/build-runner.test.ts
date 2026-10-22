@@ -13,7 +13,7 @@ import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-public
  * are spot-checked where the rule lives (feedback, attempts, transcript
  * metadata, actor kinds).
  */
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test, spyOn } from 'bun:test'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -304,6 +304,10 @@ class OneShotPostAppendFaultStore extends MemoryBuildStore {
 }
 
 interface HarnessOptions {
+  store?: OneShotPostAppendFaultStore
+  instance?: string
+  runtimeIdentity?: typeof RUNTIME_IDENTITY
+  beforeExec?: (cmd: string[], store: BuildStore) => Promise<void>
   nativeSessions?: boolean
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
@@ -403,7 +407,7 @@ interface Harness {
 
 async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const clock = options.clock ?? steppingClock()
-  const store = new OneShotPostAppendFaultStore({ clock })
+  const store = options.store ?? new OneShotPostAppendFaultStore({ clock })
   nextHarnessWorkspace += 1
   const workspaces = new FakeWorkspaceProvider({
     mode: 'logical',
@@ -415,7 +419,8 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     baseBranch: 'main',
     branch: BRANCH,
   })
-  await store.createBuild({ slug: SLUG, repo: 'acme/app', ticket: TICKET, branch: BRANCH })
+  if (!options.store)
+    await store.createBuild({ slug: SLUG, repo: 'acme/app', ticket: TICKET, branch: BRANCH })
   if (options.seedPrelude !== false) {
     await store.append(SLUG, {
       actor: DISPATCHER,
@@ -479,6 +484,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
+    await options.beforeExec?.(cmd, store)
     if (cmd[0] === 'git' && cmd[1] === 'commit-tree') {
       replayPrepared = true
       return { stdout: 'c'.repeat(40), stderr: '', exitCode: 0 }
@@ -643,7 +649,8 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     forge,
     ids: sequentialIds(),
     clock,
-    instance: 'runner-1',
+    instance: options.instance ?? 'runner-1',
+    runtimeIdentity: options.runtimeIdentity,
     host: 'sandbox-a',
     ...(options.delegateCredential ? { delegateCredential: options.delegateCredential } : {}),
     ...(options.sessionEnv !== undefined ? { sessionEnv: options.sessionEnv } : {}),
@@ -7461,4 +7468,154 @@ test('runtime companion append failure prevents phase work after attach', async 
   expect(ofType(events, 'runner.attached')).toHaveLength(1)
   expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
   expect(ofType(events, 'plan.started')).toHaveLength(0)
+})
+
+describe('accepted runtime relaunch at phase boundaries', () => {
+  const target = { ...RUNTIME_IDENTITY, commit: 'f'.repeat(40) }
+  async function authorize(store: BuildStore, instance = 'runner-1', to = target) {
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'execution.drain-authorized',
+      payload: {
+        instance,
+        correlation: 'handoff-1',
+        run: 'dispatch-old',
+        runtime: RUNTIME_IDENTITY,
+        targetRuntime: to,
+      },
+    })
+  }
+
+  test('a target accepted during plan lets plan finish but starts no review', async () => {
+    const h = await makeHarness({
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          plan: async (ctx) => {
+            await authorize(store)
+            return handlers.plan!(ctx)
+          },
+        }
+      },
+    })
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'plan.completed')).toHaveLength(1)
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+    expect(ofType(events, 'plan-review.started')).toHaveLength(0)
+    expect(ofType(events, 'execution.relaunch-requested')).toHaveLength(1)
+    expect(ofType(events, 'execution.relaunch-requested')[0]!.payload).toEqual({
+      instance: 'runner-1',
+      correlation: 'handoff-1',
+      from: RUNTIME_IDENTITY,
+      to: target,
+    })
+    await h.br.run()
+    expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(1)
+  })
+
+  test('a fresh owner resumes the next phase on the accepted runtime from durable state', async () => {
+    const old = await makeHarness({
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        return {
+          ...handlers,
+          plan: async (ctx) => {
+            await authorize(store)
+            return handlers.plan!(ctx)
+          },
+        }
+      },
+    })
+    await old.br.run()
+    await old.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'runner-1', workspaceRef: 'local', outcome: 'relaunch', exitCode: 0 },
+    })
+    await old.store.releaseLease(SLUG, 'runner-1')
+    // No process memory or repository lease is needed to preserve the handoff.
+    const successor = await makeHarness({
+      store: old.store,
+      seedPrelude: false,
+      instance: 'runner-2',
+      runtimeIdentity: target,
+    })
+    await successor.br.run()
+    const events = await old.store.getEvents(SLUG)
+    expect(ofType(events, 'runner.runtime-recorded').map((e) => e.payload.runtime)).toEqual([
+      RUNTIME_IDENTITY,
+      target,
+    ])
+    expect(ofType(events, 'plan.completed')).toHaveLength(1)
+    expect(ofType(events, 'plan-review.started')).toHaveLength(1)
+    expect(ofType(events, 'execution.relaunch-requested')).toHaveLength(1)
+  })
+
+  test('a target accepted during a deterministic check lets only that check complete', async () => {
+    const h = await makeHarness({
+      beforeExec: async (cmd, store) => {
+        if (cmd[0] === 'sh' && cmd[2] === 'bun tsc --noEmit') await authorize(store)
+      },
+    })
+    await seedCodeApproved(h.store)
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'verify.completed').map((e) => e.payload.step)).toEqual(['types'])
+    expect(ofType(events, 'execution.relaunch-requested')).toHaveLength(1)
+    expect(h.execCalls.some((c) => c.cmd[2] === 'bun test')).toBe(false)
+  })
+
+  test('unchanged target adds no Store reads at boundaries', async () => {
+    async function countReads(equalTarget: boolean) {
+      const h = await makeHarness()
+      if (equalTarget) await authorize(h.store, 'runner-1', RUNTIME_IDENTITY)
+      const reads = spyOn(h.store, 'getReducerValue')
+      try {
+        await h.br.run()
+        return reads.mock.calls.length
+      } finally {
+        reads.mockRestore()
+      }
+    }
+    expect(await countReads(true)).toBe(await countReads(false))
+  })
+
+  test('failed request deposit rejects instead of returning a successful relaunch', async () => {
+    const h = await makeHarness()
+    await authorize(h.store)
+    const original = h.store.appendIfCurrent.bind(h.store)
+    const append = spyOn(h.store, 'appendIfCurrent').mockImplementation(
+      async (slug, seq, event) => {
+        if (event.type === 'execution.relaunch-requested') throw new Error('request write failed')
+        return original(slug, seq, event)
+      },
+    )
+    try {
+      await expect(h.br.run()).rejects.toThrow('request write failed')
+      expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(0)
+    } finally {
+      append.mockRestore()
+    }
+  })
+
+  for (const kind of ['equal', 'foreign', 'settled', 'remote'] as const) {
+    test(`${kind} target does not request relaunch`, async () => {
+      const h = await makeHarness({ workspaceRemote: kind === 'remote' })
+      await authorize(
+        h.store,
+        kind === 'foreign' ? 'another-runner' : 'runner-1',
+        kind === 'equal' ? RUNTIME_IDENTITY : target,
+      )
+      if (kind === 'settled')
+        await h.store.append(SLUG, {
+          actor: DISPATCHER,
+          type: 'execution.drain-settled',
+          payload: { instance: 'runner-1', correlation: 'handoff-1' },
+        })
+      await h.br.run()
+      expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(0)
+    })
+  }
 })
