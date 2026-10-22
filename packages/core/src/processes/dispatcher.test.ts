@@ -10565,3 +10565,115 @@ test('a child claim wakes an idle parent before the child opens a PR', async () 
   expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
   expect(reads).toBeGreaterThan(0)
 })
+
+test('node polling reads no settled history after warming, on idle and due ticks', async () => {
+  class FactCountingStore extends MemoryBuildStore {
+    readonly facts = new Map<string, number>()
+    override async getReducerValue(...args: Parameters<MemoryBuildStore['getReducerValue']>) {
+      const [scope, request] = args
+      if (scope.kind === 'build' && request.reducer === 'buildReadFacts')
+        this.facts.set(scope.slug, (this.facts.get(scope.slug) ?? 0) + 1)
+      return super.getReducerValue(...args)
+    }
+  }
+  const clock = manualClock()
+  const store = new FactCountingStore({ clock })
+  const h = harness({
+    store,
+    clock,
+    tickets: ['N1', 'N2', 'N3'].map((id) => readyTicket(id, { kind: 'node' })),
+  })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  const nodes = await store.listBuilds()
+  const parent = nodes[0]!
+  for (let i = 0; i < 40; i++) {
+    const ticket = { source: 'fake', id: `OLD-${i}` }
+    await store.createBuild({
+      slug: `history-${i}`,
+      repo: REPO,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket,
+          repo: REPO,
+          baseBranch: 'main',
+          kind: 'work',
+          ...(i % 2 ? {} : { target: { ticket: parent.ticket!, build: parent.slug } }),
+        },
+      },
+    })
+    await store.append(`history-${i}`, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  clock.advance(600_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  for (const elapsed of [20_000, 120_000]) {
+    store.facts.clear()
+    clock.advance(elapsed)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect([...store.facts.keys()].filter((slug) => slug.startsWith('history-'))).toEqual([])
+  }
+  // A late lifecycle receipt invalidates only that terminal child's cached facts.
+  await store.append('history-0', { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+  store.facts.clear()
+  expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+  // The admitted ticket-list refresh reads each historical build once; the
+  // polling gate adds exactly one fresh read for the changed child.
+  expect(store.facts.get('history-0')).toBe(2)
+  expect(store.facts.get('history-2')).toBe(1)
+})
+
+test('child phase progress preserves the ticket-list throttle; PR opening invalidates it', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  const node = (await h.store.listBuilds())[0]!
+  const ticket = { source: 'fake', id: 'CHILD' }
+  await h.store.createBuild({
+    slug: 'progress-child',
+    repo: REPO,
+    ticket,
+    branch: 'ab/progress-child',
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket,
+        repo: REPO,
+        baseBranch: node.branch!,
+        kind: 'work',
+        target: { ticket: node.ticket!, build: node.slug },
+      },
+    },
+  })
+  let listings = 0
+  const listAll = h.tickets.listAll.bind(h.tickets)
+  h.tickets.listAll = async (...args) => {
+    listings++
+    return listAll(...args)
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(listings).toBe(1)
+  for (const type of ['plan.started', 'plan-review.started', 'implement.started'] as const) {
+    await h.store.append('progress-child', { actor: KERNEL, type, payload: { round: 1 } })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(listings).toBe(1)
+  }
+  const pr = await h.forge.openPr({
+    workspacePath: REPO,
+    head: 'ab/progress-child',
+    base: node.branch!,
+    title: 'Child',
+    body: 'Child work',
+  })
+  await h.store.append('progress-child', { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(listings).toBe(2)
+})

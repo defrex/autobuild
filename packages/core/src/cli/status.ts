@@ -1106,25 +1106,18 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
         const state = (await readBuildFacts(context.store, child.slug)).value.state
         if (state.target?.build === record.slug) children.push({ slug: child.slug, state })
       }
-      let policy = {
+      // The checkpoint records the dispatcher's hot policy. A held node's
+      // launch artifact can predate later policy changes.
+      const policy = {
         nodeIdleAfterSeconds: facts.state.nodePolling?.nodeIdleAfterSeconds ?? 600,
         nodeIdlePollSeconds: facts.state.nodePolling?.nodeIdlePollSeconds ?? 120,
-      }
-      let policyUnavailable = false
-      if (configArtifact !== null) {
-        try {
-          policy = parseEffectiveBuildConfig(configArtifact).policy
-        } catch {
-          policyUnavailable = true
-        }
       }
       nodePolling = nodePollingSchedule(
         facts.state,
         nodeActivityKey(facts.state, children),
         policy,
         now,
-        policyUnavailable ||
-          facts.open !== null ||
+        facts.open !== null ||
           facts.publication.pending() ||
           facts.publication.abandonedPending() ||
           undefined,

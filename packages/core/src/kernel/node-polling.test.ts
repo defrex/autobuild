@@ -118,3 +118,43 @@ test('native operations bypass idle, holds and awaiting consent qualify', () => 
       .due,
   ).toBe(true)
 })
+
+test('ticket observation key ignores build phases but wakes for claims, PRs and operator demand', async () => {
+  const { nodeTicketObservationKey } = await import('./node-polling')
+  const parent = node()
+  const child = node()
+  const children = [{ slug: 'child', state: child }]
+  const key = nodeTicketObservationKey(parent, children)
+  for (const type of [
+    'plan.started',
+    'plan.completed',
+    'plan-review.started',
+    'implement.started',
+    'verify.started',
+  ]) {
+    advancePollingActivity(child.pollingActivity, { type, seq: 10, payload: {} } as AbEvent)
+    expect(nodeTicketObservationKey(parent, children)).toBe(key)
+  }
+  expect(nodeTicketObservationKey(parent, [])).not.toBe(key)
+  for (const type of [
+    'pr.opened',
+    'finalize.completed',
+    'pr.merged',
+    'pr.closed',
+    'build.completed',
+  ]) {
+    const before = nodeTicketObservationKey(parent, children)
+    advancePollingActivity(child.pollingActivity, { type, seq: 20, payload: {} } as AbEvent)
+    expect(nodeTicketObservationKey(parent, children)).not.toBe(before)
+  }
+  for (const type of [
+    'build.land-requested',
+    'build.hold-requested',
+    'node.restack-requested',
+    'escalation.answered',
+  ]) {
+    const before = nodeTicketObservationKey(parent, children)
+    advancePollingActivity(parent.pollingActivity, { type, seq: 30, payload: {} } as AbEvent)
+    expect(nodeTicketObservationKey(parent, children)).not.toBe(before)
+  }
+})

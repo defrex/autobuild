@@ -2632,6 +2632,27 @@ test('node status exposes idle evidence and wakes immediately on durable activit
   expect(await output(false)).toContain(
     `idle; polled every 120 seconds; last checked: ${time.toISOString()}`,
   )
+  // A held node's launch artifact still has 120, but hot policy has moved to
+  // 300 and the successful checkpoint is the evidence status must display.
+  await store.putArtifact(slug, {
+    kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+    content: effectiveBuildConfigContent(parseConfig(MINIMAL_CONFIG)),
+  })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.poll-checked',
+    payload: {
+      activityKey: key,
+      unchangedSince: time.toISOString(),
+      nodeIdleAfterSeconds: 600,
+      nodeIdlePollSeconds: 300,
+    },
+  })
+  expect(JSON.parse(await output(true)).nodePolling).toMatchObject({
+    mode: 'idle',
+    intervalSeconds: 300,
+  })
+  expect(await output(false)).toContain('idle; polled every 300 seconds')
   time = NOW
   await store.append(slug, {
     actor: humanActor('operator'),

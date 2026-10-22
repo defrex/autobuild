@@ -44,8 +44,8 @@ export function advancePollingActivity(activity: Record<string, string>, event: 
 }
 
 export function nodeActivityKey(
-  state: BuildState,
-  children: readonly { slug: string; state: BuildState }[],
+  state: Pick<BuildState, 'pollingActivity'>,
+  children: readonly { slug: string; state: Pick<BuildState, 'pollingActivity'> }[],
 ): string {
   return createHash('sha256')
     .update(
@@ -57,6 +57,46 @@ export function nodeActivityKey(
       }),
     )
     .digest('hex')
+}
+
+/** Ticket membership needs claims, PR lifecycle and operator demand, not each
+ * plan/review/verification event that keeps GitHub observation active. */
+export function nodeTicketObservationKey(
+  state: Pick<BuildState, 'pollingActivity'>,
+  children: readonly { slug: string; state: Pick<BuildState, 'pollingActivity'> }[],
+): string {
+  const select = (activity: BuildState['pollingActivity'], types: readonly string[]) =>
+    Object.fromEntries(
+      types.flatMap((type) => (activity?.[type] === undefined ? [] : [[type, activity[type]]])),
+    )
+  return nodeActivityKey(
+    {
+      pollingActivity: select(state.pollingActivity, [
+        'build.land-requested',
+        'build.hold-requested',
+        'node.restack-requested',
+        'escalation.answered',
+        'node.parent-requested',
+        'node.parent-accepted',
+      ]),
+    },
+    children.map((child) => ({
+      slug: child.slug,
+      state: {
+        pollingActivity: select(child.state.pollingActivity, [
+          'build.created',
+          'pr.opened',
+          'finalize.completed',
+          'pr.merged',
+          'pr.closed',
+          'build.completed',
+          'build.aborted',
+          'node.contribution-recorded',
+          'integration.landed',
+        ]),
+      },
+    })),
+  )
 }
 
 /** Pending operations always bypass cadence; hold and absent consent do not. */

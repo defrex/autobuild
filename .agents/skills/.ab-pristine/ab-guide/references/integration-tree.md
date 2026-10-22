@@ -195,6 +195,8 @@ and after accepted re-parenting. Descendants need independent demand; presence
 requests follow only the minimal proven ancestor path. See
 [restacking](restacking.md#timing-and-evidence) for timing, requests and distance.
 
+## Polling and status
+
 Opened integration nodes poll every tick until their durable activity has been
 quiet for `policy.nodeIdleAfterSeconds` (default 600 seconds), then poll every
 `policy.nodeIdlePollSeconds` (default 120 seconds). Holds and waiting for consent

@@ -1,4 +1,9 @@
-import { nodeActivityKey, nodePollingSchedule, nodePollingUnsettled } from '../kernel/node-polling'
+import {
+  nodeActivityKey,
+  nodePollingSchedule,
+  nodePollingUnsettled,
+  nodeTicketObservationKey,
+} from '../kernel/node-polling'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import {
   resolveTicketRef,
@@ -705,17 +710,57 @@ export class Dispatcher {
     polls.set(slug, { key, at: now })
     return true
   }
-  private async integrationClaimKey(slug: string): Promise<string> {
-    return nodeActivityKey(
-      (await this.store.buildFacts(slug)).state,
-      await this.nodePollingChildren(slug),
-    )
+  // Work targets are frozen; settled activity is refreshed only when its
+  // compact readiness digest changes. Neither cache decides eligibility.
+  private readonly nodePollingBuilds = new Map<
+    string,
+    {
+      target?: string
+      activity: Pick<BuildState, 'pollingActivity'>
+      settledKey?: string
+    }
+  >()
+  private readonly nodePollingTickReads = new Map<string, Promise<BuildState>>()
+
+  private async integrationClaimKey(slug: string, state: BuildState): Promise<string> {
+    return nodeTicketObservationKey(state, await this.nodePollingChildren(slug))
   }
-  private async nodePollingChildren(slug: string) {
-    const children: { slug: string; state: BuildState }[] = []
-    for (const { record } of await this.repoBuildDigests()) {
-      const state = (await this.store.buildFacts(record.slug)).state
-      if (state.target?.build === slug) children.push({ slug: record.slug, state })
+  private async nodePollingChildren(slug: string, refresh = false) {
+    const children: { slug: string; state: Pick<BuildState, 'pollingActivity'> }[] = []
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (record.slug === slug) continue
+      const known = this.nodePollingBuilds.get(record.slug)
+      // Only node relationships can move. Unrelated known work never needs
+      // another full-facts read, even while it is running.
+      if (digest.kind !== 'node' && known && known.target !== slug) continue
+      const settledKey =
+        digest.terminal && !digest.executionOpen
+          ? JSON.stringify([
+              digest.terminal,
+              digest.readinessChangeSeq,
+              digest.merged,
+              digest.prClosed,
+            ])
+          : undefined
+      let current = known
+      if (!current || settledKey === undefined || current.settledKey !== settledKey) {
+        let read =
+          refresh || (known && known.settledKey !== settledKey)
+            ? undefined
+            : this.nodePollingTickReads.get(record.slug)
+        if (!read) {
+          read = this.store.buildFacts(record.slug).then((facts) => facts.state)
+          this.nodePollingTickReads.set(record.slug, read)
+        }
+        const state = await read
+        current = {
+          target: state.target?.build,
+          activity: { pollingActivity: state.pollingActivity },
+          settledKey,
+        }
+        if (state.lastSeq > 0) this.nodePollingBuilds.set(record.slug, current)
+      }
+      if (current.target === slug) children.push({ slug: record.slug, state: current.activity })
     }
     return children
   }
@@ -898,6 +943,7 @@ export class Dispatcher {
   private async runTick(opts: TickOpts): Promise<TickReport> {
     this.integrationInputs = undefined
     this.integrationPublicationInputs = undefined
+    this.nodePollingTickReads.clear()
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -2005,7 +2051,7 @@ export class Dispatcher {
               return
             const current = (await this.store.buildFacts(record.slug)).state
             if (nodePollingUnsettled(current) && current.status !== 'done') return
-            const children = await this.nodePollingChildren(record.slug)
+            const children = await this.nodePollingChildren(record.slug, true)
             const key = nodeActivityKey(current, children)
             // A command or child event arriving during observation stays due.
             const commandTypes = [
@@ -5355,7 +5401,7 @@ export class Dispatcher {
         payload: comparison,
       })
     state = (await this.store.buildFacts(record.slug)).state
-    const claims = await this.integrationClaimKey(record.slug)
+    const claims = await this.integrationClaimKey(record.slug, state)
     const unchangedFailure = integrationFailed(state)
     if (
       !unchangedFailure &&
