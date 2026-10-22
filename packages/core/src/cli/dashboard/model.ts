@@ -161,7 +161,7 @@ export interface DashboardHarvest {
   /** A row always represents this concrete run; the repository gate lives in
    * the header even when no run exists. */
   run: string
-  status: 'running' | 'paused' | 'escalated' | 'failed'
+  status: 'running' | 'paused' | 'suspended' | 'escalated' | 'failed'
   steps: PipelineStep[]
   observations: number
   rounds: number
@@ -1127,7 +1127,9 @@ function projectHarvestRun(
   const exhaustion = run.recoveryExhaustion
 
   const occurrences = run.steps
-  const stopped = run.status !== 'running'
+  const suspended = run.status === 'running' ? run.sessions.at(-1) : undefined
+  const suspendedAt = suspended?.status === 'suspended' ? suspended.suspendedAt : undefined
+  const stopped = run.status !== 'running' || suspendedAt !== undefined
   const current = (name: string): boolean => {
     if (stopped || state.paused) return false
     const latest = [...occurrences].reverse().find((occurrence) => occurrence.step === name)
@@ -1166,12 +1168,10 @@ function projectHarvestRun(
   // Both durable stop states freeze any open occurrence. A failure normally
   // closes its step immediately afterward, but projecting the boundary itself
   // must never make an errored row look like work is still accumulating time.
-  const frozenAt =
-    state.pausedAt !== undefined
-      ? Date.parse(state.pausedAt)
-      : failureStoppedAt !== undefined
-        ? Date.parse(failureStoppedAt)
-        : undefined
+  const stops = [state.pausedAt, failureStoppedAt, suspendedAt]
+    .filter((at): at is string => at !== undefined)
+    .map((at) => Date.parse(at))
+  const frozenAt = stops.length > 0 ? Math.min(...stops) : undefined
   const steps: PipelineStep[] = [
     step('scan', hasOutcome('scan', 'completed'), current('scan'), {
       qualifier: failedAt('scan') ? 'failed' : undefined,
@@ -1240,7 +1240,8 @@ function projectHarvestRun(
     run: run.run,
     // A paused gate freezes an open run. Attention statuses remain visible as
     // FAILED/ESCALATED because the header now carries the gate state.
-    status: state.paused && run.status === 'running' ? 'paused' : run.status,
+    status:
+      state.paused && run.status === 'running' ? 'paused' : suspendedAt ? 'suspended' : run.status,
     steps,
     observations: run.observations.length,
     rounds,

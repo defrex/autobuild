@@ -51,6 +51,7 @@
   --status-running: var(--ok);
   --status-pausing: var(--warn);
   --status-paused: var(--warn);
+  --status-suspended: var(--warn);
   --status-resuming: var(--live);
   --status-blocked: var(--alert);
   --status-aborting: var(--alert);
@@ -661,6 +662,9 @@ input.short {
 }
 .status[data-status="pausing"] {
   color: var(--status-pausing);
+}
+.status[data-status="suspended"] {
+  color: var(--status-suspended);
 }
 .status[data-status="paused"] {
   color: var(--status-paused);
