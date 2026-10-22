@@ -104,7 +104,12 @@ test('real Bun lock and isolated install validate exact registry integrity, then
       } as unknown as Forge,
     })
     expect(target.version).toBe('2.0.0')
-    const runtime = await prepareUpgrade({ checkout: repo, target, signal, env })
+    const runtime = await prepareUpgrade({
+      checkout: repo,
+      target,
+      signal,
+      env,
+    })
     expect(JSON.parse(await readFile(join(runtime.root, 'package.json'), 'utf8')).version).toBe(
       '2.0.0',
     )
