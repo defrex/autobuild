@@ -1048,6 +1048,36 @@ describe('agent tool registry contract', () => {
     expectJsonClean(result)
   })
 
+  test('builds.events preserves failed-node attention and resumes after its sequence', async () => {
+    const world = await seedWorld()
+    const registry = buildRegistry({ store: world.store, clock })
+    const event = await world.store.append('demo', {
+      actor: KERNEL,
+      type: 'integration.verification-failed',
+      payload: {
+        id: 'cycle',
+        head: 'head',
+        parent: 'parent',
+        steps: ['unit'],
+        guidance: 'file a repair child targeting this node: demo',
+      },
+    })
+    const result = (await registry.call('builds.events', {
+      repo,
+      slug: 'demo',
+      cursor: event.seq - 1,
+    })) as { events: unknown[]; cursor: number }
+    expectEqual(result.events, [event])
+    expect(result.cursor).toBe(event.seq)
+    const resumed = (await registry.call('builds.events', {
+      repo,
+      slug: 'demo',
+      cursor: result.cursor,
+    })) as { events: unknown[]; cursor: number }
+    expectEqual(resumed.events, [])
+    expect(resumed.cursor).toBe(event.seq)
+  })
+
   test('builds.events bounded wait: a new event ends the wait, silence returns empty at the deadline', async () => {
     const world = await seedWorld()
     const registry = buildRegistry({ store: world.store, clock })

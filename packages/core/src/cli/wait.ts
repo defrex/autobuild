@@ -1,3 +1,4 @@
+import { integrationFailed } from '../kernel/integration-state'
 import { awaitsConsent } from '../kernel/landing-readiness'
 import { leafRestackReducer, type LeafRestackState } from '../kernel/leaf-restack-state'
 import { consentReady, consentIdentity } from './attention'
@@ -215,6 +216,7 @@ function stateSatisfies(
       return !!state.nodeRestack?.conflict || !!(restack.active && restack.replay?.conflicted)
     case 'attention':
       return (
+        (state.kind === 'node' && integrationFailed(state)) ||
         state.janitor?.attention === true ||
         awaitsConsent(state, restack) ||
         !!state.nodeRestack?.conflict ||
@@ -501,6 +503,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           event.type === 'escalation.raised' ||
           event.type === 'phase.deferral-escalated' ||
           event.type === 'integration.landed' ||
+          event.type === 'integration.verification-failed' ||
           event.type === 'node.item-conflicted' ||
           (event.type === 'restack.replayed' && event.payload.conflicted)
         )

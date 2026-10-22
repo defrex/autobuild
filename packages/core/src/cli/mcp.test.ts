@@ -365,3 +365,35 @@ test('MCP ticket tools expose node kind and nullable target, with metadata-only 
     await client.close()
   }
 })
+
+test('MCP builds.events forwards failed-node attention intact and respects its cursor', async () => {
+  await seed()
+  const local = openLocalStore(storeDir)
+  const event = await local.append('demo', {
+    actor: KERNEL,
+    type: 'integration.verification-failed',
+    payload: {
+      id: 'cycle',
+      head: 'a'.repeat(40),
+      parent: 'b'.repeat(40),
+      steps: ['unit'],
+      guidance: 'file a repair child targeting this node: demo',
+    },
+  })
+  await local.close()
+  const client = await connect()
+  try {
+    const call = async (cursor: number) => {
+      const result = await client.callTool({
+        name: 'builds.events',
+        arguments: { repo: await realpath(tmp), slug: 'demo', cursor },
+      })
+      expect(result.isError).toBeUndefined()
+      return JSON.parse((result.content as { text: string }[])[0]!.text)
+    }
+    expect(await call(event.seq - 1)).toEqual({ events: [event], cursor: event.seq })
+    expect(await call(event.seq)).toEqual({ events: [], cursor: event.seq })
+  } finally {
+    await client.close()
+  }
+})

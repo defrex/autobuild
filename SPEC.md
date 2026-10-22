@@ -2523,6 +2523,7 @@ with illustrative members:
 | Sessions | `session.started` (including optional write-ahead continuation intent and budget ceiling); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
+| Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Leaf restacking | `target.moved {branch, sha}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
@@ -3674,7 +3675,7 @@ current decision is required; auto-authorized and consented candidates are absen
 Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listing
 diagnostics; effective build targets remain frozen independently of source metadata.
 
-Default watch attention includes `integration.landed`, `node.item-conflicted`,
+Default watch attention includes `integration.verification-failed`, `integration.landed`, `node.item-conflicted`,
 and conflicted `restack.replayed`. Derived `build.consent-ready` observations
 carry target, branch, candidate and the durable readiness entry position in the
 existing cursor envelope. Cursor identities retain readiness episodes across
@@ -3714,3 +3715,9 @@ unavailable for uninstrumented adapters. Attribution retains at most ten builds
 ordered by descending count then build name; repository requests are unattributed.
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
+
+## Integration verification attention
+
+A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
+
+Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
