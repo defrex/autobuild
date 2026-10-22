@@ -239,6 +239,7 @@
     "$: object"
   ],
   "dispatchUpgrade": [
+    "$.authoritativeRun: string",
     "$.holds.launcher.actor.kind: string",
     "$.holds.launcher.actor: object",
     "$.holds.launcher.payload.correlation: string",
@@ -1355,6 +1356,7 @@
     "$.ticketMigrations.migrations[].to: string",
     "$.ticketMigrations.migrations[]: object",
     "$.ticketMigrations: object",
+    "$.upgrades.authoritativeRun: string",
     "$.upgrades.holds.launcher.actor.kind: string",
     "$.upgrades.holds.launcher.actor: object",
     "$.upgrades.holds.launcher.payload.correlation: string",

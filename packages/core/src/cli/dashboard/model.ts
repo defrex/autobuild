@@ -1,5 +1,6 @@
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
-import { dispatchUpgradeReducer } from '../../kernel/dispatch-upgrade'
+import { projectRollback, type DashboardRollback } from './rollback'
+import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
 import { enrichDrainingRow, projectHandoffs, type DashboardHandoff } from './handoff'
 import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
@@ -309,6 +310,7 @@ export interface DashboardCounter {
 }
 
 export interface DashboardModel {
+  rollback?: DashboardRollback
   handoffs?: DashboardHandoff[]
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
@@ -1312,12 +1314,16 @@ export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
+  // Filtered frontend feeds omit operational facts; use the durable reduced read there.
+  upgrades?: DispatchUpgradeState,
 ): DashboardModel {
-  const upgrade = projectHandoffs(
-    Array.isArray(repositoryEvents)
+  const upgradeState =
+    upgrades ??
+    (Array.isArray(repositoryEvents)
       ? dispatchUpgradeReducer.reduce(repositoryEvents)
-      : repositoryEvents.upgrades,
-  )
+      : repositoryEvents.upgrades)
+  const upgrade = projectHandoffs(upgradeState)
+  const rollback = projectRollback(upgradeState)
   const builds = enrichIntegrationRows(
     projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining)),
   ).sort((a, b) => a.slug.localeCompare(b.slug))
@@ -1327,6 +1333,7 @@ export function buildDashboardFromProjected(
     : repositoryEvents.settings
   return {
     repo: header.repo,
+    ...(rollback ? { rollback } : {}),
     ...(upgrade.handoffs.length ? { handoffs: upgrade.handoffs } : {}),
     queued: header.queued,
     active: {

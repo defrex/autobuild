@@ -1528,6 +1528,14 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
+Both dashboards also show the current authoritative dispatcher's unresolved
+rollback: failed and restored runtime (version and commit), held failed runtime,
+and rollback event timestamp. A matching durable different-target hold clearance
+removes the notice. An operator restart hides the previous lineage's notice once
+its new lineage commits an operational tick or accepted takeover. A run-started
+fact or yielded tick alone cannot hide it; same-lineage generation changes retain
+it. Historical rollbacks and other lineages' holds are never fallback notices.
+
 Both dashboards show each accepted unfinished handoff: source and target runtime
 version and abbreviated commit, mode, and drain deadline (unknown when unrecorded).
 Outstanding predecessor executions in drain mode carry `(draining)` alongside
