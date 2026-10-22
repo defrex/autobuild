@@ -1,3 +1,4 @@
+import type { SourceLaunch } from './dispatch-upgrade-source'
 import { isAbsolute, join, resolve } from 'node:path'
 
 /** Frozen launcher ABI. Changes require a new version and compatibility fixture. */
@@ -10,6 +11,7 @@ export interface GenerationLaunch {
   version: 1
   runtimeRoot: string
   checkout: string
+  sourceLaunch?: SourceLaunch
   originalInstall?: string
   run?: string
   lineage?: string
@@ -34,6 +36,7 @@ export function consumeGenerationMarker(
   const marker = JSON.parse(raw ?? 'null') as GenerationLaunch | null
   if (
     !marker ||
+    !validSourceLaunch(marker.sourceLaunch) ||
     marker.version !== DISPATCH_LAUNCH_VERSION ||
     typeof marker.runtimeRoot !== 'string' ||
     !isAbsolute(marker.runtimeRoot) ||
@@ -64,6 +67,7 @@ export function launchContext(
   if (!raw) return undefined
   const value = JSON.parse(raw) as GenerationLaunch
   if (
+    !validSourceLaunch(value.sourceLaunch) ||
     value.version !== 1 ||
     !value.run ||
     !value.lineage ||
@@ -72,4 +76,19 @@ export function launchContext(
   )
     throw new Error('invalid generation context')
   return value
+}
+
+function validSourceLaunch(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as SourceLaunch
+  return (
+    Object.keys(v).sort().join(',') === 'baseline,commit,repository' &&
+    typeof v.repository === 'string' &&
+    isAbsolute(v.repository) &&
+    typeof v.commit === 'string' &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v.commit) &&
+    typeof v.baseline === 'string' &&
+    /^[a-f0-9]{64}$/.test(v.baseline)
+  )
 }
