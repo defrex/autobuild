@@ -920,7 +920,9 @@ per-build scan paid only when a gate actually trips and a scan packet is built.
 
 Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
-(all harvest facts, operator-sandbox facts, and the three dispatcher setting
+(all harvest facts, operator-sandbox facts, cross-generation handoff correlation
+facts including preparation, request, failure, start, release, takeover, deadline,
+settlement and completion, and the three dispatcher setting
 types) plus, when the journal has one, the tail from the latest
 `dispatcher.run-started`. The run-scoped `dispatcher.runtime-recorded` companion
 is retained in this same bounded tail. Reducing this subset with the state readers yields
