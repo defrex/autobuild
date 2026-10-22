@@ -32,6 +32,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
   upgrades: DispatchUpgradeState
+  rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
   warningLines?: string[]
   dispatcher: DispatcherLiveness
@@ -113,6 +114,7 @@ export function projectRepositoryStatus(
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
     upgrades: dispatchUpgradeReducer.reduce(events),
+    rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...(() => {
@@ -146,6 +148,7 @@ export function repositoryStatusFromFacts(
   return {
     repo,
     upgrades: facts.upgrades,
+    rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     dispatcher,
     ...(() => {
@@ -180,6 +183,12 @@ export function repositoryStatusFromFacts(
   }
 }
 
+function effectiveRollbackHold(upgrades: DispatchUpgradeState, dispatcher: DispatcherLiveness) {
+  const run = dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun
+  const lineage = run && upgrades.lineages[run.run]
+  return lineage ? upgrades.holds[lineage] : undefined
+}
+
 function formatRepositoryDispatcherIdentity(
   run: NonNullable<DispatcherLiveness['latestRun']>,
 ): string {
@@ -197,6 +206,16 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
   return [
+    ...(status.upgrades.lastRollback
+      ? [
+          `runtime rollback: ${status.upgrades.lastRollback.payload.failed.version} → ${status.upgrades.lastRollback.payload.restored.version}; ${status.upgrades.lastRollback.payload.reason}`,
+        ]
+      : []),
+    ...(status.rollbackHold
+      ? [
+          `held runtime: ${status.rollbackHold.payload.failed.version}; target ${status.rollbackHold.payload.target.key}`,
+        ]
+      : []),
     ...Object.entries(status.upgrades.runs).flatMap(([run, state]) => {
       const event =
         state.completed ??
