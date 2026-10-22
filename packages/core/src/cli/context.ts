@@ -1,3 +1,7 @@
+import {
+  collectNodeVerificationProvenance,
+  type NodeVerificationIndex,
+} from './node-verification-provenance'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
@@ -99,6 +103,7 @@ export interface ContextManifest {
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
   conflict?: { baseSha: string }
+  nodeVerification?: Omit<NodeVerificationIndex, 'commits'> & { indexPath: string }
   nodeChange?: {
     owner: string
     transaction: string
@@ -219,12 +224,13 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     phase === 'implement' || phase === 'reconcile' ? locate(`${phase}-notes.md`) : undefined
   const materialized: Record<string, MaterializedEntry> = {}
 
-  async function writeDerived(desiredPath: string, content: string): Promise<void> {
+  async function writeDerived(desiredPath: string, content: string): Promise<string> {
     const relPath = locate(desiredPath)
     const target = join(abDir, relPath)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, content)
     materialized[relPath] = 'derived'
+    return `.ab/${relPath}`
   }
 
   /** Latest rev when `rev` omitted; silently skips absent kinds — the tree is
@@ -455,6 +461,31 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   } else if (inputs.commitRange === true && state.implement.commits !== undefined) {
     manifest.commitRange = state.implement.commits
+  }
+
+  if (isVerifyPhase(phase) && state.kind === 'node' && state.integration?.cycle) {
+    if (!gitWorkspace)
+      throw new Error('node verification provenance requires a Git workspace and exec')
+    const record = await store.getBuild(build)
+    if (!record) throw new Error(`node verification build ${build} is missing`)
+    const { index, specs } = await collectNodeVerificationProvenance(
+      store,
+      record.repo,
+      manifest.commitRange!,
+      { exec: deps.exec!, workspacePath },
+    )
+    for (const contribution of index.contributions) {
+      contribution.specPath = await writeDerived(
+        `contributions/${contribution.build}/spec.md`,
+        specs.get(contribution.build)!,
+      )
+    }
+    const indexPath = await writeDerived(
+      'node-verification.json',
+      `${JSON.stringify(index, null, 2)}\n`,
+    )
+    const { commits: _commits, ...metadata } = index
+    manifest.nodeVerification = { ...metadata, indexPath }
   }
 
   if (phase === 'reconcile' && state.nodeRestack?.conflict) {
