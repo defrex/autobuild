@@ -3466,3 +3466,128 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
     await store.close()
   }
 })
+
+test('interactive frontend restores older handoffs from bounded seed and clears markers on repository-only updates', async () => {
+  const { handoffEvents } = await import('../../../../tools/handoff-capture')
+  const { persistReducerSnapshot } = await import('../store/snapshots')
+  const repo = '/frontend-handoff'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  for (const slug of ['old-build', 'unaffected']) {
+    await store.createBuild({ slug, repo })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: slug }, baseBranch: 'main' },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: `${slug}-execution`, host: 'test' },
+    })
+  }
+  const append = (event: ReturnType<typeof handoffEvents>[number]) =>
+    store.appendRepo(repo, {
+      actor: event.actor,
+      type: event.type,
+      payload: event.payload,
+    } as RepositoryEventWrite)
+  for (const event of handoffEvents('old-build')) await append(event)
+  // The previous frontend version consumed the cursor while dropping handoffs.
+  await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+    version: 2,
+    cursor: await store.getRepoHighWater(repo),
+    state: { retained: [], incompleteIdentities: true },
+  })
+  const snapshots: DashboardModel[] = []
+  const startup = deferred<void>()
+  const child = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'test',
+    store,
+    env: {},
+    once: true,
+    input: { start: () => () => {} },
+    terminal: {
+      columns: 120,
+      rows: 30,
+      interactive: true,
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    resolveDashboardRenderer: () => (model, options) => {
+      snapshots.push(model)
+      return renderDashboard(model, options)
+    },
+    launchChild: ({ run }) => {
+      void store
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+            },
+          }),
+        )
+        .then(() => startup.resolve())
+      return { completed: child.promise, stop: async () => {} }
+    },
+  })
+  const running = frontend.run()
+  try {
+    await startup.promise
+    const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+    await refresh()
+    const active = snapshots.at(-1)!
+    expect(active.handoffs).toHaveLength(1)
+    const activeText = stripAnsi(
+      renderDashboard(active, { width: 120, height: 30, color: false, now: 0 }).join('\n'),
+    )
+    expect(activeText).toContain('handoff 1.0.0 aaaaaaaaaaaa to 1.1.0 bbbbbbbbbbbb; mode drain;')
+    expect(activeText).toContain('2026-07-15T12:15:00.000Z')
+    expect(active.builds.find((row) => row.slug === 'old-build')?.draining).toBe(true)
+    expect(active.builds.find((row) => row.slug === 'unaffected')?.draining).toBeUndefined()
+    expect(
+      stripAnsi(
+        renderDashboard(active, { width: 120, height: 30, color: false, now: 0 }).join('\n'),
+      ),
+    ).toContain('(draining)')
+    await append(handoffEvents('old-build', 'settled').at(-1)!)
+    await refresh()
+    const settled = snapshots.at(-1)!
+    expect(settled.handoffs).toHaveLength(1)
+    expect(settled.builds.every((row) => row.draining === undefined)).toBe(true)
+    expect(settled.builds.find((row) => row.slug === 'old-build')?.status).toBe('running')
+    await append(handoffEvents('old-build', 'completed').at(-1)!)
+    await refresh()
+    const complete = snapshots.at(-1)!
+    expect(complete.handoffs).toBeUndefined()
+    const text = stripAnsi(
+      renderDashboard(complete, { width: 120, height: 30, color: false, now: 0 }).join('\n'),
+    )
+    expect(text).not.toContain('handoff 1.0.0')
+    expect(text).not.toContain('(draining)')
+  } finally {
+    child.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+  }
+})

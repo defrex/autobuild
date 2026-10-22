@@ -1,4 +1,5 @@
 import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
+import { handoffCapture } from './handoff-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
@@ -48,6 +49,7 @@ type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 export interface FrameSpec {
   selection?: DashboardModel['selection']
   harvestSuspended?: boolean
+  handoff?: boolean
   nativeSessions?: boolean
   forgeReadiness?: boolean
   id: string
@@ -168,6 +170,22 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  ...[180, 100].map((columns) => ({
+    id: `handoff-${columns === 180 ? 'wide' : 'narrow'}`,
+    scenario: 'happy' as const,
+    columns,
+    rows: 50,
+    handoff: true,
+    requires: [
+      'handoff 1.0.0',
+      '1.1.0',
+      'mode',
+      'drain;',
+      'drain deadline',
+      '(draining)',
+      'RUNNING',
+    ],
+  })),
   {
     id: 'harvest-suspended-wide',
     scenario: 'happy',
@@ -1603,13 +1621,14 @@ async function capturePaint(
         spec.scenario === 'happy'
           ? (model.warningLines ?? []).filter((line) => !sentinelLeaseNotices.has(line))
           : []
+      const sourceModel = spec.handoff ? handoffCapture(model) : model
       const presented = {
-        ...model,
+        ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
         ...(spec.selection ? { selection: spec.selection } : {}),
         // Runtime commits include generated fixture bytes; keep their visible
         // provenance stable just like the scripted clock and repository name.
-        builds: model.builds.map((build) => ({
+        builds: sourceModel.builds.map((build) => ({
           ...build,
           ...(spec.nativeSessions && build.slug === spec.detail?.slug
             ? { sessions: nativeSessionCapture() }

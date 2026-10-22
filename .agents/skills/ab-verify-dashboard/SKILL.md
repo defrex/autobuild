@@ -21,6 +21,8 @@ the diff and not to decide applicability again.
    dispatch harness and writes `.ab/dashboard-frames/verify-report.md` plus
    PNG/text scratch files. It requires no server, network, forge, or live agent
    runner and does not deposit artifacts itself.
+   The handoff wide/narrow frames must show both runtimes, mode, deadline and
+   `(draining)` beside the independent lifecycle status.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
    including `headline-happy-wide.png`. Judge the images themselves. The `.txt`
    files are human evidence and may help identify a frame, but they are not a
@@ -51,6 +53,10 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:handoff-wide:text .ab/dashboard-frames/handoff-wide.txt --attach
+   ab artifact put dashboard-frame:handoff-wide:png .ab/dashboard-frames/handoff-wide.png --attach
+   ab artifact put dashboard-frame:handoff-narrow:text .ab/dashboard-frames/handoff-narrow.txt --attach
+   ab artifact put dashboard-frame:handoff-narrow:png .ab/dashboard-frames/handoff-narrow.png --attach
    ab artifact put dashboard-frame:harvest-suspended-wide:text .ab/dashboard-frames/harvest-suspended-wide.txt --attach
    ab artifact put dashboard-frame:harvest-suspended-wide:png .ab/dashboard-frames/harvest-suspended-wide.png --attach
    ab artifact put dashboard-frame:harvest-suspended-narrow:text .ab/dashboard-frames/harvest-suspended-narrow.txt --attach

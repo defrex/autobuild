@@ -5,6 +5,7 @@ import type {
   OperatorBuildControlRequest,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
+  formatHandoff,
   capacityExplanation,
   displayText,
   pauseResumeHelp,
@@ -209,8 +210,13 @@ export function BuildsView(props: BuildsViewProps) {
   const focused = detailOpen && selectedBuild !== undefined
   return (
     <DashboardSurface>
-      {(model.warningLines?.length || model.availableUpgrade) && (
+      {(model.warningLines?.length || model.availableUpgrade || model.handoffs?.length) && (
         <div className="messages">
+          {model.handoffs?.map((handoff) => (
+            <p className="warn notice" key={`${handoff.run}:${handoff.correlation}`}>
+              {formatHandoff(handoff)}
+            </p>
+          ))}
           {model.warningLines?.map((line) => (
             <p className="warn notice" key={line}>
               {line}
@@ -554,6 +560,7 @@ function BuildRow({
             </a>
           )}
           {held && <span className="warn held">(held)</span>}
+          {row.draining && <span className="warn draining">(draining)</span>}
           {row.alsoPaused && <span className="warn">(paused)</span>}
         </span>
         <span className="status" data-status={row.status}>
@@ -807,6 +814,7 @@ function BuildDetail({
             </a>
           </span>
         )}
+        {build.draining && <span className="warn draining">(draining)</span>}
         {build.alsoPaused && <span className="warn">(paused)</span>}
         {pipelineProvenance(build) && (
           <span>
