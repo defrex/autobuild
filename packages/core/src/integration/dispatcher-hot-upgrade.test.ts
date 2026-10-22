@@ -682,6 +682,9 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
     await run('context');
     await Bun.write(ctx.opts.workspacePath+'/.ab/plan.md','# Plan\\n1. Verify runtime boundary.\\n');
     await run('artifact','put','plan','.ab/plan.md'); await run('done');
+    // Keep B at the completed phase boundary until the injected crash. Returning
+    // here races the parent test and can start plan-review on B before rollback.
+    await new Promise(() => {});
   } else {
     while(!await Bun.file(${JSON.stringify(reviewGate)}).exists()) await Bun.sleep(25);
     await run('context'); await run('escalate','restored phase reached');
