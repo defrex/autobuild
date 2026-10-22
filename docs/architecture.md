@@ -924,6 +924,12 @@ A claim freezes the ticket's current assets into the build (SPEC §6.3):
 reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
 and `ab context` writes them under `.ab/assets/`.
 
+For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
+into chunked immutable repository artifacts in the build store before pinning.
+Reads use explicit manifest/chunk revisions without a ticket connection. Old
+pins retain ticket-row reads; existing service attachments need no migration,
+and attachments in old local stores are not moved.
+
 In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
 `range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
 has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
@@ -943,12 +949,6 @@ listed as unattributed; this introduces no new intent or verdict policy.
 A node change is authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
 Leaf verification context is unchanged.
-
-For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
-into chunked immutable repository artifacts in the build store before pinning.
-Reads use explicit manifest/chunk revisions without a ticket connection. Old
-pins retain ticket-row reads; existing service attachments need no migration,
-and attachments in old local stores are not moved.
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
