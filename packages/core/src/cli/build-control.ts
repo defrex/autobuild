@@ -1,3 +1,4 @@
+import { integrationFailed } from '../kernel/integration-state'
 import { landPreconditions } from '../kernel/landing-readiness'
 import { observeIntegration } from '../kernel/integration-completeness'
 import type { TicketSource } from '../ports/types'
@@ -92,6 +93,7 @@ export type BuildControlResult =
       count: number
       resolution: 'guidance' | 'retry' | 'dismiss-finding' | 'revise-spec'
       resumed: boolean
+      nodeRevision?: boolean
       specRev?: number
       authorizedEarlier?: boolean
       remainingOpen?: number
@@ -370,6 +372,35 @@ export function decideRevise(
   }
 }
 
+function assertNodeRevisionEligible(slug: string, state: BuildState): void {
+  const restack = state.nodeRestack
+  if (
+    state.kind !== 'node' ||
+    !state.nodeOpened ||
+    (state.status !== 'collecting' && !(state.status === 'blocked' && integrationFailed(state))) ||
+    terminalSignal(state) ||
+    state.pendingCommands.length ||
+    state.openEscalations.length ||
+    state.currentPhase ||
+    state.sessions.open.length ||
+    state.sessions.suspended.length ||
+    restack?.active ||
+    restack?.parentRequest ||
+    restack?.parentChange ||
+    Object.keys(restack?.requests ?? {}).length ||
+    state.integration?.intent ||
+    state.landing?.nativeEnablePending ||
+    state.landing?.native?.enabled ||
+    state.landing?.forgeMerge ||
+    state.landing?.command?.kind === 'land'
+  ) {
+    throw new BuildControlError(
+      'inactive',
+      `build "${slug}" cannot revise its node spec while work or controls are active; wait for idle collection or failed verification and retry`,
+    )
+  }
+}
+
 function throwRefusal(decision: Extract<ReviseDecision, { kind: 'refuse' }>): never {
   throw new BuildControlError(decision.code, decision.message)
 }
@@ -610,7 +641,17 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           : reviewRoundLimitEscalation(opts.slug, selectedOpen(state, captured))
 
       if (opts.action.resolve?.kind === 'revise-spec') {
-        const initial = decideRevise(opts.slug, state, captured)
+        const nodeRevision =
+          state.kind === 'node' &&
+          captured === undefined &&
+          state.openEscalations.length === 0 &&
+          !state.answeredEscalations.some(
+            (item) => item.resolution === 'revise-spec' && item.answeredSeq > state.restartSince,
+          )
+        if (nodeRevision) assertNodeRevisionEligible(opts.slug, state)
+        const initial = nodeRevision
+          ? { kind: 'node' as const }
+          : decideRevise(opts.slug, state, captured)
         if (initial.kind === 'refuse') throwRefusal(initial)
 
         let artifact: ArtifactRef
@@ -674,6 +715,62 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           artifact = { kind: 'spec', rev: deposited.revision }
         }
 
+        if (nodeRevision) {
+          const holder = `spec-revision-${crypto.randomUUID()}`
+          if (!(await opts.store.claimNodeWriter(opts.slug, holder, 60_000))) {
+            throw new BuildControlError('inactive', 'Node writer is busy; retry the spec revision')
+          }
+          let runnerLease = false
+          try {
+            // Fence attachment as well as branch writers while publishing.
+            // Lease expiry is evaluated by the store's clock, never client time.
+            runnerLease = await opts.store.claimLease(opts.slug, holder, 60_000)
+            if (!runnerLease)
+              throw new BuildControlError(
+                'inactive',
+                'Node runner is busy; retry the spec revision',
+              )
+            const fresh = (await readBuildFacts(opts.store, opts.slug)).value.state
+            assertNodeRevisionEligible(opts.slug, fresh)
+            // Do not adopt intervening work or an unrelated escalation as authority.
+            if (fresh.lastSeq !== state.lastSeq) {
+              throw new BuildControlError(
+                'inactive',
+                'Build changed while preparing the spec; retry. Deposited artifacts remain inert.',
+              )
+            }
+            const published = await opts.store.appendIfCurrent(opts.slug, fresh.lastSeq, {
+              actor: KERNEL,
+              type: 'spec.revised',
+              payload: {
+                artifact,
+                operator: { user, ...(opts.via ? { via: opts.via } : {}) },
+                ...(assets !== undefined ? { assets } : {}),
+              },
+            })
+            if (!published)
+              throw new BuildControlError(
+                'inactive',
+                'Build changed while publishing the spec; retry. Deposited artifacts remain inert.',
+              )
+            return {
+              kind: 'answered',
+              slug: opts.slug,
+              count: 0,
+              resolution: 'revise-spec',
+              resumed: false,
+              nodeRevision: true,
+              specRev: artifact.rev,
+            }
+          } finally {
+            try {
+              if (runnerLease) await opts.store.releaseLease(opts.slug, holder)
+            } finally {
+              await opts.store.releaseNodeWriter(opts.slug, holder)
+            }
+          }
+        }
+
         // Re-read at the last durable moment. The PR janitor and abort
         // acknowledgement may still write while a blocked build is parked.
         const freshState = (await readBuildFacts(opts.store, opts.slug)).value.state
@@ -685,7 +782,12 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           assets = decision.assets
           authorizedEarlier = true
         }
-        const answer = guidance === '' ? SPEC_REVISION_ANSWER : guidance
+        const answer =
+          guidance === ''
+            ? state.kind === 'node'
+              ? 'Operator replaced the node spec; recollect and verify'
+              : SPEC_REVISION_ANSWER
+            : guidance
         const alsoPaused = freshState.status === 'paused'
 
         // Answers must precede spec.revised: the engine parks an answered
@@ -727,6 +829,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           count: decision.open.length,
           resolution: 'revise-spec',
           resumed: alsoPaused,
+          ...(state.kind === 'node' ? { nodeRevision: true } : {}),
           ...(after.specRev !== undefined ? { specRev: after.specRev } : {}),
           ...(authorizedEarlier ? { authorizedEarlier: true } : {}),
           ...(signal !== undefined ? { terminalSignal: signal } : {}),

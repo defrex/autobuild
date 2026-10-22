@@ -55,16 +55,17 @@ export async function artifactPut(
   if (kind.trim() === '') {
     throw new Error("'ab artifact put' requires a non-empty <kind> (§8.2)")
   }
-  // §6.3 immutability: the spec cannot change during a build. It enters via
+  // §6.3: phase agents cannot change the spec during a build. It enters via
   // dispatch (spec.imported / spec.authored — dispatcher plumbing, never this
-  // CLI) and changes only through a human-answered escalation (spec.revised).
+  // CLI) and changes only through operator ab answer (spec.revised).
   // Without this gate, any phase's agent could silently swap the contract
   // every later reviewer approves conformance to.
   if (kind === 'spec') {
     throw new Error(
-      "'ab artifact put spec' is rejected: the spec is immutable during a build " +
+      "'ab artifact put spec' is rejected: the spec is immutable to phase agents during a build " +
         '(§6.3) — a phase that finds the spec itself wrong should raise ' +
-        "'ab escalate' so a human can revise it (spec.revised restarts from plan).",
+        "'ab escalate' so a human can revise it. Leaf revisions require an escalation and restart from plan; " +
+        'operators may revise idle collecting or verification-failed nodes through ab answer without an escalation.',
     )
   }
   const file = Bun.file(filePath)

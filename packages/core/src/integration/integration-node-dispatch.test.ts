@@ -1059,3 +1059,104 @@ test('complete nodes verify and land a linear stack only after explicit consent'
     await h.cleanup()
   }
 })
+
+test('operator revision retries failed node verification on the same head without restarting children', async () => {
+  let nodeSlug = ''
+  let nodeContexts = 0
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml: CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "spec-check"]').replace(
+      '[policy]',
+      '[verify.spec-check]\nkind = "agent"\nskill = "spec-check"\n\n[policy]',
+    ),
+    handlers: {
+      ...happyHandlers(),
+      'spec-check': async (cli) => {
+        await cli.run(['context'])
+        if (cli.env.build === nodeSlug) {
+          expect(await Bun.file(`${cli.ws}/.ab/spec.md`).text()).toBe(replacement)
+          nodeContexts++
+        }
+        await cli.run(['verdict', 'pass'])
+      },
+    },
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Revision node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Revision child' }), target: 'NODE' },
+    ],
+  })
+  const replacement =
+    '# Revised node\n\n## Acceptance criteria\n- Works.\n\n## Out of scope\n- Other work.\n'
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+    nodeSlug = node.slug
+    // Incomplete nodes remain idle after an explicit revision.
+    const revise = () =>
+      controlBuild({
+        store: h.store,
+        repo: h.origin,
+        slug: node.slug,
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: { kind: 'supplied', origin: 'replacement.md', read: async () => replacement },
+          },
+        },
+      })
+    await revise()
+    expect(reduceBuild(await h.events(node.slug)).status).toBe('collecting')
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(0)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'CHILD')!
+    const childState = reduceBuild(await h.events(child.slug))
+    await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+      buildSlug: child.slug,
+    })
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    const verified = reduceBuild(await h.events(node.slug))
+    const cycle = verified.integration!.cycle!
+    // A failed receipt parks this exact cycle, independently of head movement.
+    await h.store.append(node.slug, {
+      actor: { kind: 'kernel' },
+      type: 'verify.completed',
+      payload: {
+        step: 'unit',
+        attempt: 2,
+        outcome: 'fail',
+        restackId: cycle.id,
+        headSha: cycle.head,
+        baseSha: cycle.parent,
+      },
+    })
+    expect(reduceBuild(await h.events(node.slug)).status).toBe('blocked')
+    const childEvents = await h.events(child.slug)
+    const contributions = ofType(await h.events(node.slug), 'node.contribution-recorded')
+    await revise()
+    expect(reduceBuild(await h.events(node.slug)).status).toBe('collecting')
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const prepared = ofType(await h.events(node.slug), 'integration.prepared')
+    expect(prepared).toHaveLength(2)
+    expect(prepared[1]!.payload).toMatchObject({ head: cycle.head, parent: cycle.parent })
+    expect(prepared[1]!.payload.id).not.toBe(cycle.id)
+    await h.runLatest()
+    expect(nodeContexts).toBe(2)
+    const after = reduceBuild(await h.events(node.slug))
+    expect(
+      after.verify.results.some(
+        (r) => r.restackId === prepared[1]!.payload.id && r.outcome === 'pass',
+      ),
+    ).toBe(true)
+    expect(await h.events(child.slug)).toEqual(childEvents)
+    expect(ofType(await h.events(node.slug), 'node.contribution-recorded')).toEqual(contributions)
+    expect(ofType(await h.events(node.slug), 'plan.started')).toHaveLength(0)
+    const artifact = await h.store.getArtifact(node.slug, 'spec', after.specRev)
+    expect(new TextDecoder().decode(artifact!.content)).toBe(replacement)
+  } finally {
+    await h.cleanup()
+  }
+})
