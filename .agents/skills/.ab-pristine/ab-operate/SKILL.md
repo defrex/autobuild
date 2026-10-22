@@ -480,12 +480,15 @@ commit distance with at most two reads: PR plus comparison, or parent branch
 plus reversed comparison without a PR. Priming is best-effort: failures add a
 diagnostic and ordinary parent/target observations continue, so a deleted parent
 can still be replaced. Forge cooldowns and rate limits retain their gates.
-Every tick revalidates mutable resources
+Each admitted poll revalidates mutable resources
 using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
 keeps its existing cadence. Readiness and landing inspections remain fresh.
+
+For node cadence, durable wakes, restart behavior and CLI evidence, see
+[node polling and status](../ab-guide/references/integration-tree.md#polling-and-status).
 
 The total includes all attempted requests. Optional `restPrimary`,
 `restNotModified` and `graphql` counts distinguish REST responses charged to the

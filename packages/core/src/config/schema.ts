@@ -527,6 +527,8 @@ export const policySchema = z.strictObject({
   harvestThreshold: z.number().int().positive().default(5),
   /** Merged builds after the oldest observation that start harvest; zero disables drift. */
   janitorFailureAttentionSeconds: z.number().int().positive().default(600),
+  nodeIdleAfterSeconds: z.number().int().positive().default(600),
+  nodeIdlePollSeconds: z.number().int().positive().default(120),
   janitorBackoffMaxSeconds: z.number().int().positive().default(300),
   harvestMaxDrift: z.number().int().nonnegative().default(3),
 })

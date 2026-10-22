@@ -1,3 +1,9 @@
+import {
+  nodeActivityKey,
+  nodePollingSchedule,
+  nodePollingUnsettled,
+  nodeTicketObservationKey,
+} from '../kernel/node-polling'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import {
   resolveTicketRef,
@@ -691,7 +697,6 @@ export class Dispatcher {
   // and each admitted verification/publication samples the source this pass.
   private integrationInputs?: Promise<IntegrationObservationInputs>
   private integrationPublicationInputs?: Promise<IntegrationObservationInputs>
-  private readonly integrationTargets = new Map<string, string | undefined>()
   private readonly integrationPolls = new Map<string, { key: string; at: number }>()
   private readonly integrationLandingPolls = new Map<string, { key: string; at: number }>()
   private integrationPollDue(
@@ -705,22 +710,61 @@ export class Dispatcher {
     polls.set(slug, { key, at: now })
     return true
   }
-  private async integrationClaimKey(slug: string): Promise<string> {
-    const children = []
-    for (const { record, digest } of await this.repoBuildDigests()) {
-      // Work targets are frozen. Node relationships can change, so refresh
-      // those edges before computing this parent's scheduling key.
-      if (!this.integrationTargets.has(record.slug) || digest.kind === 'node') {
-        const state = (await this.store.buildFacts(record.slug)).state
-        if (state.lastSeq > 0) this.integrationTargets.set(record.slug, state.target?.build)
-      }
-      if (this.integrationTargets.get(record.slug) === slug)
-        children.push(
-          `${record.slug}:${digest.terminal ?? ''}:${digest.merged ?? ''}:${digest.prClosed ?? ''}`,
-        )
+  // Work targets are frozen; settled activity is refreshed only when its
+  // compact readiness digest changes. Neither cache decides eligibility.
+  private readonly nodePollingBuilds = new Map<
+    string,
+    {
+      target?: string
+      activity: Pick<BuildState, 'pollingActivity'>
+      settledKey?: string
     }
-    return children.sort().join('|')
+  >()
+  private readonly nodePollingTickReads = new Map<string, Promise<BuildState>>()
+
+  private async integrationClaimKey(slug: string, state: BuildState): Promise<string> {
+    return nodeTicketObservationKey(state, await this.nodePollingChildren(slug))
   }
+  private async nodePollingChildren(slug: string, refresh = false) {
+    const children: { slug: string; state: Pick<BuildState, 'pollingActivity'> }[] = []
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (record.slug === slug) continue
+      const known = this.nodePollingBuilds.get(record.slug)
+      // Only node relationships can move. Unrelated known work never needs
+      // another full-facts read, even while it is running.
+      if (digest.kind !== 'node' && known && known.target !== slug) continue
+      const settledKey =
+        digest.terminal && !digest.executionOpen
+          ? JSON.stringify([
+              digest.terminal,
+              digest.readinessChangeSeq,
+              digest.merged,
+              digest.prClosed,
+            ])
+          : undefined
+      let current = known
+      if (!current || settledKey === undefined || current.settledKey !== settledKey) {
+        let read =
+          refresh || (known && known.settledKey !== settledKey)
+            ? undefined
+            : this.nodePollingTickReads.get(record.slug)
+        if (!read) {
+          read = this.store.buildFacts(record.slug).then((facts) => facts.state)
+          this.nodePollingTickReads.set(record.slug, read)
+        }
+        const state = await read
+        current = {
+          target: state.target?.build,
+          activity: { pollingActivity: state.pollingActivity },
+          settledKey,
+        }
+        if (state.lastSeq > 0) this.nodePollingBuilds.set(record.slug, current)
+      }
+      if (current.target === slug) children.push({ slug: record.slug, state: current.activity })
+    }
+    return children
+  }
+
   private observeIntegration(slug: string, publication = false) {
     return observeIntegration(this.store, this.deps.tickets, slug, () => {
       if (publication) {
@@ -899,6 +943,7 @@ export class Dispatcher {
   private async runTick(opts: TickOpts): Promise<TickReport> {
     this.integrationInputs = undefined
     this.integrationPublicationInputs = undefined
+    this.nodePollingTickReads.clear()
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -1942,12 +1987,15 @@ export class Dispatcher {
           // Once a record is known, contain its complete janitor path: loading
           // and reducing facts, cleanup, forge/ticket calls, and store writes.
           // Existing partial facts leave the same work due on the next tick.
-          let { state, workspace, log } = await this.store.buildFacts(record.slug)
+          const initialFacts = await this.store.buildFacts(record.slug)
+          let { state, workspace, log } = initialFacts
           previous = state.janitor
           const controlDue =
             state.pendingCommands.length > 0 ||
             state.discardRequest !== undefined ||
-            (state.landing?.command && state.landing.command.seq !== state.landing.acknowledgedSeq)
+            (state.pr &&
+              state.landing?.command &&
+              state.landing.command.seq !== state.landing.acknowledgedSeq)
           if (
             !controlDue &&
             previous &&
@@ -1967,6 +2015,80 @@ export class Dispatcher {
             loaded ??= (await readBuildFacts(this.store, record.slug)).value
             return loaded
           }
+          const pollStart = state
+          const pollChildren =
+            state.kind === 'node' ? await this.nodePollingChildren(record.slug) : []
+          const pollKey = nodeActivityKey(state, pollChildren)
+          const pollSchedule =
+            state.kind === 'node' && !nodePollingUnsettled(state)
+              ? nodePollingSchedule(
+                  state,
+                  pollKey,
+                  this.deps.config.policy,
+                  this.deps.clock(),
+                  executionLeaseLive ||
+                    initialFacts.open !== null ||
+                    initialFacts.publication.pending() ||
+                    initialFacts.publication.abandonedPending() ||
+                    undefined,
+                )
+              : undefined
+          if (state.kind === 'node' && !controlDue && pollSchedule && !pollSchedule.due) {
+            attempted = false
+            return
+          }
+          let incompleteObservation = false
+          const diagnosticsBefore = report.janitorDiagnostics.length
+          const completeNodePoll = async () => {
+            if (
+              pollStart.kind !== 'node' ||
+              !pollStart.nodeOpened ||
+              incompleteObservation ||
+              executionLeaseLive ||
+              report.janitorDiagnostics.length !== diagnosticsBefore ||
+              this.outOfBudget(opts)
+            )
+              return
+            const current = (await this.store.buildFacts(record.slug)).state
+            if (nodePollingUnsettled(current) && current.status !== 'done') return
+            const children = await this.nodePollingChildren(record.slug, true)
+            const key = nodeActivityKey(current, children)
+            // A command or child event arriving during observation stays due.
+            const commandTypes = [
+              'build.land-requested',
+              'build.hold-requested',
+              'node.restack-requested',
+              'escalation.answered',
+              'node.parent-requested',
+            ]
+            if (
+              commandTypes.some(
+                (type) => current.pollingActivity?.[type] !== pollStart.pollingActivity?.[type],
+              ) ||
+              nodeActivityKey(pollStart, children) !== pollKey
+            )
+              return
+            const now = this.deps.clock().toISOString()
+            const previousCheck = pollStart.nodePolling
+            await this.store.appendIfCurrent(record.slug, current.lastSeq, {
+              actor: DISPATCHER,
+              type: 'node.poll-checked',
+              payload: {
+                activityKey: key,
+                unchangedSince:
+                  previousCheck?.activityKey === key &&
+                  previousCheck.nodeIdleAfterSeconds ===
+                    this.deps.config.policy.nodeIdleAfterSeconds &&
+                  previousCheck.nodeIdlePollSeconds ===
+                    this.deps.config.policy.nodeIdlePollSeconds &&
+                  Date.parse(previousCheck.unchangedSince) <= Date.parse(now)
+                    ? previousCheck.unchangedSince
+                    : now,
+                nodeIdleAfterSeconds: this.deps.config.policy.nodeIdleAfterSeconds,
+                nodeIdlePollSeconds: this.deps.config.policy.nodeIdlePollSeconds,
+              },
+            })
+          }
           let observedPr: Awaited<ReturnType<Forge['getPrState']>> | undefined
           // A replacement head is followed first by a forge read and cancellation,
           // ahead of node cascade, controls, or any other action for this build.
@@ -1983,7 +2105,13 @@ export class Dispatcher {
             if (observed.state !== 'open') {
               await this.checkPr(
                 record,
-                { history, workspace },
+                {
+                  history,
+                  workspace,
+                  observed: (pr) => {
+                    incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
+                  },
+                },
                 state,
                 report,
                 launched,
@@ -2065,12 +2193,19 @@ export class Dispatcher {
               ) {
                 await this.checkPr(
                   record,
-                  { history, workspace },
+                  {
+                    history,
+                    workspace,
+                    observed: (pr) => {
+                      incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
+                    },
+                  },
                   state,
                   report,
                   launched,
                   executionLeaseLive,
                 )
+                await completeNodePoll()
                 return
               }
               const previousParent = state.baseBranch
@@ -2116,6 +2251,7 @@ export class Dispatcher {
             }
             if (state.nodeOpened !== undefined && state.pr === undefined) {
               await this.pollEmptyNode(record, state)
+              await completeNodePoll()
               return
             }
           }
@@ -2166,7 +2302,13 @@ export class Dispatcher {
           if (state.pr) {
             await this.checkPr(
               record,
-              { history, workspace },
+              {
+                history,
+                workspace,
+                observed: (pr) => {
+                  incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
+                },
+              },
               state,
               report,
               launched,
@@ -2174,6 +2316,7 @@ export class Dispatcher {
               observedPr,
             )
           }
+          await completeNodePoll()
         } catch (error) {
           if (error instanceof ForgeCooldown) {
             attempted = false
@@ -2831,7 +2974,11 @@ export class Dispatcher {
     record: BuildRecord,
     // `workspace` is the open workspace fact; `history` loads the raw log, which
     // only the branches that act on a PR transition need.
-    source: { history: () => Promise<CurrentBuildFacts>; workspace: OpenBuildWorkspace | null },
+    source: {
+      history: () => Promise<CurrentBuildFacts>
+      workspace: OpenBuildWorkspace | null
+      observed?: (pr: Awaited<ReturnType<Forge['getPrState']>>) => void
+    },
     state: BuildState,
     report: TickReport,
     launched: Set<string>,
@@ -2861,6 +3008,7 @@ export class Dispatcher {
       if (!recoverLanding && state.prState !== 'merged') throw error
       prState = { state: 'open', mergeable: null }
     }
+    source.observed?.(prState)
     if (state.prState === 'merged' && state.mergedSha)
       prState = { state: 'merged', sha: state.mergedSha }
     let nativeCancelled = false
@@ -3391,6 +3539,7 @@ export class Dispatcher {
           }),
         )
       state = (await store.buildFacts(record.slug)).state
+      source.observed?.(prState)
       if (state.prState === 'merged' && state.mergedSha)
         prState = { state: 'merged', sha: state.mergedSha }
     }
@@ -5252,7 +5401,7 @@ export class Dispatcher {
         payload: comparison,
       })
     state = (await this.store.buildFacts(record.slug)).state
-    const claims = await this.integrationClaimKey(record.slug)
+    const claims = await this.integrationClaimKey(record.slug, state)
     const unchangedFailure = integrationFailed(state)
     if (
       !unchangedFailure &&

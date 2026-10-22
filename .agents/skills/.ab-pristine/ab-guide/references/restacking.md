@@ -33,6 +33,9 @@ need their own demand. Existing frozen transactions, including ones reserved
 before upgrade, finish first; later demand coalesces onto the latest parent.
 Leaves keep verify-entry and awaiting-landing restacks for every target.
 
+For observation cadence, durable wakes and last-check evidence, see
+[node polling and status](integration-tree.md#polling-and-status).
+
 Presence demand uses change identities, never ticket resolution alone. It follows
 only the path from the nearest proven ancestor source down to the dependent's
 actual destination, processing ancestors first. Unrelated siblings stay idle;
