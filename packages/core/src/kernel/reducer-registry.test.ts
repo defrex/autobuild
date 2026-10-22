@@ -347,7 +347,7 @@ describe('reducer registry', () => {
         "harvestDelegation": 2,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
-        "journalView": 5,
+        "journalView": 6,
         "lastExecutionOutcome": 1,
         "leafRestack": 4,
         "logIndex": 5,
