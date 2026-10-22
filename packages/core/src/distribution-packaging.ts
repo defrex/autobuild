@@ -2,8 +2,13 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-async function spawnExec(cmd: string[], options: { cwd: string }) {
-  const child = Bun.spawn(cmd, { cwd: options.cwd, stdout: 'pipe', stderr: 'pipe' })
+async function spawnExec(cmd: string[], options: { cwd: string; signal?: AbortSignal }) {
+  const child = Bun.spawn(cmd, {
+    cwd: options.cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    signal: options.signal,
+  })
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -14,8 +19,13 @@ async function spawnExec(cmd: string[], options: { cwd: string }) {
 
 type PackagingExec = typeof spawnExec
 
-async function execOrThrow(cmd: string[], cwd: string, exec: PackagingExec): Promise<string> {
-  const result = await exec(cmd, { cwd })
+async function execOrThrow(
+  cmd: string[],
+  cwd: string,
+  exec: PackagingExec,
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await exec(cmd, { cwd, signal })
   if (result.exitCode !== 0) {
     throw new Error(
       `${cmd.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
@@ -55,6 +65,7 @@ const packedManifestOmittedFields = ['patchedDependencies', 'devDependencies'] a
 export async function packageDistribution(
   root: string,
   exec: PackagingExec = spawnExec,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const staging = await mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
@@ -92,6 +103,7 @@ export async function packageDistribution(
       ['bun', 'pm', 'pack', '--ignore-scripts', '--destination', destination],
       staging,
       exec,
+      signal,
     )
     const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
     if (archives.length !== 1)

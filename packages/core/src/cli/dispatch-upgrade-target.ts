@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { withSourceExport, sourceContent, type SourceLaunch } from './dispatch-upgrade-source'
 import { isValidGitBranchName } from '../kernel/origin'
 import { createHash, randomUUID } from 'node:crypto'
 import { readDistributionIdentity } from './installation'
@@ -8,7 +11,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 
 export const TARGET_CHECK_INTERVAL_MS = 60_000
 export type UpgradeTarget = {
-  mode: 'pinned' | 'installed'
+  mode: 'pinned' | 'installed' | 'source'
   key: string
   version?: string
   source: string
@@ -37,6 +40,7 @@ const object = (value: unknown): Record<string, unknown> =>
 export async function resolveUpgradeTarget(input: {
   checkout: string
   base: string
+  sourceLaunch?: SourceLaunch
   originalInstall: string
   forge: Forge
   exec: Exec
@@ -85,6 +89,30 @@ export async function resolveUpgradeTarget(input: {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha))
       throw new Error('invalid authoritative base commit')
     target = { ...target, sha }
+    if (input.sourceLaunch) {
+      target = {
+        mode: 'source',
+        source: input.sourceLaunch.repository,
+        base: input.base,
+        sha,
+        key: fingerprint(['source', input.sourceLaunch.repository, sha]),
+      }
+      const content = await withSourceExport(
+        { checkout: input.checkout, sha, signal: input.signal, exec },
+        async (root) => {
+          // Even malformed metadata has an input identity independent of SHA.
+          // Excluded-file advances must not repeatedly raise the same failure.
+          const metadata = await Promise.all(
+            ['package.json', 'bun.lock', 'bunfig.toml'].map((name) =>
+              readFile(join(root, name), 'utf8').catch(() => null),
+            ),
+          )
+          target.key = fingerprint(['source-input', input.sourceLaunch!.repository, metadata])
+          return sourceContent(root, input.sourceLaunch!.repository, input.signal)
+        },
+      )
+      return { ...target, ...content }
+    }
     const blob = async (name: string, optional = false) => {
       const result = await exec(['git', 'show', `${sha}:${name}`], { cwd: input.checkout })
       if (result.exitCode === 0) return result.stdout
@@ -110,7 +138,6 @@ export async function resolveUpgradeTarget(input: {
         key: fingerprint(input.originalInstall),
       }
       const installed = await readDistributionIdentity(input.originalInstall)
-      // Source mode deliberately remains a fixed snapshot in this increment.
       target.version = installed.version
       target.key = fingerprint([target.source, installed.version, installed.commit])
       return target
