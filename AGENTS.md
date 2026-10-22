@@ -145,47 +145,57 @@ do not extend it, and do not cite SPEC §7.1.2 as current design.
 
 ## Self-hosting dispatcher updates
 
-This repository's long-lived dispatcher keeps the code it started with, and
-fresh runners and agent sessions load that generation's immutable cached
-runtime. Restart promptly after merges that change the kernel, event catalog, or reducers. Inspect the
-actual changed files to decide whether a merge needs a restart.
+This repository's dispatcher runs in `source` mode. It polls authoritative
+origin `main` immediately and every 60 seconds, prepares an immutable runtime
+from the selected commit, and preflights compatibility before handing off.
+Feature branches, checkout HEAD and local main do not select the upgrade target.
+Not every merge changes packaged runtime content, so not every merge causes a
+handoff. Old sessions drain while the successor dispatches; durable work
+continues at phase boundaries on the accepted runtime. Preparation failures
+retain the running generation and raise attention. Repeated successor failures
+can roll back to the previous runtime and hold the failed target; inspect
+repository status for failure and rollback evidence.
 
-**Maintainers only:** stop the foreground dispatcher with Ctrl-C, or send
-SIGTERM to its known process, and wait for graceful shutdown and drain to
-finish. Then run `git pull` at the canonical main repository root and start
-again with `bun tools/dispatcher-start.ts`, retaining your usual dispatch flags.
-Never pull the repository-root checkout while the older dispatcher is still
-running. Do not substitute a force-kill for a clean stop. Since AUT-855, a clean
-stop suspends live sessions; restarting resumes durable work without manually
-resetting or requeuing builds.
+**One-time adoption:** after the hot-upgrade node lands, a maintainer must
+restart once through the launcher entry below. Thereafter a manual restart is
+needed for a launcher contract change, or when `[upgrade].automatic = false`
+disables automatic upgrades. Ordinary kernel, event and reducer merges are
+handled by automatic upgrades.
+
+**Maintainers only:** stop the foreground launcher with Ctrl-C, or send SIGTERM
+to its known process, and wait for graceful shutdown and drain to finish.
+Then run `git pull` at the canonical main repository root and start again with
+`bun tools/dispatcher-start.ts`, retaining your usual dispatch flags. This entry
+uses the public binary's product launcher. Never pull the repository-root
+checkout while the older dispatcher is still running. Never substitute a
+force-kill for a clean stop. A clean stop suspends live sessions; restarting
+resumes durable work without manually resetting or requeuing builds.
 
 **Agent-safe read-only diagnosis (interactive repository-root sessions):** run
 `bun bin/ab.ts repository status --json` and `bun tools/dispatcher-check.ts`.
-The check uses the authoritative held dispatcher run, correlating its local
-PID (including an interactive launcher's private child) through Linux process
-ancestry with a launch record under ignored `.autobuild/dispatcher-starts/`.
-It prints the dispatcher starting SHA beside checkout HEAD and local main.
-`equal` means the captured clean starting revision equals HEAD; `different`
-distinguishes a dispatcher behind HEAD from divergent/ahead history. Use the
-printed `git diff --name-only` and `git log` commands to inspect kernel, event,
-and reducer changes against HEAD or local main. Local main is not necessarily
-fresh remote main: checking remote freshness requires a fetch.
+The check reports the authoritative held generation's runtime version/commit,
+upgrade mode, active handoffs (including a predecessor still draining), failure
+and rollback history, and the effective rollback hold, alongside checkout HEAD
+and local main. It compares the recorded current runtime commit and prints
+useful diff/log commands. A difference alone does not require restart. Local
+main need not equal remote main; checking remote freshness requires a fetch.
 
-`unknown` means the evidence cannot establish an exact running revision:
-pre-adoption launches have no record, dirty launches show only their captured
-base, and missing records/objects, foreign hosts, inaccessible process data,
-changed process identity, or an absent/lost/stopped holder cannot establish a
-current revision. After the next maintainer launch through the entry above,
-clean local starts can be compared. Launch records are local diagnostic
-evidence, not product lifecycle state.
+Local launch records under ignored `.autobuild/dispatcher-starts/` identify the
+launcher ancestor, whose starting SHA is not the current generation's revision.
+Process ancestry, boot and PID identity checks are separate diagnostic evidence.
+Legacy starts without records, foreign hosts, or inaccessible process data make
+that correlation unavailable without erasing a durably recorded held runtime.
+An unrecorded runtime, unknown commit or missing Git object stays unknown; no
+held dispatcher means no claim of a current generation. Concurrent generation
+or upgrade changes request a retry. Launch records are local diagnostic evidence,
+not product lifecycle state.
 
-Orchestrating agents diagnose and report the need to restart, then wait for
-the maintainer to perform it, following the installed `ab-operate` Boundaries
-section. They never run the start entry, `ab dispatch`, dispatcher stop/start/
-restart commands, or dispatcher signals themselves. An agent may read or fetch
-as authorized; it must never pull the live root checkout or manage its process.
-Implementation and verification of this tooling must not restart the live
-dispatcher.
+Orchestrating agents diagnose and report attention or a required maintainer
+restart, following the installed `ab-operate` Boundaries section. They never
+run the start entry, `ab dispatch`, dispatcher stop/start/restart commands, or
+dispatcher signals themselves. An agent may read or fetch as authorized; it
+must never pull the live root checkout or manage its process. Implementation
+and verification of this tooling must not restart the live dispatcher.
 
 ## Development conventions
 
