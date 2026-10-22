@@ -59,6 +59,7 @@ import {
 import { GitWorktreeProvider, spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { MemoryBuildStore } from '../store/memory'
+import { executionNoProgressReducer } from '../processes/execution-no-progress'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
@@ -11759,6 +11760,10 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
 
 for (const scenario of [
   'natural',
+  'relaunch',
+  'failed-relaunch',
+  'stopped-relaunch',
+  'foreign-relaunch',
   'deadline',
   'committed-error',
   'read-error',
@@ -11767,7 +11772,7 @@ for (const scenario of [
   'rejected',
 ] as const)
   test(`handoff acceptance preserves execution fencing (${scenario})`, async () => {
-    const deadline = scenario === 'deadline'
+    const deadline = scenario === 'deadline' || scenario === 'stopped-relaunch'
     const harvested = deferred()
     const agents = new ScriptedAgentRunner({
       script: async ({ opts }) => {
@@ -11878,7 +11883,9 @@ for (const scenario of [
         return {
           supervision: 'local-parent',
           identity: { provider: 'fake', workspaceRef: input.workspaceRef },
-          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          completion: completion.promise.then(() => ({
+            exitCode: scenario === 'failed-relaunch' ? 1 : 0,
+          })),
           stop: async () => {
             stops++
             completion.resolve()
@@ -12011,6 +12018,18 @@ for (const scenario of [
       )
       expect(authorization?.payload.targetRuntime).toEqual(targetHandoff?.payload.to)
       expect(authorization?.payload.instance).toBe(lease.holder)
+      if (scenario.includes('relaunch')) {
+        await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'execution.relaunch-requested',
+          payload: {
+            instance: scenario === 'foreign-relaunch' ? 'older-execution' : lease.holder,
+            correlation: handoff.correlation,
+            from: handoff.from,
+            to: handoff.to,
+          },
+        })
+      }
       const oldTicks = tickCalls.filter((holder) => holder === 'predecessor').length
       const oldClaims = claimCalls.filter((holder) => holder === 'predecessor').length
       expect((await fx.store.getBuild(slug))!.lease?.holder).toBe(lease.holder)
@@ -12056,6 +12075,59 @@ for (const scenario of [
         ),
       ).toBe(true)
       expect(events.some((event) => event.type === 'dispatcher.handoff-completed')).toBe(true)
+      if (scenario.includes('relaunch')) {
+        const buildEvents = await fx.store.getEvents(slug)
+        const ended = buildEvents.filter((event) => event.type === 'execution.ended')
+        expect(ended).toHaveLength(1)
+        expect(ended[0]).toMatchObject({
+          payload: {
+            instance: lease.holder,
+            outcome: deadline ? 'stopped' : scenario === 'relaunch' ? 'relaunch' : 'completed',
+            exitCode: scenario === 'failed-relaunch' ? 1 : 0,
+          },
+        })
+        const settlements = events.filter(
+          (event) =>
+            event.type === 'dispatcher.runner-settled' &&
+            event.payload.slug === slug &&
+            event.payload.run === 'predecessor',
+        )
+        if (deadline) expect(settlements).toHaveLength(0)
+        else {
+          expect(settlements).toHaveLength(1)
+          expect(settlements[0]).toMatchObject({
+            payload: {
+              outcome:
+                scenario === 'relaunch'
+                  ? 'relaunch'
+                  : scenario === 'failed-relaunch'
+                    ? 'failed'
+                    : 'parked',
+            },
+          })
+        }
+        expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
+        expect(events.find((event) => event.type === 'dispatcher.drain-settled')).toMatchObject({
+          payload: { instance: lease.holder, outcome: 'drained' },
+        })
+        if (scenario === 'relaunch') {
+          expect(executionNoProgressReducer.reduce(buildEvents).count).toBe(0)
+          const completed = events.find((event) => event.type === 'dispatcher.handoff-completed')!
+          expect(completed.payload).toMatchObject({ drained: 1, suspended: 0 })
+          // The manual clock never reaches the deadline: retirement depends
+          // on confirmed relaunch teardown, not the deadline suspension path.
+          expect(Date.parse(completed.payload.endedAt!)).toBeLessThan(
+            Date.parse(accepted.payload.deadline!),
+          )
+          expect(
+            buildEvents.some(
+              (event) =>
+                event.type === 'infrastructure.failed' || event.type === 'runner.setup-failed',
+            ),
+          ).toBe(false)
+        }
+      }
+
       expect(
         events.some(
           (event) =>
