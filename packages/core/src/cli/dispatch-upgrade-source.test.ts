@@ -9,13 +9,13 @@ import {
   withSourceExport,
   sourceRepository,
 } from './dispatch-upgrade-source'
-import { scanDependencies } from './dispatch-runtime-dependencies'
+import { scanDependencies, treeDigest } from './dispatch-runtime-dependencies'
 const roots: string[] = []
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'ab-source-test-'))
+async function fixture(parent = tmpdir()) {
+  const root = await mkdtemp(join(parent, 'ab-source-test-'))
   roots.push(root)
   await mkdir(join(root, 'src'))
   await writeFile(
@@ -142,3 +142,56 @@ test('production identity ignores hoist paths while retaining the selected neste
     productionLockClosure(manifest, lock).graph,
   )
 })
+
+test.each(['checkout', 'workspace', 'both'])(
+  'source fingerprinting does not require writable source parents (%s)',
+  async (readonly) => {
+    const parent = await mkdtemp(join(tmpdir(), 'ab-source-readonly-'))
+    roots.push(parent)
+    const root = await fixture(parent)
+    const workspaceParent = join(root, 'packages')
+    const workspace = join(workspaceParent, 'dependency')
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src/index.ts'), 'export const dependency = true')
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'workspace-dependency',
+        version: '1.0.0',
+        files: ['src'],
+      }),
+    )
+    const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+    manifest.dependencies = { 'workspace-dependency': '1.0.0' }
+    manifest.workspaces = ['packages/*']
+    await writeFile(join(root, 'package.json'), JSON.stringify(manifest))
+    await writeFile(
+      join(root, 'bun.lock'),
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: {
+          '': { dependencies: manifest.dependencies },
+          'packages/dependency': { name: 'workspace-dependency', version: '1.0.0' },
+        },
+        packages: {
+          'workspace-dependency': ['workspace-dependency@workspace:packages/dependency'],
+        },
+      }),
+    )
+    const before = await treeDigest(root)
+    const siblings = await readdir(parent)
+    const workspaceSiblings = await readdir(workspaceParent)
+    if (readonly !== 'workspace') await chmod(parent, 0o555)
+    if (readonly !== 'checkout') await chmod(workspaceParent, 0o555)
+    try {
+      const initial = await sourceContent(root, '/repository')
+      expect((await sourceContent(root, '/repository')).key).toBe(initial.key)
+      expect(await treeDigest(root)).toBe(before)
+      expect(await readdir(parent)).toEqual(siblings)
+      expect(await readdir(workspaceParent)).toEqual(workspaceSiblings)
+    } finally {
+      await chmod(workspaceParent, 0o755)
+      await chmod(parent, 0o755)
+    }
+  },
+)

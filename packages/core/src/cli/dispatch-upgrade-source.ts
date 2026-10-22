@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import {
   mkdir,
   mkdtemp,
@@ -283,7 +284,9 @@ async function packagedFingerprint(root: string, signal?: AbortSignal): Promise<
   for (const path of manifest.files ?? [])
     if (!path.startsWith('!') && !inside(root, resolve(root, path)))
       throw new Error('unsafe packaged source path')
-  const stage = await mkdtemp(join(root, '..', '.fingerprint-'))
+  // Launch baselines also package the live checkout and its workspaces. Scratch
+  // must never require write access beside either source root.
+  const stage = await mkdtemp(join(tmpdir(), 'autobuild-source-fingerprint-'))
   try {
     await writeFile(
       join(stage, 'package.tgz'),
