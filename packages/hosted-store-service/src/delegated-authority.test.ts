@@ -894,6 +894,15 @@ test('persisted lifecycle facts match full replay for historical anchors, duplic
       },
     ],
     [
+      'harvest.session.suspended',
+      {
+        run: 'run',
+        session: 'phase',
+        cause: 'shutdown',
+        transcript: { kind: 'transcript', rev: 0 },
+      },
+    ],
+    [
       'harvest.execution.released',
       { execution: 'exec', environmentId: 'env', snapshots: { outcome: 'confirmed' } },
     ],
@@ -1152,3 +1161,93 @@ test.each(['build-runner', 'build-phase'] as const)(
   },
   35_000,
 )
+
+test('harvest suspension closes the old phase immediately while runner authority opens a fresh continuation', async () => {
+  const f = await fixture()
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.started',
+    payload: {
+      run: 'resume-run',
+      observations: [{ build: 'one', seq: 1 }],
+      scan: { kind: 'scan', rev: 0 },
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: { execution: 'exec', run: 'resume-run', launch: 'started', leaseHolder: 'holder' },
+  })
+  await f.store.claimRepoLease(A, 'holder', 60000)
+  const issued = await f.issue(f.project.token, {
+    kind: 'harvest-runner',
+    execution: 'exec',
+    repo: A,
+    id: 'resume-run',
+    leaseHolder: 'holder',
+  })
+  expect(issued.status).toBe(200)
+  const token = (await issued.json()).token
+  const base = `/repos/${encodeURIComponent(A)}`
+  const start = (session: string, continuation?: unknown) => ({
+    actor: { kind: 'kernel' },
+    type: 'harvest.session.started',
+    payload: {
+      run: 'resume-run',
+      session,
+      role: 'harvest',
+      runner: 'scripted',
+      step: 'synthesize',
+      round: 1,
+      ...(continuation ? { continuation } : {}),
+    },
+  })
+  expect((await f.server.fetch(request(`${base}/events`, token, start('old')))).status).toBe(201)
+  const oldResponse = await f.issue(token, {
+    kind: 'harvest-phase',
+    repo: A,
+    id: 'resume-run',
+    session: 'old',
+  })
+  expect(oldResponse.status).toBe(200)
+  const old = (await oldResponse.json()).token
+  expect(
+    (
+      await f.server.fetch(
+        request(`${base}/events`, token, {
+          actor: { kind: 'kernel' },
+          type: 'harvest.session.suspended',
+          payload: {
+            run: 'resume-run',
+            session: 'old',
+            cause: 'cutover',
+            transcript: { kind: 'harvest-transcript', rev: 0 },
+          },
+        }),
+      )
+    ).status,
+  ).toBe(201)
+  expect((await f.server.fetch(request(`${base}/events`, old))).status).toBe(401)
+  expect(
+    (
+      await f.server.fetch(
+        request(
+          `${base}/events`,
+          token,
+          start('new', { predecessor: 'old', root: 'old', cause: 'cutover' }),
+        ),
+      )
+    ).status,
+  ).toBe(201)
+  const fresh = await f.issue(token, {
+    kind: 'harvest-phase',
+    repo: A,
+    id: 'resume-run',
+    session: 'new',
+  })
+  expect(fresh.status).toBe(200)
+  expect((await f.server.fetch(request(`${base}/events`, (await fresh.json()).token))).status).toBe(
+    200,
+  )
+  expect((await f.server.fetch(request(`${base}/events`, old))).status).toBe(401)
+})

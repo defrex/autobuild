@@ -51,6 +51,10 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:harvest-suspended-wide:text .ab/dashboard-frames/harvest-suspended-wide.txt --attach
+   ab artifact put dashboard-frame:harvest-suspended-wide:png .ab/dashboard-frames/harvest-suspended-wide.png --attach
+   ab artifact put dashboard-frame:harvest-suspended-narrow:text .ab/dashboard-frames/harvest-suspended-narrow.txt --attach
+   ab artifact put dashboard-frame:harvest-suspended-narrow:png .ab/dashboard-frames/harvest-suspended-narrow.png --attach
    ab artifact put dashboard-frame:capacity-wide:text .ab/dashboard-frames/capacity-wide.txt --attach
    ab artifact put dashboard-frame:capacity-wide:png .ab/dashboard-frames/capacity-wide.png --attach
    ab artifact put dashboard-frame:native-sessions:text .ab/dashboard-frames/native-sessions.txt --attach
