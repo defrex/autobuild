@@ -82,7 +82,7 @@ archives, changes and merge proofs. Lease expiry recovers the same operation,
 not a competing one. Prepared/conflicted/replayed item receipts, publication
 intent, proven replacement and settlement distinguish each recovery boundary.
 Inventory retains its sampled source boundary even while the confirmed parent
-boundary stays unchanged. It exposes source identities, node-owned foreign commits, active operation,
+boundary stays unchanged. It exposes source identities, hand-pushed changes (node-owned foreign commits), active operation,
 conflict item and unsafe merge evidence.
 
 Only a conflicted item attaches a reconcile runner. It receives the original
