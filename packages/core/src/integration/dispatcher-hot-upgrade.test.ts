@@ -773,19 +773,19 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
         const { Database } = await import('bun:sqlite')
         const db = new Database(join(storePath, 'autobuild.sqlite'))
         try {
-          const { seq } = db
-            .query('SELECT MAX(seq)+1 AS seq FROM events WHERE build=?')
-            .get(futureSlug!) as { seq: number }
+          // The live dispatcher still writes heartbeats and session facts. Wait
+          // for its writer and allocate the sequence in the same atomic write.
+          db.exec('PRAGMA busy_timeout = 5000')
           db.query(
-            'INSERT INTO events (build,seq,ts,actor,type,payload,compatibility) VALUES (?,?,?,?,?,?,?)',
+            'INSERT INTO events (build,seq,ts,actor,type,payload,compatibility) SELECT ?,MAX(seq)+1,?,?,?,?,? FROM events WHERE build=?',
           ).run(
             futureSlug!,
-            seq,
             new Date().toISOString(),
             JSON.stringify({ kind: 'kernel' }),
             'future.runtime-decision',
             '{}',
             JSON.stringify({ classification: 'decisive', writerVersion: '2.0.0' }),
+            futureSlug!,
           )
         } finally {
           db.close()
