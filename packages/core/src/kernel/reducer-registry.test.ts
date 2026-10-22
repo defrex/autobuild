@@ -128,7 +128,45 @@ function corpora(): unknown[][] {
     seq: index + 1,
     ts: '2026-10-21T00:00:00Z',
   }))
+  const rollbackCorpus = [
+    {
+      type: 'dispatcher.runtime-rolled-back',
+      payload: {
+        correlation: 'rollback',
+        run: 'restored',
+        lineage: 'launcher',
+        predecessor: 'run-drain',
+        successor: 'next',
+        handoff: 'drain',
+        takeoverAt: '2026-10-21T00:00:00Z',
+        failures: 3,
+        failed: handoff.to,
+        restored: handoff.from,
+        failedRoot: '/cache/failed',
+        restoredRoot: '/cache/restored',
+        target: identity.target,
+        reason: 'three failed exits',
+      },
+    },
+    {
+      type: 'dispatcher.rollback-hold-cleared',
+      payload: {
+        correlation: 'rollback',
+        run: 'restored',
+        lineage: 'launcher',
+        target: { ...identity.target, key: 'changed' },
+      },
+    },
+  ].map((event, index) => ({
+    ...event,
+    repo: 'repo',
+    actor: { kind: 'dispatcher' },
+    seq: index + 1,
+    ts: '2026-10-21T00:00:00Z',
+  }))
   return [
+    rollbackCorpus.slice(0, 1),
+    rollbackCorpus,
     drainCorpus,
     buildDrain.slice(0, 1),
     buildDrain,
@@ -337,7 +375,7 @@ describe('reducer registry', () => {
         "dispatchFrontend": 2,
         "dispatchSettings": 1,
         "dispatchStatus": 3,
-        "dispatchUpgrade": 3,
+        "dispatchUpgrade": 4,
         "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
         "executionNoProgress": 5,
@@ -368,7 +406,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 26,
+        "repositoryReadFacts": 27,
         "repositoryStateEvents": 4,
         "sandboxStates": 1,
         "session": 1,

@@ -59,6 +59,8 @@ export interface UpgradeControllerInput {
   lineage: string
   from: RuntimeIdentity
   failedKeys: string[]
+  hold?: DispatchUpgradeState['lastRollback']
+  clearHold?(root: string): void
   resolved?: DispatchUpgradeState['runs'][string]['resolved']
   currentKey?: string
   storeChangedSinceFailure?(): Promise<boolean>
@@ -80,8 +82,10 @@ export class DispatchUpgradeController {
   private preparation?: AbortController
   private readonly failed: Set<string>
   private resolved?: string
+  private hold?: DispatchUpgradeState['lastRollback']
   constructor(private readonly input: UpgradeControllerInput) {
     this.failed = new Set(input.failedKeys)
+    this.hold = input.hold?.payload.lineage === input.lineage ? input.hold : undefined
     this.resolved = input.resolved ? JSON.stringify(input.resolved.payload.target) : undefined
   }
   start(): void {
@@ -143,6 +147,21 @@ export class DispatchUpgradeController {
           },
         })
         this.resolved = observation
+      }
+      if (this.hold) {
+        if (this.hold.payload.target.key === target.key) return
+        await this.input.append({
+          actor: DISPATCHER,
+          type: 'dispatcher.rollback-hold-cleared',
+          payload: {
+            correlation: this.hold.payload.correlation,
+            run: this.input.run,
+            lineage: this.input.lineage,
+            target: publicTarget(target),
+          },
+        })
+        this.input.clearHold?.(this.hold.payload.failedRoot)
+        this.hold = undefined
       }
       if (this.failed.has(target.key)) {
         if (!(await this.input.storeChangedSinceFailure?.())) return
