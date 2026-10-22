@@ -2073,3 +2073,233 @@ describe('revise-spec re-pins ticket assets (SPEC §6.3)', () => {
     await store.close()
   })
 })
+
+async function revisionNode() {
+  const store = await makeStore({ active: false, ticket: { source: 'fake', id: 'NODE' } })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: REPO,
+      ticket: { source: 'fake', id: 'NODE' },
+      baseBranch: 'main',
+      kind: 'node',
+    },
+  })
+  await seedSpec(store)
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: 'b'.repeat(40) },
+  })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'node.compared',
+    payload: { headSha: 'a'.repeat(40), parentSha: 'b'.repeat(40), ahead: 1 },
+  })
+  return store
+}
+
+function reviseNode(store: MemoryBuildStore, read = async () => CONFORMING_SPEC) {
+  return controlBuild({
+    store,
+    repo: REPO,
+    slug: SLUG,
+    user: 'operator',
+    via: { kind: 'mcp', client: 'test' },
+    action: {
+      kind: 'answer',
+      resolve: {
+        kind: 'revise-spec',
+        body: { kind: 'supplied', origin: 'replacement.md', read },
+      },
+    },
+  })
+}
+
+test('node revisions preserve history, collection and contribution state without answering escalations', async () => {
+  const store = await revisionNode()
+  const before = reduceBuild(await store.getEvents(SLUG))
+  for (const rev of [1, 2]) {
+    expect(await reviseNode(store)).toMatchObject({
+      kind: 'answered',
+      count: 0,
+      nodeRevision: true,
+      specRev: rev,
+      resumed: false,
+    })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.status).toBe('collecting')
+    expect(state.specRev).toBe(rev)
+    expect(state.nodeRestack).toEqual(before.nodeRestack)
+    expect(state.target).toEqual(before.target)
+    expect(await store.getArtifact(SLUG, 'spec', 0)).not.toBeNull()
+  }
+  const events = await store.getEvents(SLUG)
+  expect(events.filter((e) => e.type === 'escalation.answered')).toHaveLength(0)
+  expect(events.filter((e) => e.type === 'spec.revised').at(-1)).toMatchObject({
+    actor: KERNEL,
+    payload: {
+      artifact: { kind: 'spec', rev: 2 },
+      operator: { user: 'operator', via: { kind: 'mcp', client: 'test' } },
+    },
+  })
+})
+
+test('failed-node revision clears the reducer blocker immediately and keeps historical receipts', async () => {
+  const store = await revisionNode()
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'integration.prepared',
+    payload: { id: 'old', head: 'a'.repeat(40), parent: 'b'.repeat(40), config: '{}' },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.completed',
+    payload: {
+      step: 'unit',
+      attempt: 1,
+      outcome: 'fail',
+      headSha: 'a'.repeat(40),
+      baseSha: 'b'.repeat(40),
+      restackId: 'old',
+    },
+  })
+  expect(reduceBuild(await store.getEvents(SLUG)).status).toBe('blocked')
+  await reviseNode(store)
+  const facts = (await (await import('../store/reduced-reads')).readBuildFacts(store, SLUG)).value
+  expect(facts.state.status).toBe('collecting')
+  expect(facts.state).toEqual(reduceBuild(await store.getEvents(SLUG)))
+  expect(facts.state.verify.results).toHaveLength(1)
+  expect(facts.state.integration?.cycles).toHaveLength(1)
+})
+
+test('node ticket revision reads explicitly and re-pins assets while file revision preserves them', async () => {
+  const store = await revisionNode()
+  const assets = [
+    {
+      kind: 'design',
+      name: 'ref',
+      revision: 1,
+      layout: 'file' as const,
+      size: 1,
+      fileCount: 1,
+      dirCount: 0,
+    },
+  ]
+  await controlBuild({
+    store,
+    repo: REPO,
+    slug: SLUG,
+    action: {
+      kind: 'answer',
+      resolve: { kind: 'revise-spec', body: { kind: 'ticket' } },
+    },
+    readTicketBody: async (ref) => {
+      expect(ref.id).toBe('NODE')
+      return CONFORMING_SPEC
+    },
+    prepareTicketAssets: async () => assets,
+  })
+  expect(reduceBuild(await store.getEvents(SLUG)).pinnedAssets).toEqual(assets)
+  await reviseNode(store)
+  expect(reduceBuild(await store.getEvents(SLUG)).pinnedAssets).toEqual(assets)
+})
+
+test('node refusal checks precede lazy reads, and races leave deposited bodies inert', async () => {
+  for (const type of ['build.pause-requested', 'build.abort-requested'] as const) {
+    const store = await revisionNode()
+    await store.append(SLUG, { actor: { kind: 'human', user: 'test' }, type, payload: {} })
+    let read = false
+    await expect(
+      reviseNode(store, async () => {
+        read = true
+        return CONFORMING_SPEC
+      }),
+    ).rejects.toThrow()
+    expect(read).toBe(false)
+  }
+  for (const race of ['abort', 'verify', 'changed', 'landed'] as const) {
+    const store = await revisionNode()
+    await expect(
+      reviseNode(store, async () => {
+        if (race === 'abort')
+          await store.append(SLUG, { actor: KERNEL, type: 'build.abort-requested', payload: {} })
+        if (race === 'verify')
+          await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'verify.started',
+            payload: { step: 'unit', attempt: 1 },
+          })
+        if (race === 'changed')
+          await store.append(SLUG, {
+            actor: DISPATCHER,
+            type: 'node.compared',
+            payload: { headSha: 'new', parentSha: 'b'.repeat(40), ahead: 2 },
+          })
+        if (race === 'landed')
+          await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+        return CONFORMING_SPEC
+      }),
+    ).rejects.toThrow()
+    expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(0)
+    expect((await store.getEvents(SLUG)).some((e) => e.type === 'spec.revised')).toBe(false)
+  }
+  const store = await revisionNode()
+  await expect(reviseNode(store, async () => 'bad spec')).rejects.toMatchObject({
+    code: 'spec-nonconforming',
+  })
+  expect((await store.getEvents(SLUG)).some((e) => e.type === 'spec.revised')).toBe(false)
+})
+
+test('interrupted deposit is inert and a retry publishes only the newly supplied node body', async () => {
+  const store = await revisionNode()
+  const put = store.putArtifact.bind(store)
+  let interrupted = false
+  store.putArtifact = async (...args) => {
+    const artifact = await put(...args)
+    if (!interrupted) {
+      interrupted = true
+      throw new Error('interrupted after deposit')
+    }
+    return artifact
+  }
+  await expect(reviseNode(store)).rejects.toThrow('interrupted')
+  expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(0)
+  const replacement = CONFORMING_SPEC.replace('Replacement', 'New contract')
+  expect(await reviseNode(store, async () => replacement)).toMatchObject({ specRev: 2 })
+  const artifact = await store.getArtifact(SLUG, 'spec', 2)
+  expect(new TextDecoder().decode(artifact!.content)).toBe(replacement)
+})
+
+test('node revision CAS refuses a state change at publication without retrying', async () => {
+  const store = await revisionNode()
+  const append = store.appendIfCurrent.bind(store)
+  store.appendIfCurrent = async (...args) => {
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'other' },
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    return append(...args)
+  }
+  await expect(reviseNode(store)).rejects.toThrow('retry')
+  expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(0)
+})
+
+test('node publication refuses live runner or writer leases, then succeeds after release', async () => {
+  for (const kind of ['runner', 'writer'] as const) {
+    const store = await revisionNode()
+    if (kind === 'runner') await store.claimLease(SLUG, 'busy', 60_000)
+    else await store.claimNodeWriter(SLUG, 'busy', 60_000)
+    await expect(reviseNode(store)).rejects.toThrow('busy')
+    expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(0)
+    if (kind === 'runner') await store.releaseLease(SLUG, 'busy')
+    else await store.releaseNodeWriter(SLUG, 'busy')
+    expect(await reviseNode(store)).toMatchObject({ nodeRevision: true, specRev: 2 })
+  }
+})

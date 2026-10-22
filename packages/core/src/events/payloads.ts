@@ -1,4 +1,5 @@
 import { runtimeIdentitySchema } from './runtime'
+import { viaSchema } from './envelope'
 import { nativeSessionHandleSchema } from './native-session'
 /**
  * The event vocabulary (SPEC §15.3), frozen as schemas — this closes open
@@ -789,14 +790,18 @@ export const eventPayloadSchemas = {
     artifact: artifactRefSchema,
     session: z.string().min(1),
   }),
-  'spec.revised': z.strictObject({
-    artifact: artifactRefSchema,
-    /** seq of the `escalation.raised` event that forced the revision. */
-    escalation: z.number().int().positive(),
-    /** Present (possibly empty) when the revision re-pins the build to the
-     * ticket's then-current assets; absent leaves the pinned set unchanged. */
-    assets: z.array(pinnedAssetSchema).optional(),
-  }),
+  'spec.revised': z.union([
+    z.strictObject({
+      artifact: artifactRefSchema,
+      escalation: z.number().int().positive(),
+      assets: z.array(pinnedAssetSchema).optional(),
+    }),
+    z.strictObject({
+      artifact: artifactRefSchema,
+      operator: z.strictObject({ user: z.string().min(1), via: viaSchema.optional() }),
+      assets: z.array(pinnedAssetSchema).optional(),
+    }),
+  ]),
 
   // ── Sessions (every agent run is bracketed by these) ──────────────────────
   'session.started': z.strictObject({

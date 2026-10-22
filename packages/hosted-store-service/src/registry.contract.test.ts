@@ -1517,3 +1517,63 @@ test('state tools and HTTP routes preserve full metadata and duplicate refusals'
   expect(duplicate).toBeInstanceOf(RegistryError)
   expect((duplicate as RegistryError).body.error).toContain('already exists')
 })
+
+test('actual builds.answer registry revises collecting nodes with body and ticket origin and operator attribution', async () => {
+  for (const origin of ['body', 'ticket'] as const) {
+    const world = await seedWorld()
+    await world.store.createBuild({
+      slug: 'node-revision',
+      repo,
+      ticket: { source: 'hosted', id: 'AUT-1' },
+    })
+    await world.store.append('node-revision', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo,
+        ticket: { source: 'hosted', id: 'AUT-1' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await world.store.append('node-revision', {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: 'parent' },
+    })
+    const registry = buildRegistry({ store: world.store, tickets: world.backend, clock })
+    const result = await registry.call(
+      'builds.answer',
+      {
+        repo,
+        slug: 'node-revision',
+        resolution: 'revise-spec',
+        origin,
+        body: CONFORMING_SPEC,
+      },
+      { identity: 'Ada', via: { kind: 'mcp', client: 'contract' } },
+    )
+    expect(result).toMatchObject({ kind: 'answered', nodeRevision: true, count: 0, specRev: 0 })
+    expect((await world.store.getEvents('node-revision')).at(-1)).toMatchObject({
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: {
+        operator: { user: 'Ada', via: { kind: 'mcp', client: 'contract' } },
+      },
+    })
+    const refused = await toolFailure(() =>
+      registry.call(
+        'builds.answer',
+        {
+          repo: 'other/repo',
+          slug: 'node-revision',
+          resolution: 'revise-spec',
+          origin,
+          body: CONFORMING_SPEC,
+        },
+        { identity: 'Ada' },
+      ),
+    )
+    expect(refused.kind).toBeDefined()
+  }
+})
