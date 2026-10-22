@@ -50,6 +50,7 @@ test('failure suppression tracks exact target input and opt-out disables work', 
   await h.controller.check()
   expect(h.calls()).toBe(1)
   expect(h.events.map((e) => e.type)).toEqual([
+    'dispatcher.upgrade-target-resolved',
     'dispatcher.upgrade-detected',
     'dispatcher.upgrade-failed',
   ])
@@ -227,8 +228,80 @@ for (const { name, commit, bunTag, locked, unchanged } of [
     expect(installs).toBe(unchanged ? 0 : 1)
     expect(cutovers).toBe(0)
     expect(events.map((event) => event.type)).toEqual(
-      unchanged ? [] : ['dispatcher.upgrade-detected', 'dispatcher.upgrade-failed'],
+      unchanged
+        ? ['dispatcher.upgrade-target-resolved']
+        : [
+            'dispatcher.upgrade-target-resolved',
+            'dispatcher.upgrade-detected',
+            'dispatcher.upgrade-failed',
+          ],
     )
     await controller.stop()
   })
 }
+
+test('source observations survive equality, failed inputs and reducer replay without per-poll growth', async () => {
+  const { dispatchUpgradeReducer } = await import('../kernel/dispatch-upgrade')
+  const events: RepositoryEventWrite[] = []
+  let target: UpgradeTarget = {
+    mode: 'source',
+    key: 'baseline',
+    source: '/repo/.git',
+    base: 'main',
+    sha: 'a'.repeat(40),
+    version: from.version,
+  }
+  let preparations = 0
+  const input = {
+    run: 'source',
+    lineage: 'l',
+    from,
+    currentKey: 'baseline',
+    failedKeys: [],
+    enabled: () => true,
+    resolve: async () => target,
+    prepare: async () => {
+      preparations++
+      throw new Error('failure')
+    },
+    append: async (event: RepositoryEventWrite) => {
+      events.push(event)
+    },
+    cutover: async () => false,
+  }
+  const first = new DispatchUpgradeController(input)
+  await first.check()
+  await first.check()
+  target = { ...target, sha: 'b'.repeat(40) }
+  await first.check()
+  await first.check()
+  expect(preparations).toBe(0)
+  expect(events.map((e) => e.type)).toEqual([
+    'dispatcher.upgrade-target-resolved',
+    'dispatcher.upgrade-target-resolved',
+  ])
+  const replay = () =>
+    dispatchUpgradeReducer.reduce(
+      events.map((event, i) => ({
+        ...event,
+        repo: '/repo',
+        seq: i + 1,
+        ts: new Date().toISOString(),
+      })) as Parameters<typeof dispatchUpgradeReducer.reduce>[0],
+    )
+  const resumed = new DispatchUpgradeController({
+    ...input,
+    resolved: replay().runs.source?.resolved,
+  })
+  await resumed.check()
+  expect(events).toHaveLength(2)
+  target = { ...target, key: 'changed' }
+  await resumed.check()
+  await resumed.check()
+  expect(preparations).toBe(1)
+  target = { ...target, sha: 'c'.repeat(40) }
+  await resumed.check()
+  expect(preparations).toBe(1)
+  expect(replay().runs.source?.failure).toBeDefined()
+  expect(replay().runs.source?.resolved?.payload.target.sha).toBe(target.sha)
+})

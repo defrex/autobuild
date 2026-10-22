@@ -323,7 +323,14 @@ uses the same service as `ab restack <node>`. The receipt contains `slug`,
 non-node, unopened and terminal builds and enforces repository ownership.
 
 Repository status includes `upgrades.runs`, keyed by originating dispatcher run,
-with detected target, failure, handoff and completion evidence. Facts carry launcher
+with latest successful `resolved` target, detected target, failure, handoff and
+completion evidence. `dispatcher.upgrade-target-resolved` carries strict
+`{run, lineage, target}` data; the target has mode (`pinned`, `installed`, or
+`source`), content key, source provenance and optional version/base/SHA. Source
+mode names the authoritative base commit, which can advance without changing
+packaged inputs or the running runtime. Status text renders the resolved mode,
+base and SHA separately, so an older handoff cannot hide a newer target. Identical
+observations append nothing; a successful resolution does not clear failures. Facts carry launcher
 lineage, from/to runtimes, resolution mode and authoritative base SHA/ref or original
 installation provenance, plus prepared cache identity. Completion names the successor
 and requires repository ownership. `dispatcher.upgrade-failed` is immediate repository
