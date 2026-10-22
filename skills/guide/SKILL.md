@@ -987,7 +987,7 @@ changing it requires a dispatcher restart.
 | `model` | — (required when `enabled = true`) | nonblank provider-qualified string, same vocabulary as `[roles]` | The turn runner's model, resolved through the deployment's gateway credential; a leading `vercel-ai-gateway/` prefix is accepted and stripped. |
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under. |
 | `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the operator answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
-| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the legacy hosted wake event set, independent of CLI watch defaults; an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
+| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the legacy hosted wake event set including `integration.verification-failed`, independent of CLI watch defaults; an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
 
 `[orchestrator.sandbox]` fields:
@@ -1884,6 +1884,8 @@ With no slugs the repository journal is included; named watches add it with
 
 The default watch reports actionable conditions only:
 
+- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node.
+
 - `build.janitor-failing`: a build has failed janitor attempts for the configured attention threshold. A successful attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.
 
@@ -2034,7 +2036,7 @@ vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `abo
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
-`attention` (an open escalation, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
+`attention` (current failed node verification, an open escalation, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
 globs in supply order — and the record names what matched.
@@ -2045,9 +2047,9 @@ means an open escalation exactly as everywhere else. In the manner of `kubectl
 wait`, a condition that already holds when the command starts returns
 immediately with that build's latest event (`--since` does not suppress this);
 otherwise the first later event whose reduction produces it ends the wait.
-`attention` is also a current-state condition: existing janitor failure attention, an already open escalation or
+`attention` is also a current-state condition: current failed node verification, existing janitor failure attention, an already open escalation or
 merge decision returns immediately, including with `--since`. Merge matches
-use the same observation as watch. During replay, only new escalation events
+use the same observation as watch. During replay, only new failed-node verification or escalation events
 or undelivered eligible merge decisions satisfy attention. `--event` conditions
 fire only on new events or a cursor-resumed backlog.
 

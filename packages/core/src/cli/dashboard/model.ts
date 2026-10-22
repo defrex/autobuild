@@ -366,6 +366,7 @@ export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState
   if (state.status === 'done') return 'done'
   if (state.status === 'aborted') return 'cleaning'
   if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
+  if (state.kind === 'node' && integrationFailed(state)) return 'blocked'
   if (
     (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
@@ -1033,6 +1034,9 @@ export function projectBuildFromFacts(
     ...(setupError !== undefined ? { setupError } : {}),
     blockers: [
       ...state.openEscalations.map((e) => e.question),
+      ...(state.kind === 'node' && integrationFailed(state)
+        ? ['verification failed: file a repair child targeting this node']
+        : []),
       ...(mergeWaitReason !== undefined ? [mergeWaitReason] : []),
     ],
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined

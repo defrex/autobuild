@@ -1484,7 +1484,7 @@ restart-classified as a whole.
 | `model` | — | nonblank string, required when `enabled = true` | Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential. |
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under (`ORCHESTRATOR_ROUTE_LIMIT_SECONDS`, the same number the operator route pins as `maxDuration`). |
 | `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until the operator answers. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
-| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the default attention set — the build events `ab watch` filters on by default plus the repository-journal events `ab watch` follows) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
+| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the legacy hosted wake set including `integration.verification-failed`, independently of CLI watch defaults) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
 | `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
 
 `[orchestrator.sandbox]` fields:
@@ -2051,3 +2051,9 @@ execution and unchanged-base progress budgets retain their existing accounting.
 
 Default `ab watch` and `ab wait --for attention` include
 `phase.deferral-escalated`; explicit event filters replace the default set.
+
+## Integration verification attention
+
+A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports using a per-cycle CAS guard. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
+
+Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.

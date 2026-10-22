@@ -34,6 +34,7 @@ export const buildEventPolicy = {
   'integration.prepared': 'decisive',
   'integration.landing-intended': 'decisive',
   'integration.landed': 'decisive',
+  'integration.verification-failed': 'decisive',
   'integration.audited': 'decisive',
   'node.restack-requested': 'decisive',
   'node.restack-satisfied': 'decisive',

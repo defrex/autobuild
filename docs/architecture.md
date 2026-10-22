@@ -1399,3 +1399,11 @@ and more than half of attributed requests. Telemetry never controls workflow.
 Ticket-source continuity is reduced by `kernel/ticket-migrations.ts` from durable
 repository `tickets.migration-recorded` facts. Import publishes only complete
 mappings; current-operation resolvers leave build records and old events intact.
+
+## Integration verification reporting
+
+A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports using a per-cycle CAS guard. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
+
+Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+
+`packages/core/src/kernel/integration-state.ts` retains reported cycle identities and selects missing failures from exact receipts. `kernel/integration-attention.ts` owns their CAS append; `processes/build-runner.ts` reports after verification and `processes/dispatcher.ts` recovers missing facts before per-build janitor gates. The shared `cli/dashboard/model.ts` projects current failure as blocked attention for both frontends.

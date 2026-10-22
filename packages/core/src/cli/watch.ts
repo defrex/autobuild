@@ -109,6 +109,7 @@ export const BUILD_ATTENTION_EVENTS = [
   'escalation.raised',
   'phase.deferral-escalated',
   'integration.landed',
+  'integration.verification-failed',
   'node.item-conflicted',
 ] as const satisfies readonly EventType[]
 
@@ -409,6 +410,8 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'integration.verification-failed':
+      return `verification failed: ${event.payload.steps.join(', ')}; head ${event.payload.head}; parent ${event.payload.parent}; ${event.payload.guidance}`
     case 'build.janitor-failing':
       return `Janitor failing: ${singleLine(event.payload.message)}`
     case 'dispatcher.forge-degraded':

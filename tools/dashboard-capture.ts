@@ -1,3 +1,4 @@
+import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
 import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
@@ -771,6 +772,7 @@ mode = "auto"
         },
       })
     }
+    if (label === 'failed') await reportIntegrationFailures(harness.store, slug)
     if (!node)
       await harness.store.append(slug, {
         actor: KERNEL,

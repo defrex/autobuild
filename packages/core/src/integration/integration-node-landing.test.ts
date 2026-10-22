@@ -135,6 +135,20 @@ test('a verification-blocked node admits a repair child and verifies the repaire
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await h.runLatest()
     expect(reduceBuild(await h.events(node.slug)).status).toBe('blocked')
+    const failures = (await h.events(node.slug)).filter(
+      (event) => event.type === 'integration.verification-failed',
+    )
+    expect(failures).toHaveLength(1)
+    expect(failures[0]!.payload).toMatchObject({
+      steps: ['unit'],
+      guidance: `file a repair child targeting this node: ${node.slug}`,
+    })
+    await h.dispatcher.tick()
+    expect(
+      (await h.events(node.slug)).filter(
+        (event) => event.type === 'integration.verification-failed',
+      ),
+    ).toHaveLength(1)
     h.tickets.add({ ...readyTicket('REPAIR', { title: 'Repair missing marker' }), target: 'NODE' })
     h.clock.advance(60_000)
     await h.dispatcher.tick()
@@ -440,3 +454,97 @@ test.each([false, true])(
     }
   },
 )
+
+test('dispatcher recovers a failed receipt without a runner, workspace or successful forge read', async () => {
+  const { KERNEL, DISPATCHER } = await import('../events/envelope')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('NODE', { title: 'Recover failed verification' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    const head = 'a'.repeat(40)
+    const parent = 'b'.repeat(40)
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'node.compared',
+      payload: { headSha: head, parentSha: parent, ahead: 1 },
+    })
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'integration.prepared',
+      payload: { id: 'crashed-cycle', head, parent, config: '{"verify":{"steps":["unit"]}}' },
+    })
+    await h.store.append(node.slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: {
+        step: 'unit',
+        attempt: 1,
+        outcome: 'fail',
+        restackId: 'crashed-cycle',
+        headSha: head,
+        baseSha: parent,
+      },
+    })
+    const launches = h.launched.length
+    // Every forge operation may fail: reporting must happen before any probe.
+    h.forge.getPrState = async () => {
+      throw new Error('forge unavailable')
+    }
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const events = await h.events(node.slug)
+    expect(events.filter((event) => event.type === 'integration.verification-failed')).toHaveLength(
+      1,
+    )
+    expect(events.filter((event) => event.type === 'verify.started')).toHaveLength(0)
+    expect(events.filter((event) => event.type === 'escalation.raised')).toHaveLength(0)
+    expect(h.launched).toHaveLength(launches)
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    expect((await readBuildFacts(h.store, node.slug)).value.workspace).toBeNull()
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('agent verification failure reports the exact node cycle once without an escalation', async () => {
+  const handlers = happyHandlers()
+  handlers['ab-verify-feature'] = async (cli) => {
+    await cli.run(['context'])
+    const report = join(cli.ws, '.ab/feature-report.md')
+    await Bun.write(report, 'Feature verification failed: repair the integration.')
+    await cli.run(['verdict', 'fail', '--report', report])
+  }
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers,
+    configToml:
+      CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "feature"]') +
+      '\n[verify.feature]\nkind = "agent"\nskill = "ab-verify-feature"\n',
+    tickets: [{ ...readyTicket('NODE', { title: 'Agent failed integration' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await addStack(h, node.branch!)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    await h.dispatcher.tick()
+    const events = await h.events(node.slug)
+    const state = reduceBuild(events)
+    expect(state.status).toBe('blocked')
+    const reports = events.filter((event) => event.type === 'integration.verification-failed')
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.payload).toMatchObject({
+      id: state.integration!.cycle!.id,
+      head: state.integration!.cycle!.head,
+      parent: state.integration!.cycle!.parent,
+      steps: ['feature'],
+    })
+    expect(events.filter((event) => event.type === 'escalation.raised')).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+})
