@@ -120,7 +120,7 @@ const restartRequiredConfigPathsSchema = z
   })
 
 const upgradeTargetSchema = z.strictObject({
-  mode: z.enum(['pinned', 'installed']),
+  mode: z.enum(['pinned', 'installed', 'source']),
   key: z.string().min(1),
   source: z.string().min(1),
   version: z.string().optional(),
@@ -472,6 +472,11 @@ export const dispatcherStatusEventPayloadSchemas = {
   }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
+  'dispatcher.upgrade-target-resolved': z.strictObject({
+    run: dispatchRun,
+    lineage: z.string().min(1),
+    target: upgradeTargetSchema,
+  }),
   'dispatcher.upgrade-detected': upgradeIdentitySchema,
   'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
   'dispatcher.handoff-started': handoffSchema,
@@ -769,6 +774,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.reset': ['human'],
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
+  'dispatcher.upgrade-target-resolved': ['dispatcher'],
   'dispatcher.upgrade-detected': ['dispatcher'],
   'dispatcher.upgrade-failed': ['dispatcher'],
   'dispatcher.handoff-started': ['dispatcher'],

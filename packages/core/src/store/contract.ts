@@ -2246,10 +2246,20 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             type: 'dispatcher.upgrade-failed',
             payload: { ...identity, run: 'foreign', reason: 'registry unavailable' },
           })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.upgrade-target-resolved',
+            payload: {
+              run: 'foreign',
+              lineage: identity.lineage,
+              target: { ...identity.target, mode: 'source', sha: 'b'.repeat(40) },
+            },
+          })
           const first = (await readRepositoryFacts(store, repo)).value.upgrades
           expect(first.runs.old?.handoff?.payload).toEqual(handoff)
           expect(first.runs.old?.completed).toBeUndefined()
           expect(first.runs.foreign?.failure?.payload.reason).toBe('registry unavailable')
+          expect(first.runs.foreign?.resolved?.payload.target.sha).toBe('b'.repeat(40))
           await store.appendRepo(repo, {
             actor: DISPATCHER,
             type: 'dispatcher.handoff-completed',

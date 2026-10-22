@@ -64,6 +64,12 @@ function corpora(): unknown[][] {
     ],
     [
       {
+        type: 'dispatcher.upgrade-target-resolved',
+        seq: 0,
+        ts: '2026-10-20T23:59:59Z',
+        payload: { run: identity.run, lineage: identity.lineage, target: identity.target },
+      },
+      {
         type: 'dispatcher.upgrade-detected',
         seq: 1,
         ts: '2026-10-21T00:00:00Z',
@@ -271,7 +277,7 @@ describe('reducer registry', () => {
         "dispatchFrontend": 3,
         "dispatchSettings": 1,
         "dispatchStatus": 3,
-        "dispatchUpgrade": 1,
+        "dispatchUpgrade": 2,
         "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
         "executionNoProgress": 5,
@@ -302,7 +308,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 25,
+        "repositoryReadFacts": 26,
         "repositoryStateEvents": 5,
         "sandboxStates": 1,
         "session": 1,

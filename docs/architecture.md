@@ -432,11 +432,21 @@ frontend, kernel, local runners and agent CLI use one completed immutable root;
 spawn and pruning. Cached guest archives are captured at installation.
 `--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
 `dispatch-upgrade-target.ts` reads manifest and lock blobs from one authoritative
-base snapshot, or rereads the original install pathname when unpinned.
+base snapshot, or rereads the original install pathname when unpinned. Frozen
+launcher eligibility selects source mode for a source root sharing the dispatched
+repository's Git common directory. `dispatch-upgrade-source.ts` exports exact
+commits into private cache staging and fingerprints actual packed contents and
+the production-reachable Bun lock closure. Source preparation installs with the
+frozen lock and scripts disabled, then publishes through the existing immutable
+runtime cache. Neither resolution nor installation changes an operator/build
+worktree. Excluded-file commits change observed provenance without adoption.
 `dispatch-upgrade-install.ts` stages and validates exact targets;
 `dispatch-upgrade-controller.ts` checks immediately and every 60 seconds, suppresses
 failed target inputs and serializes cutover with claim ticks. Upgrade/handoff facts
-are reduced by `kernel/dispatch-upgrade.ts`. The exited immutable generation's
+are reduced by `kernel/dispatch-upgrade.ts`. The advisory
+`dispatcher.upgrade-target-resolved` fact independently retains each run's latest
+successful mode/base/SHA observation without clearing failure evidence; repeated
+identical observations append nothing. The exited immutable generation's
 `dispatch-handoff.ts` reader interprets the journal for the filesystem-only launcher,
 which starts generations sequentially. Local runners finish all suspension writes
 before exit; eligible handles resume natively and others record fresh-session
