@@ -1,3 +1,4 @@
+import { ownsDispatchPresentation } from './dispatch-presentation-ownership'
 import { guardForge } from '../kernel/guarded-forge'
 import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import { openProductionStore } from './store-opening'
@@ -49,8 +50,12 @@ export async function runDirectBinary(
     workspacePath: process.cwd(),
     processEnv: process.env,
     exec: spawnExec,
-    stdout: (line: string) => console.log(line),
-    stderr: (line: string) => console.error(line),
+    stdout: (line: string) => {
+      if (command !== 'dispatch' || ownsDispatchPresentation()) console.log(line)
+    },
+    stderr: (line: string) => {
+      if (command !== 'dispatch' || ownsDispatchPresentation()) console.error(line)
+    },
   }
 
   // Sessionless commands resolve their own repository/store and do not require

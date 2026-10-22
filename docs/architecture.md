@@ -435,13 +435,22 @@ spawn and pruning. Cached guest archives are captured at installation.
 base snapshot, or rereads the original install pathname when unpinned.
 `dispatch-upgrade-install.ts` stages and validates exact targets;
 `dispatch-upgrade-controller.ts` checks immediately and every 60 seconds, suppresses
-failed target inputs and serializes cutover with claim ticks. Upgrade/handoff facts
-are reduced by `kernel/dispatch-upgrade.ts`. The exited immutable generation's
-`dispatch-handoff.ts` reader interprets the journal for the filesystem-only launcher,
-which starts generations sequentially. Local runners finish all suspension writes
-before exit; eligible handles resume natively and others record fresh-session
-fallback. Local harvest is interrupted and rerun by existing recovery. Automatic
-upgrades can be disabled; launcher contract changes require a manual restart.
+failed target inputs and publishes durable prepared targets. `dispatch-preflight.ts`
+checks target configuration, provider compatibility and actual protocol-write
+admission before requesting yield. `kernel/dispatch-upgrade.ts` folds correlated
+acceptance, terminal release, takeover, per-execution retirement and completion.
+The runtime-owned `dispatch-handoff.ts` reader lets the filesystem-only launcher
+supervise overlapping generations without owning Store or config decisions.
+A runtime-owned repository-record projection binds the journal transport before
+initial spawn and across handoffs, including when later config edits are invalid.
+`dispatch-frontend.ts` acknowledges terminal release only after joining input
+and rendering. The old kernel releases repository authority but retains local
+execution supervision until completion or the hot policy deadline. Build-log
+execution authorization permits expected mixed-version deferral without restart
+attention. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
+after a predecessor dies. Cutover suspends immediately when provider evidence
+cannot establish safe overlap. Automatic upgrades can be disabled; targets
+without preflight capability require manual restart.
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;

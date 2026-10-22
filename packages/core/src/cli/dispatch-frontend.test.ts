@@ -3358,3 +3358,111 @@ test('a frame superseded by confirmAbort is discarded without a durable render w
     await h.finish()
   }
 })
+
+test('handoff release retries a failed durable acknowledgement without reacquiring or repainting the terminal', async () => {
+  const store = new MemoryBuildStore()
+  const repo = '/handoff-release-retry'
+  await store.ensureRepo(repo)
+  const completed = deferred<DispatchChildResult>()
+  let run = '',
+    inputLive = false,
+    writes = 0,
+    attempts = 0,
+    writesAtRelease = 0
+  const append = store.appendRepo.bind(store)
+  store.appendRepo = async (repo, event) => {
+    if (event.type === 'dispatcher.terminal-released') {
+      attempts++
+      expect(inputLive).toBe(false)
+      if (attempts === 1) {
+        writesAtRelease = writes
+        throw new Error('temporary store outage')
+      }
+      expect(writes).toBe(writesAtRelease)
+    }
+    return append(repo, event)
+  }
+  const write = () => {
+    writes++
+  }
+  const frontend = new DispatchFrontend({
+    repo,
+    store,
+    storeRef: '/unused',
+    env: {},
+    once: false,
+    terminal: {
+      write,
+      modes: createTerminalModeController(write, write),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: {
+      start: () => {
+        inputLive = true
+        return () => {
+          inputLive = false
+        }
+      },
+    },
+    launchChild: (input) => {
+      run = input.run
+      return {
+        completed: completed.promise,
+        stop: async () => {
+          completed.resolve({ outcome: 'normal', exitCode: 0 })
+        },
+      }
+    },
+  })
+  const running = frontend.run()
+  try {
+    await waitFor(() => !!run && inputLive, 'frontend input')
+    const runtime = {
+      version: '1.0.0',
+      commit: 'unknown',
+      source: { kind: 'package' as const, location: '/old' },
+    }
+    const handoff = {
+      correlation: 'handoff',
+      run,
+      lineage: 'launcher',
+      from: runtime,
+      to: { ...runtime, version: '2.0.0' },
+      root: '/new',
+      cacheId: 'new',
+      target: { mode: 'installed' as const, key: 'new', source: '/install' },
+    }
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.target-prepared',
+      payload: handoff,
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.yield-requested',
+      payload: { ...handoff, successor: 'new', mode: 'drain', evidence: 'same schema' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.handoff-started',
+      payload: { ...handoff, successor: 'new', mode: 'drain', builds: [] },
+    })
+    await waitFor(
+      async () =>
+        (await store.getRepoEvents(repo)).some(
+          (event) => event.type === 'dispatcher.terminal-released',
+        ),
+      'retried terminal release',
+    )
+    expect(attempts).toBe(2)
+    completed.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+    expect(writes).toBe(writesAtRelease)
+  } finally {
+    completed.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+    await store.close()
+  }
+})

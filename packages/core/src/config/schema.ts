@@ -509,6 +509,7 @@ export type RoleConfig = z.infer<typeof roleSchema>
 // ── [policy] ─────────────────────────────────────────────────────────────────
 
 export const policySchema = z.strictObject({
+  upgradeDrainSeconds: z.number().int().positive().default(900),
   /** Wall-clock bound for an agent phase session; roles may override it. */
   sessionBudgetSeconds: z.number().int().positive().default(3600),
   /** Same-finding survival threshold before auto-escalate (§10, §15.4). */

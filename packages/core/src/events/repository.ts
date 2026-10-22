@@ -408,10 +408,39 @@ export const dispatcherStatusEventPayloadSchemas = {
   }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
+  'dispatcher.target-prepared': handoffSchema,
+  'dispatcher.yield-requested': handoffSchema.extend({
+    successor: dispatchRun,
+    mode: z.enum(['drain', 'cutover']),
+    evidence: z.string().min(1),
+  }),
+  'dispatcher.terminal-released': handoffSchema,
+  'dispatcher.takeover': handoffSchema.extend({ successor: dispatchRun }),
+  'dispatcher.drain-settled': handoffSchema.extend({
+    slug: z.string().min(1),
+    instance: z.string().min(1),
+    outcome: z.enum(['drained', 'suspended', 'unknown']),
+  }),
+  'dispatcher.drain-deadline': handoffSchema.extend({ deadline: z.iso.datetime() }),
   'dispatcher.upgrade-detected': upgradeIdentitySchema,
   'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
-  'dispatcher.handoff-started': handoffSchema,
-  'dispatcher.handoff-completed': handoffSchema.extend({ successor: dispatchRun }),
+  'dispatcher.handoff-started': handoffSchema.extend({
+    successor: dispatchRun.optional(),
+    mode: z.enum(['drain', 'cutover']).optional(),
+    startedAt: z.iso.datetime().optional(),
+    deadline: z.iso.datetime().optional(),
+    builds: z
+      .array(z.strictObject({ slug: z.string().min(1), instance: z.string().min(1) }))
+      .optional(),
+  }),
+  'dispatcher.handoff-completed': handoffSchema.extend({
+    successor: dispatchRun,
+    mode: z.enum(['drain', 'cutover']).optional(),
+    startedAt: z.iso.datetime().optional(),
+    endedAt: z.iso.datetime().optional(),
+    drained: z.number().int().nonnegative().optional(),
+    suspended: z.number().int().nonnegative().optional(),
+  }),
   'dispatcher.runtime-recorded': z.strictObject({
     run: dispatchRun,
     startedSeq: z.number().int().positive(),
@@ -679,6 +708,12 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.reset': ['human'],
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
+  'dispatcher.target-prepared': ['dispatcher'],
+  'dispatcher.yield-requested': ['dispatcher'],
+  'dispatcher.terminal-released': ['dispatcher'],
+  'dispatcher.takeover': ['dispatcher'],
+  'dispatcher.drain-settled': ['dispatcher'],
+  'dispatcher.drain-deadline': ['dispatcher'],
   'dispatcher.upgrade-detected': ['dispatcher'],
   'dispatcher.upgrade-failed': ['dispatcher'],
   'dispatcher.handoff-started': ['dispatcher'],

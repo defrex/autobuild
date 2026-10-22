@@ -350,8 +350,8 @@ Treat every default-watch record as a call to act:
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
   the reported blocker.
 - Automatic upgrade failure: inspect repository status for the target, provenance
-  and reason. The running generation stays active; the same failed input is
-  suppressed until target metadata changes or a fresh operator launch. Report
+  and reason, including a rejected protocol-write preflight. The running generation stays active; the same failed input is
+  suppressed until target or selected-store compatibility evidence changes or a fresh operator launch. Report
   launcher-contract changes or disabled automatic upgrades as manual restart
   needs. Agents still never manage the process.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
@@ -397,9 +397,13 @@ for the exceptions above.
 
 ### Boundaries
 
-- Automatic kernel cutover is product behavior, not agent process authority.
-  Native-eligible local sessions resume; others record reasoned fresh fallback.
-  Harvest uses existing interruption/rerun recovery.
+- Automatic generation handoff is product behavior, not agent process authority.
+  Passing preflight permits draining when the selected store can be shared; unknown
+  compatibility chooses cutover. Rejected protocol writes preserve the predecessor.
+  Old local executions retain leases while the successor owns repository work;
+  remaining sessions suspend at the policy deadline and resume natively where
+  eligible, with reasoned fresh fallback otherwise. Harvest/provisioning work joins
+  before repository authority transfers.
 - Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode,
   and no dispatcher process-management commands. This applies when the
   dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
