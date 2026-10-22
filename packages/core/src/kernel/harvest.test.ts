@@ -16,6 +16,9 @@ import {
 import { checkIncremental } from './incremental-contract'
 import type { RepositoryEvent } from '../events/repository'
 import { MemoryBuildStore } from '../store/memory'
+import { nativeHandle } from '../ports/runner/native-session'
+import { readRepositoryFacts } from '../store/reduced-reads'
+import { repositoryReadFactsReducer } from './read-facts'
 import { steppingClock } from '../testing/fixed'
 
 /** Every fixture log reduced here is also held to the incremental contract
@@ -1182,4 +1185,103 @@ describe('reduceHarvest', () => {
     const events = await store.getRepoEvents('/repo')
     expect(() => reduceHarvest(events)).toThrow(/unknown harvest run "missing"/)
   })
+})
+
+test('late and contradictory session facts remain replayable without changing the active bracket', async () => {
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const repo = '/late-session'
+  await store.ensureRepo(repo)
+  await store.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.started',
+    payload: {
+      run: 'run',
+      observations: [{ build: 'b', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    },
+  })
+  const start = {
+    run: 'run',
+    session: 'a',
+    role: 'harvest' as const,
+    runner: 'scripted',
+    args: [],
+    step: 'synthesize' as const,
+    round: 1,
+  }
+  await store.appendRepo(repo, { actor: KERNEL, type: 'harvest.session.started', payload: start })
+  await store.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.session.started',
+    payload: {
+      ...start,
+      session: 'c',
+      continuation: { predecessor: 'a', root: 'a', cause: 'runner-loss' },
+    },
+  })
+  const before = (await readRepositoryFacts(store, repo)).value.harvest
+  for (const session of ['a', 'unknown']) {
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.session.ended',
+      payload: {
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        run: 'run',
+        session,
+        transcript: { kind: 'harvest-transcript', rev: 0 },
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.session.native-handle-recorded',
+      payload: {
+        run: 'run',
+        session,
+        handle: nativeHandle('scripted', 'stale', '/workspace'),
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.session.suspended',
+      payload: {
+        run: 'run',
+        session,
+        cause: 'shutdown',
+        transcript: { kind: 'harvest-transcript', rev: 0 },
+      },
+    })
+  }
+  // Duplicate starts and stale continuations cannot replace the current bracket.
+  await store.appendRepo(repo, { actor: KERNEL, type: 'harvest.session.started', payload: start })
+  await store.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.session.started',
+    payload: {
+      ...start,
+      session: 'stale-continuation',
+      continuation: { predecessor: 'a', root: 'a', cause: 'runner-loss' },
+    },
+  })
+  // Invalid acceptance must not install a native identity before validation.
+  await store.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.session.resumed',
+    payload: {
+      run: 'run',
+      session: 'c',
+      predecessor: 'unknown',
+      root: 'a',
+      handle: nativeHandle('scripted', 'stale', '/workspace'),
+    },
+  })
+  expect((await readRepositoryFacts(store, repo)).value.harvest.runs).toEqual(before.runs)
+  const events = await store.getRepoEvents(repo)
+  expect(reduceHarvest(events).runs).toEqual(before.runs)
+  checkIncremental(repositoryReadFactsReducer, events)
+  expect(
+    reduceHarvest(events).latest?.sessions.map(({ session, status }) => ({ session, status })),
+  ).toEqual([
+    { session: 'a', status: 'ended' },
+    { session: 'c', status: 'open' },
+  ])
 })

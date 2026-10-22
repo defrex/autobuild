@@ -64,3 +64,7 @@ cluster and author; you never create or move tickets.
 Do not call the TicketSource, edit tracker files, dispatch a build, push, or
 infer state from your own stdout. If evidence is weak, preserve that limitation
 in acceptance criteria rather than inventing facts.
+
+After native resumption, run `ab harvest context` again and inspect the current
+authoritative artifacts and feedback before continuing. The runner gives each
+continued turn fresh session credentials; never reuse a predecessor identity.

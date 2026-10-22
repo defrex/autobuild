@@ -62,3 +62,7 @@ link. Mark honestly in both directions: neither re-litigate a resolved
 finding nor let a dodged one look fresh, because the kernel mechanically
 escalates a chain that persists too long, and a stalemate is the only
 thing that counter can usefully measure.
+
+After native resumption, run `ab harvest context` again and inspect the current
+authoritative artifacts and feedback before continuing. The runner gives each
+continued turn fresh session credentials; never reuse a predecessor identity.

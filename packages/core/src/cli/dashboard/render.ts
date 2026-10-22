@@ -268,6 +268,7 @@ const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status']
   collecting: 'cyan',
   pausing: 'yellow',
   paused: 'yellow',
+  suspended: 'yellow',
   resuming: 'cyan',
   blocked: 'red',
   aborting: 'red',

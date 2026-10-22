@@ -2092,8 +2092,10 @@ runtime cache without updating the operator's installation. A successful cutover
 settles the open claim tick, suspends every local build session, waits for its
 stream and suspension writes, exits the old generation, then starts the successor.
 Native resume applies where eligible; other sessions record `session.resume-fallback`
-with a reason. Local harvest follows existing clean-stop interruption and rerun
-recovery. Remote supervised runners retain detach/recovery behavior.
+with a reason. Local harvest suspends on clean stop and cutover, closing its stream and
+recording partial transcript evidence before lease release. The next generation
+resumes eligible native sessions with fresh credentials, or records a reasoned
+fresh fallback. Suspension does not spend harvest recovery attempts; crashes do. Remote supervised runners retain detach/recovery behavior.
 
 Repository status exposes per-run target, handoff and failure details. Upgrade
 failure is repository attention, naming the target and reason. Resolution/install
