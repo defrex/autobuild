@@ -406,3 +406,67 @@ test('SQLite overlap still rejects a narrower CHECK constraint without initializ
     await store.close()
   }
 })
+
+for (const admitted of [false, true])
+  test(`hosted client outside overlap selects cutover but still requires target write admission (${admitted})`, async () => {
+    const { RemoteBuildStore } = await import('../store/remote/client')
+    const writes: Array<{ type: string; payload: unknown }> = []
+    const failures: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        if (new URL(request.url).pathname === '/health')
+          return Response.json({
+            autobuildVersion: '1.2.0',
+            protocolVersion: '4',
+            supportedClientRange: { minVersion: '1.0.0', maxVersionExclusive: '1.3.0' },
+          })
+        if (request.method === 'GET')
+          return Response.json({
+            repo: 'repo',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            lease: { holder: handoff.run, expiresAt: new Date(Date.now() + 60_000).toISOString() },
+          })
+        const fact = (await request.json()) as { type: string; payload: unknown }
+        if (!admitted)
+          return Response.json(
+            { kind: 'validation', error: 'target client refused' },
+            { status: 409 },
+          )
+        writes.push(fact)
+        return Response.json({ ...fact, repo: 'repo', seq: 1, ts: new Date().toISOString() })
+      },
+    })
+    const store = new RemoteBuildStore({
+      url: server.url.href,
+      identity: { autobuildVersion: '1.3.0', protocolVersion: '4' },
+    })
+    try {
+      expect(
+        await prepareDispatcherYield({
+          store,
+          repo: 'repo',
+          handoff,
+          successor: 'new',
+          signal: new AbortController().signal,
+          validate: async () => {},
+          failure: async (reason) => {
+            failures.push(reason)
+          },
+        }),
+      ).toBe(admitted)
+      if (admitted)
+        expect(writes).toMatchObject([
+          { type: 'dispatcher.yield-requested', payload: { mode: 'cutover' } },
+        ])
+      else {
+        expect(writes).toEqual([])
+        expect(failures).toHaveLength(1)
+      }
+    } finally {
+      server.stop(true)
+      await store.close()
+    }
+  })

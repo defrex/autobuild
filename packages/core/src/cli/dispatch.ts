@@ -1,7 +1,7 @@
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import { validateWorkspaceDispatchConfiguration } from './dispatch-readiness'
 import { releasePreparedRuntime } from './dispatch-runtime-use'
-import { recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
+import { authorizeRemoteHandoffs, recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
 import { distributionRoot } from '../distribution'
 import { readDistributionIdentity } from './installation'
 import { launchContext } from './dispatch-launch-contract'
@@ -1169,6 +1169,17 @@ class DispatchLoop {
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
       await this.repoView.refresh()
+      const executionSlugs = new Set(
+        [...(await this.repoView.getRepoBuildDigests(this.repoIdentity))]
+          .filter(([, digest]) => digest.executionOpen)
+          .map(([slug]) => slug),
+      )
+      await authorizeRemoteHandoffs(
+        this.wiring.store,
+        this.repoIdentity,
+        this.repoView.repositoryFacts().upgrades,
+        executionSlugs,
+      )
       const settings = await this.readDispatchSettings()
       const readyObservation =
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
@@ -4115,6 +4126,15 @@ class DispatchLoop {
     const builds = [...this.activeBuildRuns]
       .filter(([, entry]) => entry.handle?.supervision === 'local-parent')
       .map(([slug, entry]) => ({ slug, instance: entry.instance }))
+    const remoteBuilds = []
+    for (const [slug, digest] of await this.repoView.getRepoBuildDigests(this.repoIdentity)) {
+      if (!digest.executionOpen) continue
+      const facts = (await readBuildFacts(this.wiring.store, slug)).value
+      if (!facts.remoteWorkspace || !facts.open) continue
+      const instance = facts.open.instance
+      const runtime = facts.runnerAttaches.findLast((a) => a.instance === instance)?.runtime
+      remoteBuilds.push({ slug, instance, ...(runtime ? { runtime } : {}) })
+    }
     const handoff: Handoff = {
       correlation: request.correlation,
       run: request.run,
@@ -4137,6 +4157,7 @@ class DispatchLoop {
           startedAt,
           deadline,
           builds,
+          remoteBuilds,
         },
       })
     } catch (error) {
@@ -4213,6 +4234,12 @@ class DispatchLoop {
           instance: build.instance,
         },
       })
+    await authorizeRemoteHandoffs(
+      this.wiring.store,
+      this.repoIdentity,
+      undefined,
+      new Set((handoff.remoteBuilds ?? []).map((build) => build.slug)),
+    )
     this.retirement = {
       handoff: {
         correlation: handoff.correlation,

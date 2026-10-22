@@ -7,6 +7,7 @@ import {
   cachedRuntime,
   validateRuntime,
   prepareRuntime,
+  guestArchiveProvenance,
   type CachedRuntime,
 } from './dispatch-runtime-cache'
 import { readDistributionIdentity, lockPackageRecord } from './installation'
@@ -112,7 +113,7 @@ export async function prepareUpgrade(input: {
       }
       if (key !== target.key) continue
       const runtime = await cachedRuntime(join(cache, name, 'distribution'))
-      if (!runtime || !reserveExistingRuntime(runtime.root)) continue
+      if (!runtime?.guestArchive || !reserveExistingRuntime(runtime.root)) continue
       try {
         await validateRuntime(runtime)
         if (target.mode === 'source' && captureRuntimeIdentity(runtime.root).commit !== target.sha)
@@ -150,10 +151,15 @@ export async function prepareUpgrade(input: {
       await writeFile(path, JSON.stringify(manifest))
       let runtime: CachedRuntime | undefined
       try {
-        runtime = await prepareRuntime(root, checkout, {
-          upgradeKey: target.key,
-          commit: target.sha!,
-        })
+        runtime = await prepareRuntime(
+          root,
+          checkout,
+          {
+            upgradeKey: target.key,
+            commit: target.sha!,
+          },
+          { provenance: 'source' },
+        )
         if (captureRuntimeIdentity(runtime.root).commit !== target.sha)
           throw new Error('source runtime commit contradicts target')
         signal.throwIfAborted()
@@ -168,7 +174,9 @@ export async function prepareUpgrade(input: {
     const identity = await readDistributionIdentity(target.installRoot!)
     if (identity.version !== target.version)
       throw new Error('original installation changed during preparation')
-    const runtime = await prepareRuntime(identity.root, checkout)
+    const runtime = await prepareRuntime(identity.root, checkout, undefined, {
+      provenance: await guestArchiveProvenance(identity.root),
+    })
     try {
       signal.throwIfAborted()
       return await validate(runtime)
@@ -234,7 +242,9 @@ export async function prepareUpgrade(input: {
     validateUpgradeLockReceipt(target.record!, record)
     if (target.version !== undefined && installed.version !== target.version)
       throw new Error('installed version contradicts target')
-    runtime = await prepareRuntime(installed.root, checkout)
+    runtime = await prepareRuntime(installed.root, checkout, undefined, {
+      provenance: String(target.record![0]).includes('@github:') ? 'source' : 'registry',
+    })
     await validate(runtime)
     signal.throwIfAborted()
     await writeFile(join(cache, runtime.id, 'upgrade-key'), target.key)
