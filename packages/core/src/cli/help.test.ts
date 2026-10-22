@@ -437,3 +437,11 @@ describe('layered CLI help catalog', () => {
     expect(isSessionlessInvocation(['harvest', 'context'])).toBe(false)
   })
 })
+
+test('watch help names every durable default and wait help includes failed nodes', async () => {
+  const { BUILD_ATTENTION_EVENTS } = await import('./watch')
+  const watch = renderCommandHelp('watch')
+  for (const type of BUILD_ATTENTION_EVENTS) expect(watch).toContain(type)
+  expect(watch).toContain('failed node verification')
+  expect(renderCommandHelp('wait')).toContain('failed node verification')
+})

@@ -715,12 +715,12 @@ const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
 
 /** The attention set a new session's wake settings inherit when the
  * repository does not override `wake`: the build events an operator or agent
- * must wake up for (the same set `ab watch` filters on by default) plus the
- * repository-journal attention events (the same set `ab watch`
- * follows), spelled as literal globs. Both halves of the attention set can
- * wake a session. */
+ * must wake up for, spelled as literal globs. These legacy hosted defaults
+ * remain independent of CLI watch defaults; failed node verification belongs
+ * to both. Repository-journal attention can also wake a session. */
 export const defaultOrchestratorWakeGlobs: readonly string[] = [
   'escalation.raised',
+  'integration.verification-failed',
   'phase.deferral-escalated',
   'phase.failed',
   'infrastructure.failed',

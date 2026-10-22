@@ -1325,6 +1325,32 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     return { store: fake, heldCalls: () => total }
   }
 
+  test('remote held reads deliver failed-node attention through the default filter', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'node')
+    const payload = {
+      id: 'cycle',
+      head: 'a'.repeat(40),
+      parent: 'b'.repeat(40),
+      steps: ['agent'],
+      guidance: 'file a repair child targeting this node: node',
+    }
+    const { store: fake, heldCalls } = longPollStore(store, async (_slug, call) => {
+      if (call === 1)
+        await store.append('node', {
+          actor: KERNEL,
+          type: 'integration.verification-failed',
+          payload,
+        })
+    })
+    const h = harness(store, { openStore: () => fake })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['node'], count: 1, timeout: '2' })
+    expect(heldCalls()).toBeGreaterThan(0)
+    expect(
+      h.out.map((line) => JSON.parse(line)).find((record) => record.event)?.event.payload,
+    ).toEqual(payload)
+  })
+
   test('an appended event is delivered without waiting the interval, via a held read', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
@@ -2721,4 +2747,49 @@ test('read deferral attention wakes the default watch once, keeps its real event
   expect(
     explicit.out.map((line) => JSON.parse(line)).filter((record) => record.event),
   ).toHaveLength(0)
+})
+
+test('failed node cycles use default attention, baseline history and resume without duplicates', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'node')
+  const payload = {
+    id: 'cycle-1',
+    head: 'a'.repeat(40),
+    parent: 'b'.repeat(40),
+    steps: ['unit', 'docs'],
+    guidance: 'file a repair child targeting this node: node',
+  }
+  let sent = false
+  const h = harness(store, {
+    onTick: async () => {
+      if (sent) return
+      sent = true
+      await store.append('node', {
+        actor: KERNEL,
+        type: 'integration.verification-failed',
+        payload,
+      })
+    },
+  })
+  await abWatch({ ...h.base, slugs: ['node'], count: 1, timeout: '3' })
+  const records = h.out.map((line) => JSON.parse(line)).filter((record) => record.event)
+  expect(records).toHaveLength(1)
+  expect(records[0].event.payload).toEqual(payload)
+  const cursor = records[0].cursor
+  const resumed = harness(store)
+  await abWatch({ ...resumed.base, slugs: ['node'], since: cursor, timeout: '1' })
+  expect(resumed.out.map((line) => JSON.parse(line)).filter((record) => record.event)).toEqual([])
+  const baseline = harness(store)
+  await abWatch({ ...baseline.base, slugs: ['node'], timeout: '1' })
+  expect(baseline.out.map((line) => JSON.parse(line)).filter((record) => record.event)).toEqual([])
+  await store.append('node', {
+    actor: KERNEL,
+    type: 'integration.verification-failed',
+    payload: { ...payload, id: 'cycle-2', head: 'c'.repeat(40) },
+  })
+  const next = harness(store)
+  await abWatch({ ...next.base, slugs: ['node'], since: cursor, count: 1, timeout: '1' })
+  expect(
+    next.out.map((line) => JSON.parse(line)).find((record) => record.event)?.event.payload.id,
+  ).toBe('cycle-2')
 })
