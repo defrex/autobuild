@@ -33,6 +33,7 @@ test('every terminal capture fixture has identical web rows and step facts', asy
     expect(capture.frames.map((frame) => frame.id)).toEqual(FRAME_SPECS.map((frame) => frame.id))
     for (const frame of capture.frames) {
       const terminal = {
+        ...(frame.model.rollback ? { rollback: frame.model.rollback } : {}),
         ...(frame.model.handoffs ? { handoffs: frame.model.handoffs } : {}),
         builds: frame.model.builds.map((build) => ({
           identity: build.slug,
@@ -95,4 +96,16 @@ test('repository-only draining changes replace that row and retain unrelated row
   expect(settled.builds[0]).not.toBe(active.builds[0])
   expect(settled.builds[1]).toBe(active.builds[1])
   expect(projectWebParity(active).builds[0]?.draining).toBe(true)
+})
+
+test('polling removes resolved rollback notices while retaining equal row identities', async () => {
+  const { rollbackCapture } = await import('../../../tools/rollback-capture')
+  const active = rollbackCapture(model())
+  expect(projectWebParity(active).rollback).toEqual(active.rollback)
+  for (const stage of ['cleared', 'restarted'] as const) {
+    const next = reconcileDashboard(active, rollbackCapture(active, stage))
+    expect(next.rollback).toBeUndefined()
+    expect(next.builds[0]).toBe(active.builds[0])
+    expect(projectWebParity(next).rollback).toBeUndefined()
+  }
 })

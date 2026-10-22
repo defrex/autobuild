@@ -7135,6 +7135,10 @@
     "501": {
       "kind": "object",
       "props": {
+        "authoritativeRun": {
+          "type": "11",
+          "optional": true
+        },
         "runs": {
           "type": "502",
           "optional": false
