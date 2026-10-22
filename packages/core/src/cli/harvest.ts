@@ -24,6 +24,7 @@ import {
   parkedHarvestRuns,
   proposalArtifactForRound,
   reduceHarvest,
+  suspendedHarvestSession,
   unresolvedHarvestAttentionRuns,
   type HarvestPendingCommand,
   type HarvestRunState,
@@ -437,12 +438,14 @@ export interface HarvestSessionStatusView {
   /** Open until the session's `harvest.session.ended` lands; the store's
    * records refine this to the stream's authoritative status when available. */
   streamStatus: 'open' | 'closed'
-  status: 'open' | 'ended'
+  status: 'open' | 'ended' | 'suspended'
+  transcript?: import('../ontology').ArtifactRef
+  continuation?: import('../events/repository').HarvestEventPayload<'harvest.session.started'>['continuation']
 }
 
 export interface HarvestRunStatusView {
   run: string
-  status: HarvestRunState['status']
+  status: HarvestRunState['status'] | 'suspended'
   startedSeq: number
   startedAt: string
   observations: number
@@ -461,8 +464,8 @@ export interface HarvestStatusView {
   run?: string
   /** Repository control takes display precedence while paused; runStatus keeps
    * the primary run lifecycle queryable without making pause terminal. */
-  status: 'idle' | 'paused' | HarvestRunState['status']
-  runStatus?: HarvestRunState['status']
+  status: 'idle' | 'paused' | 'suspended' | HarvestRunState['status']
+  runStatus?: HarvestRunState['status'] | 'suspended'
   paused: boolean
   pausedSeq?: number
   pausedAt?: string
@@ -557,6 +560,7 @@ function projectHarvestSessions(
         step: event.payload.step,
         round: event.payload.round,
         status: 'open',
+        ...(event.payload.continuation ? { continuation: event.payload.continuation } : {}),
         // The store's records are authoritative when available; without them
         // the pairing degrades gracefully (open until `harvest.session.ended`).
         ...(record !== undefined
@@ -566,22 +570,30 @@ function projectHarvestSessions(
               streamStatus: event.payload.stream !== undefined ? 'open' : 'closed',
             }),
       }
+      if (event.payload.continuation) {
+        const prior = byRun
+          .get(event.payload.run)
+          ?.find((s) => s.session === event.payload.continuation!.predecessor)
+        if (prior) prior.status = 'ended'
+      }
       const list = byRun.get(event.payload.run) ?? []
       list.push(view)
       byRun.set(event.payload.run, list)
       open.set(view.session, view)
       continue
     }
-    if (event.type !== 'harvest.session.ended') continue
+    if (event.type !== 'harvest.session.ended' && event.type !== 'harvest.session.suspended')
+      continue
     const started = open.get(event.payload.session)
     if (started === undefined) continue
-    started.status = 'ended'
+    started.status = event.type === 'harvest.session.suspended' ? 'suspended' : 'ended'
+    started.transcript = event.payload.transcript
     // A session bracket has ended: without an authoritative record its
     // stream reads closed.
     const record = recordsByLabel.get(`session:${started.session}`)
     if (record !== undefined) {
       started.stream = record.id
-      started.streamStatus = record.status
+      started.streamStatus = started.status === 'suspended' ? 'closed' : record.status
     } else {
       started.streamStatus = 'closed'
     }
@@ -593,7 +605,7 @@ function projectHarvestSessions(
 function projectHarvestRunStatus(run: HarvestRunState): Omit<HarvestRunStatusView, 'sessions'> {
   return {
     run: run.run,
-    status: run.status,
+    status: suspendedHarvestSession(run) ? 'suspended' : run.status,
     startedSeq: run.startedSeq,
     startedAt: run.startedAt,
     observations: run.observations.length,
@@ -638,7 +650,12 @@ export function projectHarvestStatus(
       const list = sessionsByRun.get(run) ?? []
       list.push({
         ...session,
-        ...(record ? { stream: record.id, streamStatus: record.status } : {}),
+        ...(record
+          ? {
+              stream: record.id,
+              streamStatus: session.status === 'suspended' ? ('closed' as const) : record.status,
+            }
+          : {}),
       })
       sessionsByRun.set(run, list)
     }
@@ -651,7 +668,7 @@ export function projectHarvestStatus(
   const unresolvedIds = new Set(unresolved.map((run) => run.run))
   const primary =
     runs.find((run) => unresolvedIds.has(run.run)) ??
-    runs.find((run) => run.status === 'running') ??
+    runs.find((run) => run.status === 'running' || run.status === 'suspended') ??
     runs.at(-1)
 
   const control = {
@@ -704,7 +721,7 @@ function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): str
     const stream =
       session.stream !== undefined ? ` stream ${session.stream} (${session.streamStatus})` : ''
     lines.push(
-      `  session ${session.session} (${session.role}, ${session.step}@${session.round})${stream}`,
+      `  session ${session.session} (${session.role}, ${session.step}@${session.round}, ${session.status})${stream}`,
     )
   }
   if (run.recovery.stopped !== undefined) {
