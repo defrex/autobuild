@@ -3716,6 +3716,25 @@ ordered by descending count then build name; repository requests are unattribute
 Repository status names a hotspot only when one build makes at least two requests
 and more than half of attributed requests. Telemetry never controls workflow.
 
+GitHub shares in-flight and completed PR, branch/ref and comparison observations
+across builds within one dispatcher tick. Opened nodes prime their tips and
+commit distance with at most two reads: PR plus comparison, or parent branch
+plus reversed comparison without a PR. Priming is best-effort: failures add a
+diagnostic and ordinary parent/target observations continue, so a deleted parent
+can still be replaced. Forge cooldowns and rate limits retain their gates.
+Every tick revalidates mutable resources
+using exact-resource ETags; authenticated 304s spare the REST primary quota.
+Adapter caches are bounded and restart/eviction falls back to fresh reads.
+Writes, including Git publication and rewrites, invalidate observations before
+attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
+keeps its existing cadence. Readiness and landing inspections remain fresh.
+
+The total includes all attempted requests. Optional `restPrimary`,
+`restNotModified` and `graphql` counts distinguish REST responses charged to the
+primary quota, REST 304s and GraphQL calls. Transport failures and historical or
+legacy observations can remain unclassified; absent fields never imply zero.
+Shared requests are attributed to their first requester; cache hits count zero.
+
 ## Integration verification attention
 
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.

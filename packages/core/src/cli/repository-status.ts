@@ -188,7 +188,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const active = status.ticketSourceDegradation
   return [
     requests
-      ? `forge requests: ${requests.total} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
+      ? `forge requests: ${requests.total}${requests.restPrimary === undefined ? '' : `; REST primary ${requests.restPrimary}`}${requests.restNotModified === undefined ? '' : `; REST 304 ${requests.restNotModified}`}${requests.graphql === undefined ? '' : `; GraphQL ${requests.graphql}`} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
       : 'forge requests: unavailable',
     ...(status.forgeDegradation
       ? [

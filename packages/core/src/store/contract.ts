@@ -1123,6 +1123,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
                   ...counters,
                   forgeRequests: {
                     total: i,
+                    restPrimary: i,
+                    restNotModified: 0,
+                    graphql: 0,
                     unattributed: 0,
                     builds: i ? [{ build: 'active', requests: i }] : [],
                     complete: true,
@@ -1135,6 +1138,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             expect(finished.outcome === 'completed' && finished.counters.forgeRequests?.total).toBe(
               i,
             )
+            if (finished.outcome === 'completed')
+              expect(finished.counters.forgeRequests?.restPrimary).toBe(i)
             expect(result!.events).toEqual([])
             expect((await store.getRepo(repo))!.tick!.finished!.completedAt).toBe(
               clock().toISOString(),

@@ -1,6 +1,9 @@
 import { z } from 'zod'
 /** Bounded operational evidence, never lifecycle authority. */
 export const forgeRequestCountsSchema = z.strictObject({
+  restPrimary: z.number().int().nonnegative().optional(),
+  restNotModified: z.number().int().nonnegative().optional(),
+  graphql: z.number().int().nonnegative().optional(),
   total: z.number().int().nonnegative(),
   unattributed: z.number().int().nonnegative(),
   builds: z
