@@ -78,3 +78,90 @@ test('handoff reader follows only its stopped run and rejects operator stop; sta
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+test('a held generation journal remains readable after invalid configuration edits', async () => {
+  const { readUpgradeProjection } = await import('./dispatch-handoff')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-journal-binding-'))
+  const storePath = join(repo, '.autobuild/store')
+  const store = openLocalStore(storePath)
+  const launch = {
+    version: 1 as const,
+    runtimeRoot: '/old',
+    checkout: repo,
+    originalInstall: '/install',
+    run: 'old',
+    lineage: 'launcher',
+  }
+  try {
+    await store.ensureRepo(repo)
+    await store.claimRepoLease(repo, 'old', 60_000)
+    const projection = await readUpgradeProjection(launch, ['dispatch', '--store', storePath], {})
+    expect(projection.journal).toEqual({ storeRef: storePath, repo })
+    await writeFile(join(repo, 'autobuild.toml'), 'store = [invalid TOML')
+    const bound = await readUpgradeProjection(
+      { ...launch, journal: projection.journal },
+      ['dispatch'],
+      {},
+    )
+    expect(bound.journal).toEqual(projection.journal)
+    expect((await store.getRepo(repo))!.lease!.holder).toBe('old')
+  } finally {
+    await store.close()
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('operator stop wins over preflight failure publication', async () => {
+  const { recordPreflightFailure } = await import('./dispatch-handoff')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-preflight-stop-'))
+  const storePath = join(repo, '.autobuild/store')
+  const store = openLocalStore(storePath)
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/old' },
+  }
+  const prepared = {
+    run: 'old',
+    correlation: 'upgrade',
+    lineage: 'launcher',
+    from: runtime,
+    to: { ...runtime, version: '2.0.0' },
+    root: '/new',
+    cacheId: 'new',
+    target: { mode: 'installed' as const, key: 'new', source: '/install' },
+  }
+  try {
+    await store.ensureRepo(repo)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.target-prepared',
+      payload: prepared,
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.stop-requested',
+      payload: { run: 'old', signal: 'SIGINT' },
+    })
+    await recordPreflightFailure(
+      {
+        version: 1,
+        runtimeRoot: '/old',
+        checkout: repo,
+        run: 'old',
+        lineage: 'launcher',
+        journal: { repo, storeRef: storePath },
+      },
+      ['dispatch'],
+      {},
+      'upgrade',
+      'preflight process exited',
+    )
+    expect(
+      (await store.getRepoEvents(repo)).some((event) => event.type === 'dispatcher.upgrade-failed'),
+    ).toBe(false)
+  } finally {
+    await store.close()
+    await rm(repo, { recursive: true, force: true })
+  }
+})
