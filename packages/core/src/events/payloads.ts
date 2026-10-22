@@ -454,6 +454,16 @@ export const eventPayloadSchemas = {
       )
       .optional(),
   }),
+  'integration.verification-failed': z.strictObject({
+    id: z.string().trim().min(1),
+    head: z.string().trim().min(1),
+    parent: z.string().trim().min(1),
+    steps: z
+      .array(z.string().trim().min(1))
+      .min(1)
+      .refine((steps) => new Set(steps).size === steps.length, 'failed steps must be unique'),
+    guidance: z.string().trim().min(1),
+  }),
   'integration.prepared': z.strictObject({
     id: z.string().min(1),
     head: z.string().min(1),

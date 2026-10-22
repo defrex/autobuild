@@ -2110,3 +2110,59 @@ test('janitor failure wakes default watchers and satisfies current attention unt
     ),
   ).toBeNull()
 })
+
+test('attention wait finds an already-failed node before notification, including with --since', async () => {
+  const store = makeStore()
+  await store.createBuild({
+    slug: 'node',
+    repo: REPO,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'file', id: 'NODE' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    },
+  })
+  await store.append('node', {
+    actor: DISPATCHER,
+    type: 'node.compared',
+    payload: { headSha: 'a'.repeat(40), parentSha: 'b'.repeat(40), ahead: 1 },
+  })
+  await store.append('node', {
+    actor: DISPATCHER,
+    type: 'integration.prepared',
+    payload: {
+      id: 'cycle',
+      head: 'a'.repeat(40),
+      parent: 'b'.repeat(40),
+      config: '{"verify":{"steps":["unit"]}}',
+    },
+  })
+  const failed = await store.append('node', {
+    actor: KERNEL,
+    type: 'verify.completed',
+    payload: {
+      step: 'unit',
+      attempt: 1,
+      outcome: 'fail',
+      restackId: 'cycle',
+      headSha: 'a'.repeat(40),
+      baseSha: 'b'.repeat(40),
+    },
+  })
+  const since = encodeCursor({
+    v: 1,
+    repo: REPO,
+    store: `${REPO}/.autobuild`,
+    streams: { node: failed.seq },
+  })
+  const h = harness(store)
+  expect(await abWait({ ...h.base, slugs: ['node'], forValues: ['attention'], since })).toBe(0)
+  expect(records(h.out)[0]?.condition).toBe('attention')
+  expect(records(h.out)[0]?.event.seq).toBe(failed.seq)
+  expect((await store.getEvents('node')).at(-1)?.seq).toBe(failed.seq)
+})

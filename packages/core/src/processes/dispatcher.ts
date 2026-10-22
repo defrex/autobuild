@@ -1,3 +1,4 @@
+import { reportIntegrationFailures } from '../kernel/integration-attention'
 import {
   resolveTicketRef,
   migrationIdentity,
@@ -1906,6 +1907,18 @@ export class Dispatcher {
     const entries = (await this.repoBuildDigests()).filter(
       ({ digest }) => isWorkDigest(digest) || digest.integrationAuditPending === true,
     )
+    // Receipt reporting requires no forge call, capacity or workspace. Recover
+    // every episode before the transport-budget and janitor-backoff gates.
+    for (const { record, digest } of entries) {
+      if (digest.kind !== 'node' || !digest.nodeOpened || digest.terminal) continue
+      try {
+        await reportIntegrationFailures(this.store, record.slug)
+      } catch (error) {
+        report.janitorDiagnostics.push(
+          `build ${record.slug}: integration attention recovery failed — ${String(error)}`,
+        )
+      }
+    }
     for (const { record, digest } of entries) {
       // Budget gate: the janitor's per-build path issues forge/store transport
       // calls (PR probes, closePr, deleteBranch); once the budget is spent,

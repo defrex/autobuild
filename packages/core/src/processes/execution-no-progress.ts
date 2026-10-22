@@ -34,6 +34,7 @@ export const executionProgress = {
   'integration.prepared': 'progress',
   'integration.landing-intended': 'progress',
   'integration.landed': 'progress',
+  'integration.verification-failed': 'bookkeeping',
   'integration.audited': 'progress',
   'node.opening': 'progress',
   'node.writer-reserved': 'progress',

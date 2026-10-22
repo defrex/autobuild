@@ -84,7 +84,7 @@ the same resolved working directory.
 ### Watch for attention events
 
 `ab watch --json` is the standing monitor. Keep its default filter: every
-record calls for action. It reports build escalations, persistent janitor failures and merge decisions,
+record calls for action. It reports failed node verification, build escalations, persistent janitor failures and merge decisions,
 harvest escalations/recovery exhaustion, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
@@ -334,6 +334,7 @@ outcomes or self-healing failures.
 
 Treat every default-watch record as a call to act:
 
+- `integration.verification-failed`: inspect the failed steps, verified head and parent; file a repair child targeting the named node. Each failed cycle reports once.
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
 - `build.consent-ready`: inspect the one consent queue, then land or hold the
@@ -428,14 +429,14 @@ before retrying the node cycle.
 
 Watch for decisions and conflicts with `ab watch --json`; save its opaque cursor
 and resume with `ab watch --since <cursor> --json`. Default attention includes
-node landings, node item conflicts, conflicted leaf replays and derived
+failed node verification (`integration.verification-failed`), node landings, node item conflicts, conflicted leaf replays and derived
 `build.consent-ready` observations, including already-ready landings on first
 repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or
 exit/re-entry can notify again. Explicit `--event` globs remain event-only.
 Use `ab wait --for consent --for node-landed --for restack-conflicted --json`
 for one wake; state waits return immediately when already satisfied. `--for
-attention` also includes consent readiness, janitor failure attention and landing/conflict attention.
+attention` also includes current failed node verification, consent readiness, janitor failure attention and landing/conflict attention.
 Resume event backlogs with `--since <cursor>`; keep handling emitted records
 before interpreting terminal completion.
 
