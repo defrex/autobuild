@@ -1,3 +1,6 @@
+import { recordRuntimeRollback } from './dispatch-handoff'
+import { syncRollbackRetention } from './dispatch-runtime-use'
+import { dirname as runtimeDirname } from 'node:path'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import { validateWorkspaceDispatchConfiguration } from './dispatch-readiness'
 import { releasePreparedRuntime } from './dispatch-runtime-use'
@@ -4033,12 +4036,15 @@ class DispatchLoop {
       this.repoLeaseHolder !== this.runId
     )
       return false
-    if (launch.predecessor && !this.upgradeRetirementSettled)
+    const retirementPredecessor =
+      launch.rollback?.predecessor ?? launch.recovery?.predecessor ?? launch.predecessor
+    if (retirementPredecessor && !this.upgradeRetirementSettled)
       this.upgradeRetirementSettled = await recoverDispatchDrain(
         this.wiring.store,
         this.repoIdentity,
-        launch.predecessor,
+        retirementPredecessor,
         this.wiring.clock(),
+        launch.rollback || launch.recovery ? this.runId : undefined,
       )
     const state = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
       this.runId
@@ -4347,11 +4353,20 @@ class DispatchLoop {
     const launch = launchContext(this.opts.env)
     if (!launch || this.opts.once || this.opts.repository || this.repoLeaseHolder !== this.runId)
       return
+    await recordRuntimeRollback(this.wiring.store, this.repoIdentity, launch, this.runId)
     const upgrades = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value
+    const hold = upgrades.holds[launch.lineage!]
+    syncRollbackRetention(
+      runtimeDirname(runtimeDirname(launch.runtimeRoot)),
+      launch.lineage!,
+      hold?.payload.failedRoot,
+    )
+    const retirementPredecessor =
+      launch.rollback?.predecessor ?? launch.recovery?.predecessor ?? launch.predecessor
     this.upgradeRetirementSettled =
-      !launch.predecessor ||
-      !upgrades.runs[launch.predecessor]?.request ||
-      !!upgrades.runs[launch.predecessor]?.completed
+      !retirementPredecessor ||
+      !upgrades.runs[retirementPredecessor]?.request ||
+      !!upgrades.runs[retirementPredecessor]?.completed
     if (
       !this.handoffCompleted &&
       launch.predecessor &&
@@ -4387,9 +4402,11 @@ class DispatchLoop {
       runningBunTag: (await readDistributionIdentity(distributionRoot())).bunTag,
       reservationOwner: launch.launcherPid,
       resolved: upgrades.runs[this.runId]?.resolved,
-      currentKey: launch.predecessor
-        ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key
-        : launch.sourceLaunch?.baseline,
+      currentKey:
+        (launch.recovery?.predecessor ?? launch.predecessor)
+          ? upgrades.runs[(launch.recovery?.predecessor ?? launch.predecessor)!]?.handoff?.payload
+              .target.key
+          : launch.sourceLaunch?.baseline,
       storeChangedSinceFailure: async () => {
         const evidence = await inspectStore().catch(() => undefined)
         const changed =
@@ -4399,6 +4416,9 @@ class DispatchLoop {
         if (evidence !== undefined) failedStoreEvidence = evidence
         return changed
       },
+      hold,
+      clearHold: () =>
+        syncRollbackRetention(runtimeDirname(runtimeDirname(launch.runtimeRoot)), launch.lineage!),
       failedKeys: Object.values(upgrades.runs).flatMap((state) =>
         state.failure && state.failure.payload.lineage === launch.lineage
           ? [state.failure.payload.target.key]
@@ -5006,6 +5026,9 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         type: 'dispatcher.run-started',
         payload: {
           run: runId,
+          ...(launchContext(resolvedOpts.env)?.lineage
+            ? { lineage: launchContext(resolvedOpts.env)!.lineage }
+            : {}),
           pid: process.pid,
           host: hostname(),
           effectiveConfig: { kind: artifact.kind, rev: artifact.revision },

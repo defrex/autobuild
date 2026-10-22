@@ -190,3 +190,182 @@ test('operator stop wins over preflight failure publication', async () => {
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+test('restored generation validates takeover, deposits once under authority, and exposes hold until clear/restart', async () => {
+  const { recordRuntimeRollback } = await import('./dispatch-handoff')
+  const { captureRuntimeIdentity } = await import('../runtime-identity')
+  const { projectDispatcherLiveness } = await import('../kernel/dispatcher-liveness')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-rollback-record-'))
+  const store = openLocalStore(join(repo, '.autobuild/store'))
+  const root = async (version: string, digest: string) => {
+    const id = `${version}-${digest.repeat(64)}`,
+      root = join(repo, '.autobuild/runtime', id, 'distribution')
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'tsconfig.json'), '{}\n')
+    await writeFile(join(root, 'package.json'), JSON.stringify({ version }))
+    await writeFile(
+      join(dirname(root), 'runtime.json'),
+      JSON.stringify({ version: 1, id, root, digest: digest.repeat(64) }),
+    )
+    return { root, cacheId: id }
+  }
+  try {
+    const restored = await root('1.0.0', 'a'),
+      failed = await root('2.0.0', 'b')
+    await store.ensureRepo(repo)
+    const handoff = {
+      correlation: 'h',
+      run: 'old',
+      lineage: 'launcher',
+      from: captureRuntimeIdentity(restored.root),
+      to: captureRuntimeIdentity(failed.root),
+      root: failed.root,
+      cacheId: failed.cacheId,
+      target: { mode: 'installed' as const, key: 'two', source: '/install', version: '2.0.0' },
+    }
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.target-prepared',
+      payload: handoff,
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.yield-requested',
+      payload: { ...handoff, successor: 'new', mode: 'drain', evidence: 'compatible' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.handoff-started',
+      payload: {
+        ...handoff,
+        successor: 'new',
+        mode: 'drain',
+        startedAt: new Date().toISOString(),
+        deadline: new Date(Date.now() + 60_000).toISOString(),
+        builds: [],
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.terminal-released',
+      payload: handoff,
+    })
+    const takeover = await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.takeover',
+      payload: { ...handoff, successor: 'new' },
+    })
+    const rollback = {
+      version: 1 as const,
+      correlation: 'rollback',
+      lineage: 'launcher',
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'h',
+      takeoverAt: takeover.ts,
+      failures: 3 as const,
+      failed,
+      restored,
+    }
+    const launch = {
+      version: 1 as const,
+      rollbackVersion: 1 as const,
+      rollback,
+      runtimeRoot: restored.root,
+      checkout: repo,
+      run: 'restored',
+      lineage: 'launcher',
+    }
+    await expect(recordRuntimeRollback(store, repo, launch, 'restored')).rejects.toThrow(
+      'authority',
+    )
+    await store.claimRepoLease(repo, 'restored', 60_000)
+    await expect(
+      recordRuntimeRollback(
+        store,
+        repo,
+        { ...launch, rollback: { ...rollback, successor: 'foreign' } },
+        'restored',
+      ),
+    ).rejects.toThrow('matching durable takeover')
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'restored',
+        lineage: 'launcher',
+        pid: process.pid,
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    await recordRuntimeRollback(store, repo, launch, 'restored')
+    await recordRuntimeRollback(store, repo, launch, 'restored')
+    let events = await store.getRepoEvents(repo)
+    const rollbacks = events.filter((e) => e.type === 'dispatcher.runtime-rolled-back')
+    expect(rollbacks).toHaveLength(1)
+    expect(repositoryNeedsAttention(rollbacks[0]!)).toBe(true)
+    const status = async () => {
+      events = await store.getRepoEvents(repo)
+      return projectRepositoryStatus(
+        repo,
+        events,
+        projectDispatcherLiveness(await store.getRepo(repo), events, new Date()),
+      )
+    }
+    expect((await status()).rollbackHold?.payload.failed.version).toBe('2.0.0')
+    expect(renderRepositoryStatus(await status()).join('\n')).toContain(
+      'runtime rollback: 2.0.0 → 1.0.0',
+    )
+    // A new operator lineage ignores a still-active old hold without deleting history.
+    await store.releaseRepoLease(repo, 'restored')
+    await store.claimRepoLease(repo, 'operator-before-clear', 60_000)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'operator-before-clear',
+        lineage: 'new-launcher',
+        pid: process.pid,
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    expect((await status()).rollbackHold).toBeUndefined()
+    expect((await status()).upgrades.holds.launcher).toBeDefined()
+    await store.releaseRepoLease(repo, 'operator-before-clear')
+    await store.claimRepoLease(repo, 'restored', 60_000)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.rollback-hold-cleared',
+      payload: {
+        correlation: 'rollback',
+        run: 'restored',
+        lineage: 'launcher',
+        target: { ...handoff.target, key: 'three' },
+      },
+    })
+    await rm(dirname(failed.root), { recursive: true, force: true })
+    await recordRuntimeRollback(store, repo, launch, 'restored')
+    expect((await status()).rollbackHold).toBeUndefined()
+    expect((await status()).upgrades.lastRollback).toBeDefined()
+    await store.releaseRepoLease(repo, 'restored')
+    await store.claimRepoLease(repo, 'operator', 60_000)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'operator',
+        lineage: 'new-launcher',
+        pid: process.pid,
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    expect((await status()).rollbackHold).toBeUndefined()
+    expect((await status()).upgrades.lastRollback).toBeDefined()
+  } finally {
+    await store.close()
+    await rm(repo, { recursive: true, force: true })
+  }
+})
