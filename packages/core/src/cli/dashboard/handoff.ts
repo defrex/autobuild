@@ -47,6 +47,7 @@ export function enrichDrainingRow(
   row: DashboardBuild,
   draining: ReadonlySet<string>,
 ): DashboardBuild {
+  if (row.draining === undefined && !draining.has(row.slug)) return row
   const { draining: _previous, ...fresh } = row
   return { ...fresh, ...(draining.has(row.slug) ? { draining: true } : {}) }
 }
