@@ -156,3 +156,40 @@ test('restart publishes an unchanged nonempty queue for the new run before suppr
   expect(reduceDispatchStatus(events, 'run').queued).toBe(3)
   expect(decide(queued, events)).toBe(false)
 })
+
+test('request outcome categories survive completed and failed event/tick payloads', async () => {
+  const { validateRepositoryEventWrite } = await import('../events/repository')
+  const { repoTickCompletionSchema } = await import('../store/repo-tick')
+  const forgeRequests = {
+    total: 5,
+    unattributed: 1,
+    builds: [{ build: 'node', requests: 4 }],
+    complete: true,
+    restPrimary: 1,
+    restNotModified: 2,
+    graphql: 1,
+  }
+  const completed = { ...counters, forgeRequests }
+  expect(repoTickCompletionSchema.parse({ outcome: 'completed', counters: completed })).toEqual({
+    outcome: 'completed',
+    counters: completed,
+  })
+  expect(
+    repoTickCompletionSchema.parse({ outcome: 'failed', error: 'offline', forgeRequests }),
+  ).toEqual({ outcome: 'failed', error: 'offline', forgeRequests })
+  expect(
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-failed',
+      payload: { run: 'run', error: 'offline' },
+    }).payload,
+  ).toMatchObject({ error: 'offline' })
+  expect(
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: { ...baseline.payload, counters: completed },
+    }).payload,
+  ).toMatchObject({ counters: completed })
+  expect(decide({ ...report, forgeRequests })).toBe(false)
+})

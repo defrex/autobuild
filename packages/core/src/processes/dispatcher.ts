@@ -861,14 +861,21 @@ export class Dispatcher {
     const builds = new Map<string, number>()
     let total = 0
     let unattributed = 0
+    const categories = { restPrimary: 0, restNotModified: 0, graphql: 0 }
+    let classified = this.deps.forge.name === 'github'
     const stop = this.deps.forge.observeRequests?.((request) => {
       const build = request.build ?? forgeRequestContext().build
       total++
+      if (request.outcome) {
+        categories[request.outcome]++
+        classified = true
+      }
       if (build) builds.set(build, (builds.get(build) ?? 0) + 1)
       else unattributed++
     })
     const counts = () => ({
       total,
+      ...(classified ? categories : {}),
       unattributed,
       builds: [...builds]
         .map(([build, requests]) => ({ build, requests }))
@@ -878,7 +885,9 @@ export class Dispatcher {
     })
     this.lastForgeRequests = undefined
     try {
-      const report = await this.runTick(opts)
+      const report = await (this.deps.forge.withReadScope
+        ? this.deps.forge.withReadScope(() => this.runTick(opts))
+        : this.runTick(opts))
       if (stop || this.deps.config.forge === 'local-git') report.forgeRequests = counts()
       return report
     } finally {
@@ -2036,9 +2045,41 @@ export class Dispatcher {
               return
             }
             if (state.nodeOpened) {
+              let primed = false
+              if (
+                record.branch &&
+                state.baseBranch &&
+                !((state.status === 'paused' || state.status === 'blocked') && !state.pr)
+              ) {
+                primed = await this.primeNodeReads(record, state, report)
+              }
+              if (
+                primed &&
+                state.pr &&
+                (
+                  await this.deps.forge.getPrState(
+                    this.deps.checkout ?? this.deps.repo,
+                    state.pr.number,
+                  )
+                ).state !== 'open'
+              ) {
+                await this.checkPr(
+                  record,
+                  { history, workspace },
+                  state,
+                  report,
+                  launched,
+                  executionLeaseLive,
+                )
+                return
+              }
+              const previousParent = state.baseBranch
               await this.observeTicketTarget(record, state, report)
               loaded = undefined
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
+              if (record.branch && state.baseBranch && previousParent !== state.baseBranch) {
+                await this.primeNodeReads(record, state, report)
+              }
             }
             if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) return
             if (state.nodeOpened && state.baseBranch) {
@@ -2164,6 +2205,34 @@ export class Dispatcher {
             })
         }
       })
+    }
+  }
+
+  /** Priming saves requests but must not block parent recovery or ordinary observations. */
+  private async primeNodeReads(
+    record: BuildRecord,
+    state: BuildState,
+    report: TickReport,
+  ): Promise<boolean> {
+    if (!this.deps.forge.primeNodeReads || !record.branch || !state.baseBranch) return false
+    try {
+      await this.deps.forge.primeNodeReads({
+        workspacePath: this.deps.checkout ?? this.deps.repo,
+        parent: state.baseBranch,
+        head: record.branch,
+        ...(state.pr ? { prNumber: state.pr.number } : {}),
+      })
+      return true
+    } catch (error) {
+      if (
+        error instanceof ForgeRequestDeferred ||
+        (isForgeFailure(error) && error.details.kind === 'rate-limited')
+      )
+        throw error
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: node read priming failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
+      )
+      return false
     }
   }
 

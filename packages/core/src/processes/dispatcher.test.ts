@@ -1,5 +1,5 @@
 import { GitHubForge } from '../ports/forge/github'
-import { GitHubApiError } from '../ports/forge/github-transport'
+import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
 import { publicationPending } from './publication-state'
@@ -35,7 +35,7 @@ import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { LinearTicketSource } from '../ports/tickets/linear'
 import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
-import type { Ticket, WorkspaceProvider } from '../ports/types'
+import type { Forge, Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -129,6 +129,7 @@ function harness(
     onLaunch?: (slug: string, store: BuildStore) => Promise<void> | void
     workspaceBase?: WorkspaceBase
     prAttachments?: boolean
+    dispatchForge?: Forge
     forge?: FakeForge
     exec?: Exec
     /** Mutable dispatcher snapshot used by hot-reload boundary tests. */
@@ -198,7 +199,7 @@ function harness(
               key === 'name' ? opts.workspaceName : Reflect.get(target, key, receiver),
           })),
     ...(opts.retiredWorkspaces === undefined ? {} : { retiredWorkspaces: opts.retiredWorkspaces }),
-    forge,
+    forge: opts.dispatchForge ?? forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
     ...(opts.repairBuildConfig ? { repairBuildConfig: opts.repairBuildConfig } : {}),
@@ -10087,3 +10088,324 @@ for (const expired of [false, true])
       expect(h.launches).toEqual([])
     }
   })
+
+test.each([true, false])(
+  'GitHub complete quiet node ticks use two conditional reads (PR=%s)',
+  async (hasPr) => {
+    const initial = harness({
+      tickets: (hasPr ? ['N'] : ['N', 'N2']).map((id) => readyTicket(id, { kind: 'node' })),
+    })
+    initial.forge.remoteBranches.set('main', BASE_SHA)
+    await initial.dispatcher.tick()
+    const node = (await initial.store.listBuilds())[0]!
+    if (hasPr)
+      await initial.store.append(node.slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: {
+          pr: { number: 1, url: 'https://github.com/acme/repo/pull/1', headSha: BASE_SHA },
+        },
+      })
+    for (const opened of await initial.store.listBuilds()) {
+      await initial.store.append(opened.slug, {
+        actor: KERNEL,
+        type: 'node.inventory',
+        payload: { head: BASE_SHA, base: BASE_SHA, builds: [], contributions: [], foreign: [] },
+      })
+      await initial.store.append(opened.slug, {
+        actor: KERNEL,
+        type: 'node.parent-distance',
+        payload: { base: BASE_SHA, parent: BASE_SHA, branch: 'main', count: 0 },
+      })
+    }
+    const requestsPerTick = hasPr ? 2 : 3
+    const calls: { path: string; conditional: boolean }[] = []
+    let parent = BASE_SHA
+    let head = BASE_SHA
+    let terminal = false
+    const representations = new Map<string, string>()
+    const transport: GitHubRequest = async (_method, path, opts) => {
+      const conditional = opts?.headers?.['If-None-Match'] !== undefined
+      calls.push({ path, conditional })
+      let json: unknown
+      if (path.includes('/pulls/'))
+        json = {
+          state: terminal ? 'closed' : 'open',
+          merged: false,
+          mergeable: true,
+          merge_commit_sha: null,
+          auto_merge: null,
+          head: { ref: node.branch, sha: head, repo: { full_name: 'acme/repo' } },
+        }
+      else if (path.includes('/git/ref/heads/'))
+        json = { object: { sha: path.endsWith('/main') ? parent : head } }
+      else if (path.includes('/branches/')) json = { commit: { sha: parent } }
+      else if (path.includes('/compare/'))
+        json = { base_commit: { sha: hasPr ? parent : head }, ahead_by: 0, behind_by: 0 }
+      else throw new Error(`unexpected request ${path}`)
+      const etag = JSON.stringify(json)
+      if (representations.get(path) === etag && opts?.headers?.['If-None-Match'] === etag)
+        return { status: 304, headers: {} as Record<string, string> }
+      representations.set(path, etag)
+      return { status: 200, headers: { etag }, json }
+    }
+    const gitOptions = {
+      token: 'test-token',
+      exec: async (cmd: string[]) => ({
+        stdout: cmd.includes('rev-parse')
+          ? cmd.at(-1)?.includes('parent')
+            ? parent
+            : head
+          : cmd.includes('rev-list')
+            ? '0'
+            : '',
+        stderr: '',
+        exitCode: 0,
+      }),
+    }
+    const baselineForge = new GitHubForge({ repository: 'acme/repo', transport, ...gitOptions })
+    const unshared = new Proxy(baselineForge, {
+      get(target, key) {
+        if (key === 'withReadScope' || key === 'primeNodeReads') return undefined
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const baseline = harness({
+      store: initial.store,
+      wrapTickets: () => initial.tickets,
+      dispatchForge: unshared,
+    })
+    const oldReport = await baseline.dispatcher.tick({ acceptNewWork: false })
+    expect(oldReport.janitorFailed).toBe(0)
+    expect(oldReport.forgeRequests?.total).toBe(hasPr ? 12 : 24)
+    calls.length = 0
+    const github = new GitHubForge({ repository: 'acme/repo', transport, ...gitOptions })
+    const h = harness({
+      store: initial.store,
+      wrapTickets: () => initial.tickets,
+      dispatchForge: github,
+    })
+    for (let tick = 0; tick < 3; tick++) {
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(report.janitorFailed).toBe(0)
+      expect(report.forgeRequests?.total).toBe(requestsPerTick)
+      expect(report.forgeRequests?.restNotModified).toBe(tick ? requestsPerTick : 0)
+      expect(h.launches).toEqual([])
+    }
+    expect(calls.slice(requestsPerTick).every((c) => c.conditional)).toBe(true)
+    head = 'b'.repeat(40)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect(reduceBuild(await h.store.getEvents(node.slug)).nodeComparison?.headSha).toBe(head)
+    h.clock.advance(600_000)
+    parent = 'c'.repeat(40)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect(
+      (await h.store.getEvents(node.slug)).filter((e) => e.type === 'target.moved').at(-1)?.payload,
+    ).toEqual({ branch: 'main', sha: parent })
+    if (hasPr) {
+      h.clock.advance(600_000)
+      terminal = true
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).forgeRequests?.total).toBe(1)
+      expect(reduceBuild(await h.store.getEvents(node.slug)).prState).toBe('closed')
+    }
+  },
+)
+
+test('GitHub leaf-only ticks retain their standalone request count', async () => {
+  for (const scoped of [false, true]) {
+    const initial = harness()
+    await seedAwaitingPr(initial)
+    const github = new GitHubForge({
+      repository: 'acme/repo',
+      transport: async (_method, path) => {
+        if (path.includes('/branches/'))
+          return { status: 200, headers: {}, json: { commit: { sha: BASE_SHA } } }
+        if (path.includes('/pulls/'))
+          return {
+            status: 200,
+            headers: {},
+            json: {
+              state: 'open',
+              merged: false,
+              mergeable: true,
+              merge_commit_sha: null,
+              auto_merge: null,
+            },
+          }
+        throw new Error(`unexpected leaf request ${path}`)
+      },
+    })
+    const forge = scoped
+      ? github
+      : new Proxy(github, {
+          get(target, key) {
+            if (key === 'withReadScope' || key === 'primeNodeReads') return undefined
+            const value = Reflect.get(target, key, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+    const h = harness({
+      store: initial.store,
+      wrapTickets: () => initial.tickets,
+      dispatchForge: forge,
+    })
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.janitorFailed).toBe(0)
+    expect(report.forgeRequests?.total).toBe(2)
+    expect(h.launches).toEqual([])
+  }
+})
+
+test.each(
+  [true, false].flatMap((hasPr) =>
+    [
+      new GitHubApiError(404, 'parent deleted'),
+      new GitHubApiError(503, 'comparison unavailable'),
+      new Error('network timeout'),
+    ].map((failure) => [hasPr, failure] as const),
+  ),
+)('failed GitHub node priming preserves parent recovery (PR=%s, %s)', async (hasPr, failure) => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  const slug = 'orphan-node'
+  const branch = `ab-node/${slug}`
+  const ticket = { source: 'fake', id: 'N' }
+  await h.store.createBuild({
+    slug,
+    repo: REPO,
+    branch,
+    ticket,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'gone-parent', kind: 'node' },
+    },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: BASE_SHA },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.parent-requested',
+    payload: {
+      id: 'recover-parent',
+      old: { target: null, branch: 'gone-parent' },
+      next: { target: null, branch: 'main' },
+      revision: (await h.tickets.get('N'))!.revision,
+    },
+  })
+  if (hasPr)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 1, url: 'https://github.com/acme/repo/pull/1', headSha: BASE_SHA },
+      },
+    })
+  const get = h.tickets.get.bind(h.tickets)
+  let ticketReads = 0
+  h.tickets.get = async (id) => {
+    ticketReads++
+    return get(id)
+  }
+  const paths: string[] = []
+  const github = new GitHubForge({
+    repository: 'acme/repo',
+    token: 'test-token',
+    exec: async (cmd) => ({
+      stdout: cmd.includes('ls-remote')
+        ? `${BASE_SHA}\t${cmd.at(-1)}\n`
+        : cmd.includes('rev-parse')
+          ? BASE_SHA
+          : cmd.includes('rev-list')
+            ? '0'
+            : '',
+      stderr: '',
+      exitCode: 0,
+    }),
+    transport: async (_method, path) => {
+      paths.push(path)
+      if (path.includes('/branches/gone-parent') || path.includes('/compare/gone-parent...'))
+        throw failure
+      if (path.includes('/pulls/'))
+        return {
+          status: 200,
+          headers: {},
+          json: {
+            node_id: 'pr-1',
+            draft: false,
+            base: { ref: 'main' },
+            state: 'open',
+            merged: false,
+            mergeable: true,
+            merge_commit_sha: null,
+            auto_merge: null,
+            head: { ref: branch, sha: BASE_SHA, repo: { full_name: 'acme/repo' } },
+          },
+        }
+      if (path.includes('/branches/'))
+        return { status: 200, headers: {}, json: { commit: { sha: BASE_SHA } } }
+      if (path.includes('/compare/'))
+        return {
+          status: 200,
+          headers: {},
+          json: { base_commit: { sha: BASE_SHA }, ahead_by: 0, behind_by: 0 },
+        }
+      throw new Error(`unexpected recovery read ${path}`)
+    },
+  })
+  const run = harness({ store: h.store, wrapTickets: () => h.tickets, dispatchForge: github })
+  const report = await run.dispatcher.tick({ acceptNewWork: false })
+  expect(report.janitorFailed).toBe(0)
+  expect(ticketReads).toBeGreaterThan(0)
+  expect(
+    report.janitorDiagnostics.some((message) => message.includes('node read priming failed')),
+  ).toBe(true)
+  expect(
+    (await h.store.getEvents(slug)).some(
+      (e) => e.type === 'node.parent-accepted' && e.payload.id === 'recover-parent',
+    ),
+  ).toBe(true)
+  expect(reduceBuild(await h.store.getEvents(slug)).baseBranch).toBe('main')
+  expect(paths.some((path) => path.includes('gone-parent'))).toBe(true)
+  expect((await run.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+  expect(
+    (await h.store.getEvents(slug)).some(
+      (e) => e.type === 'node.parent-completed' && e.payload.id === 'recover-parent',
+    ),
+  ).toBe(true)
+})
+
+test('node read priming still defers parent observation during forge cooldown', async () => {
+  const { ForgeCooldown } = await import('../kernel/guarded-forge')
+  const initial = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  initial.forge.remoteBranches.set('main', BASE_SHA)
+  await initial.dispatcher.tick()
+  let ticketReads = 0
+  const get = initial.tickets.get.bind(initial.tickets)
+  initial.tickets.get = async (id) => {
+    ticketReads++
+    return get(id)
+  }
+  const forge = new Proxy(initial.forge, {
+    get(target, key) {
+      if (key === 'primeNodeReads')
+        return async () => {
+          throw new ForgeCooldown('cooldown')
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const h = harness({
+    store: initial.store,
+    wrapTickets: () => initial.tickets,
+    dispatchForge: forge,
+  })
+  const report = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(ticketReads).toBe(0)
+  expect(report.janitorFailed).toBe(0)
+  expect(report.janitorDiagnostics).toEqual([])
+})
