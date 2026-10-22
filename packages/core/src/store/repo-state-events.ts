@@ -17,6 +17,20 @@ import {
 /** The anchor fact a bounded read's tail hangs from. */
 const RUN_STARTED = 'dispatcher.run-started'
 
+/** Handoff correlation spans dispatcher generations. These facts must survive
+ * later run anchors, including failures that invalidate prepared requests. */
+export const DISPATCH_HANDOFF_EVENT_TYPES = [
+  'dispatcher.target-prepared',
+  'dispatcher.yield-requested',
+  'dispatcher.upgrade-failed',
+  'dispatcher.handoff-started',
+  'dispatcher.terminal-released',
+  'dispatcher.takeover',
+  'dispatcher.drain-deadline',
+  'dispatcher.drain-settled',
+  'dispatcher.handoff-completed',
+] as const satisfies readonly RepositoryEventType[]
+
 /** Durable, slow-growing repository event types: every fact a state reducer
  * may consult at full replay depth. Derived from the catalog groups so a new
  * harvest or sandbox event type joins automatically; the three dispatcher
@@ -24,6 +38,7 @@ const RUN_STARTED = 'dispatcher.run-started'
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   'tickets.migration-recorded',
+  ...DISPATCH_HANDOFF_EVENT_TYPES,
   'dispatcher.forge-degraded',
   'dispatcher.forge-recovered',
   ...Object.keys(changePresenceEventPayloadSchemas),
@@ -46,7 +61,9 @@ const LATEST_TYPES = new Set<string>(REPOSITORY_LATEST_EVENT_TYPES)
  * `dispatcher.run-started` contains everything those consumers keep. */
 export const REPOSITORY_RUN_SCOPED_EVENT_TYPES: readonly RepositoryEventType[] = [
   ...Object.keys(dispatcherStatusEventPayloadSchemas).filter(
-    (type) => !REPOSITORY_LATEST_EVENT_TYPES.includes(type as RepositoryEventType),
+    (type) =>
+      !REPOSITORY_LATEST_EVENT_TYPES.includes(type as RepositoryEventType) &&
+      !REPOSITORY_STATE_EVENT_TYPES.includes(type as RepositoryEventType),
   ),
   'dispatcher.config-reloaded',
 ] as RepositoryEventType[]
@@ -106,7 +123,7 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 5
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 6
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) ||
@@ -154,7 +171,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 6
+export const JOURNAL_VIEW_REDUCER_VERSION = 7
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {

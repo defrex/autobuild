@@ -1492,6 +1492,14 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
+Both dashboards show each accepted unfinished handoff: source and target runtime
+version and abbreviated commit, mode, and drain deadline (unknown when unrecorded).
+Outstanding predecessor executions in drain mode carry `(draining)` alongside
+their lifecycle status. Matching durable settlement clears a build marker;
+accepted completion clears its handoff banner. Takeover, an overdue deadline
+and an empty outstanding set do not complete a handoff. Multiple unfinished
+generations remain visible; cutover does not mark builds draining.
+
 Integration list rows show parent commit distance (current or unknown when appropriate),
 name the destination and show children landed out of the
 known total, with the remainder split into building and queued. Cancelled

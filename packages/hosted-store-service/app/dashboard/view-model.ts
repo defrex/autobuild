@@ -34,9 +34,11 @@ export function elapsedMilliseconds(
 }
 
 export interface DashboardParityProjection {
+  handoffs?: DashboardModel['handoffs']
   builds: Array<{
     identity: string
     status: DashboardBuild['status']
+    draining?: boolean
     integrationRow?: DashboardBuild['integrationRow']
     steps: Array<{
       label: string
@@ -67,8 +69,10 @@ export function projectWebParity(model: DashboardModel): DashboardParityProjecti
       ...(step.reason !== undefined ? { reason: step.reason } : {}),
     }))
   return {
+    ...(model.handoffs ? { handoffs: model.handoffs } : {}),
     builds: model.builds.map((build) => ({
       identity: build.slug,
+      ...(build.draining ? { draining: true } : {}),
       status: build.status,
       steps: steps(build.integrationRow?.steps ?? build.steps),
       ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),

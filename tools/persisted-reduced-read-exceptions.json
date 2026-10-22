@@ -696,5 +696,9 @@
   "packages/core/src/cli/status.ts::detail::reduce": {
     "kind": "reduction",
     "reason": "Pure whole-log build-detail reference projection, shared with persisted attach history; production status uses detailFromFacts and persisted reduced reads."
+  },
+  "packages/core/src/cli/dashboard/model.ts::buildDashboardFromProjected::reduce": {
+    "kind": "reduction",
+    "reason": "Pure presentation/reference overload for caller-supplied repository event arrays; production current-state callers use persisted RepositoryReadFacts.upgrades."
   }
 }

@@ -33,8 +33,10 @@ test('every terminal capture fixture has identical web rows and step facts', asy
     expect(capture.frames.map((frame) => frame.id)).toEqual(FRAME_SPECS.map((frame) => frame.id))
     for (const frame of capture.frames) {
       const terminal = {
+        ...(frame.model.handoffs ? { handoffs: frame.model.handoffs } : {}),
         builds: frame.model.builds.map((build) => ({
           identity: build.slug,
+          ...(build.draining ? { draining: true } : {}),
           status: build.status,
           ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),
           steps: (build.integrationRow?.steps ?? build.steps).map((step) => ({
@@ -82,4 +84,15 @@ test('web polling preserves equal rows and replaces changed facts', () => {
 test('elapsed presentation ticks without replacing model rows', () => {
   expect(elapsedMilliseconds({ accumulatedMs: 500, runningSince: 1_000 }, 2_500)).toBe(2_000)
   expect(elapsedMilliseconds({ accumulatedMs: 500 }, 99_000)).toBe(500)
+})
+
+test('repository-only draining changes replace that row and retain unrelated row identity', async () => {
+  const { handoffCapture } = await import('../../../tools/handoff-capture')
+  const base = model()
+  base.builds.push({ ...base.builds[0]!, slug: 'other' })
+  const active = handoffCapture(base)
+  const settled = reconcileDashboard(active, handoffCapture(active, 'settled'))
+  expect(settled.builds[0]).not.toBe(active.builds[0])
+  expect(settled.builds[1]).toBe(active.builds[1])
+  expect(projectWebParity(active).builds[0]?.draining).toBe(true)
 })

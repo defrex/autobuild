@@ -1,10 +1,14 @@
+import { DISPATCH_HANDOFF_EVENT_TYPES } from '../store/repo-state-events'
 import { type RepositoryEvent, validateRepositoryEventWrite } from '../events/repository'
 import { defineReducer } from '../kernel/incremental'
 import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
 import type { BuildStore, Clock } from '../store/types'
 
+const handoffTypes = new Set<string>(DISPATCH_HANDOFF_EVENT_TYPES)
+
 export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
   return (
+    handoffTypes.has(event.type) ||
     event.type.startsWith('harvest.') ||
     event.type === 'tickets.migration-recorded' ||
     event.type === 'dispatcher.intake-set' ||
@@ -14,7 +18,7 @@ export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
 }
 
 export const dispatchFrontendReducer = defineReducer({
-  version: 3,
+  version: 4,
   initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean } => ({
     retained: [],
     incompleteIdentities: true,
