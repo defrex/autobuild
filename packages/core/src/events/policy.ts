@@ -177,6 +177,7 @@ export const repositoryEventPolicy = {
   'orchestrator.sandbox.reset': 'decisive',
   'orchestrator.sandbox.published': 'decisive',
   'orchestrator.sandbox.publish-failed': 'decisive',
+  'dispatcher.upgrade-target-resolved': 'advisory',
   'dispatcher.upgrade-detected': 'advisory',
   'dispatcher.upgrade-failed': 'decisive',
   'dispatcher.handoff-started': 'decisive',

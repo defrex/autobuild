@@ -82,3 +82,29 @@ test('launcher transitive graph is eagerly loaded filesystem/process code', asyn
   await visit(resolve(import.meta.dir, 'dispatch-launcher.ts'))
   expect(visited.size).toBeGreaterThan(5)
 })
+
+test('optional frozen source launch metadata is validated and preserved in ABI v1', () => {
+  const sourceLaunch = {
+    repository: '/repo/.git',
+    commit: 'a'.repeat(40),
+    baseline: 'b'.repeat(64),
+  }
+  const marker = { version: 1, runtimeRoot: '/runtime', checkout: '/repo', sourceLaunch }
+  expect(
+    consumeGenerationMarker({ AB_DISPATCH_GENERATION: JSON.stringify(marker) }, '/runtime')
+      .sourceLaunch,
+  ).toEqual(sourceLaunch)
+  for (const invalid of [
+    null,
+    {},
+    { ...sourceLaunch, commit: 'main' },
+    { ...sourceLaunch, baseline: '' },
+    { ...sourceLaunch, repository: 'relative' },
+  ])
+    expect(() =>
+      consumeGenerationMarker(
+        { AB_DISPATCH_GENERATION: JSON.stringify({ ...marker, sourceLaunch: invalid }) },
+        '/runtime',
+      ),
+    ).toThrow()
+})

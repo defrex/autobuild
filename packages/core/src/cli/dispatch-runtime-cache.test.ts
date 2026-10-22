@@ -410,8 +410,8 @@ test('cached and archived forge runtimes preserve abbreviated Bun provenance for
       prepare: async () => {
         throw new Error('unchanged forge target must not install')
       },
-      append: async () => {
-        throw new Error('unchanged forge target must not emit upgrade facts')
+      append: async (event) => {
+        expect(event.type).toBe('dispatcher.upgrade-target-resolved')
       },
       cutover: async () => {
         throw new Error('unchanged forge target must not cut over')
