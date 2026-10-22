@@ -1,3 +1,4 @@
+import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
 import { handoffCapture } from './handoff-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
@@ -48,6 +49,7 @@ type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 export interface FrameSpec {
   selection?: DashboardModel['selection']
   harvestSuspended?: boolean
+  rollback?: boolean
   handoff?: boolean
   nativeSessions?: boolean
   forgeReadiness?: boolean
@@ -169,6 +171,22 @@ const HAPPY_FORBIDDEN = [
 export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
+  ...[180, 100].map((columns) => ({
+    id: `rollback-${columns === 180 ? 'wide' : 'narrow'}`,
+    scenario: 'happy' as const,
+    columns,
+    rows: 50,
+    rollback: true,
+    requires: [
+      'rollback: failed 1.1.0',
+      'bbbbbbbbbbbb',
+      'restored 1.0.0',
+      'aaaaaaaaaaaa',
+      'held',
+      ROLLBACK_AT,
+      'RUNNING',
+    ],
+  })),
   ...[180, 100].map((columns) => ({
     id: `handoff-${columns === 180 ? 'wide' : 'narrow'}`,
     scenario: 'happy' as const,
@@ -1538,7 +1556,12 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
       )
     }
   }
-  if (spec.scenario === 'happy' && /\b(?:error|failed|failure)\b/i.test(text)) {
+  if (
+    spec.scenario === 'happy' &&
+    /\b(?:error|failed|failure)\b/i.test(
+      spec.rollback ? text.replace('rollback: failed', 'rollback:') : text,
+    )
+  ) {
     throw new Error(`dashboard capture ${id}: final frame included failure or error text`)
   }
   if (spec.scenario === 'happy' && plain.some((line) => line.endsWith('~'))) {
@@ -1619,7 +1642,11 @@ async function capturePaint(
         spec.scenario === 'happy'
           ? (model.warningLines ?? []).filter((line) => !sentinelLeaseNotices.has(line))
           : []
-      const sourceModel = spec.handoff ? handoffCapture(model) : model
+      const sourceModel = spec.rollback
+        ? rollbackCapture(model)
+        : spec.handoff
+          ? handoffCapture(model)
+          : model
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
