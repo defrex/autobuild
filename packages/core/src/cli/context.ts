@@ -468,11 +468,20 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       throw new Error('node verification provenance requires a Git workspace and exec')
     const record = await store.getBuild(build)
     if (!record) throw new Error(`node verification build ${build} is missing`)
+    const contributionBase =
+      state.nodeRestack?.contributionBoundaries?.[manifest.commitRange!.head] ??
+      state.nodeRestack?.contributionBase ??
+      state.nodeOpened?.sha
+    if (!contributionBase)
+      throw new Error(
+        `node verification ${build} is missing its durable contribution boundary; restore node opening evidence`,
+      )
     const { index, specs } = await collectNodeVerificationProvenance(
       store,
       record.repo,
       manifest.commitRange!,
       { exec: deps.exec!, workspacePath },
+      { contributionBase, foreignAliases: state.nodeRestack?.foreignAliases },
     )
     for (const contribution of index.contributions) {
       contribution.specPath = await writeDerived(

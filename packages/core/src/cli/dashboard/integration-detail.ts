@@ -1,3 +1,4 @@
+import { projectHandPushed, type HandPushedChange } from './hand-pushed'
 import type { Config } from '../../config/schema'
 import type { BuildRecord } from '../../store/types'
 import type { BuildState } from '../../kernel/reducer'
@@ -21,6 +22,7 @@ export interface IntegrationChild {
   landed: boolean
 }
 export interface IntegrationDetail {
+  handPushedCommits?: HandPushedChange[]
   parentDistance?: string
   destination: string
   branch: string
@@ -117,6 +119,7 @@ export function projectIntegrationDetail(
     (restack.active && restack.replay?.conflicted ? restack.replay : undefined)
   const mode = nodeLandingPolicyDisplay(state, config.landing)
   return {
+    handPushedCommits: projectHandPushed(state.nodeRestack),
     parentDistance: row.parentDistance,
     destination: `${row.destination}${state.target ? '' : ' (the configured base branch)'}`,
     branch: record.branch ?? state.nodeOpening?.branch ?? 'unknown branch',

@@ -1,3 +1,4 @@
+import { handPushedLabel, handPushedText } from './hand-pushed'
 import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
 import { treeVocabulary, consentQueue } from './tree'
@@ -766,6 +767,7 @@ function detailBody(
     field('Integration', detail.destination)
     const progress = integrationProgress(build.integrationRow, color)
     body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
+    field(handPushedLabel, handPushedText(detail.handPushedCommits))
     field('Branch', `${detail.branch} · restack ${detail.restack}`)
     if (detail.parentDistance) field('Parent', detail.parentDistance.replace(/^parent /, ''))
     for (const path of detail.conflictFiles ?? []) field('Conflict', path)
