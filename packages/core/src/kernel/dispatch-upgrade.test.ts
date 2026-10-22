@@ -197,3 +197,41 @@ test('a failed request stays blocked until a new preparation replaces it, includ
     )
   }
 })
+
+test('rollback history and lineage holds replay across a changed target and a new operator launch', () => {
+  const rollback = write('dispatcher.runtime-rolled-back', {
+    correlation: 'rollback',
+    run: 'restored',
+    lineage: 'launcher',
+    predecessor: 'old',
+    successor: 'new',
+    handoff: 'upgrade',
+    takeoverAt: '2026-01-01T00:00:00.000Z',
+    failures: 3,
+    failed: handoff.to,
+    restored: runtime,
+    failedRoot: '/cache/new',
+    restoredRoot: '/cache/old',
+    target: handoff.target,
+    reason: 'three failed exits',
+  })
+  const unchanged = write('dispatcher.rollback-hold-cleared', {
+    correlation: 'rollback',
+    run: 'restored',
+    lineage: 'launcher',
+    target: handoff.target,
+  })
+  const changed = write('dispatcher.rollback-hold-cleared', {
+    correlation: 'rollback',
+    run: 'restored',
+    lineage: 'launcher',
+    target: { ...handoff.target, key: 'three' },
+  })
+  const events = log([rollback, rollback, unchanged])
+  checkIncremental(dispatchUpgradeReducer, events)
+  expect(dispatchUpgradeReducer.reduce(events).holds.launcher?.payload.target.key).toBe('new')
+  const cleared = log([rollback, unchanged, changed])
+  checkIncremental(dispatchUpgradeReducer, cleared)
+  expect(dispatchUpgradeReducer.reduce(cleared).holds).toEqual({})
+  expect(dispatchUpgradeReducer.reduce(cleared).lastRollback?.payload.failed.version).toBe('2.0.0')
+})

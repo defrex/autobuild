@@ -8,8 +8,25 @@ export const DISPATCH_GENERATION_ENV = 'AB_DISPATCH_GENERATION'
 export const GENERATION_ENTRY = 'bin/ab-dispatch-generation.ts'
 export const GENERATION_EXITS = { stopped: 80, handoff: 81, failed: 82 } as const
 export const GENERATION_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGQUIT', 'SIGTERM'] as const
+/** Negotiated independently of the frozen v1 launch/overlap protocols. */
+export const DISPATCH_ROLLBACK_VERSION = 1
+export interface RollbackContext {
+  version: 1
+  correlation: string
+  lineage: string
+  predecessor: string
+  successor: string
+  handoff: string
+  takeoverAt: string
+  failures: 3
+  failed: { root: string; cacheId: string }
+  restored: { root: string; cacheId: string }
+}
 export interface GenerationLaunch {
   version: 1
+  rollbackVersion?: 1
+  rollback?: RollbackContext
+  recovery?: { predecessor: string; successor: string; handoff: string }
   overlapVersion?: 1
   journal?: { storeRef: string; repo: string }
   runtimeRoot: string
@@ -42,6 +59,7 @@ export function consumeGenerationMarker(
   if (
     !marker ||
     !validSourceLaunch(marker.sourceLaunch) ||
+    !validRecoveryContext(marker) ||
     marker.version !== DISPATCH_LAUNCH_VERSION ||
     typeof marker.runtimeRoot !== 'string' ||
     !isAbsolute(marker.runtimeRoot) ||
@@ -73,6 +91,7 @@ export function launchContext(
   const value = JSON.parse(raw) as GenerationLaunch
   if (
     !validSourceLaunch(value.sourceLaunch) ||
+    !validRecoveryContext(value) ||
     value.version !== 1 ||
     !value.run ||
     !value.lineage ||
@@ -95,5 +114,57 @@ function validSourceLaunch(value: unknown): boolean {
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v.commit) &&
     typeof v.baseline === 'string' &&
     /^[a-f0-9]{64}$/.test(v.baseline)
+  )
+}
+
+export function validRecoveryContext(launch: GenerationLaunch): boolean {
+  if (launch.rollbackVersion !== undefined && launch.rollbackVersion !== 1) return false
+  if (launch.rollback !== undefined && (!launch.rollback || typeof launch.rollback !== 'object'))
+    return false
+  if (
+    launch.recovery !== undefined &&
+    (!launch.recovery || typeof launch.recovery !== 'object' || launch.predecessor)
+  )
+    return false
+  const context = launch.rollback
+  if (!context && !launch.recovery) return true
+  if (
+    launch.rollbackVersion !== DISPATCH_ROLLBACK_VERSION ||
+    typeof launch.lineage !== 'string' ||
+    !launch.lineage ||
+    typeof launch.run !== 'string' ||
+    !launch.run ||
+    !isAbsolute(launch.checkout) ||
+    !isAbsolute(launch.runtimeRoot)
+  )
+    return false
+  if (
+    launch.recovery &&
+    ![launch.recovery.predecessor, launch.recovery.successor, launch.recovery.handoff].every(
+      (v) => typeof v === 'string' && v.length > 0,
+    )
+  )
+    return false
+  if (!context) return true
+  const validRuntime = (runtime: RollbackContext['failed']) =>
+    runtime &&
+    typeof runtime.cacheId === 'string' &&
+    /^[^/]+-[a-f0-9]{64}$/.test(runtime.cacheId) &&
+    runtime.root === join(launch.checkout, '.autobuild/runtime', runtime.cacheId, 'distribution')
+  return (
+    context.version === 1 &&
+    context.lineage === launch.lineage &&
+    [context.correlation, context.predecessor, context.successor, context.handoff].every(
+      (v) => typeof v === 'string' && v.length > 0,
+    ) &&
+    typeof context.takeoverAt === 'string' &&
+    Number.isFinite(Date.parse(context.takeoverAt)) &&
+    context.failures === 3 &&
+    validRuntime(context.failed) &&
+    validRuntime(context.restored) &&
+    context.failed.root !== context.restored.root &&
+    context.restored.root === launch.runtimeRoot &&
+    !launch.predecessor &&
+    !launch.recovery
   )
 }
