@@ -931,6 +931,7 @@ model = "test/mock"
     expect(events.map((event) => event.type)).toEqual(['session.created', 'session.wake-set'])
     const wakeSet = events.find((event) => event.type === 'session.wake-set')
     expect(wakeSet?.payload.globs).toContain('escalation.raised')
+    expect(wakeSet?.payload.globs).toContain('integration.verification-failed')
     expect(wakeSet?.actor).toEqual({ kind: 'human', user: 'Ada' })
 
     // The message route awaits only turn.started and returns the turn and

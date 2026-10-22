@@ -1,3 +1,4 @@
+import { reportIntegrationFailures } from '../kernel/integration-attention'
 import { publishExact } from '../kernel/publication'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
 import { hostname } from 'node:os'
@@ -1165,9 +1166,11 @@ export class BuildRunner {
           return decision
         case 'run-check':
           await this.runCheck(decision)
+          await reportIntegrationFailures(this.deps.store, this.deps.slug)
           return decision
         case 'run-agent-verify':
           await this.runAgentVerify(decision)
+          await reportIntegrationFailures(this.deps.store, this.deps.slug)
           return decision
         case 'evaluate-verify':
           await this.evaluateVerify(decision)
@@ -1987,8 +1990,10 @@ export class BuildRunner {
 
     if (decision.action.kind === 'run-check') {
       await this.runCheck(decision.action)
+      await reportIntegrationFailures(this.deps.store, this.deps.slug)
     } else {
       await this.runAgentVerify(decision.action)
+      await reportIntegrationFailures(this.deps.store, this.deps.slug)
     }
   }
 
