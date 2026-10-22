@@ -2504,12 +2504,19 @@ stands in for tick completion. Telemetry survives lease release. Safe shutdown
 uses the matching run's open observation, historical journal boundaries when
 absent, and refuses forced termination when the observation cannot be read.
 
+Both dashboards show each accepted unfinished generation handoff, naming its source
+and target runtimes (version and abbreviated commit), mode and drain deadline
+(`unknown` for missing historical facts). A drain-mode outstanding execution
+adds `(draining)` to its build without replacing lifecycle status. Matching
+settlement clears the marker; accepted completion clears the banner. Takeover,
+an expired deadline and an empty outstanding set do not clear the banner.
+
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
 any build's trail. Each dashboard build row spends its header on identity and
 lifecycle status, with the pipeline and its per-step elapsed values below it;
 controls and diagnostic lines expose actions, pending dispatch, abort cleanup,
-setup failures, and blockers. Dashboard rows derive from build events and
+setup failures, and blockers. Dashboard rows derive from build and repository events and
 effective configuration only, so heartbeat or lease renewal without an event
 does not alter them. Every nonterminal build, including `queued`, has a
 dashboard row; a pre-run row names its pending dispatch boundary or latest

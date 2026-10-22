@@ -1,3 +1,4 @@
+import { formatHandoff } from './handoff'
 import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
 import { treeVocabulary, consentQueue } from './tree'
@@ -365,6 +366,7 @@ function renderBuild(
   }
   // Blocked overrides paused visually, but the pause is still a fact the
   // operator needs — so it rides along rather than being overwritten.
+  if (build.draining) rightTokens.push(paint('(draining)', 'yellow', color))
   if (build.alsoPaused) rightTokens.push(paint('(paused)', 'yellow', color))
   rightTokens.push(
     paint(build.status.toUpperCase().padStart(widths.status), STATUS_COLOR[build.status], color),
@@ -907,6 +909,12 @@ function upgradeNoticeLine(
       )
 }
 
+function handoffLines(model: DashboardModel, color: boolean, width: number): string[] {
+  return (model.handoffs ?? []).flatMap((handoff) =>
+    wrappedText(formatHandoff(handoff), width, '  ').map((line) => paint(line, 'yellow', color)),
+  )
+}
+
 function detailGeometry(
   model: DashboardModel,
   width: number,
@@ -918,7 +926,10 @@ function detailGeometry(
   if (build === undefined) return undefined
   const layout = detailBody(build, view, { color: false, width, height, now: 0 })
   const topLength =
-    2 + (model.standby === undefined ? 0 : 1) + (model.availableUpgrade === undefined ? 0 : 1)
+    2 +
+    (model.standby === undefined ? 0 : 1) +
+    (model.availableUpgrade === undefined ? 0 : 1) +
+    handoffLines(model, false, width).length
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, false, width, controlsCapacity(height, topLength))
@@ -969,16 +980,18 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   const build = model.builds.find((candidate) => candidate.slug === view.slug)
   if (build === undefined) return []
   const { color, width, height } = opts
+  const draining = build.draining ? ` ${paint('(draining)', 'yellow', color)}` : ''
   const paused = build.alsoPaused ? ' (also paused)' : ''
   const notice = upgradeNoticeLine(model, color, width)
   const top = [
     truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
     truncate(
-      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
+      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}${draining}`,
       width,
     ),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
+    ...handoffLines(model, color, width),
   ]
   const { body } = detailBody(build, view, opts)
   const controls =
@@ -1089,6 +1102,7 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
     truncate(`  session ${displayText(view.sessionId)}`, width),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
+    ...handoffLines(model, color, width),
   ]
   const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
   const controls = truncate(
@@ -1166,6 +1180,7 @@ function renderSessionView(model: DashboardModel, opts: RenderOpts): string[] {
     ),
     ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
+    ...handoffLines(model, color, width),
   ]
   const content = sessionContentLines(view, width).map((line) => truncate(line, width))
   const controls = truncate(
@@ -1596,6 +1611,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     toggles,
     ...standbyLine(model, color, width),
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
+    ...handoffLines(model, color, width),
     ...warnings,
   ]
   // Both structural separators are fixed frame chrome: one between the

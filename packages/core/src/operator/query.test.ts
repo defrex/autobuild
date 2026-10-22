@@ -1244,3 +1244,27 @@ test('operator reduced attention exposes own-build read gates without a raw-even
   expect(result.dashboardRow).toMatchObject({ status: 'blocked', blockers: [question] })
   expect(JSON.stringify(result)).toContain(question)
 })
+
+test('repository-only handoff settlement and completion agree in snapshot and detail', async () => {
+  const { handoffEvents } = await import('../../../../tools/handoff-capture')
+  const store = new MemoryBuildStore({ clock })
+  await publishRun(store, 'dispatch', config(4, 5))
+  await createBuild(store, 'active', 'active')
+  const append = async (event: ReturnType<typeof handoffEvents>[number]) => {
+    await store.appendRepo(REPO, {
+      actor: event.actor,
+      type: event.type,
+      payload: event.payload,
+    } as import('../events/repository').RepositoryEventWrite)
+  }
+  for (const event of handoffEvents('active')) await append(event)
+  for (const stage of ['active', 'settled', 'completed'] as const) {
+    if (stage !== 'active') await append(handoffEvents('active', stage).at(-1)!)
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    const detail = await getOperatorBuild({ store, repo: REPO, slug: 'active', now })
+    expect(detail.dashboardRow?.draining).toBe(stage === 'active' ? true : undefined)
+    expect(snapshot.model.builds[0]?.draining).toBe(detail.dashboardRow?.draining)
+    expect(snapshot.model.handoffs?.length).toBe(stage === 'completed' ? undefined : 1)
+    expect(detail.dashboardRow?.status).toBe('running')
+  }
+})

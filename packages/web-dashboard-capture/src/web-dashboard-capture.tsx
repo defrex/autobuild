@@ -1,3 +1,4 @@
+import { handoffCapture } from '../../../tools/handoff-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
 import { nativeSessionCapture } from '../../../tools/native-session-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
@@ -82,6 +83,12 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+  ...['wide', 'narrow', 'dimmed'].map((size) => ({
+    id: `builds-handoff-${size}`,
+    width: size === 'narrow' ? 390 : 1440,
+    height: 2200,
+    requires: ['handoff 1.0.0', '1.1.0', 'mode drain;', 'drain deadline', '(draining)', 'RUNNING'],
+  })),
   {
     id: 'capacity-wide',
     width: 1440,
@@ -663,6 +670,18 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     return shell(
       builds(models.integration, { detailOpen: true, selection: { kind: 'build', slug } }),
       { model: models.integration },
+    )
+  }
+  if (spec.id.startsWith('builds-handoff-')) {
+    const model = handoffCapture(models.happy)
+    return shell(
+      builds(
+        model,
+        spec.id.endsWith('dimmed')
+          ? { detailOpen: true, selection: { kind: 'build', slug: model.builds[1]!.slug } }
+          : {},
+      ),
+      { model },
     )
   }
   switch (spec.id) {
