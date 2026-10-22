@@ -54,6 +54,8 @@ export async function prepareUpgrade(input: {
     )
     if (!new RegExp(`DISPATCH_LAUNCH_VERSION = ${DISPATCH_LAUNCH_VERSION}\\b`).test(contract))
       throw new Error('launcher contract changed; manual restart required')
+    if (!contract.includes('DISPATCH_OVERLAP_VERSION = 1'))
+      throw new Error('target lacks validated overlap preflight; manual restart required')
     await readFile(join(runtime.root, 'packages/core/src/cli/dispatch-handoff.ts'), 'utf8').catch(
       () => {
         throw new Error('target lacks durable handoff support; manual restart required')

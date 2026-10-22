@@ -1,3 +1,7 @@
+import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
+import { validateWorkspaceDispatchConfiguration } from './dispatch-readiness'
+import { releasePreparedRuntime } from './dispatch-runtime-use'
+import { recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
 import { distributionRoot } from '../distribution'
 import { readDistributionIdentity } from './installation'
 import { launchContext } from './dispatch-launch-contract'
@@ -5,7 +9,7 @@ import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { prepareUpgrade } from './dispatch-upgrade-install'
 import { readDispatchUpgrade } from '../store/reduced-reads'
-import type { Handoff } from '../kernel/dispatch-upgrade'
+import type { Handoff, UpgradeRun } from '../kernel/dispatch-upgrade'
 import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
@@ -486,37 +490,7 @@ async function defaultWire(
   // Origin mode: no checkout exists, so the provider's host git seams are
   // replaced by the injected origin and the forge's remote reads.
   const originMode = opts.repository !== undefined
-  // Dispatch preflight is capability-driven (AUT-516): forge support, origin
-  // validation, and required environment all read the selected provider's
-  // registration declarations — builtin and plugin alike — instead of naming
-  // a provider.
-  const workspaceCaps = plugins.workspaceProviders.get(config.workspace.provider)?.capabilities
-  if (workspaceCaps?.supportedForges !== undefined) {
-    if (!workspaceCaps.supportedForges.includes(config.forge)) {
-      throw new Error(
-        workspaceCaps.forgeDispatchMessage ??
-          `workspace provider "${config.workspace.provider}" does not support forge "${config.forge}"`,
-      )
-    }
-  }
-  if (workspaceCaps?.validateOrigin !== undefined && !originMode) {
-    const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], {
-      cwd: opts.targetRepo,
-    })
-    if (origin.exitCode !== 0)
-      throw new Error(
-        workspaceCaps.originReadFailureMessage ??
-          `workspace provider "${config.workspace.provider}" requires a readable Git origin`,
-      )
-    workspaceCaps.validateOrigin(origin.stdout.trim())
-  }
-  for (const group of workspaceCaps?.requiredEnv ?? []) {
-    if (group.dispatchMessage === undefined) continue
-    const satisfied = group.alternatives.some((names) =>
-      names.every((name) => opts.env[name] !== undefined && opts.env[name] !== ''),
-    )
-    if (!satisfied) throw new Error(group.dispatchMessage)
-  }
+  await validateWorkspaceDispatchConfiguration(config, opts, plugins)
   // The builtin GitHub forge resolves its credential lazily on its first
   // request (GITHUB_TOKEN, GH_TOKEN, then the gh CLI login) and names the
   // miss reason on any request that had to go out anonymously; nothing is
@@ -647,7 +621,7 @@ class DispatchLoop {
   private readonly activeBuildRuns = new Map<string, ActiveBuildExecution>()
   private acceptingBuildLaunches = true
   /** Process-local fast path; the repository lease is the cross-process gate. */
-  private readonly localHarvestShutdown = new AbortController()
+  private localHarvestShutdown = new AbortController()
   private localHarvestFailure: unknown
   private harvestInFlight: Promise<void> | undefined
   /** Live hosted-harvest execution: the environment-supervised handle whose
@@ -1158,6 +1132,7 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
+      if (await this.acceptUpgradeYield()) return emptyTickReport()
       // Every tick verifies local lease currency, reclaiming when necessary. Without it,
       // this invocation records the yield and performs no claims, launches,
       // or publications — including no tick-completed status publication.
@@ -2844,9 +2819,7 @@ class DispatchLoop {
     }
   }
 
-  /** Teardown: detach the local wait only. The guest keeps running and
-   * heartbeating its adopted repository lease; the execution stays open and
-   * a later invocation settles it from the Store plus provider liveness. */
+  /** Suspend local harvest and join its durable shutdown before lease release. */
   private async stopLocalHarvest(): Promise<void> {
     this.localHarvestShutdown.abort()
     if (this.wiring.workspaces.harvestExecution === undefined) await this.harvestInFlight
@@ -3265,7 +3238,7 @@ class DispatchLoop {
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
               await this.repoView.releaseLease(slug, instance)
-              await this.settlePendingPublication(slug)
+              if (!this.retirement) await this.settlePendingPublication(slug)
             }
           },
           async (error) => {
@@ -3342,6 +3315,13 @@ class DispatchLoop {
     )
   }
 
+  /** An unresolved yield keeps watching until durable state decides it. */
+  private get watchStopped(): boolean {
+    return this.yieldPending
+      ? this.opts.signal?.aborted === true || this.inputStop.signal.aborted
+      : this.stopped
+  }
+
   /** `--once` awaits everything in `inFlight` that is not tagged
    * 'environment': `local-parent` build executions, locally run harvest, and
    * hosted harvest. Hosted harvest runs in a disposable guest but carries no
@@ -3399,9 +3379,11 @@ class DispatchLoop {
    * is DETACHED: the guest keeps running and heartbeating its lease; the next
    * invocation settles the execution from the Store plus provider liveness
    * (AC: a restarted dispatcher never replaces a healthy environment). */
-  private async stopBuildExecutions(): Promise<void> {
+  private async stopBuildExecutions(supervision?: 'environment'): Promise<void> {
     this.acceptingBuildLaunches = false
-    const active = [...this.activeBuildRuns.entries()]
+    const active = [...this.activeBuildRuns.entries()].filter(
+      ([, entry]) => !supervision || entry.handle?.supervision === supervision,
+    )
     for (const [, entry] of active) {
       if (entry.handle?.supervision === 'environment') entry.detaching = true
       else entry.stopping = true
@@ -3462,6 +3444,7 @@ class DispatchLoop {
   }
 
   private say(line: string): void {
+    if (this.presentationReleased) return
     if (!this.dashboard && this.opts.silent !== true) this.opts.stdout(line)
   }
 
@@ -3471,12 +3454,14 @@ class DispatchLoop {
   }
 
   private warn(line: string): void {
+    if (this.presentationReleased) return
     if (this.dashboard) this.setWarning(line)
     else if (this.opts.silent !== true) this.opts.stderr(line)
   }
 
   /** Failure-severity dashboard notice whose historical plain sink is stdout. */
   private failureNotice(line: string): void {
+    if (this.presentationReleased) return
     if (this.dashboard) this.setWarning(line)
     else if (this.opts.silent !== true) this.opts.stdout(line)
   }
@@ -3957,6 +3942,7 @@ class DispatchLoop {
       const requestedAt = this.wiring.clock().getTime()
       this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
+          if (this.retirement && this.repoLeaseHolder === undefined) return
           if (alive) {
             this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
             return
@@ -4017,12 +4003,352 @@ class DispatchLoop {
     }
   }
 
+  private retirement?: {
+    handoff: Handoff
+    successor: string
+    mode: 'drain' | 'cutover'
+    startedAt: string
+    deadline: string
+    builds: Array<{ slug: string; instance: string }>
+  }
+  private yieldPending = false
+  private presentationReleased = false
+  private upgradeRetirementSettled = true
+  private handledPreflightFailure?: string
+
+  /** Called only inside the tick serialization boundary, before any new work. */
+  private async acceptUpgradeYield(): Promise<boolean> {
+    const launch = launchContext(this.opts.env)
+    if (
+      launch?.overlapVersion !== 1 ||
+      this.watchStopped ||
+      this.superseded ||
+      this.repoLeaseHolder !== this.runId
+    )
+      return false
+    if (launch.predecessor && !this.upgradeRetirementSettled)
+      this.upgradeRetirementSettled = await recoverDispatchDrain(
+        this.wiring.store,
+        this.repoIdentity,
+        launch.predecessor,
+        this.wiring.clock(),
+      )
+    const state = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
+      this.runId
+    ]
+    // A prior attempt may have committed acceptance before a read or build
+    // authorization failed. Resume that decision before any repository work.
+    if (state?.handoff && state.handoff.payload.lineage === launch.lineage)
+      return this.adoptUpgradeYield(state.handoff)
+    if (
+      state?.failure &&
+      state.prepared &&
+      this.handledPreflightFailure !== state.failure.payload.correlation
+    ) {
+      this.handledPreflightFailure = state.failure.payload.correlation
+      releasePreparedRuntime(state.prepared.payload.root, launch.launcherPid)
+      releasePreparedRuntime(state.prepared.payload.root)
+      await this.upgradeController?.stop()
+      this.upgradeController = undefined
+      await this.initializeAutomaticUpgrade()
+    }
+    const request = state?.request?.payload
+    if (
+      !request ||
+      state.failure ||
+      state.handoff ||
+      request.lineage !== launch.lineage ||
+      !this.currentConfig().config.upgrade.automatic
+    ) {
+      this.abandonUpgradeYield()
+      return false
+    }
+    const facts = (await readDispatcherRunFacts(this.wiring.store, this.repoIdentity, this.runId))
+      .value
+    if (facts.stopRequest) {
+      this.abandonUpgradeYield()
+      return false
+    }
+    const lease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
+    if (
+      lease?.holder !== this.runId ||
+      Date.parse(lease.expiresAt) <= this.wiring.clock().getTime()
+    ) {
+      this.superseded = true
+      return false
+    }
+    // No launch, claim, tick or target continuation may cross this boundary.
+    this.yieldPending = true
+    this.acceptingBuildLaunches = false
+    this.cutoverRequested = true
+    // Suspend local harvest durably before transferring repository authority.
+    await this.stopLocalHarvest()
+    // A hosted launch can still be provisioning when yield is requested.
+    // Keep joining that continuation and detach as soon as its handle exists.
+    while (this.harvestInFlight) {
+      await this.stopHostedHarvest()
+      await Promise.race([
+        this.harvestInFlight,
+        new Promise<void>((resolve) => setTimeout(resolve, 25)),
+      ])
+    }
+    await this.dispatcher.stopProvisioning()
+    const currentLease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
+    if (
+      currentLease?.holder !== this.runId ||
+      Date.parse(currentLease.expiresAt) <= this.wiring.clock().getTime()
+    ) {
+      this.superseded = true
+      return false
+    }
+    const startedAt = this.wiring.clock().toISOString()
+    const deadline = new Date(
+      Date.parse(startedAt) + this.currentConfig().config.policy.upgradeDrainSeconds * 1000,
+    ).toISOString()
+    const builds = [...this.activeBuildRuns]
+      .filter(([, entry]) => entry.handle?.supervision === 'local-parent')
+      .map(([slug, entry]) => ({ slug, instance: entry.instance }))
+    const handoff: Handoff = {
+      correlation: request.correlation,
+      run: request.run,
+      lineage: request.lineage,
+      from: request.from,
+      to: request.to,
+      root: request.root,
+      cacheId: request.cacheId,
+      target: request.target,
+    }
+    let acceptanceError: unknown
+    try {
+      await this.repoView.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'dispatcher.handoff-started',
+        payload: {
+          ...handoff,
+          successor: request.successor,
+          mode: request.mode,
+          startedAt,
+          deadline,
+          builds,
+        },
+      })
+    } catch (error) {
+      acceptanceError = error
+    }
+
+    // An append can commit before its response is lost. Only durable state
+    // decides whether repository authority must transfer. If this read fails,
+    // keep admission closed; a later watch attempt adopts the durable acceptance
+    // before it can tick, claim or launch again.
+    const accepted = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
+      this.runId
+    ]?.handoff
+    if (accepted?.payload.correlation !== handoff.correlation) {
+      this.abandonUpgradeYield()
+      if (acceptanceError !== undefined)
+        await this.repoView.appendRepo(this.repoIdentity, {
+          actor: DISPATCHER,
+          type: 'dispatcher.upgrade-failed',
+          payload: {
+            correlation: handoff.correlation,
+            run: handoff.run,
+            lineage: handoff.lineage,
+            from: handoff.from,
+            target: handoff.target,
+            reason: createReadinessRedactor(this.opts.env)(
+              acceptanceError instanceof Error
+                ? acceptanceError.message
+                : 'handoff preparation rejected',
+            ),
+          },
+        })
+      return false
+    }
+    return this.adoptUpgradeYield(accepted)
+  }
+
+  /** Reopen admission after a yield that did not durably transfer authority. */
+  private abandonUpgradeYield(): void {
+    if (!this.yieldPending) return
+    // The joined local workflow is suspended, but subsequent ticks must be
+    // able to resume it with a fresh shutdown signal.
+    this.localHarvestShutdown = new AbortController()
+    this.yieldPending = false
+    this.cutoverRequested = false
+    this.acceptingBuildLaunches = true
+  }
+
+  /** Enter retirement from the persisted acceptance, which may predate this tick. */
+  private async adoptUpgradeYield(accepted: NonNullable<UpgradeRun['handoff']>): Promise<boolean> {
+    const handoff = accepted.payload
+    // Legacy cutovers do not have the negotiated overlap capture.
+    if (
+      handoff.run !== this.runId ||
+      handoff.successor === undefined ||
+      handoff.mode === undefined ||
+      handoff.startedAt === undefined ||
+      handoff.deadline === undefined ||
+      handoff.builds === undefined
+    )
+      return false
+    this.yieldPending = true
+    this.acceptingBuildLaunches = false
+    this.cutoverRequested = true
+    for (const build of handoff.builds)
+      await this.repoView.append(build.slug, {
+        actor: DISPATCHER,
+        type: 'execution.drain-authorized',
+        payload: {
+          correlation: handoff.correlation,
+          run: this.runId,
+          runtime: handoff.from,
+          instance: build.instance,
+        },
+      })
+    this.retirement = {
+      handoff: {
+        correlation: handoff.correlation,
+        run: handoff.run,
+        lineage: handoff.lineage,
+        from: handoff.from,
+        to: handoff.to,
+        root: handoff.root,
+        cacheId: handoff.cacheId,
+        target: handoff.target,
+      },
+      successor: handoff.successor,
+      mode: handoff.mode,
+      startedAt: handoff.startedAt,
+      deadline: handoff.deadline,
+      builds: handoff.builds,
+    }
+    this.yieldPending = false
+    this.inputStop.abort()
+    return true
+  }
+
+  private async retireGeneration(): Promise<void> {
+    const retirement = this.retirement!
+    await this.stopBuildExecutions('environment')
+    await this.finishRendering()
+    this.presentationReleased = true
+    if (this.opts.kernelRunId === undefined) releaseDispatchPresentation()
+    // Interactive kernels have no terminal authority. Their frontend must
+    // acknowledge removal and joining of input/render work itself.
+    if (this.opts.kernelRunId === undefined) {
+      await this.repoView.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'dispatcher.terminal-released',
+        payload: retirement.handoff,
+      })
+    } else {
+      for (;;) {
+        const state = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
+          this.runId
+        ]
+        if (state?.released) break
+        if (this.opts.signal?.aborted) break
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    await this.releaseRepoLease()
+    const pending = new Map(retirement.builds.map((build) => [build.slug, build.instance]))
+    const settle = async (
+      slug: string,
+      instance: string,
+      outcome: 'drained' | 'suspended' | 'unknown',
+    ) => {
+      await this.repoView.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.drain-settled',
+        payload: { correlation: retirement.handoff.correlation, instance },
+      })
+      await this.repoView.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'dispatcher.drain-settled',
+        payload: { ...retirement.handoff, slug, instance, outcome },
+      })
+      pending.delete(slug)
+    }
+    while (pending.size) {
+      for (const [slug, instance] of pending)
+        if (this.activeBuildRuns.get(slug)?.instance !== instance)
+          await settle(slug, instance, 'drained')
+      if (!pending.size) break
+      if (
+        retirement.mode === 'cutover' ||
+        this.opts.signal?.aborted ||
+        this.wiring.clock().getTime() >= Date.parse(retirement.deadline)
+      )
+        break
+      // Read-only policy supervision: never another tick or config fan-out.
+      try {
+        const { loadConfig } = await import('../config/load')
+        const config = await loadConfig(join(this.opts.targetRepo, 'autobuild.toml'))
+        const { createRuntimeResolver } = await import('../ports/runner/routing')
+        createRuntimeResolver(
+          this.wiring.runtimes,
+          config.roles,
+          config.policy.sessionBudgetSeconds,
+        )
+        const deadline = new Date(
+          Date.parse(retirement.startedAt) + config.policy.upgradeDrainSeconds * 1000,
+        ).toISOString()
+        if (deadline !== retirement.deadline) {
+          await this.repoView.appendRepo(this.repoIdentity, {
+            actor: DISPATCHER,
+            type: 'dispatcher.drain-deadline',
+            payload: { ...retirement.handoff, deadline },
+          })
+          retirement.deadline = deadline
+        }
+      } catch {
+        /* Retain the last accepted policy. */
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 250))
+    }
+    // Existing stop orders native suspension before process-group reaping.
+    await this.stopBuildExecutions()
+    for (const [slug, instance] of pending) {
+      const execution = (await readBuildFacts(this.wiring.store, slug)).value.state
+        .drainingExecutions?.[instance]
+      const suspendedHere = execution?.suspended
+      const ended = execution?.ended
+      await settle(slug, instance, suspendedHere ? 'suspended' : ended ? 'drained' : 'unknown')
+    }
+    const settled = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value.runs[
+      this.runId
+    ]!
+    if (settled.completed) return
+    await this.repoView.appendRepo(this.repoIdentity, {
+      actor: DISPATCHER,
+      type: 'dispatcher.handoff-completed',
+      payload: {
+        ...retirement.handoff,
+        successor: retirement.successor,
+        mode: retirement.mode,
+        startedAt: retirement.startedAt,
+        endedAt: this.wiring.clock().toISOString(),
+        drained: settled.drained,
+        suspended: settled.suspended,
+      },
+    })
+  }
+
   private async initializeAutomaticUpgrade(): Promise<void> {
     const launch = launchContext(this.opts.env)
     if (!launch || this.opts.once || this.opts.repository || this.repoLeaseHolder !== this.runId)
       return
     const upgrades = (await readDispatchUpgrade(this.wiring.store, this.repoIdentity)).value
-    if (!this.handoffCompleted && launch.predecessor) {
+    this.upgradeRetirementSettled =
+      !launch.predecessor ||
+      !upgrades.runs[launch.predecessor]?.request ||
+      !!upgrades.runs[launch.predecessor]?.completed
+    if (
+      !this.handoffCompleted &&
+      launch.predecessor &&
+      !upgrades.runs[launch.predecessor]?.request
+    ) {
       const previous = upgrades.runs[launch.predecessor]
       const handoff = previous?.handoff?.payload
       if (
@@ -4041,6 +4367,11 @@ class DispatchLoop {
     }
     if (this.upgradeController) return
     const redact = createReadinessRedactor(this.opts.env)
+    const inspectStore = async () =>
+      (await this.wiring.store.inspectDispatcherOverlap?.(AbortSignal.timeout(30_000)))?.evidence
+    let failedStoreEvidence = Object.values(upgrades.runs).some((state) => state.failure)
+      ? await inspectStore().catch(() => undefined)
+      : undefined
     this.upgradeController = new DispatchUpgradeController({
       run: this.runId,
       lineage: launch.lineage!,
@@ -4051,13 +4382,25 @@ class DispatchLoop {
       currentKey: launch.predecessor
         ? upgrades.runs[launch.predecessor]?.handoff?.payload.target.key
         : launch.sourceLaunch?.baseline,
+      storeChangedSinceFailure: async () => {
+        const evidence = await inspectStore().catch(() => undefined)
+        const changed =
+          failedStoreEvidence !== undefined &&
+          evidence !== undefined &&
+          evidence !== failedStoreEvidence
+        if (evidence !== undefined) failedStoreEvidence = evidence
+        return changed
+      },
       failedKeys: Object.values(upgrades.runs).flatMap((state) =>
         state.failure && state.failure.payload.lineage === launch.lineage
           ? [state.failure.payload.target.key]
           : [],
       ),
       enabled: () =>
-        !this.stopped && !this.superseded && this.currentConfig().config.upgrade.automatic,
+        !this.stopped &&
+        !this.superseded &&
+        this.currentConfig().config.upgrade.automatic &&
+        this.upgradeRetirementSettled,
       resolve: (signal) =>
         resolveUpgradeTarget({
           checkout: this.opts.targetRepo,
@@ -4081,13 +4424,15 @@ class DispatchLoop {
             this.repoLeaseHolder !== this.runId
           )
             return false
+          if (launch.overlapVersion !== 1)
+            throw new Error(
+              'launcher lacks overlapping preflight supervision; manual restart required',
+            )
           await this.repoView.appendRepo(this.repoIdentity, {
             actor: DISPATCHER,
-            type: 'dispatcher.handoff-started',
+            type: 'dispatcher.target-prepared',
             payload: handoff,
           })
-          this.cutoverRequested = true
-          this.inputStop.abort()
           return true
         }),
     })
@@ -4186,7 +4531,7 @@ class DispatchLoop {
       this.startUpgradeChecks()
       await this.initializeAutomaticUpgrade()
       let startup = true
-      while (!this.stopped && !this.superseded) {
+      while (!this.watchStopped && !this.superseded) {
         try {
           const report = await this.dispatcherTick(startup)
           this.printReport(report, this.harvestInFlight === undefined)
@@ -4197,7 +4542,7 @@ class DispatchLoop {
           await this.publishTickFailure(error)
           this.warn(`tick failed: ${message}`)
         }
-        if (this.stopped || this.superseded) break
+        if (this.watchStopped || this.superseded) break
         await sleep(intervalMs)
       }
       if (this.superseded) {
@@ -4206,19 +4551,24 @@ class DispatchLoop {
     } finally {
       this.localHarvestShutdown.abort()
       await this.upgradeController?.stop()
-      await this.stopBuildExecutions()
-      await this.stopLocalHarvest()
-      await this.stopHostedHarvest()
-      // Signal provisioning continuations and release their leases before
-      // the repository lease, so the next supervisor adopts immediately.
-      await this.dispatcher.stopProvisioning()
-      // Stop input and join teardown work first so every result that becomes
-      // reportable at that boundary is included. Local harvest suspension is durable before lease release.
-      await this.finishRendering()
-      for (const report of await this.publishSettlementReports()) {
-        this.printReport(report, false)
+      if (this.retirement) {
+        await this.retireGeneration()
+      } else {
+        await this.stopBuildExecutions()
+        await this.stopLocalHarvest()
+        await this.stopHostedHarvest()
+        // Signal provisioning continuations and release their leases before
+        // the repository lease, so the next supervisor adopts immediately.
+        await this.dispatcher.stopProvisioning()
+        // Stop input and join teardown work first so every result that becomes
+        // reportable at that boundary is included. Local harvest suspension
+        // is durable before lease release.
+        await this.finishRendering()
+        for (const report of await this.publishSettlementReports()) {
+          this.printReport(report, false)
+        }
+        await this.releaseRepoLease()
       }
-      await this.releaseRepoLease()
     }
     // The finished interactive frame stays on screen; never append a late line
     // beneath it. Plain mode retains its historical shutdown line.
