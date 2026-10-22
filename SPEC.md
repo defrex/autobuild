@@ -227,7 +227,12 @@ uncommitted edits) and dependency bytes participate in content identity; version
 alone never selects a snapshot. Completed distribution roots are immutable.
 The generation, kernel, later local runners and agent PATH `ab` all execute
 from that same root. Run/attach runtime identities name the cached directory.
-The guest archive is captured from that snapshot too.
+Source generations capture their guest archive from that exact snapshot.
+Registry generations preserve the normalized host archive and separately fetch
+their manifest version's published GitHub release asset for guests. Version and
+SHA256 validation precede cache completion; missing, corrupt or wrong-version
+assets fail preparation. Completed metadata retains explicit provenance and both
+digests; older entries without guest provenance are not silently reused.
 
 The versioned v1 launch contract consists of argv, a consumed one-shot
 `AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
@@ -271,7 +276,9 @@ starting repository work or terminal input/output. Provider compatibility eviden
 chooses drain when sharing is safe and cutover otherwise. SQLite compares its
 untouched catalog semantically (columns, indexes, keys and constraints) with target
 requirements, accepting equivalent schemas built by guarded ALTER migrations; HTTP uses the live service's client
-and protocol admission. Missing evidence chooses cutover. Successful durable
+and protocol admission. Missing evidence chooses cutover. A target outside the hosted client overlap
+window also requires cutover; target admission and successful protocol writes
+are still mandatory. Cutover never makes a rejected target runnable. Successful durable
 protocol writes are also required: a service that admits the client but rejects
 a new yield fact fails preflight, leaving the predecessor active with target and
 reason in repository attention. Failed targets are not retried every tick; a change in selected-store compatibility
@@ -290,7 +297,12 @@ input/render work before acknowledging terminal release. Only after that durable
 acknowledgement and a successful repository lease claim may the successor draw
 or consume input. Only the successor ticks, claims, runs janitor/harvest and
 launches runners. Execution leases remain with existing local runners; remote
-executions detach immediately.
+executions detach immediately. Their exact instances and recorded guest runtimes
+are captured separately on `dispatcher.handoff-started.remoteBuilds`. This
+authorization work survives local retirement completion and late attachment;
+it never adds to local drain counts or delays predecessor exit. Guests retain
+their leases and heartbeats and request neutral relaunch after their current
+phase completes. The successor re-attaches with refreshed guest bytes.
 
 A draining predecessor supervises its captured local executions until they settle
 or `policy.upgradeDrainSeconds` (900 seconds by default) elapses. The deadline
@@ -303,7 +315,7 @@ retirement from execution leases and durable build facts after predecessor death
 An unrelated dispatcher taking the lease still causes ordinary supersession and
 teardown. Rollback remains outside this behavior.
 
-At each completed phase boundary, a local build runner compares its immutable
+At each completed phase boundary, a local or remote build runner compares its immutable
 attach runtime with the accepted handoff target mirrored in its instance-scoped
 build-log drain authorization. The comparison uses existing boundary facts and
 adds no Store read. A mismatch records `execution.relaunch-requested` and exits
@@ -311,8 +323,9 @@ after normal phase completion, publication settlement and session cleanup.
 Confirmed teardown records the neutral `relaunch` execution outcome; it consumes
 no failure or no-progress allowance. The current repository lease holder
 relaunches from durable state on its own immutable runtime, including after an
-ownership gap. Equal or absent targets preserve normal execution. Remote runners
-are unchanged; deadline suspension remains the mechanism for unfinished phases.
+ownership gap. Equal or absent targets preserve normal execution. Remote guests
+re-attach through the provider, which reinstalls the accepted generation’s archive
+before launching the next execution. Deadline suspension applies only to local phases.
 
 The journal records `dispatcher.target-prepared`, `dispatcher.yield-requested`,
 `dispatcher.handoff-started`, `dispatcher.terminal-released`, `dispatcher.takeover`,

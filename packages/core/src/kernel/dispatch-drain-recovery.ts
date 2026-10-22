@@ -1,3 +1,4 @@
+import type { DispatchUpgradeState } from './dispatch-upgrade'
 import { DISPATCHER } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts, readDispatchUpgrade } from '../store/reduced-reads'
@@ -59,4 +60,42 @@ export async function recoverDispatchDrain(
       },
     })
   return true
+}
+
+/** Replay remote authorization independently of local retirement. Iterate newest
+ * acceptances first so recovery can never roll an execution's target backward. */
+export async function authorizeRemoteHandoffs(
+  store: BuildStore,
+  repo: string,
+  upgrades?: DispatchUpgradeState,
+): Promise<void> {
+  const runs = Object.values((upgrades ?? (await readDispatchUpgrade(store, repo)).value).runs)
+    .filter((run) => run.handoff)
+    .sort((a, b) => b.handoff!.seq - a.handoff!.seq)
+  const seen = new Set<string>()
+  for (const run of runs) {
+    const handoff = run.handoff!.payload
+    for (const capture of handoff.remoteBuilds ?? []) {
+      const key = JSON.stringify([capture.slug, capture.instance])
+      if (seen.has(key)) continue
+      seen.add(key)
+      const facts = (await readBuildFacts(store, capture.slug)).value
+      if (facts.open?.instance !== capture.instance) continue
+      const runtime = facts.runnerAttaches.findLast((a) => a.instance === capture.instance)?.runtime
+      if (!runtime) continue // A guest may attach after its predecessor retires.
+      const authorization = facts.state.drainingExecutions?.[capture.instance]?.authorization
+      if (authorization?.correlation === handoff.correlation) continue
+      await store.appendIfCurrent(capture.slug, facts.state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'execution.drain-authorized',
+        payload: {
+          correlation: handoff.correlation,
+          run: handoff.run,
+          runtime,
+          targetRuntime: handoff.to,
+          instance: capture.instance,
+        },
+      })
+    }
+  }
 }

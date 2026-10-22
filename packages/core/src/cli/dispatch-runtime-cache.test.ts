@@ -421,3 +421,68 @@ test('cached and archived forge runtimes preserve abbreviated Bun provenance for
     await controller.stop()
   }
 })
+
+test('registry guests use the exact version release asset, retain host archive and reject corrupt guest bytes', async () => {
+  const { source, checkout } = await fixture()
+  const { packageDistribution } = await import('../distribution-packaging')
+  const bytes = await packageDistribution(source)
+  const versions: string[] = []
+  const runtime = await prepareRuntime(source, checkout, undefined, {
+    provenance: 'registry',
+    fetchRelease: async (version) => {
+      versions.push(version)
+      return bytes
+    },
+  })
+  expect(versions).toEqual(['1.2.3'])
+  expect(runtime.guestArchive?.provenance).toBe('registry')
+  expect(await Bun.file(join(dirname(runtime.root), 'guest-distribution.tgz')).bytes()).toEqual(
+    new Uint8Array(bytes),
+  )
+  expect(runtime.guestArchive?.digest).toBe(
+    new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
+  )
+  await validateRuntime(runtime)
+  const sourceRuntime = await prepareRuntime(source, checkout)
+  expect(sourceRuntime.id).not.toBe(runtime.id)
+  expect(sourceRuntime.guestArchive).toMatchObject({
+    provenance: 'source',
+    digest: sourceRuntime.archiveDigest,
+  })
+  await writeFile(join(dirname(runtime.root), 'guest-distribution.tgz'), 'corrupt')
+  await expect(validateRuntime(runtime)).rejects.toThrow('corrupt guest archive')
+})
+
+test('failed or wrong-version registry guest resolution never publishes a completed entry and can retry', async () => {
+  const { source, checkout } = await fixture()
+  const { packageDistribution } = await import('../distribution-packaging')
+  for (const fetchRelease of [
+    async () => new Uint8Array(),
+    async () => new Uint8Array([1, 2, 3]),
+    async () => {
+      throw new Error('asset missing')
+    },
+  ]) {
+    await expect(
+      prepareRuntime(source, checkout, undefined, { provenance: 'registry', fetchRelease }),
+    ).rejects.toThrow()
+  }
+  const manifestPath = join(source, 'package.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, version: '9.9.9' }))
+  const wrong = await packageDistribution(source)
+  await writeFile(manifestPath, JSON.stringify(manifest))
+  await expect(
+    prepareRuntime(source, checkout, undefined, {
+      provenance: 'registry',
+      fetchRelease: async () => wrong,
+    }),
+  ).rejects.toThrow('version contradicts')
+  const correct = await packageDistribution(source)
+  await validateRuntime(
+    await prepareRuntime(source, checkout, undefined, {
+      provenance: 'registry',
+      fetchRelease: async () => correct,
+    }),
+  )
+})

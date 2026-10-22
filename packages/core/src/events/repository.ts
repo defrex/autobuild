@@ -494,6 +494,15 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.upgrade-detected': upgradeIdentitySchema,
   'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
   'dispatcher.handoff-started': handoffSchema.extend({
+    remoteBuilds: z
+      .array(
+        z.strictObject({
+          slug: z.string().min(1),
+          instance: z.string().min(1),
+          runtime: runtimeIdentitySchema.optional(),
+        }),
+      )
+      .optional(),
     successor: dispatchRun.optional(),
     mode: z.enum(['drain', 'cutover']).optional(),
     startedAt: z.iso.datetime().optional(),

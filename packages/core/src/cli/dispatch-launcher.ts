@@ -17,7 +17,7 @@ import { dirname, basename, resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { distributionRoot } from '../distribution'
 import { resolveMainRepo } from './main-checkout'
-import { prepareRuntime } from './dispatch-runtime-cache'
+import { prepareRuntime, guestArchiveProvenance } from './dispatch-runtime-cache'
 import {
   activateRuntime,
   pruneRuntimes,
@@ -60,7 +60,9 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     const baseline = await sourceContent(distributionRoot(), repository)
     sourceLaunch = { repository, commit, baseline: baseline.key }
   }
-  let runtime = await prepareRuntime(distributionRoot(), checkout)
+  let runtime = await prepareRuntime(distributionRoot(), checkout, undefined, {
+    provenance: await guestArchiveProvenance(originalInstall),
+  })
   if (sourceLaunch) {
     const frozen = JSON.parse(await readFile(join(runtime.root, 'package.json'), 'utf8'))
     if (

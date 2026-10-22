@@ -222,6 +222,15 @@ requires a published release.
 
 ### Guest distribution version selection and delivery
 
+Cached generations retain explicit archive provenance. A registry generation
+delivers its manifest version’s GitHub release asset, validated for version and
+digest separately from its normalized host archive. Source, Git and local package
+generations deliver their exact packed code. Missing or invalid release assets
+fail preparation without falling back to packing the registry installation.
+Remote guests finish their phase before requesting relaunch; re-attachment
+refreshes the archive and marker before the next runner starts. They retain
+independent leases and never hold local retirement open.
+
 The guest's distribution version is selected by the archive source, and both
 sources agree with the running system by construction:
 

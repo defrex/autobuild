@@ -429,7 +429,12 @@ dependencies offline under `.autobuild/runtime/`, then starts
 only filesystem/process helpers and never opens a Store. The generation's
 frontend, kernel, local runners and agent CLI use one completed immutable root;
 `dispatch-runtime-use.ts` protects current/previous/held/live entries during
-spawn and pruning. Cached guest archives are captured at installation.
+spawn and pruning. Cached guest archives are captured at installation. Source generations deliver
+the exact packed source archive; registry generations keep a separate,
+digest-validated GitHub release asset matching the cached manifest version.
+The normalized host archive retains its independent compiler boundary. A bounded
+release-resolution child keeps provider authentication and HTTP code outside the
+resident launcher’s eager filesystem/process import graph.
 `--once`, origin/hosted paths and injected hot dashboard rendering remain direct.
 `dispatch-upgrade-target.ts` reads manifest and lock blobs from one authoritative
 base snapshot, or rereads the original install pathname when unpinned. Frozen
@@ -456,11 +461,13 @@ execution supervision until completion or the hot policy deadline. Build-log
 execution authorization permits expected mixed-version deferral without restart
 attention. Accepted authorization also carries the target runtime.
 `processes/execution-relaunch.ts` compares immutable identities from existing
-boundary facts; local runners finish the phase, record an instance-correlated
+boundary facts; local and remote runners finish the phase, record an instance-correlated
 relaunch request and clean up. Confirmed teardown records a neutral relaunch
 outcome. The current owner's ordinary lease sweep resumes durable work promptly,
-including after an ownership gap; remote execution and deadline suspension keep
-their existing paths. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
+including after an ownership gap. Remote captures authorize exact guest runtimes
+independently of local retirement, including late attachment after completion.
+Guests detach without losing leases; re-attachment refreshes their archive before
+the next phase. Deadline suspension applies only to local runners. `kernel/dispatch-drain-recovery.ts` reconstructs unfinished retirement
 after a predecessor dies. Cutover suspends immediately when provider evidence
 cannot establish safe overlap. Automatic upgrades can be disabled; targets
 without preflight capability require manual restart.

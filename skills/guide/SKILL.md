@@ -238,7 +238,7 @@ The distinctions that change an administrator's answer:
   accepted or revived by detection; a newly prepared attempt must pass preflight.
   Compatible generations drain: the predecessor releases terminal
   input/rendering and repository authority, then supervises only captured local
-  executions while the successor owns ticks and launches. Local runners finish
+  executions while the successor owns ticks and launches. Local and remote runners finish
   their current phase, compare their immutable attach runtime with the accepted
   target using existing boundary facts, and durably request relaunch on mismatch.
   Confirmed teardown has the neutral `relaunch` outcome; the current repository
@@ -248,7 +248,11 @@ The distinctions that change an administrator's answer:
   fail preflight and preserve the predecessor. The hot `policy.upgradeDrainSeconds`
   defaults to 900; remaining local sessions suspend at that deadline and resume
   natively where eligible, with reasoned fresh fallback otherwise. Remote runners
-  detach. Repository-owned harvest/provisioning work joins before lease release.
+  detach with leases and heartbeats intact. Their exact instances and guest runtimes
+  are captured separately, authorize boundary relaunch even after local retirement,
+  and never delay predecessor exit. Re-attachment reinstalls the target archive.
+  Cached registry generations use their version’s validated GitHub release asset;
+  source generations deliver their exact packed code. Repository-owned harvest/provisioning work joins before lease release.
   Durable takeover and retirement completion are separate; status exposes both
   runtimes, outstanding draining executions and deadline. The launcher keeps live
   runtimes reserved and joins all children on operator stop. `[upgrade] automatic =
@@ -1255,8 +1259,8 @@ shipped by that distribution, without requiring a version bump. A consuming
 repository's vendored-skill-only merge does not change the installed runtime.
 The successor passes config/store and
 protocol-write preflight before yield; compatible generations drain, otherwise
-cutover suspends immediately. Existing runners keep execution leases while the
-successor owns repository work. At completed phase boundaries local runners
+cutover suspends local sessions immediately. Existing runners keep execution leases while the
+successor owns repository work. At completed phase boundaries local and remote runners
 request relaunch onto the accepted target; the current owner resumes them from
 durable state. Remaining local sessions suspend at the hot drain
 deadline and resume through their durable session records.

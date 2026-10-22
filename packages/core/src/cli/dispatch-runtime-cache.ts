@@ -1,3 +1,4 @@
+import { fetchRuntimeGuestRelease } from './dispatch-runtime-release'
 import { existsSync, renameSync } from 'node:fs'
 import {
   reservePreparedRuntime,
@@ -54,6 +55,11 @@ export interface CachedRuntime {
   digest: string
   dependencies: string
   archiveDigest: string
+  guestArchive?: {
+    provenance: 'source' | 'registry'
+    file: 'distribution.tgz' | 'guest-distribution.tgz'
+    digest: string
+  }
 }
 export async function cachedRuntime(root: string): Promise<CachedRuntime | undefined> {
   if (!ownCachedRuntime(root)) return undefined
@@ -225,12 +231,51 @@ async function stageCode(source: string, target: string): Promise<void> {
   await writeFile(join(target, 'bin/agent/ab'), cachedAgentTrampoline)
   await chmod(join(target, 'bin/agent/ab'), 0o755)
 }
+export async function guestArchiveProvenance(source: string): Promise<'source' | 'registry'> {
+  const cached = await cachedRuntime(source)
+  if (cached) {
+    await validateRuntime(cached)
+    return cached.guestArchive!.provenance
+  }
+  // Resolve provenance before staging removes checkout and package-manager evidence.
+  if (existsSync(join(source, '.git')) || existsSync(join(source, '.bun-tag'))) return 'source'
+  const manifest = await readManifest(source)
+  const marker = `${join('node_modules', '@defrex', 'autobuild')}`
+  const index = source.lastIndexOf(marker)
+  if (index >= 0) {
+    const owner = await readManifest(source.slice(0, index))
+    const declared =
+      owner.dependencies?.['@defrex/autobuild'] ?? owner.devDependencies?.['@defrex/autobuild']
+    if (
+      typeof declared === 'string' &&
+      !/^(file:|link:|workspace:|github:|git|https?:)/.test(declared)
+    )
+      return 'registry'
+  }
+  if (typeof manifest.gitHead === 'string') return 'source'
+  return 'source'
+}
+
 export async function validateRuntime(runtime: CachedRuntime): Promise<void> {
   if (!(await cachedRuntime(runtime.root)) || (await treeDigest(runtime.root)) !== runtime.digest)
     throw new Error(`corrupt completed runtime: ${runtime.root}`)
   const archive = await Bun.file(join(dirname(runtime.root), 'distribution.tgz')).arrayBuffer()
   if (new Bun.CryptoHasher('sha256').update(archive).digest('hex') !== runtime.archiveDigest)
     throw new Error(`corrupt runtime archive: ${runtime.root}`)
+  const guest = runtime.guestArchive
+  if (
+    !guest ||
+    !['distribution.tgz', 'guest-distribution.tgz'].includes(guest.file) ||
+    (guest.provenance === 'registry'
+      ? guest.file !== 'guest-distribution.tgz'
+      : guest.provenance !== 'source' || guest.file !== 'distribution.tgz')
+  )
+    throw new Error(
+      `runtime lacks guest archive provenance; prepare a fresh runtime: ${runtime.root}`,
+    )
+  const bytes = await readFile(join(dirname(runtime.root), guest.file))
+  if (new Bun.CryptoHasher('sha256').update(bytes).digest('hex') !== guest.digest)
+    throw new Error(`corrupt guest archive: ${runtime.root}`)
 }
 
 async function validateRuntimeImports(root: string, checkout: string): Promise<void> {
@@ -247,10 +292,39 @@ async function validateRuntimeImports(root: string, checkout: string): Promise<v
   if (code !== 0) throw new Error(`cached runtime import validation failed: ${stderr}`)
 }
 
+const guestFetches = new WeakMap<
+  (version: string) => Promise<Uint8Array>,
+  Map<string, Promise<Uint8Array>>
+>()
+function fetchGuestArchive(
+  version: string,
+  fetchRelease: (version: string) => Promise<Uint8Array>,
+): Promise<Uint8Array> {
+  let versions = guestFetches.get(fetchRelease)
+  if (!versions) {
+    versions = new Map()
+    guestFetches.set(fetchRelease, versions)
+  }
+  const existing = versions.get(version)
+  if (existing) return existing
+  const pending = Promise.resolve().then(() => fetchRelease(version))
+  versions.set(version, pending)
+  void pending
+    .finally(() => {
+      if (versions.get(version) === pending) versions.delete(version)
+    })
+    .catch(() => {})
+  return pending
+}
+
 export async function prepareRuntime(
   source: string,
   checkout: string,
   publication?: { upgradeKey: string; commit: string },
+  guest: {
+    provenance: 'source' | 'registry'
+    fetchRelease?: (version: string) => Promise<Uint8Array>
+  } = { provenance: 'source' },
 ): Promise<CachedRuntime> {
   source = await realpath(source)
   checkout = await realpath(checkout)
@@ -309,8 +383,14 @@ export async function prepareRuntime(
     await validateRuntimeImports(root, checkout)
     const digest = await treeDigest(root)
     const manifest = await readManifest(root)
-    const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${digest}`
+    const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
     const destination = join(cache, id)
+    const reusable = await cachedRuntime(join(destination, 'distribution'))
+    if (reusable) {
+      reservePreparedRuntime(cache, id)
+      await validateRuntime(reusable)
+      return reusable
+    }
     const archive = await packageDistribution(root)
     const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
     const extracted = join(stage, 'archive-check')
@@ -336,6 +416,37 @@ export async function prepareRuntime(
     await validateRuntimeImports(extracted, checkout)
     await rm(extracted, { recursive: true })
     await writeFile(join(stage, 'distribution.tgz'), archive)
+    let guestArchive: NonNullable<CachedRuntime['guestArchive']> = {
+      provenance: 'source',
+      file: 'distribution.tgz',
+      digest: archiveDigest,
+    }
+    if (guest.provenance === 'registry') {
+      const bytes = await fetchGuestArchive(
+        String(manifest.version),
+        guest.fetchRelease ?? fetchRuntimeGuestRelease,
+      )
+      if (!bytes.byteLength) throw new Error('published guest archive is empty')
+      const path = join(stage, 'guest-distribution.tgz')
+      await writeFile(path, bytes)
+      const inspect = Bun.spawn(['tar', '-xOzf', path, 'package/package.json'], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const [text, error, code] = await Promise.all([
+        new Response(inspect.stdout).text(),
+        new Response(inspect.stderr).text(),
+        inspect.exited,
+      ])
+      if (code !== 0) throw new Error(`invalid published guest archive: ${error}`)
+      if (JSON.parse(text).version !== manifest.version)
+        throw new Error('published guest archive version contradicts runtime')
+      guestArchive = {
+        provenance: 'registry',
+        file: 'guest-distribution.tgz',
+        digest: new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
+      }
+    }
     const runtime: CachedRuntime = {
       version: 1,
       id,
@@ -343,6 +454,7 @@ export async function prepareRuntime(
       digest,
       dependencies: graph.fingerprint,
       archiveDigest,
+      guestArchive,
     }
     await writeFile(join(stage, 'runtime.json'), JSON.stringify(runtime))
     if (publication)

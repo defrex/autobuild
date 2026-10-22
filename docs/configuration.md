@@ -673,12 +673,14 @@ checkout-only hooks such as Husky are not provisioning dependencies. A Bun
 install or verification failure identifies the configured image and expected
 universal-image capabilities, deletes the partial environment, and leaves no
 readiness marker. A retry also deletes any named sandbox without that marker
-instead of adopting partial setup. The installed distribution's identity — package version and remote-store
-protocol version — is recorded in the guest's
+instead of adopting partial setup. The installed distribution's identity — package version, remote-store
+protocol version and SHA256 of the exact installed archive — is recorded in the guest's
 `/opt/autobuild/.distribution-version` marker; a reused sandbox whose marker
 no longer matches the identity the current system would deliver is refreshed
 by reinstalling the archive before reuse, so an upgraded dispatcher retrofits
-its persistent guests (see "Guest distribution version selection and delivery"
+its persistent guests. Cached registry generations deliver their own manifest
+version’s validated GitHub release asset, separately from the normalized host
+archive; source generations deliver exact packed source bytes (see "Guest distribution version selection and delivery"
 in docs/setup.md for the release-and-upgrade delivery path and the hosted
 store's supported client window). Immediately
 before every build-child launch, the adapter verifies the
@@ -2105,7 +2107,9 @@ A successor first validates configuration and the actual selected store without
 starting repository work or terminal input/output. Provider compatibility evidence
 chooses drain when sharing is safe and cutover otherwise. SQLite compares its
 untouched catalog with target requirements; HTTP uses the live service's client
-and protocol admission. Missing evidence chooses cutover. Successful durable
+and protocol admission. Missing evidence chooses cutover. A target outside the hosted client overlap
+window also requires cutover; target admission and successful protocol writes
+are still mandatory. Cutover never makes a rejected target runnable. Successful durable
 protocol writes are also required: a service that admits the client but rejects
 a new yield fact fails preflight, leaving the predecessor active with target and
 reason in repository attention. Failed targets are not retried every tick; a change in selected-store compatibility
@@ -2124,7 +2128,12 @@ input/render work before acknowledging terminal release. Only after that durable
 acknowledgement and a successful repository lease claim may the successor draw
 or consume input. Only the successor ticks, claims, runs janitor/harvest and
 launches runners. Execution leases remain with existing local runners; remote
-executions detach immediately.
+executions detach immediately. Their exact instances and recorded guest runtimes
+are captured separately on `dispatcher.handoff-started.remoteBuilds`. This
+authorization work survives local retirement completion and late attachment;
+it never adds to local drain counts or delays predecessor exit. Guests retain
+their leases and heartbeats and request neutral relaunch after their current
+phase completes. The successor re-attaches with refreshed guest bytes.
 
 A draining predecessor supervises its captured local executions until they settle
 or `policy.upgradeDrainSeconds` (900 seconds by default) elapses. The deadline
@@ -2135,8 +2144,7 @@ for predecessor stop before takeover. Retirement completion records drained and
 suspended counts separately from takeover. A successor reconstructs unfinished
 retirement from execution leases and durable build facts after predecessor death.
 An unrelated dispatcher taking the lease still causes ordinary supersession and
-teardown. Rollback and phase-boundary runner replacement remain
-outside this behavior.
+teardown. Rollback remains outside this behavior.
 
 Repository status exposes per-run resolved target, handoff and failure details.
 `dispatcher.upgrade-target-resolved` records the first successful resolution and

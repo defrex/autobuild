@@ -1,7 +1,7 @@
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import { validateWorkspaceDispatchConfiguration } from './dispatch-readiness'
 import { releasePreparedRuntime } from './dispatch-runtime-use'
-import { recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
+import { authorizeRemoteHandoffs, recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
 import { distributionRoot } from '../distribution'
 import { readDistributionIdentity } from './installation'
 import { launchContext } from './dispatch-launch-contract'
@@ -1140,6 +1140,11 @@ class DispatchLoop {
         await this.recordTickYielded()
         return emptyTickReport()
       }
+      await authorizeRemoteHandoffs(
+        this.wiring.store,
+        this.repoIdentity,
+        this.repoView.repositoryFacts().upgrades,
+      )
       await this.reportForgeReadiness()
       const startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
       if (startedAt === null) {
@@ -4115,6 +4120,14 @@ class DispatchLoop {
     const builds = [...this.activeBuildRuns]
       .filter(([, entry]) => entry.handle?.supervision === 'local-parent')
       .map(([slug, entry]) => ({ slug, instance: entry.instance }))
+    const remoteBuilds = []
+    for (const build of await this.wiring.store.listBuildsForRepo(this.repoIdentity)) {
+      const facts = (await readBuildFacts(this.wiring.store, build.slug)).value
+      if (!facts.remoteWorkspace || !facts.open) continue
+      const instance = facts.open.instance
+      const runtime = facts.runnerAttaches.findLast((a) => a.instance === instance)?.runtime
+      remoteBuilds.push({ slug: build.slug, instance, ...(runtime ? { runtime } : {}) })
+    }
     const handoff: Handoff = {
       correlation: request.correlation,
       run: request.run,
@@ -4137,6 +4150,7 @@ class DispatchLoop {
           startedAt,
           deadline,
           builds,
+          remoteBuilds,
         },
       })
     } catch (error) {
@@ -4213,6 +4227,7 @@ class DispatchLoop {
           instance: build.instance,
         },
       })
+    await authorizeRemoteHandoffs(this.wiring.store, this.repoIdentity)
     this.retirement = {
       handoff: {
         correlation: handoff.correlation,
