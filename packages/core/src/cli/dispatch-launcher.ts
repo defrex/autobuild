@@ -1,3 +1,10 @@
+import { readFile } from 'node:fs/promises'
+import {
+  sourceRepository,
+  sourceCommand,
+  sourceContent,
+  type SourceLaunch,
+} from './dispatch-upgrade-source'
 import {
   FOCUS_REPORTING_MODE,
   KITTY_KEYBOARD_MODE,
@@ -45,7 +52,32 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       : entry.endsWith('/bin/ab.ts')
         ? dirname(dirname(entry))
         : distributionRoot()
+  const repository = await sourceRepository(distributionRoot(), checkout)
+  let sourceLaunch: SourceLaunch | undefined
+  if (repository) {
+    const commit = (await sourceCommand(['git', 'rev-parse', 'HEAD'], distributionRoot())).trim()
+    const baseline = await sourceContent(distributionRoot(), repository)
+    sourceLaunch = { repository, commit, baseline: baseline.key }
+  }
   let runtime = await prepareRuntime(distributionRoot(), checkout)
+  if (sourceLaunch) {
+    const frozen = JSON.parse(await readFile(join(runtime.root, 'package.json'), 'utf8'))
+    if (
+      typeof frozen.gitHead !== 'string' ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(frozen.gitHead)
+    ) {
+      releasePreparedRuntime(runtime.root)
+      throw new Error('frozen source runtime has no commit provenance')
+    }
+    sourceLaunch.commit = frozen.gitHead
+  }
+  if (
+    sourceLaunch &&
+    (await sourceContent(distributionRoot(), sourceLaunch.repository)).key !== sourceLaunch.baseline
+  ) {
+    releasePreparedRuntime(runtime.root)
+    throw new Error('source changed while freezing launch provenance; retry dispatch')
+  }
   let child: ReturnType<typeof Bun.spawn> | undefined
   let signal: NodeJS.Signals | undefined
   const listeners = GENERATION_SIGNALS.map((name) => ({
@@ -71,6 +103,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
         runtimeRoot: runtime.root,
         checkout,
         originalInstall,
+        ...(sourceLaunch ? { sourceLaunch } : {}),
         launcherPid: process.pid,
         run: randomUUID(),
         lineage,

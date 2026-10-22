@@ -140,3 +140,42 @@ test('existing Bun forge lock records with abbreviated commits remain supported'
   expect(target.mode).toBe('pinned')
   expect(target.record).toEqual(record)
 })
+
+test('frozen self-hosting source eligibility follows authoritative commits, preserving content keys for excluded advances', async () => {
+  const { sourceRepository, sourceContent } = await import('./dispatch-upgrade-source')
+  const h = await fixture()
+  await mkdir(join(h.repo, 'src'))
+  await writeFile(join(h.repo, 'src/main.ts'), 'export const value = 1')
+  await writeFile(
+    join(h.repo, 'package.json'),
+    JSON.stringify({ name: '@defrex/autobuild', version: '1.0.0', files: ['src'] }),
+  )
+  await writeFile(
+    join(h.repo, 'bun.lock'),
+    JSON.stringify({ lockfileVersion: 1, workspaces: { '': {} }, packages: {} }),
+  )
+  await h.git('add', '.')
+  await h.git('commit', '-m', 'source')
+  await h.git('push', 'origin', 'main')
+  const repository = (await sourceRepository(h.repo, h.repo))!
+  expect(await sourceRepository(h.install, h.repo)).toBeUndefined()
+  const commit = await h.git('rev-parse', 'HEAD')
+  const baseline = (await sourceContent(h.repo, repository)).key
+  const input = { ...h.input, sourceLaunch: { repository, commit, baseline } }
+  const first = await resolveUpgradeTarget(input)
+  expect(first).toMatchObject({ mode: 'source', sha: commit, key: baseline })
+  await h.git('checkout', '-b', 'feature')
+  await writeFile(join(h.repo, 'excluded'), 'unrelated')
+  await h.git('add', 'excluded')
+  await h.git('commit', '-m', 'excluded')
+  await h.git('push', 'origin', 'feature:main')
+  const next = await resolveUpgradeTarget(input)
+  expect(next.key).toBe(first.key)
+  expect(next.sha).not.toBe(first.sha!)
+  await writeFile(join(h.repo, 'src/main.ts'), 'dirty operator bytes')
+  expect((await resolveUpgradeTarget(input)).key).toBe(first.key)
+  await h.git('add', 'src/main.ts')
+  await h.git('commit', '-m', 'packaged')
+  await h.git('push', 'origin', 'feature:main')
+  expect((await resolveUpgradeTarget(input)).key).not.toBe(first.key)
+})
