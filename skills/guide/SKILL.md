@@ -251,8 +251,24 @@ The distinctions that change an administrator's answer:
   detach. Repository-owned harvest/provisioning work joins before lease release.
   Durable takeover and retirement completion are separate; status exposes both
   runtimes, outstanding draining executions and deadline. The launcher keeps live
-  runtimes reserved and joins all children on operator stop. `[upgrade] automatic =
-  false` disables preparation. A target or launcher without negotiated preflight/overlap capability, or a changed
+  runtimes reserved and joins all children on operator stop.
+
+  With rollback-capable launcher and generation peers, three failed successor exits
+  within ten minutes of the original durable takeover restore the immediately previous
+  cached runtime. The first two failures restart the same runtime without repeating
+  preflight. Preflight failures never count; outside that window ordinary failure
+  exit behavior applies. Rollback goes back one runtime only. The launcher opens no
+  store: it passes a validated, versioned recovery context to the restored generation,
+  which records `dispatcher.runtime-rolled-back` under repository authority and holds
+  the failed target for that launcher lineage. Store compatibility changes, resolution
+  errors and disabling/re-enabling upgrades do not clear this hold. A successfully
+  resolved different target records `dispatcher.rollback-hold-cleared`; a fresh operator
+  launch starts a new lineage. Both previous and held runtimes remain protected from
+  cache pruning. Existing phase executions keep their leases and continue on the
+  restored runtime at the next boundary; unreadable decisive facts defer a build with
+  attention before any action. Peers without negotiated rollback capability retain
+  existing failure behavior and report that capable runtimes are required.
+  `[upgrade] automatic = false` disables preparation. A target or launcher without negotiated preflight/overlap capability, or a changed
   launcher contract, requires manual restart.
 
   Local harvest suspends durably before repository lease release on handoff or
@@ -1104,7 +1120,7 @@ the latest resolved target SHA. Compatible generations overlap through the durab
 presentation modes bypass automatic adoption. Operator stop wins over cutover.
 Repository status exposes per-run resolved target, upgrade target, failure and handoff facts, both
 generations, takeover, outstanding draining builds and deadline;
-`dispatcher.upgrade-failed` is actionable attention. Unrelated base commits do not
+`dispatcher.upgrade-failed` and `dispatcher.runtime-rolled-back` are actionable attention. Status also exposes the last rollback and current-lineage hold. Unrelated base commits do not
 retry an unchanged failed target. No registry credentials belong in these facts.
 
 ## Setup and upgrades
@@ -1259,7 +1275,10 @@ cutover suspends immediately. Existing runners keep execution leases while the
 successor owns repository work. At completed phase boundaries local runners
 request relaunch onto the accepted target; the current owner resumes them from
 durable state. Remaining local sessions suspend at the hot drain
-deadline and resume through their durable session records.
+deadline and resume through their durable session records. After an automatic runtime
+rollback, phase work continues on the restored runtime at the next boundary;
+unreadable decisive facts defer with attention. The held target waits for a changed
+resolved target or a fresh operator launch, independently of store compatibility.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -2006,7 +2025,7 @@ The default watch reports actionable conditions only:
   authorized landings awaiting application are silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, `dispatcher.upgrade-failed`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,

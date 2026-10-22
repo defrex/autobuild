@@ -465,6 +465,19 @@ after a predecessor dies. Cutover suspends immediately when provider evidence
 cannot establish safe overlap. Automatic upgrades can be disabled; targets
 without preflight capability require manual restart.
 
+**Automatic runtime rollback.** The filesystem/process-only launcher in
+`cli/dispatch-launcher.ts` owns the crash budget, anchored to durable takeover.
+`cli/dispatch-crash-budget.ts` counts three failed exits within ten minutes;
+`cli/dispatch-launch-contract.ts` negotiates a separate rollback capability while
+preserving v1 launch/overlap compatibility. Generation-owned readers expose takeover
+and capability evidence. `cli/dispatch-handoff.ts` validates recovery against that
+evidence and deposits the idempotent rollback fact after lease acquisition.
+`kernel/dispatch-upgrade.ts` reduces lineage holds and historical rollback;
+`cli/dispatch-upgrade-controller.ts` clears a hold only after resolving a different
+target. `cli/dispatch-runtime-use.ts` transfers reservations to generation-owned
+hold retention under the pruning lock. Existing runner leases and decisive-read
+deferrals remain the boundary recovery authority.
+
 Local harvest suspends durably before repository lease release on handoff or
 clean stop. The next generation resumes eligible native sessions with fresh
 logical credentials, or records a reasoned `harvest.session.resume-fallback`

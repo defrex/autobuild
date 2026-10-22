@@ -247,7 +247,7 @@ The default watch reports actionable conditions only:
   awaiting application is silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, `dispatcher.upgrade-failed`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
@@ -335,3 +335,13 @@ and deadline. The successor owns repository work after terminal release and leas
 claim, while old local runners retain execution leases until settlement or deadline. `dispatcher.upgrade-failed` is immediate repository
 attention; the current generation remains active and identical failed inputs are
 suppressed across native handoff until target or selected-store compatibility evidence changes or a fresh operator launch.
+
+Repository status additionally exposes `upgrades.lastRollback` (historical, retained
+when cleared), `upgrades.holds` keyed by launcher lineage, `upgrades.lineages` keyed
+by generation run, `upgrades.rollbackIds` for idempotent rollback correlations, and `rollbackHold` for the effective dispatcher lineage.
+`dispatcher.runtime-rolled-back` names failed/restored runtime identities and cache
+roots, target, original handoff/takeover, three failed exits and reason. It is default
+repository attention. `dispatcher.rollback-hold-cleared` records a different
+successfully resolved target. The rollback hold survives store compatibility
+changes, resolution errors and upgrade opt-out; a new operator-launch lineage
+ignores old holds. Preflight failure suppression above remains separate.
