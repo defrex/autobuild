@@ -2688,3 +2688,21 @@ test.each(['pushBranch', 'rewrite', 'kernelRewrite'] as const)(
     })
   },
 )
+
+test('GraphQL query variables containing mutation do not invalidate an observation epoch', async () => {
+  let branches = 0
+  const forge = new GitHubForge({
+    repository: 'acme/app',
+    transport: async (_method, path) => {
+      if (path === 'graphql') throw new Error('query unavailable')
+      branches++
+      return { status: 200, headers: {}, json: { commit: { sha: 'head' } } }
+    },
+  })
+  await forge.withReadScope(async () => {
+    await forge.remoteBranchSha('mutation-branch')
+    await forge.setAutoMerge('/ws', 1, true, { buildSlug: 'test', baseBranch: 'mutation-branch' })
+    await forge.remoteBranchSha('mutation-branch')
+  })
+  expect(branches).toBe(1)
+})

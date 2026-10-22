@@ -826,8 +826,7 @@ export class GitHubForge implements Forge {
     path: string,
     opts?: GitHubRequestOpts,
   ): Promise<GitHubResponse> {
-    if (method !== 'GET' && (path !== 'graphql' || JSON.stringify(opts?.body).includes('mutation')))
-      this.invalidateReads()
+    if (method !== 'GET' && path !== 'graphql') this.invalidateReads()
     return this.transport(method, path, opts)
   }
 
@@ -857,6 +856,7 @@ export class GitHubForge implements Forge {
     query: string,
     variables: Record<string, unknown>,
   ): Promise<T> {
+    if (/^\s*mutation\b/.test(query)) this.invalidateReads()
     const response = await this.request('POST', 'graphql', { body: { query, variables } })
     const envelope = z
       .object({
