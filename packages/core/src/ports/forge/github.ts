@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { isForgeFailure, type ForgeRequestObserver } from '../forge-failure'
 import {
   forgeRequestContext,
@@ -152,9 +153,18 @@ const restPrState = z
     auto_merge: z.object({}).passthrough().nullable().optional(),
     mergeable: z.boolean().nullable(),
     merge_commit_sha: z.string().min(1).nullable(),
-    head: z.object({ sha: z.string().min(1) }).optional(),
+    head: z
+      .object({
+        sha: z.string().min(1),
+        ref: z.string().optional(),
+        repo: z.object({ full_name: z.string() }).nullable().optional(),
+      })
+      .optional(),
   })
   .passthrough()
+  .refine((view) => !view.merged || view.merge_commit_sha !== null, {
+    message: 'GitHub reports PR merged with no merge_commit_sha',
+  })
 
 const restNativeAutoMerge = z
   .object({
@@ -174,6 +184,12 @@ const restAutoMergeView = z
   .passthrough()
 
 const restRepositoryAutoMerge = z.object({ allow_auto_merge: z.boolean() }).passthrough()
+
+const nodeComparison = z.object({
+  base_commit: z.object({ sha: z.string().min(1) }),
+  ahead_by: z.number().int().nonnegative(),
+  behind_by: z.number().int().nonnegative(),
+})
 
 const restBranchHead = z
   .object({ commit: z.object({ sha: z.string().min(1) }).passthrough() })
@@ -556,14 +572,15 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * single tick cannot absorb. */
 export const MERGEABILITY_RETRY_DELAYS_MS = [1000, 2000, 4000, 5000, 6000, 6000, 6000]
 
-/** Hard cap on the janitor poll's per-PR ETag cache. One small entry per PR
- * ever polled in a dispatcher process lifetime makes hitting this in practice
- * implausible; the cap is hygiene, not a load-bearing bound. */
-const PR_STATE_CACHE_CAP = 512
+/** Bounded validated HTTP representations; eviction falls back to fresh GETs. */
+const REPRESENTATION_CACHE_CAP = 512
 
 export class GitHubForge implements Forge {
   get rewrite() {
-    return gitRewrite(this.exec, false)
+    return gitRewrite(async (cmd, opts) => {
+      if (cmd.includes('push')) this.invalidateReads()
+      return this.exec(cmd, opts)
+    }, false)
   }
   get kernelRewrite() {
     return gitRewrite(this.kernelExec, false)
@@ -571,6 +588,7 @@ export class GitHubForge implements Forge {
   /** Credentials exist only in the trusted subprocess environment, never in
    * argv, repository config, remote URLs, or the resolving agent's environment. */
   readonly kernelExec: Exec = async (cmd, opts) => {
+    if (cmd.includes('push')) this.invalidateReads()
     const repo = await this.repoCoordinates()
     if (!repo) throw new Error('kernel Git requires explicit GitHub repository coordinates')
     const credential = typeof this.token === 'function' ? await this.token() : this.token
@@ -621,17 +639,79 @@ export class GitHubForge implements Forge {
   private readonly repoRoot?: string
   private readonly env: Readonly<Record<string, string | undefined>>
   private coordinates?: RepoCoordinates | null
-  /** Per-PR ETag cache for the janitor poll, keyed `owner/name#number`.
-   * Conditional revalidation per GitHub's documented best practices: every
-   * REST response carries an `ETag`, and re-GETting with `If-None-Match`
-   * answers 304 Not Modified — which does not count against the primary rate
-   * limit — whenever the representation is unchanged. The cache lives only
-   * for this adapter instance (the dispatcher constructs one forge and holds
-   * it across janitor ticks), so a process restart is cache loss: exactly
-   * today's first-poll behavior. Capped with oldest-inserted eviction; a miss
-   * is an ordinary unconditional poll, so eviction is harmless by
-   * construction. */
-  private readonly prStateCache = new Map<string, { etag: string; state: PrState }>()
+  private readonly representations = new Map<string, { etag: string; value: unknown }>()
+  private readonly reads = new AsyncLocalStorage<Map<string, Promise<unknown>>>()
+
+  private readonly activeScopes = new Set<Map<string, Promise<unknown>>>()
+  private readEpoch = 0
+
+  async withReadScope<T>(work: () => Promise<T>): Promise<T> {
+    const scope = new Map<string, Promise<unknown>>()
+    this.activeScopes.add(scope)
+    try {
+      return await this.reads.run(scope, work)
+    } finally {
+      scope.clear()
+      this.activeScopes.delete(scope)
+    }
+  }
+
+  private memo<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const scope = this.reads.getStore()
+    if (!scope || !this.activeScopes.has(scope)) return work()
+    const existing = scope.get(key)
+    if (existing) return existing as Promise<T>
+    const result = Promise.resolve().then(work)
+    scope.set(key, result)
+    return result
+  }
+
+  private invalidateReads(): void {
+    this.readEpoch++
+    for (const scope of this.activeScopes) scope.clear()
+    this.representations.clear()
+  }
+
+  /** These reads all use GET with the transport's fixed JSON representation
+   * headers. The full repository-qualified path (including query, if any)
+   * is therefore the exact resource key; raw/file/readiness reads stay separate.
+   * Only validated representations receive validators. */
+  private async revalidate<T>(schema: z.ZodType<T>, path: string, operation: string): Promise<T> {
+    return this.memo(`http:${path}`, () => this.revalidateResource(schema, path, operation))
+  }
+
+  private async revalidateResource<T>(
+    schema: z.ZodType<T>,
+    path: string,
+    operation: string,
+  ): Promise<T> {
+    const epoch = this.readEpoch
+    const cached = this.representations.get(path)
+    try {
+      const response = await this.request(
+        'GET',
+        path,
+        cached ? { headers: { 'If-None-Match': cached.etag } } : undefined,
+      )
+      if (response.status === 304) {
+        if (!cached) throw new Error(`unsolicited GitHub 304 for ${operation}`)
+        return cached.value as T
+      }
+      const value = this.parse(schema, response, operation)
+      if (epoch !== this.readEpoch) return value
+      this.representations.delete(path)
+      if (response.headers.etag)
+        this.representations.set(path, { etag: response.headers.etag, value })
+      while (this.representations.size > REPRESENTATION_CACHE_CAP) {
+        this.representations.delete(this.representations.keys().next().value!)
+      }
+      return value
+    } catch (error) {
+      if (epoch === this.readEpoch) this.representations.delete(path)
+      throw error
+    }
+  }
+
   /** Bounded waits between mergeability re-queries on the UNKNOWN path. */
   private readonly mergeabilityRetryDelaysMs: number[]
 
@@ -667,11 +747,19 @@ export class GitHubForge implements Forge {
     const transport = opts.transport ?? createGitHubFetchTransport({ token: this.token })
     this.transport = async (...args) =>
       guardedForgeRequest(async () => {
-        for (const observer of this.requestObservers) observer(forgeRequestContext())
+        const context = forgeRequestContext()
+        let outcome: 'restPrimary' | 'restNotModified' | 'graphql' | undefined
+        if (args[1] === 'graphql') outcome = 'graphql'
         try {
-          return await transport(...args)
+          const response = await transport(...args)
+          outcome ??= response.status === 304 ? 'restNotModified' : 'restPrimary'
+          return response
         } catch (error) {
+          if (error instanceof GitHubApiError) outcome ??= 'restPrimary'
           throw classifyGitHubFailure(error, this.now())
+        } finally {
+          for (const observer of this.requestObservers)
+            observer({ ...context, ...(outcome ? { outcome } : {}) })
         }
       })
     if (opts.repository !== undefined && opts.repository !== '') {
@@ -738,6 +826,7 @@ export class GitHubForge implements Forge {
     path: string,
     opts?: GitHubRequestOpts,
   ): Promise<GitHubResponse> {
+    if (method !== 'GET' && path !== 'graphql') this.invalidateReads()
     return this.transport(method, path, opts)
   }
 
@@ -767,6 +856,7 @@ export class GitHubForge implements Forge {
     query: string,
     variables: Record<string, unknown>,
   ): Promise<T> {
+    if (/^\s*mutation\b/.test(query)) this.invalidateReads()
     const response = await this.request('POST', 'graphql', { body: { query, variables } })
     const envelope = z
       .object({
@@ -806,12 +896,14 @@ export class GitHubForge implements Forge {
   /** Ordinary phase publication extends history; reconcile uses the separate guarded rewrite capability.
    * Only ever called from worktree-side terminals and contract fixtures. */
   async confirmPublication(workspacePath: string, branch: string, sha: string): Promise<boolean> {
+    this.invalidateReads()
     if ((await remoteBranchHead(this.exec, workspacePath, branch)) !== sha) return false
     await refreshBranchCache(this.exec, workspacePath, branch, sha)
     return true
   }
 
   async pushBranch(workspacePath: string, branch: string, sha?: string): Promise<void> {
+    this.invalidateReads()
     await publishBranch(this.exec, workspacePath, branch, sha)
   }
 
@@ -888,16 +980,7 @@ export class GitHubForge implements Forge {
   async getPrState(_workspacePath: string, number: number): Promise<PrState> {
     const { owner, name } = await this.requireCoordinates()
     const prPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
-    const cacheKey = `${owner}/${name}#${number}`
-    const cached = this.prStateCache.get(cacheKey)
-    const response =
-      cached !== undefined
-        ? await this.request('GET', prPath, { headers: { 'If-None-Match': cached.etag } })
-        : await this.request('GET', prPath)
-    if (response.status === 304 && cached !== undefined) {
-      return cached.state
-    }
-    const view = this.parse(restPrState, response, `PR #${number} poll`)
+    const view = await this.prView(number, prPath)
     let state: PrState
     if (view.merged) {
       // §15.7 [D1]: pr.merged records the squash commit as the landing
@@ -923,22 +1006,61 @@ export class GitHubForge implements Forge {
           }
       }
     }
-    const etag = response.headers.etag
-    if (etag === undefined || etag === '') {
-      // No revalidation token on this 200: drop any stale entry so a future
-      // poll can never replay it against a changed representation.
-      this.prStateCache.delete(cacheKey)
-    } else {
-      this.prStateCache.set(cacheKey, { etag, state })
-      // Hard capacity cap with oldest-inserted eviction (JS Map iteration
-      // order). The just-inserted entry is newest, so it survives.
-      while (this.prStateCache.size > PR_STATE_CACHE_CAP) {
-        const oldest = this.prStateCache.keys().next()
-        if (oldest.done === true) break
-        this.prStateCache.delete(oldest.value)
-      }
-    }
     return state
+  }
+
+  private prView(number: number, path: string) {
+    return this.memo(`pr:${number}`, () => this.revalidate(restPrState, path, `PR #${number} poll`))
+  }
+
+  async primeNodeReads(input: {
+    workspacePath: string
+    parent: string
+    head: string
+    prNumber?: number
+  }): Promise<void> {
+    const scope = this.reads.getStore()
+    if (!scope || !this.activeScopes.has(scope)) return
+    const epoch = this.readEpoch
+    const { owner, name } = await this.requireCoordinates()
+    const root = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    let headSha: string
+    let parentSha: string
+    let ahead: number
+    if (input.prNumber !== undefined) {
+      const view = await this.prView(input.prNumber, `${root}/pulls/${input.prNumber}`)
+      if (view.merged || view.state === 'closed') return
+      if (
+        view.head?.ref !== input.head ||
+        view.head.repo?.full_name.toLowerCase() !== `${owner}/${name}`.toLowerCase()
+      )
+        return
+      headSha = view.head.sha
+      const comparison = await this.revalidate(
+        nodeComparison,
+        `${root}/compare/${encodeURIComponent(input.parent)}...${encodeURIComponent(headSha)}`,
+        'node observation',
+      )
+      parentSha = comparison.base_commit.sha
+      ahead = comparison.ahead_by
+    } else {
+      parentSha = await this.remoteBranchSha(input.parent)
+      const comparison = await this.revalidate(
+        nodeComparison,
+        `${root}/compare/${encodeURIComponent(input.head)}...${encodeURIComponent(parentSha)}`,
+        'node observation',
+      )
+      headSha = comparison.base_commit.sha
+      ahead = comparison.behind_by
+    }
+    if (epoch !== this.readEpoch) return this.primeNodeReads(input)
+    if (!this.activeScopes.has(scope)) return
+    scope.set(`branch:${input.parent}`, Promise.resolve(parentSha))
+    scope.set(`branch:${input.head}`, Promise.resolve(headSha))
+    scope.set(
+      `compare:${input.parent}:${input.head}`,
+      Promise.resolve({ parentSha, headSha, ahead }),
+    )
   }
 
   async mergeLinearStack(
@@ -1089,7 +1211,7 @@ export class GitHubForge implements Forge {
       pr.head.sha !== before.headSha
     )
       throw new Error(`PR #${number} retarget acknowledgement disagrees with requested base/head`)
-    this.prStateCache.delete(`${owner}/${name}#${number}`)
+    this.invalidateReads()
   }
 
   async inspectLandingPr(_workspacePath: string, number: number) {
@@ -1143,7 +1265,7 @@ export class GitHubForge implements Forge {
     const { owner, name } = await this.requireCoordinates()
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
     try {
-      await this.request('GET', `${repoPath}/git/ref/heads/${branch}`)
+      await this.request('GET', `${repoPath}/git/ref/heads/${encodeURIComponent(branch)}`)
     } catch (error) {
       if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (error instanceof GitHubApiError && error.status === 404) return // idempotent
@@ -1739,17 +1861,19 @@ export class GitHubForge implements Forge {
   private async nodeRef(branch: string): Promise<string> {
     if (!isValidGitBranchName(branch)) throw new Error('invalid node branch')
     const { owner, name } = await this.requireCoordinates()
-    const result = await this.getJson(
-      z.object({ object: z.object({ sha: z.string().min(1) }) }),
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${branch}`,
-      'node ref',
-    )
-    return result.object.sha
+    return this.memo(`branch:${branch}`, async () => {
+      const result = await this.revalidate(
+        z.object({ object: z.object({ sha: z.string().min(1) }) }),
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodeURIComponent(branch)}`,
+        'node ref',
+      )
+      return result.object.sha
+    })
   }
 
   private async compareShas(parentSha: string, headSha: string) {
     const { owner, name } = await this.requireCoordinates()
-    return this.getJson(
+    return this.revalidate(
       z.object({
         ahead_by: z.number().int().nonnegative(),
         behind_by: z.number().int().nonnegative(),
@@ -1796,19 +1920,23 @@ export class GitHubForge implements Forge {
   }
 
   async compareBranches(parent: string, head: string) {
-    const parentSha = await this.nodeRef(parent)
-    const headSha = await this.nodeRef(head)
-    return { parentSha, headSha, ahead: (await this.compareShas(parentSha, headSha)).ahead_by }
+    return this.memo(`compare:${parent}:${head}`, async () => {
+      const parentSha = await this.nodeRef(parent)
+      const headSha = await this.nodeRef(head)
+      return { parentSha, headSha, ahead: (await this.compareShas(parentSha, headSha)).ahead_by }
+    })
   }
 
   async remoteBranchSha(branch: string): Promise<string> {
     const { owner, name } = await this.requireCoordinates()
-    const branchHead = await this.getJson(
-      restBranchHead,
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${branch}`,
-      `remote branch ${branch}`,
-    )
-    return branchHead.commit.sha
+    return this.memo(`branch:${branch}`, async () => {
+      const branchHead = await this.revalidate(
+        restBranchHead,
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}`,
+        `remote branch ${branch}`,
+      )
+      return branchHead.commit.sha
+    })
   }
 
   /** Raw file bytes from the repository. Ref omitted → the repository's

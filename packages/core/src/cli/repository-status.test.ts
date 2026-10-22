@@ -513,3 +513,44 @@ test('CLI JSON and operator status use the held dispatcher configuration and the
     expected,
   )
 })
+
+test('repository status renders available outcome categories on failed tick telemetry', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(REPO)
+  await store.claimRepoLease(REPO, 'run', 60_000)
+  await store.beginRepoTick(REPO, 'run')
+  await store.finishRepoTick(
+    REPO,
+    'run',
+    {
+      outcome: 'failed',
+      error: 'offline',
+      forgeRequests: {
+        total: 5,
+        restPrimary: 1,
+        restNotModified: 2,
+        graphql: 1,
+        unattributed: 5,
+        builds: [],
+        complete: true,
+      },
+    },
+    [
+      {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.tick-started',
+        payload: { run: 'run', startedAt: new Date().toISOString() },
+      },
+      {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.tick-failed',
+        payload: { run: 'run', error: 'offline' },
+      },
+    ],
+  )
+  const { getRepositoryStatus } = await import('../operator/query')
+  const status = await getRepositoryStatus(store, REPO, new Date())
+  expect(renderRepositoryStatus(status)[0]).toBe(
+    'forge requests: 5; REST primary 1; REST 304 2; GraphQL 1 (5 unattributed)',
+  )
+})
