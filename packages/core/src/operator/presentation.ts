@@ -26,3 +26,5 @@ export type {
 
 export type { IntegrationDetail, IntegrationChild } from '../cli/dashboard/integration-detail'
 export { displayText } from '../cli/dashboard/cells'
+
+export { handPushedLabel, handPushedText } from '../cli/dashboard/hand-pushed'

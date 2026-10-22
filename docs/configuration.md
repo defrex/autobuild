@@ -883,7 +883,7 @@ selectors are validated even though the mandatory step will not use them for
 applicability.
 
 In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
-`range`, `indexPath`, `contributions` and `unattributedCommits`. Each contribution
+`range`, `indexPath`, `contributions`, `handPushedCommits` and `unattributedCommits`. Each contribution
 has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
 `specPath` and `commits`. The JSON index repeats this metadata and adds the
 exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
@@ -897,8 +897,14 @@ frozen parent-to-head range, including earlier cycles and merge side history.
 Specs use the current event-authorized revision, never an unsanctioned latest
 deposit or mutable ticket body. Unknown identities, ambiguous or invalid trailers,
 and missing source data fail hydration. Commits without a build trailer are
-listed as unattributed; this introduces no new intent or verdict policy.
-A node change is authorized when the node spec or the spec of the contribution
+listed as unattributed, a mechanical absence of a trailer rather than an authorization verdict.
+`handPushedCommits: [{sha, originalSha, message}]` identifies node-owned hand-pushed
+commits in the frozen range. Ownership uses the durable first-parent contribution
+boundary; inherited and merge-side history are not automatically owned. Confirmed
+rewrite aliases preserve original identity, and `message` is the full commit message.
+These messages express maintainer-authorized intent: judge quality and consistency;
+never fail these commits solely for lacking a covering spec.
+Other node changes are authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
 Leaf verification context is unchanged.
 
