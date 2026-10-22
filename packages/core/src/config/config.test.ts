@@ -163,6 +163,8 @@ describe('parseConfig — complete flattened surface', () => {
         harvestMaxDrift: 9,
         janitorFailureAttentionSeconds: 600,
         janitorBackoffMaxSeconds: 300,
+        nodeIdleAfterSeconds: 600,
+        nodeIdlePollSeconds: 120,
       },
       tickets: {
         source: 'file',
@@ -220,6 +222,8 @@ describe('parseConfig — defaults', () => {
         harvestMaxDrift: 3,
         janitorFailureAttentionSeconds: 600,
         janitorBackoffMaxSeconds: 300,
+        nodeIdleAfterSeconds: 600,
+        nodeIdlePollSeconds: 120,
       },
       tickets: { source: 'file', readyState: 'ready' },
       orchestrator: {
@@ -754,6 +758,8 @@ skill = "ab-verify-e2e"
       harvestMaxDrift: 3,
       janitorFailureAttentionSeconds: 600,
       janitorBackoffMaxSeconds: 300,
+      nodeIdleAfterSeconds: 600,
+      nodeIdlePollSeconds: 120,
     })
   })
 })
@@ -1430,3 +1436,9 @@ mode = "auto"
     }
   })
 })
+
+for (const key of ['nodeIdleAfterSeconds', 'nodeIdlePollSeconds']) {
+  test.each(['0', '-1', '1.5', '"120"', 'true'])(`policy.${key} rejects %s`, (value) => {
+    expect(() => parseConfig(`${READY}\n[policy]\n${key} = ${value}\n`)).toThrow()
+  })
+}

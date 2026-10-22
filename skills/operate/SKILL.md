@@ -480,12 +480,26 @@ commit distance with at most two reads: PR plus comparison, or parent branch
 plus reversed comparison without a PR. Priming is best-effort: failures add a
 diagnostic and ordinary parent/target observations continue, so a deleted parent
 can still be replaced. Forge cooldowns and rate limits retain their gates.
-Every tick revalidates mutable resources
+Each admitted poll revalidates mutable resources
 using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
 keeps its existing cadence. Readiness and landing inspections remain fresh.
+
+Opened integration nodes poll every tick until their durable activity has been
+quiet for `policy.nodeIdleAfterSeconds` (default 600 seconds), then poll every
+`policy.nodeIdlePollSeconds` (default 120 seconds). Holds and waiting for consent
+qualify normally. Child claims, PR and landing activity, operator commands
+(including repeated holds), restack requests and answers wake the next tick.
+GitHub-only changes are discovered on the next due check, within the idle
+interval plus normal tick scheduling while the dispatcher is running; failure,
+cooldown and transport-budget gates still apply. Pending operations retain
+active polling and action-time readiness checks remain fresh. Successful
+`node.poll-checked` facts preserve quiet history across restarts; missing facts
+force a fresh check. `ab build status` reports active or idle cadence and the
+last successful check (or unrecorded evidence).
+
 
 The total includes all attempted requests. Optional `restPrimary`,
 `restNotModified` and `graphql` counts distinguish REST responses charged to the

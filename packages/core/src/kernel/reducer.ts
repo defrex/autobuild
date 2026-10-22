@@ -1,3 +1,4 @@
+import { advancePollingActivity } from './node-polling'
 import {
   advanceCompatibility,
   initialCompatibility,
@@ -190,6 +191,8 @@ export interface BuildState {
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
   integration?: IntegrationState
+  pollingActivity?: Record<string, string>
+  nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
   nodeComparison?: EventPayload<'node.compared'>
 
   /**
@@ -375,6 +378,8 @@ export interface BuildAcc {
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
   integration?: IntegrationState
+  pollingActivity?: Record<string, string>
+  nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
   nodeComparison?: EventPayload<'node.compared'>
 
   attached: boolean
@@ -430,7 +435,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 18
+export const BUILD_REDUCER_VERSION = 19
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -543,6 +548,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
   let lastEvent = acc.lastEvent
   for (const event of events) {
+    acc.pollingActivity ??= {}
+    advancePollingActivity(acc.pollingActivity, event)
     acc.landing ??= {}
     if (event.type === 'build.janitor-attempt-failed')
       acc.janitor = {
@@ -579,6 +586,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'node.opened':
         acc.nodeOpened = event.payload
+        break
+      case 'node.poll-checked':
+        acc.nodePolling = { ...event.payload, checkedAt: event.ts }
         break
       case 'node.compared':
         acc.nodeComparison = event.payload
@@ -1171,6 +1181,8 @@ function finishBuild(acc: BuildAcc): BuildState {
     mergedSha: acc.mergedSha,
     nodeOpened: acc.nodeOpened,
     integration: acc.integration,
+    pollingActivity: acc.pollingActivity,
+    nodePolling: acc.nodePolling,
     nodeComparison: acc.nodeComparison,
     nodeRestack: acc.nodeRestack,
     status,

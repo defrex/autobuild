@@ -2572,3 +2572,77 @@ describe('abBuildAssetGet', () => {
     await expect(run('missing', 'a.txt')).rejects.toThrow('no build "missing"')
   })
 })
+
+test('node status exposes idle evidence and wakes immediately on durable activity', async () => {
+  const { nodeActivityKey } = await import('../kernel/node-polling')
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  let time = new Date('2026-07-15T11:50:00Z')
+  const store = new MemoryBuildStore({ clock: () => time })
+  const slug = 'idle-node'
+  await store.createBuild({
+    slug,
+    repo: REPO,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        kind: 'node',
+        baseBranch: 'main',
+        ticket: { source: 'fake', id: 'N' },
+      },
+    },
+  })
+  await store.append(slug, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'head' } })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.compared',
+    payload: { headSha: 'head', parentSha: 'parent', ahead: 0 },
+  })
+  const key = nodeActivityKey((await readBuildFacts(store, slug)).value.state, [])
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'node.poll-checked',
+    payload: {
+      activityKey: key,
+      unchangedSince: time.toISOString(),
+      nodeIdleAfterSeconds: 600,
+      nodeIdlePollSeconds: 120,
+    },
+  })
+  const output = async (json: boolean) => {
+    const lines: string[] = []
+    await abBuildStatus({
+      slug,
+      targetRepo: REPO,
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => lines.push(line),
+      json,
+      openStore: () => store,
+      now: () => NOW,
+    })
+    return lines.join('\n')
+  }
+  expect(JSON.parse(await output(true)).nodePolling).toMatchObject({
+    mode: 'idle',
+    intervalSeconds: 120,
+    lastChecked: time.toISOString(),
+  })
+  expect(await output(false)).toContain(
+    `idle; polled every 120 seconds; last checked: ${time.toISOString()}`,
+  )
+  time = NOW
+  await store.append(slug, {
+    actor: humanActor('operator'),
+    type: 'build.hold-requested',
+    payload: {},
+  })
+  expect(JSON.parse(await output(true)).nodePolling.mode).toBe('active')
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'closed-unmerged' },
+  })
+  expect(JSON.parse(await output(true)).nodePolling).toBeUndefined()
+})
