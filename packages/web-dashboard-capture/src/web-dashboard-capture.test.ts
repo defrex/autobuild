@@ -666,3 +666,16 @@ test('chromium detection prefers the configured binary and reports absence', () 
   ).toBe('/usr/local/bin/chromium')
   expect(chromiumBinary({}, () => false, which)).toBeUndefined()
 })
+
+test('handoff renders shared vocabulary and retains lifecycle; settlement and completion remove annotations', async () => {
+  const { handoffCapture } = await import('../../../tools/handoff-capture')
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  for (const stage of ['active', 'settled', 'completed'] as const) {
+    const fixture = models()
+    fixture.happy = handoffCapture(fixture.happy, stage)
+    const text = evidenceText(await renderWebFrame(spec, fixture, { css: '', fontCss: '' }))
+    expect(text.includes('(draining)')).toBe(stage === 'active')
+    expect(text.includes('handoff 1.0.0')).toBe(stage !== 'completed')
+    expect(text).toContain('RUNNING')
+  }
+})
