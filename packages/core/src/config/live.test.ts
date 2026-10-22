@@ -317,3 +317,22 @@ describe('live landing policy', () => {
     expect(BUILD_OWNED_CONFIG_PATHS).not.toContain('landing')
   })
 })
+
+test('upgrade drain policy defaults, validates and hot reloads after publication', async () => {
+  expect(parseConfig(base).policy.upgradeDrainSeconds).toBe(900)
+  for (const value of ['0', '-1', '1.5'])
+    expect(() => parseConfig(`${base}\n[policy]\nupgradeDrainSeconds=${value}`)).toThrow()
+  const published: number[] = []
+  const live = new LiveConfig(
+    'autobuild.toml',
+    parseConfig(base),
+    base,
+    runtimes,
+    async ({ effectiveConfig }) => {
+      published.push(effectiveConfig.policy.upgradeDrainSeconds)
+    },
+  )
+  expect((await live.refresh(`${base}\n[policy]\nupgradeDrainSeconds=30`)).kind).toBe('adopted')
+  expect(published).toEqual([30])
+  expect(live.current().config.policy.upgradeDrainSeconds).toBe(30)
+})

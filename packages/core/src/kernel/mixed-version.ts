@@ -1,8 +1,41 @@
+import type { RuntimeIdentity } from '../events/runtime'
 import type { CompatibilityState } from '../events/compatibility'
 import type { BuildState } from './reducer'
 import type { BuildStore } from '../store/types'
 import type { Actor } from '../events/envelope'
 import { readBuildFacts } from '../store/reduced-reads'
+
+const drainingExecutions = new WeakMap<BuildStore, { instance: string; runtime: RuntimeIdentity }>()
+/** Carry the caller's own immutable execution identity through nested kernel
+ * helpers without adding repository authority to a build-scoped store. */
+export function withDrainingExecution<T extends BuildStore>(
+  store: T,
+  instance: string,
+  runtime: RuntimeIdentity,
+): T {
+  const scoped = new Proxy(store, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  drainingExecutions.set(scoped, { instance, runtime })
+  return scoped
+}
+async function authorizedDrainingExecution(store: BuildStore, slug: string): Promise<boolean> {
+  const execution = drainingExecutions.get(store)
+  if (!execution) return false
+  const authorization = (await readBuildFacts(store, slug)).value.state.drainingExecutions?.[
+    execution.instance
+  ]?.authorization
+  return (
+    !!authorization &&
+    authorization.runtime.version === execution.runtime.version &&
+    authorization.runtime.commit === execution.runtime.commit &&
+    authorization.runtime.source.kind === execution.runtime.source.kind &&
+    authorization.runtime.source.location === execution.runtime.source.location
+  )
+}
 
 export function compatibilityDiagnostic(facts: CompatibilityState): string | undefined {
   if (facts.decisiveFacts === 0) return undefined
@@ -28,6 +61,7 @@ export async function deferMixedVersion(
     const { state } = (await readBuildFacts(store, slug)).value
     const diagnostic = compatibilityDiagnostic(state.compatibility)
     if (!diagnostic) return false
+    if (await authorizedDrainingExecution(store, slug)) return true
     const facts = state.compatibility
     if (state.compatibilityDeferredBoundary === facts.decisiveBoundary) return true
     const written = await store.appendIfCurrent(slug, state.lastSeq, {

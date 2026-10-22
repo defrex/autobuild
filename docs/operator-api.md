@@ -333,6 +333,9 @@ base and SHA separately, so an older handoff cannot hide a newer target. Identic
 observations append nothing; a successful resolution does not clear failures. Facts carry launcher
 lineage, from/to runtimes, resolution mode and authoritative base SHA/ref or original
 installation provenance, plus prepared cache identity. Completion names the successor
-and requires repository ownership. `dispatcher.upgrade-failed` is immediate repository
+and records completed retirement separately from takeover. During a handoff the
+projection includes both generations, chosen mode, outstanding draining builds
+and deadline. The successor owns repository work after terminal release and lease
+claim, while old local runners retain execution leases until settlement or deadline. `dispatcher.upgrade-failed` is immediate repository
 attention; the current generation remains active and identical failed inputs are
-suppressed across native handoff until metadata changes or a fresh operator launch.
+suppressed across native handoff until target or selected-store compatibility evidence changes or a fresh operator launch.
