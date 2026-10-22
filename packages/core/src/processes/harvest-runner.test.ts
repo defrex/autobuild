@@ -3404,3 +3404,102 @@ describe('local harvest native suspension', () => {
     ).toBe(true)
   })
 })
+
+test('a resumed alternate sharing the primary runner is not retained as the primary producer', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alternate-producer-'))
+  roots.push(workspace)
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const tickets = new FakeTicketSource()
+  const ids = sequentialIds()
+  const { run } = await seedOpenRun({ store, tickets, ids, workspace, stage: 'started' })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.step.started',
+    payload: { run, step: 'synthesize', round: 1 },
+  })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.session.started',
+    payload: {
+      run,
+      session: 'old-alternate',
+      role: 'harvest',
+      runner: 'scripted',
+      args: ['alternate'],
+      step: 'synthesize',
+      round: 1,
+    },
+  })
+  await store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.session.suspended',
+    payload: {
+      run,
+      session: 'old-alternate',
+      cause: 'shutdown',
+      transcript: { kind: 'harvest-transcript', rev: 0 },
+    },
+  })
+  const producerTurns: Array<{ args: readonly string[]; turn: number }> = []
+  let reviews = 0
+  const scripted = new ScriptedAgentRunner({
+    script: async ({ opts, turn }) => {
+      const env = resolveHarvestCliEnv(opts.env)
+      const deps = { store, env, workspacePath: workspace, ids }
+      await buildHarvestContext(deps)
+      if (opts.skill === 'ab-harvest') {
+        producerTurns.push({ args: opts.args ?? [], turn })
+        const observations = JSON.parse(
+          await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+        )
+        const file = join(workspace, '.ab', `proposals-${producerTurns.length}.json`)
+        await writeFile(
+          file,
+          JSON.stringify(proposalSet(observations, `Specific defect ${producerTurns.length}`)),
+        )
+        await submitHarvestProposals(deps, file)
+      } else {
+        reviews += 1
+        const notes = join(workspace, '.ab', 'review.md')
+        await writeFile(notes, reviews === 1 ? 'revise' : 'approve')
+        if (reviews === 1) {
+          const findings = join(workspace, '.ab', 'review-findings.json')
+          await writeFile(
+            findings,
+            JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
+          )
+          await submitHarvestVerdict(deps, { verdict: 'revise', notes, findings })
+        } else await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+      }
+      return defaultTurnResult('done')
+    },
+  })
+  const cfg = config(1)
+  cfg.roles.default!.args = ['primary']
+  cfg.roles.default!.alternates = [{ runtime: 'scripted', args: ['alternate'] }]
+  const result = await new HarvestRunner({
+    store,
+    tickets,
+    config: cfg,
+    runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+    repo: '/repo',
+    workspacePath: workspace,
+    ids,
+    uuids: randomUuids(),
+    clock: steppingClock(),
+    instance: 'next',
+  }).run()
+  expect(result.outcome).toBe('completed')
+  expect(producerTurns).toEqual([
+    { args: ['alternate'], turn: 1 },
+    { args: ['primary'], turn: 1 },
+  ])
+  const events = await store.getRepoEvents('/repo')
+  expect(
+    events
+      .filter((e) => e.type === 'harvest.session.started')
+      .filter((e) => e.payload.role === 'harvest')
+      .map((e) => e.payload.args),
+  ).toEqual([['alternate'], ['alternate'], ['primary']])
+  expect(events.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
+})

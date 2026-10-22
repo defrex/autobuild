@@ -60,7 +60,8 @@ async function suspendedFixture(handle = nativeHandle('scripted', 'native-old', 
     '[tickets]\nsource="file"\nreadyState="Ready"\n[roles.default]\nruntime="scripted"\n[policy]\nharvestThreshold=100',
   )
   const stop = new AbortController()
-  const run = (runner: AgentRunner, primary?: AgentRunner) =>
+  const ids = sequentialIds()
+  const run = (runner: AgentRunner, primary?: AgentRunner, signal = stop.signal) =>
     new HarvestRunner({
       store,
       config,
@@ -71,11 +72,11 @@ async function suspendedFixture(handle = nativeHandle('scripted', 'native-old', 
       },
       repo: '/repo',
       workspacePath: '/workspace',
-      ids: sequentialIds(),
+      ids,
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'next',
-      shutdownSignal: stop.signal,
+      shutdownSignal: signal,
     }).run()
   return { store, config, stop, run, handle }
 }
@@ -255,3 +256,80 @@ test('a suspended alternate resumes its original route before trying the primary
   expect(events.some((e) => e.type === 'harvest.session.resume-fallback')).toBe(false)
   expect(primary.sessions.size).toBe(0)
 })
+
+test('a clean stop after crash recovery does not charge the same open bracket twice', async () => {
+  const fx = await suspendedFixture()
+  await fx.store.appendRepo('/repo', {
+    actor: KERNEL,
+    type: 'harvest.session.started',
+    payload: {
+      run: 'run',
+      session: 'crashed',
+      role: 'harvest',
+      runner: 'scripted',
+      args: [],
+      step: 'synthesize',
+      round: 1,
+      continuation: { predecessor: 'old', root: 'old', handle: fx.handle, cause: 'cutover' },
+    },
+  })
+  const append = fx.store.appendRepo.bind(fx.store)
+  fx.store.appendRepo = async (...args) => {
+    const event = await append(...args)
+    if (args[1].type === 'harvest.resumed') fx.stop.abort()
+    return event
+  }
+  const nextStop = new AbortController()
+  const adapter = new ScriptedAgentRunner({
+    nativeState: new Map([['native-old', []]]),
+    script: () => {
+      nextStop.abort()
+      return defaultTurnResult()
+    },
+  })
+  expect((await fx.run(adapter)).outcome).toBe('suspended')
+  let events = await fx.store.getRepoEvents('/repo')
+  expect(events.filter((e) => e.type === 'harvest.recovery-requested')).toHaveLength(1)
+  expect(events.filter((e) => e.type === 'harvest.session.started')).toHaveLength(2)
+  expect(adapter.sessions.size).toBe(0)
+  expect((await fx.run(adapter, undefined, nextStop.signal)).outcome).toBe('suspended')
+  events = await fx.store.getRepoEvents('/repo')
+  expect(events.filter((e) => e.type === 'harvest.recovery-requested')).toHaveLength(1)
+  expect(events.filter((e) => e.type === 'harvest.failed')).toHaveLength(1)
+  expect(events.find((e) => e.type === 'harvest.session.resumed')?.payload.predecessor).toBe(
+    'crashed',
+  )
+})
+
+for (const exhaust of [false, true]) {
+  test(`a resumed alternate failure retains configured indexes (exhaust=${exhaust})`, async () => {
+    const fx = await suspendedFixture()
+    fx.config.roles.default!.runtime = 'primary'
+    fx.config.roles.default!.alternates = [{ runtime: 'scripted', args: [] }]
+    const primary = new ScriptedAgentRunner({
+      script: () => {
+        if (exhaust) return failedTurnResult('primary unavailable', false, '', 'availability')
+        fx.stop.abort()
+        return defaultTurnResult()
+      },
+    })
+    const alternate = new ScriptedAgentRunner({
+      nativeState: new Map([['native-old', []]]),
+      script: () => failedTurnResult('alternate unavailable', false, '', 'availability'),
+    })
+    const outcome = await fx.run(alternate, primary)
+    expect(outcome.outcome).toBe(exhaust ? 'failed' : 'suspended')
+    const events = await fx.store.getRepoEvents('/repo')
+    const started = events.filter((e) => e.type === 'harvest.session.started')
+    expect(started.at(-1)?.payload).toMatchObject({
+      runner: 'primary',
+      substitution: { failed: { index: 1, runner: 'scripted' }, selectedIndex: 0 },
+    })
+    expect(started.at(-1)?.payload.continuation).toBeUndefined()
+    if (exhaust) {
+      const failure = events.find((e) => e.type === 'harvest.failed')
+      expect(failure?.payload.providerAttempts?.map((attempt) => attempt.index)).toEqual([1, 0])
+      expect(failure?.payload.error).toBe('primary unavailable')
+    }
+  })
+}

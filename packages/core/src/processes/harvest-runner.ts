@@ -272,7 +272,11 @@ export class HarvestRunner {
             session.step === 'synthesize'
               ? run.proposals.some((p) => p.round === session.round)
               : run.reviews.some((r) => r.round === session.round)
-          if (!terminal) {
+          const runId = run.run
+          const failureAlreadyRecorded = Object.values(events.harvestFailures).some(
+            ({ latest }) => latest.payload.run === runId && latest.seq > session.startedSeq,
+          )
+          if (!terminal && !failureAlreadyRecorded) {
             await this.recordWorkflowFailure(
               run.run,
               new Error('harvest agent interrupted by runner loss'),
@@ -660,10 +664,10 @@ export class HarvestRunner {
     const prior = current?.sessions.findLast(
       (s) => s.step === spec.step && s.round === spec.round && s.status !== 'ended',
     )
-    const candidates = [primary, ...alternates]
+    const candidates = [primary, ...alternates].map((target, index) => ({ target, index }))
     const selected = prior
       ? candidates.find(
-          (t) =>
+          ({ target: t }) =>
             t.runtime === prior.runner &&
             t.model === prior.model &&
             JSON.stringify(t.args) === JSON.stringify(prior.args ?? []),
@@ -690,12 +694,12 @@ export class HarvestRunner {
       this.producer = undefined
       primaryLive = undefined
     }
-    for (let index = 0; index < targets.length; index += 1) {
-      const target = targets[index]!
+    for (let position = 0; position < targets.length; position += 1) {
+      const { target, index } = targets[position]!
       this.shutdownBoundary()
       const session = ids('hs')
       const continuation =
-        index === 0 && prior
+        position === 0 && prior
           ? {
               predecessor: prior.session,
               root: prior.continuation?.root ?? prior.session,
@@ -705,7 +709,7 @@ export class HarvestRunner {
           : undefined
       // A pause requested while a provider failed is honored before another
       // provider starts; the incomplete step safely restarts at the primary.
-      if (index > 0) await this.controlBoundary(spec.run)
+      if (position > 0) await this.controlBoundary(spec.run)
       else await this.ensureLease()
       const streamBracket = await this.openSessionStream(target, {
         session,
@@ -1066,7 +1070,7 @@ export class HarvestRunner {
       const eligibleForAlternate =
         turnError !== undefined ||
         (result?.kind === 'failed' && isAlternateEligible(result.failure))
-      if (index + 1 < targets.length && eligibleForAlternate) {
+      if (position + 1 < targets.length && eligibleForAlternate) {
         substitution = attempt
         continue
       }
@@ -1467,14 +1471,14 @@ export class HarvestRunner {
     return true
   }
 
-  /** Settle repository-wide commands and automatic recovery only at a durable
-   * workflow boundary. Requests and acknowledgements are separate facts, so a
-   * replacement process can finish the same transition without spending a
-   * second recovery attempt. */
   private shutdownBoundary(): void {
     if (this.deps.shutdownSignal?.aborted) throw new HarvestSuspendedSignal()
   }
 
+  /** Settle repository-wide commands and automatic recovery only at a durable
+   * workflow boundary. Requests and acknowledgements are separate facts, so a
+   * replacement process can finish the same transition without spending a
+   * second recovery attempt. */
   private async controlBoundary(run?: string): Promise<void> {
     this.shutdownBoundary()
     while (true) {

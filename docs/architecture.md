@@ -924,7 +924,10 @@ alternate targets, and independently inherited build-session budget.
 `build-runner.ts` and `harvest-runner.ts` own the deterministic
 primary-first attempt loop: each substitution opens a new session bracket,
 records provenance on its start, and only complete-chain exhaustion consumes an
-existing phase/session attempt. This keeps runtime availability routing out of
+existing phase/session attempt. A suspended harvest turn first tries its recorded
+route, then the remaining targets in configured order; provider evidence retains
+configured indexes, and only the primary stays live for producer revisions.
+This keeps runtime availability routing out of
 agent judgment while preserving transcript and artifact actor attribution.
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake

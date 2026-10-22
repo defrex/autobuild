@@ -220,7 +220,7 @@ export interface HarvestAcc {
 }
 
 /** Bump when `HarvestAcc`'s shape or fold semantics change. */
-export const HARVEST_REDUCER_VERSION = 2
+export const HARVEST_REDUCER_VERSION = 3
 
 function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void {
   const order = acc.runs
@@ -663,9 +663,8 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
         break
       }
       case 'harvest.session.started': {
-        const run = requireRun(runs, event.payload.run, event)
-        if (run.sessions.some((s) => s.session === event.payload.session))
-          throw new Error('Duplicate harvest session')
+        const run = runs.get(event.payload.run)
+        if (!run || run.sessions.some((s) => s.session === event.payload.session)) break
         const continuation = event.payload.continuation
         if (continuation) {
           const prior = run.sessions.find((s) => s.session === continuation.predecessor)
@@ -675,9 +674,8 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
             prior.round !== event.payload.round ||
             prior.status === 'ended'
           )
-            throw new Error('Invalid harvest continuation')
-          if ((prior.continuation?.root ?? prior.session) !== continuation.root)
-            throw new Error('Invalid harvest continuation root')
+            break
+          if ((prior.continuation?.root ?? prior.session) !== continuation.root) break
           prior.status = 'ended'
         }
         run.sessions.push({
@@ -694,9 +692,11 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
       case 'harvest.session.resumed':
       case 'harvest.session.resume-fallback':
       case 'harvest.session.ended': {
-        const run = requireRun(runs, event.payload.run, event)
-        const session = run.sessions.find((s) => s.session === event.payload.session)
-        if (session?.status !== 'open') throw new Error('Harvest session is not open')
+        const run = runs.get(event.payload.run)
+        const session = run?.sessions.find((s) => s.session === event.payload.session)
+        // A replaced runner can append late facts after its lease expires.
+        // Retain the journal evidence without reviving a retired bracket.
+        if (session?.status !== 'open') break
         if (
           event.type === 'harvest.session.native-handle-recorded' ||
           event.type === 'harvest.session.resumed'
@@ -705,8 +705,7 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
             session.nativeHandle &&
             JSON.stringify(session.nativeHandle) !== JSON.stringify(event.payload.handle)
           )
-            throw new Error('Conflicting harvest native identity')
-          session.nativeHandle = structuredClone(event.payload.handle)
+            break
         }
         if (event.type === 'harvest.session.resumed') {
           if (
@@ -715,15 +714,19 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
             session.continuation?.predecessor !== event.payload.predecessor ||
             session.continuation.root !== event.payload.root
           )
-            throw new Error('Invalid harvest resume acceptance')
+            break
           session.resumed = true
         }
         if (event.type === 'harvest.session.resume-fallback') {
-          if (!session.continuation || session.resumed || session.fallback)
-            throw new Error('Invalid harvest fallback')
+          if (!session.continuation || session.resumed || session.fallback) break
           session.fallback = true
           delete session.nativeHandle
         }
+        if (
+          event.type === 'harvest.session.native-handle-recorded' ||
+          event.type === 'harvest.session.resumed'
+        )
+          session.nativeHandle = structuredClone(event.payload.handle)
         if (event.type === 'harvest.session.suspended') {
           session.status = 'suspended'
           session.suspendedAt = event.ts

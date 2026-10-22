@@ -812,7 +812,11 @@ alternates in order without consuming extra phase attempts. Authentication,
 permission, and local runtime-configuration failures do not. Every target has
 its own session/transcript; a continuation fallback starts fresh from durable
 context. Selection is not sticky, so the next phase, continuation, or retry
-starts from the primary. Only chain exhaustion writes the phase failure, and
+starts from the primary. A suspended Harvest turn first retries its recorded
+route, then tries the remaining configured targets in order. Its substitution
+and failure evidence retain configured indexes even when that order starts at
+an alternate; only a successful primary can remain live for producer revisions.
+Only chain exhaustion writes the phase failure, and
 the final failure controls retry behavior. Substitution starts and exhausted
 failures retain the targets and verbatim errors durably. Core phases, agent
 verify/finalize, and Harvest use the chain; tool-free one-shots do not.

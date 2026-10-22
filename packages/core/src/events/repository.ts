@@ -30,7 +30,7 @@ import {
   type ActorKind,
 } from './envelope'
 import { EventValidationError } from './catalog'
-import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
+import { providerAttemptSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
@@ -285,7 +285,16 @@ export const harvestEventPayloadSchemas = {
     /** Stream id this session's live view writes to (SPEC §9, session
      * streams). Optional only so historical journals replay unchanged. */
     stream: z.string().min(1).optional(),
-    substitution: providerSubstitutionSchema.optional(),
+    // Native continuation can try a configured alternate before index zero.
+    substitution: z
+      .strictObject({
+        failed: providerAttemptSchema,
+        selectedIndex: z.number().int().nonnegative(),
+      })
+      .refine((value) => value.selectedIndex !== value.failed.index, {
+        message: 'substitution must select a different configured target',
+      })
+      .optional(),
   }),
   'harvest.session.ended': z.strictObject({
     run: z.string().min(1),
@@ -345,7 +354,14 @@ export const harvestEventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
     willRetry: z.boolean(),
-    providerAttempts: providerAttemptsSchema.optional(),
+    providerAttempts: z
+      .array(providerAttemptSchema)
+      .min(1)
+      .refine(
+        (attempts) => new Set(attempts.map((attempt) => attempt.index)).size === attempts.length,
+        { message: 'provider attempts must name distinct configured targets' },
+      )
+      .optional(),
   }),
 } as const
 
