@@ -553,6 +553,27 @@ test('agent verification failure reports the exact node cycle once without an es
   try {
     await h.dispatcher.tick()
     const node = (await h.store.listBuilds())[0]!
+    // Trailer identities must resolve to durable contributing builds and specs.
+    for (const slug of ['first-child', 'second-child']) {
+      const ticket = { source: 'fake', id: slug }
+      await h.store.createBuild({ slug, repo: node.repo, ticket })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: node.repo, baseBranch: 'main' },
+      })
+      await h.store.putArtifact(slug, { kind: 'spec', content: `Authorize ${slug}` })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
     await addStack(h, node.branch!)
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await h.runLatest()

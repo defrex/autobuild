@@ -7,6 +7,8 @@ import type {
 import {
   formatHandoff,
   formatRollback,
+  handPushedLabel,
+  handPushedText,
   capacityExplanation,
   displayText,
   pauseResumeHelp,
@@ -961,6 +963,12 @@ function BuildDetail({
                     {displayText(path)}
                   </p>
                 ))}
+                <div className="kv" style={{ overflowWrap: 'anywhere' }}>
+                  <span>
+                    <span className="k">{handPushedLabel} </span>
+                    {displayText(handPushedText(detail.handPushedCommits))}
+                  </span>
+                </div>
                 <h3>Steps</h3>
                 <StepLine
                   steps={build.integrationRow.steps}

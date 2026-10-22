@@ -3088,6 +3088,7 @@ test('integration detail fits children by cells, sanitizes controls and scrolls 
       steps: [{ label: 'collect', state: 'current' }],
     },
     integrationDetail: {
+      handPushedCommits: [{ sha: 'a'.repeat(40), originalSha: 'b'.repeat(40) }],
       destination: 'main (the configured base branch)',
       branch: 'ab-node/integration',
       restack: 'conflicted',
@@ -3114,6 +3115,8 @@ test('integration detail fits children by cells, sanitizes controls and scrolls 
   const lines = rd(m, { color: false, width: 55 })
   const text = lines.join('\n')
   for (const fact of [
+    'Hand-pushed changes',
+    'original',
     'Integration',
     'Progress',
     'Branch',

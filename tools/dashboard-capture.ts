@@ -608,6 +608,68 @@ mode = "auto"
       type: 'node.opened',
       payload: { sha: 'opening-sha' },
     })
+    if (label === 'with-pr') {
+      const original = 'b'.repeat(40)
+      const rewritten = 'a'.repeat(40)
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.writer-reserved',
+        payload: {
+          id: 'intent-replay',
+          operation: 'restack',
+          expected: original,
+          parent: 'opening-sha',
+          oldBase: 'opening-sha',
+          archive: 'refs/archive/intent',
+          changes: [{ sha: original }],
+          upstreamBuilds: [],
+          merges: [],
+        },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.item-prepared',
+        payload: { id: 'intent-replay', index: 0, base: 'opening-sha' },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.item-replayed',
+        payload: {
+          id: 'intent-replay',
+          index: 0,
+          base: 'opening-sha',
+          head: rewritten,
+          dropped: false,
+        },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.publish-intended',
+        payload: { id: 'intent-replay', head: rewritten },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.rewritten',
+        payload: { id: 'intent-replay', previous: original, head: rewritten },
+      })
+      await harness.store.append(slug, {
+        actor: KERNEL,
+        type: 'node.writer-settled',
+        payload: { id: 'intent-replay', outcome: 'completed' },
+      })
+      // These provenance facts must not shift the established leaf timeline.
+      harness.clock.advance(-6000)
+    }
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.inventory',
+      payload: {
+        head: 'child-sha',
+        builds: [],
+        foreign: label === 'with-pr' ? ['a'.repeat(40)] : [],
+      },
+    })
+    harness.clock.advance(-1000)
     await harness.store.append(slug, {
       actor: DISPATCHER,
       type: 'node.compared',
