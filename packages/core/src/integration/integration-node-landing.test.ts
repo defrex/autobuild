@@ -1,3 +1,4 @@
+import { DISPATCHER } from '../events/envelope'
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { makeHarness, happyHandlers, readyTicket, git, commitAll, CONFIG_TOML } from './harness'
@@ -311,6 +312,9 @@ test('integration agent verification receives exact commit range without produce
     const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
     expect(manifest.commitRange.base).toBeTruthy()
     expect(manifest.commitRange.head).toBe(await git(['rev-parse', 'HEAD'], cli.ws))
+    expect(
+      manifest.nodeVerification.contributions.map((entry: { build: string }) => entry.build),
+    ).toEqual(['first-child', 'second-child'])
     expect(manifest.materialized['plan.md']).toBeUndefined()
     expect(manifest.materialized['implement-notes.md']).toBeUndefined()
     verified++
@@ -327,6 +331,27 @@ test('integration agent verification receives exact commit range without produce
   try {
     await h.dispatcher.tick()
     const node = (await h.store.listBuilds())[0]!
+    // Trailer identities must resolve to durable contributing builds and specs.
+    for (const slug of ['first-child', 'second-child']) {
+      const ticket = { source: 'fake', id: slug }
+      await h.store.createBuild({ slug, repo: node.repo, ticket })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: node.repo, baseBranch: 'main' },
+      })
+      await h.store.putArtifact(slug, { kind: 'spec', content: `Authorize ${slug}` })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
     await addStack(h, node.branch!)
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     await h.runLatest()
