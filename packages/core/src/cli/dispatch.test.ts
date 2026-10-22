@@ -11216,6 +11216,25 @@ for (const intake of [true, false]) {
     test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted})`, async () => {
       const clock = manualClock()
       const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.handoff-started',
+        payload: {
+          correlation: 'historical-remote',
+          run: 'historical-predecessor',
+          lineage: 'old-launcher',
+          from: RUNTIME_IDENTITY,
+          to: RUNTIME_IDENTITY,
+          root: '/cache',
+          cacheId: 'old',
+          target: { mode: 'installed', key: 'old', source: '/old' },
+          remoteBuilds: Array.from({ length: 100 }, (_, i) => ({
+            slug: `finished-${i}`,
+            instance: `old-${i}`,
+          })),
+        },
+      })
       const stop = new AbortController()
       const calls: string[] = []
       let measuring = false
@@ -11760,6 +11779,7 @@ test('dispatcher runtime persistence failure prevents claims and ticks', async (
 
 for (const scenario of [
   'natural',
+  'remote',
   'relaunch',
   'failed-relaunch',
   'stopped-relaunch',
@@ -11881,7 +11901,7 @@ for (const scenario of [
       async start(input) {
         starts++
         return {
-          supervision: 'local-parent',
+          supervision: scenario === 'remote' ? 'environment' : 'local-parent',
           identity: { provider: 'fake', workspaceRef: input.workspaceRef },
           completion: completion.promise.then(() => ({
             exitCode: scenario === 'failed-relaunch' ? 1 : 0,
@@ -11910,6 +11930,7 @@ for (const scenario of [
       type: 'workspace.provisioned',
       payload: {
         provider: 'git-worktree',
+        ...(scenario === 'remote' ? { remote: true } : {}),
         ref: 'ws-drain',
         path: '/draining/workspace',
         branch: `ab/${slug}`,
@@ -11970,6 +11991,25 @@ for (const scenario of [
       await ready.promise
       expect(starts).toBe(1)
       const lease = (await fx.store.getBuild(slug))!.lease!
+      if (scenario === 'remote') {
+        const attach = await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.attached',
+          payload: { instance: lease.holder, host: 'guest' },
+        })
+        await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.runtime-recorded',
+          payload: {
+            instance: lease.holder,
+            attachedSeq: attach.seq,
+            runtime: {
+              ...RUNTIME_IDENTITY,
+              source: { kind: 'package', location: '/opt/autobuild' },
+            },
+          },
+        })
+      }
       await fx.store.appendRepo(fx.origin, {
         actor: DISPATCHER,
         type: 'dispatcher.upgrade-detected',
@@ -12018,6 +12058,26 @@ for (const scenario of [
       )
       expect(authorization?.payload.targetRuntime).toEqual(targetHandoff?.payload.to)
       expect(authorization?.payload.instance).toBe(lease.holder)
+      if (scenario === 'remote') {
+        await running // The guest completion promise is deliberately still pending.
+        expect(targetHandoff?.payload.builds).toEqual([])
+        expect(targetHandoff?.payload.remoteBuilds).toMatchObject([
+          { slug, instance: lease.holder, runtime: { source: { location: '/opt/autobuild' } } },
+        ])
+        expect(authorization?.payload.runtime.source.location).toBe('/opt/autobuild')
+        expect((await fx.store.getBuild(slug))!.lease).toEqual(lease)
+        expect(await fx.store.heartbeat(slug, lease.holder)).toBe(true)
+        expect((await fx.store.getEvents(slug)).some((e) => e.type === 'execution.ended')).toBe(
+          false,
+        )
+        expect(
+          (await fx.store.getRepoEvents(fx.origin)).some(
+            (e) => e.type === 'dispatcher.handoff-completed',
+          ),
+        ).toBe(true)
+        expect(stops).toBe(0)
+        return
+      }
       if (scenario.includes('relaunch')) {
         await fx.store.append(slug, {
           actor: KERNEL,

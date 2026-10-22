@@ -235,3 +235,40 @@ finally:
     await rm(cwd, { recursive: true, force: true })
   }
 }, 90000)
+
+test('an isolated registry installation prepares local launch without a guest asset fetch', async () => {
+  const { prepareLaunchRuntime } = await import('./dispatch-launcher')
+  const { releasePreparedRuntime } = await import('./dispatch-runtime-use')
+  const root = await mkdtemp(join(tmpdir(), 'ab-isolated-launch-'))
+  const source = join(
+    root,
+    'node_modules/.bun/@defrex+autobuild@1.2.3/node_modules/@defrex/autobuild',
+  )
+  const checkout = join(root, 'consumer')
+  try {
+    await mkdir(join(source, 'bin/agent'), { recursive: true })
+    await mkdir(join(source, 'packages'), { recursive: true })
+    await mkdir(checkout)
+    await writeFile(
+      join(source, 'package.json'),
+      JSON.stringify({ name: '@defrex/autobuild', version: '1.2.3', files: ['bin', 'packages'] }),
+    )
+    await writeFile(join(source, 'bin/ab.ts'), 'console.log("1.2.3")')
+    await writeFile(join(source, 'bin/agent/ab'), '#!/bin/sh\n')
+    for (const entry of [
+      'ab-dispatch-generation.ts',
+      'ab-dispatch-kernel.ts',
+      'ab-build-runner.ts',
+      'ab-harvest-runner.ts',
+      'ab-process-group-reaper.ts',
+    ])
+      await writeFile(join(source, 'bin', entry), 'export {}')
+    // The .bun store entry has no owner manifest. This is Bun's argv[1] realpath.
+    const runtime = await prepareLaunchRuntime(source, source, checkout)
+    expect(runtime.guestArchive).toEqual({ provenance: 'registry', file: 'guest-distribution.tgz' })
+    expect(await Bun.file(join(runtime.root, '../guest-distribution.tgz')).exists()).toBe(false)
+    releasePreparedRuntime(runtime.root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

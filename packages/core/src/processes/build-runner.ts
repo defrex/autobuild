@@ -1222,7 +1222,6 @@ export class BuildRunner {
   private async requestRelaunch(
     facts: Awaited<ReturnType<typeof readBuildFacts>>['value'],
   ): Promise<boolean> {
-    if (this.deps.workspaceRemote === true) return false
     const request = relaunchTarget(
       facts.state,
       this.deps.instance,
