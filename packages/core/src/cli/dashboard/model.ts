@@ -1,3 +1,5 @@
+import { dispatchUpgradeReducer } from '../../kernel/dispatch-upgrade'
+import { enrichDrainingRow, projectHandoffs, type DashboardHandoff } from './handoff'
 import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
   projectIntegrationRow,
@@ -172,6 +174,7 @@ export interface DashboardHarvest {
 }
 
 export interface DashboardBuild {
+  draining?: boolean
   integrationRow?: IntegrationRow
   integrationDetail?: IntegrationDetail
   collectionIdentity?: {
@@ -305,6 +308,7 @@ export interface DashboardCounter {
 }
 
 export interface DashboardModel {
+  handoffs?: DashboardHandoff[]
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
@@ -1304,13 +1308,21 @@ export function buildDashboardFromProjected(
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] | RepositoryReadFacts = [],
 ): DashboardModel {
-  const builds = enrichIntegrationRows(projectedBuilds).sort((a, b) => a.slug.localeCompare(b.slug))
+  const upgrade = projectHandoffs(
+    Array.isArray(repositoryEvents)
+      ? dispatchUpgradeReducer.reduce(repositoryEvents)
+      : repositoryEvents.upgrades,
+  )
+  const builds = enrichIntegrationRows(
+    projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining)),
+  ).sort((a, b) => a.slug.localeCompare(b.slug))
   const harvestProjection = projectRepositoryHarvest(repositoryEvents)
   const settings = Array.isArray(repositoryEvents)
     ? reduceDispatchSettings(repositoryEvents)
     : repositoryEvents.settings
   return {
     repo: header.repo,
+    ...(upgrade.handoffs.length ? { handoffs: upgrade.handoffs } : {}),
     queued: header.queued,
     active: {
       current: header.capacityProjection?.occupied ?? header.activeCount,

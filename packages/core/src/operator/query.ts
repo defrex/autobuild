@@ -1,3 +1,4 @@
+import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import { dispatchCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
@@ -277,7 +278,7 @@ export async function getOperatorBuild(opts: {
   const record = await requireBuild(opts.store, opts.repo, opts.slug)
   const facts = (await readBuildFacts(opts.store, opts.slug)).value
   const state = facts.state
-  const { config } = await effectiveConfig(opts.store, opts.repo)
+  const { config, repositoryEvents } = await effectiveConfig(opts.store, opts.repo)
   let dashboardRow: DashboardBuild | null = null
   if (!projectsNoDashboardRow(state)) {
     const pinned = await readPinnedConfig(opts.store, opts.slug, config)
@@ -285,7 +286,10 @@ export async function getOperatorBuild(opts: {
     // Implied by the gate; kept as an explicit check (not an assertion) so the
     // code never lies if `effectiveStatus` and `projectBuild` ever drift.
     if (row !== null) {
-      dashboardRow = decorateWithPinnedMeta(row, pinned)
+      dashboardRow = enrichDrainingRow(
+        decorateWithPinnedMeta(row, pinned),
+        projectHandoffs(repositoryEvents.upgrades).draining,
+      )
       if (row.integrationDetail) {
         const records = await opts.store.listBuildsForRepo(opts.repo)
         const digests = await readBuildDigests(opts.store, opts.repo)

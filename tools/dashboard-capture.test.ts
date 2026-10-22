@@ -80,6 +80,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'handoff-wide',
+    'handoff-narrow',
     'harvest-suspended-wide',
     'harvest-suspended-narrow',
     'capacity-wide',
@@ -127,7 +129,13 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id === 'capacity-wide') {
+    if (frame.id.startsWith('handoff-')) {
+      expect(frame.text).toContain('handoff 1.0.0 aaaaaaaaaaaa to 1.1.0 bbbbbbbbbbbb; mode drain;')
+      expect(frame.text).toContain('2026-07-15T12:15:00.000Z')
+      expect(frame.text).toContain('(draining)')
+      expect(frame.model.builds.filter((row) => row.draining)).toHaveLength(1)
+      expect(frame.model.builds.every((row) => row.status === 'running')).toBe(true)
+    } else if (frame.id === 'capacity-wide') {
       expect(frame.model.capacity).toEqual({
         configured: 4,
         occupied: 5,
@@ -218,6 +226,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id !== 'headline-happy-wide' &&
       frame.id !== 'website-hero' &&
       !frame.id.startsWith('harvest-suspended-') &&
+      !frame.id.startsWith('handoff-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-')
     ) {

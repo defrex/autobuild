@@ -152,7 +152,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
         { getReducerSnapshot: getSnapshot },
         { kind: 'repo', repo },
         'dispatchFrontend',
-        { version: 2 },
+        { version: 3 },
       )
     )?.state,
   ).length
@@ -192,7 +192,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
             { getReducerSnapshot: getSnapshot },
             { kind: 'repo', repo },
             'dispatchFrontend',
-            { version: 2 },
+            { version: 3 },
           )
         )?.state,
       ).length

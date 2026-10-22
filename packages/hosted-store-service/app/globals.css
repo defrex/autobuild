@@ -630,7 +630,8 @@ input.short {
   color: var(--slack);
 }
 /* Keep this warning on --title while --warn dims with surrounding row details. */
-.tokens .held {
+.tokens .held,
+.tokens .draining {
   color: var(--title);
 }
 .pr[data-pr="open"] {
