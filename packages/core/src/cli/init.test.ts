@@ -114,7 +114,7 @@ describe('agent-driven ab init', () => {
       installedSkillFilePath(target, 'ab-guide', setupReference),
       'utf8',
     )
-    expect(liveReference).toContain('author a repository-owned\n   agent-verify skill')
+    expect(liveReference).toContain('Author a repository-owned acceptance-check skill')
     expect(await readFile(pristineSkillFilePath(target, 'ab-guide', setupReference), 'utf8')).toBe(
       liveReference,
     )
