@@ -45,6 +45,8 @@ bun ab init --validate
 
 `init` writes a stack-neutral configuration when absent, vendors skills, and hands repository-aware setup to a coding agent. It preserves existing configuration. Setup chooses meaningful commands and establishes adapter prerequisites; init does not invent checks from your stack. `init --validate` checks readiness for the configured arrangement.
 
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. See the [verification guide](verification.md).
+
 
 ```
 bun ab upgrade

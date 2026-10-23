@@ -361,7 +361,7 @@ function deprecationNotice(entry: RoleKeyConsumers): string {
   // declares its own step-named role, which wins — so it can never be a reason
   // to keep this key, and it never blocks the rename. Counting it as one made
   // the advice non-converging: "keep it, it is also the superseded key for
-  // e2e", followed on the next dispatch by "it can be deleted".
+  // acceptance", followed on the next dispatch by "it can be deleted".
 
   // Inert: the key routes nothing at all.
   if (activeAlias.length === 0) {

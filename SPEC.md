@@ -476,7 +476,7 @@ mechanically:
 | `plan-review` | `/plan-review <build>` | `plan-review.verdict` | `plan-review` (rev N) |
 | `implement` | `/implement <build>` | `implement.completed` | diff + `implement-notes` |
 | `code-review` | `/code-review <build>` | `code-review.verdict` | `code-review` (rev N) |
-| `verify:e2e` | `/verify-app-e2e <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:e2e` on pass/fail when present |
+| `verify:acceptance` | `/verify-acceptance <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:acceptance` on pass/fail when present |
 | `finalize` | `/finalize <build>` | `finalize.completed` | PR ref, summary |
 | `reconcile` | `/reconcile <build>` | `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` | `reconcile-notes` + one replayed change |
 
@@ -484,8 +484,11 @@ Every phase skill takes **only the build slug**; everything else it needs
 comes from the store via the `ab` CLI (§8).
 
 Canonical skills installed into a repo carry the `ab-` namespace prefix
-(§16.3), for example `/ab-plan` and `/ab-code-review`. Repository-authored
-extension skills use their own names, such as `/verify-app-e2e`. This spec uses
+(§16.3), for example `/ab-plan` and `/ab-code-review`.
+
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+
+Repository-authored extension skills use their own names, such as `/verify-acceptance`. This spec uses
 the bare phase names throughout.
 
 ## 5. Pipeline grammar
@@ -1770,11 +1773,11 @@ deterministic fail-safe.
   their *logical step name*; core phases select `[roles.<phase>]`.
 
   ```toml
-  [verify.e2e]
+  [verify.acceptance]
   kind = "agent"
-  skill = "verify-app-e2e" # repository-authored skill
+  skill = "verify-acceptance" # repository-authored skill
 
-  [roles.e2e]        # the STEP name — not "verify-app-e2e"
+  [roles.acceptance]        # the STEP name — not "verify-acceptance"
   runtime = "pi"
   ```
 
@@ -2643,7 +2646,7 @@ rejection is `EventValidationError`.
 
 1. **Closed vocabularies live in type names; open ones live in payloads.**
    Phases are a closed set → `plan.completed`. Verify and finalize steps are
-   config-defined (open) → `verify.completed {step: "e2e"}`.
+   config-defined (open) → `verify.completed {step: "acceptance"}`.
 2. **Events carry facts, never derived state.** Build status is a reduction
    (§15.5); no event ever says "status is now X".
 3. **Blobs live in artifacts; events carry refs** `{kind, rev}`.
@@ -2872,7 +2875,7 @@ plan-review.started{r1} → plan-review.verdict{approve}
 implement.started{r1} → implement.completed{commits, notes@1}
 code-review.started{r1} → code-review.verdict{approve}
 verify.started{types} → verify.completed{outcome:pass} → …unit
-verify.started{e2e} → pr-attachment.designated{artifact,filename,mediaType} → verify.completed{outcome:pass}
+verify.started{acceptance} → pr-attachment.designated{artifact,filename,mediaType} → verify.completed{outcome:pass}
 finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.completed{pr} → finalize.step-completed{release-notes}
 (later, janitor:) pr.merged → workspace.released → build.completed{merged} → pr-attachment.reclaimed{hostedSeq}
 ```
@@ -2899,7 +2902,7 @@ any unexpired execution lease, then releases a partial workspace and stale
 lease, returns the ticket to Ready, and appends `build.completed {outcome:
 discarded}` last. No runner is required.
 
-**A — verify failure:** `verify.completed {step: e2e, outcome: fail,
+**A — verify failure:** `verify.completed {step: acceptance, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
 2 → approve → verify re-runs **from the first step** (implement changed the
@@ -3447,16 +3450,16 @@ test = "bun run test"
 publish = "bun run publish"
 
 [verify]
-steps = ["types", "unit", "e2e"]
+steps = ["types", "unit", "acceptance"]
 [verify.types]
 kind = "check"                  # deterministic: command + pass/fail
 command = "typecheck"           # ref into [commands]
 [verify.unit]
 kind = "check"
 command = "test"
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
-skill = "verify-app-e2e"       # repository-authored agent verifier
+skill = "verify-acceptance"       # repository-authored agent verifier
 paths = ["web/**"]              # optional changed-path applicability
 
 [finalize]
@@ -3602,8 +3605,8 @@ is not re-verified, so breakage that only exists in the combination can land.
 This project ships 11 canonical default skills for the fixed phases, the
 non-phase surfaces (`spec`, `tickets`, and `guide`), and the outer-loop skills.
 Repository setup guidance ships as `guide/references/setup.md`, not as a skill;
-agent verifier skills are authored by each repository when needed. `ab init`
-installs into a repo:
+each repository authors its own acceptance-check skill. No generic verifier
+skill ships. `ab init` installs into a repo:
 
 - **A stack-neutral `autobuild.toml` skeleton**, rendered only when absent. It
   declares no setup command or verify step and inspects no language or package
@@ -3630,7 +3633,8 @@ installs into a repo:
   point: this repo's code-review standards and setup reference live in the
   vendored trees. Harness-specific discovery paths are symlinks to the one
   canonical editable copy. Setup directs the repository to author and configure
-  its own agent verifier when judgment-driven end-to-end coverage is warranted.
+  an acceptance-check skill selected from an agent verify step in every repository.
+  Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 - **Model-invocation discipline.** Phase skills are installed
   non-agent-invocable: they are invoked explicitly by the runner or a human,
   never auto-triggered by a model pattern-matching a description — a model
