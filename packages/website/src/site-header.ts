@@ -5,7 +5,6 @@ export function renderSiteHeader(section: 'home' | 'docs', docsNavigation?: stri
   const links = [
     ['home', '/', 'Home'],
     ['docs', '/docs/', 'Docs'],
-    ['changelog', `${REPO_URL}/blob/main/CHANGELOG.md`, 'Changelog'],
     ['github', REPO_URL, 'GitHub ↗'],
   ]
     .map(

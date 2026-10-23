@@ -10,8 +10,8 @@ for (const section of ['home', 'docs'] as const) {
     const nav = html.match(/<nav[\s\S]*?<\/nav>/)![0]
     expect(nav.match(/aria-current="page"/g)).toHaveLength(1)
     expect(nav).toContain(`href="${section === 'home' ? '/' : '/docs/'}" aria-current="page"`)
-    for (const href of ['/', '/docs/', REPO_URL, `${REPO_URL}/blob/main/CHANGELOG.md`])
-      expect(nav).toContain(`href="${href}"`)
+    for (const href of ['/', '/docs/', REPO_URL]) expect(nav).toContain(`href="${href}"`)
+    expect(nav).not.toContain('CHANGELOG.md')
     const id = html.match(/aria-controls="([^"]+)"/)![1]
     expect(nav).toContain(`id="${id}"`)
     expect(html).toContain('type="button" aria-expanded="false"')
