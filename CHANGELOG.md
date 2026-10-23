@@ -3,8 +3,13 @@
 ## Unreleased
 
 - [#664](https://github.com/defrex/autobuild/pull/664) — Suspend live sessions on runner stop and resume them natively
+- [#663](https://github.com/defrex/autobuild/pull/663) — Show the integration tree on the landing page
 - [#661](https://github.com/defrex/autobuild/pull/661) — Keep review ranges scoped to each build after restacks
 - [#662](https://github.com/defrex/autobuild/pull/662) — Record native agent session handles for cross-process continuation
+- [#660](https://github.com/defrex/autobuild/pull/660) — Document operating, seams and configuration on the website
+- [#659](https://github.com/defrex/autobuild/pull/659) — Document builds, dispatch, integration and tickets on the website
+- [#657](https://github.com/defrex/autobuild/pull/657) — Add a documentation section to the website
+- [#655](https://github.com/defrex/autobuild/pull/655) — Extend website capture coverage to docs and animated figures
 - [#654](https://github.com/defrex/autobuild/pull/654) — Recommend project-pinned Autobuild installation
 - [#653](https://github.com/defrex/autobuild/pull/653) — Keep the terminal dashboard live when its pane loses focus
 - [#652](https://github.com/defrex/autobuild/pull/652) — Pin release install commands as exact dev dependencies

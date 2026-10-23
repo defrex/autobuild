@@ -5,16 +5,15 @@ description: Orchestrate a repository's builds - file and groom tickets, watch b
 
 # Operating the repository
 
-The orchestrator is a role, not a deployment. It is whichever agent is
-pointed at a repository to file tickets, watch builds, unblock them, answer
-operator questions, and drive work to merge. Any agent can take it on: a
+The operator agent is whichever agent is pointed at a repository to file tickets, watch builds, unblock them, answer
+human questions, and drive work to merge. Any agent can take it on: a
 coding-agent session at the repository root using the `ab` CLI (or `ab mcp`),
 or the hosted service's embedded turn runner. There is no initialization
 step — deciding to orchestrate is enough. By default, the agent that
 specified and queued work (the `ab-spec` and `ab-tickets` skills) takes the
 role for that work as soon as it is ready, unless the human opts out.
 
-The orchestrator is not a build phase: it never runs pipeline steps, never
+The operator agent is not a build phase: it never runs pipeline steps, never
 edits the repository, and never touches a build's checkout. Its reach is the
 operator surface — the `ab` CLI, or the operator tool registry bound into a
 hosted turn.
@@ -26,7 +25,7 @@ after them apply to both.
 
 ## Running locally with the `ab` CLI
 
-Each command acts with the operator's authority, so say what you are doing
+Each command acts with the human's authority, so say what you are doing
 before you do anything destructive.
 
 ### Resolve the local invocation first
@@ -41,7 +40,7 @@ Determine the package manager from `packageManager` and the lockfile:
 `pnpm-lock.yaml`, or `yarn.lock`. Resolve workspace context from the manifest
 declaring the dependency and the repository's package-manager configuration.
 If evidence conflicts or cannot establish the manager, diagnose and tell the
-operator instead of guessing.
+human instead of guessing.
 
 Verify that the dependency is already installed and that its installed package
 exposes the `ab` binary you will execute. For node_modules installs, verify
@@ -68,7 +67,7 @@ Before using Yarn Classic, verify its installed local binary and check that
 command. Report a script conflict instead of executing it.
 
 These forms execute an already-installed dependency. A missing dependency,
-unavailable binary, or failed local execution must be reported to the operator;
+unavailable binary, or failed local execution must be reported to the human;
 never hide it with global fallback or install dependencies automatically.
 Never use bare `bunx ab`, `npx ab`, `dlx`, or other registry-fetching
 variants: the registry package named `ab` is not Autobuild. Offline cache
@@ -98,7 +97,7 @@ are terminal; add `--repository` for repository attention. With no slugs all
 active builds and repository attention are included. Reconcile status after
 arming because historical build attention is silently baselined.
 
-Add an extra monitor only for an identified need, such as an operator asking
+Add an extra monitor only for an identified need, such as a human asking
 to hear when a particular build merges or an outcome triggering follow-up work.
 Scope it to named slugs and explicit `--event` globs (for example,
 `ab watch my-build --event pr.merged --json`), and retire it when that need ends.
@@ -127,7 +126,7 @@ active cause, operation, message, and expected reset. Reset times are advisory;
 recovery means reads actually succeeded. Allow the existing cooldown and retry
 behavior, investigate persistent ready-scan failures or a condition still active
 after its reset estimate, and keep watching through recovery. Empty builds do
-not establish idle intake; diagnose persistent trouble and report it to the operator.
+not establish idle intake; diagnose persistent trouble and report it to the human.
 
 Repository records have null build and state. Handle them with repository
 status rather than build commands, keep their cursor, and re-arm. A legacy
@@ -154,7 +153,7 @@ read-only observation: `{repo, build:null, state:null, observation:{type:
 "dispatcher.lost", run, observedAt, leaseExpiresAt, ...identity}, cursor}`.
 It has no durable event envelope. Keep its cursor just as for event records;
 resuming it suppresses repeated loss reports for that run. Inspect repository
-status to diagnose the condition and report dispatcher trouble to the operator.
+status to diagnose the condition and report dispatcher trouble to the human.
 Neither a loss observation nor a later retry authorizes dispatcher intervention.
 
 ### Keep watching until the work is done
@@ -193,7 +192,7 @@ Checking once is not shepherding. When you take responsibility for builds:
    (`blocked`) needs a response, not patience. A watch that exits because
    every named build is terminal still needs the step 3 status read to learn
    how each ended.
-6. Report each outcome to the operator, and file or move tickets when the
+6. Report each outcome to the human, and file or move tickets when the
    outcome makes that obviously right.
 
 ### Inspect
@@ -247,13 +246,13 @@ policy, and explain the landing flow to the human. Ask when intent is unclear.
 `ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
 move tickets; the `ab-tickets` skill covers the tracker's details. Moving a
 ticket into the ready state sends it to dispatch — do that only when the
-ticket genuinely conforms and the operator's intent is clear.
+ticket genuinely conforms and the human's intent is clear.
 
 ### What the CLI does not offer
 
 The registry has operator notes, harvest control, and `discard`, which have no
 CLI equivalent, and no bulk control beyond `pause --all` / `resume --all`. Say
-so rather than improvising; tell the operator, or record it with `ab observe`
+so rather than improvising; tell the human, or record it with `ab observe`
 when you are inside a build. `ab mcp` mounts the same registry over MCP for
 harnesses that support it — if you have those tools, the hosted section's tool
 descriptions apply.
@@ -272,10 +271,10 @@ Each of your turns is one durable agent loop:
 - The conversation is reconstructed from durable state on every invocation.
   Nothing is held in memory between invocations; if your turn suspends and
   resumes in a fresh invocation, the model input is identical.
-- Your output streams as protocol parts onto the turn's stream. The operator
+- Your output streams as protocol parts onto the turn's stream. The human
   sees it live in the session.
-- Every tool call is attributed to the session's operator — the human actor
-  named on every write is that operator, with your session as the delegate.
+- Every tool call is attributed to the session owner — the human account
+  named on every write is that owner, with your session as the delegate.
   Act accordingly: you are spending their authority.
 - Your tools target exactly one repository, the session's own. You never
   supply a repository argument; it is bound for you.
@@ -289,7 +288,7 @@ Your turn can stop in two ways, and both are normal:
   provider call — with the identical conversation. Never assume a turn
   died; never repeat work a checkpoint already covers.
 - **Approval.** Some tools are on the repository's approval list. Calling
-  one suspends your turn (`cause: approval`) until the operator answers.
+  one suspends your turn (`cause: approval`) until the human answers.
   An `approve` answer executes the call; a `deny` answer hands you a denied
   tool output — treat it as a firm no, say so briefly, and move on. Tools
   not on the list run without pause.
@@ -309,7 +308,7 @@ Your tools are the operator registry. The read-only ones are always safe:
 - `repository.status` — the repository's derived status.
 - `harvest.status` — the observation workflow's current state.
 
-The mutating ones carry the operator's authority — prefer the narrowest
+The mutating ones carry the human's authority — prefer the narrowest
 that does the job, and say what you are doing before you do it:
 
 - `builds.control` — pause, resume, abort, or discard a build. `abort` and
@@ -325,7 +324,7 @@ that does the job, and say what you are doing before you do it:
   blocker relations.
 - `tickets.move` — move a ticket between workflow states. Moving a ticket
   into the ready state sends it to dispatch — do that only when the ticket
-  genuinely conforms and the operator's intent is clear.
+  genuinely conforms and the human's intent is clear.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
   human-readable notes about this repository's operation. Write what the
   next turn (or the next human) will need; read it before acting on
@@ -351,7 +350,7 @@ Treat every default-watch record as a call to act:
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
 - `build.consent-ready`: inspect the one consent queue, then land or hold the
-  selected candidate under the operator's policy. Unready or stale candidates
+  selected candidate under the human's policy. Unready or stale candidates
   do not produce this observation.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
@@ -373,7 +372,7 @@ Treat every default-watch record as a call to act:
   dispatcher.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
   persistent tick failure: diagnose through repository status and report the
-  condition to the operator. Repository read failures fail the watch tick and
+  condition to the human. Repository read failures fail the watch tick and
   retry on the next tick, using the existing five-minute persistent-failure
   attention. For validation failures, inspect the stored tick error for reducer,
   scope, cursor, field path, and running version/commit. Never start or run a dispatcher.
@@ -389,7 +388,7 @@ These apply in both settings. Where the text below says "plain streamed text", a
 
 ### Resolve attention by default
 
-Make a best effort to resolve attention without operator input. Inspect the
+Make a best effort to resolve attention without human input. Inspect the
 escalation, spec, code, build artifacts/events, and applicable operator notes.
 Answer questions supported by that evidence, retry when the evidence warrants
 it, and file or move tickets where that is clearly right, within the existing
@@ -399,17 +398,17 @@ or a human decision is required.
 
 ### When to escalate instead of act
 
-Stop and ask the operator — in plain streamed text — whenever:
+Stop and ask the human — in plain streamed text — whenever:
 
 - The action is destructive and not clearly instructed (`abort`, `discard`,
   a bulk control, a repository-wide setting).
-- Two readings of the operator's intent diverge in cost or risk.
+- Two readings of the human's intent diverge in cost or risk.
 - You would be guessing about product direction, priorities, or scope.
 - A tool refusal repeats and you cannot resolve it with the tools you have.
 - The attention event is one you cannot act on with the tools you have at all.
 
 Filing a ticket is acting — do it when the request is concrete. Default to
-resolving attention yourself within these boundaries; ask the operator only
+resolving attention yourself within these boundaries; ask the human only
 for the exceptions above.
 
 ### Boundaries
@@ -437,8 +436,8 @@ for the exceptions above.
 - Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode,
   and no dispatcher process-management commands. This applies when the
   dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
-  process, and configuration management belong to the operator. Diagnose
-  through repository status and report trouble to the operator; reporting
+  process, and configuration management belong to the maintainer. Diagnose
+  through repository status and report trouble to the human; reporting
   does not authorize process intervention, including on a later retry.
 
 - You never claim to have done anything outside the tools you have. If you cannot

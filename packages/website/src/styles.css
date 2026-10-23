@@ -57,13 +57,6 @@ a.dim {
 .show-sm {
   display: none;
 }
-.masthead {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 2ch;
-  padding-block: 24px;
-}
 .sections {
   display: flex;
   flex-direction: column;
@@ -139,14 +132,6 @@ a.dim {
 .actions.links {
   margin-top: 0;
 }
-.install {
-  display: flex;
-  align-items: center;
-  gap: 3ch;
-  background: #141414;
-  height: 48px;
-  padding: 0 2ch;
-}
 .btn {
   display: inline-flex;
   align-items: center;
@@ -167,6 +152,15 @@ a.dim {
   background: #e6e6e6;
   color: #000000;
   border-color: #e6e6e6;
+}
+/* Lower emphasis: the same box with its outline withheld until hover. */
+.btn.ghost {
+  border-color: transparent;
+  color: #888888;
+}
+.btn.ghost:hover {
+  color: #55b8b8;
+  border-color: transparent;
 }
 .word {
   background: transparent;
@@ -379,5 +373,485 @@ a.dim {
   }
   .show-sm {
     display: inline;
+  }
+}
+
+/* Read mode: the broadcast palette and type scale, within a 72-cell measure. */
+/* Docs Read register: approved docs-layout export. */
+.docs {
+  color-scheme: dark;
+  line-height: 26px;
+}
+.docs-shell {
+  max-width: 1440px;
+  box-sizing: border-box;
+  margin: auto;
+  padding: 40px 32px 0;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 760px) 220px;
+  gap: 48px;
+  align-items: start;
+}
+.docs-shell > * {
+  min-width: 0;
+}
+.docs-sidebar {
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+.docs-nav,
+.docs-toc,
+.docs-menu-navigation {
+  font-size: 14px;
+  line-height: 20px;
+}
+.docs-group {
+  margin-bottom: 28px;
+}
+.docs-group-label {
+  color: #888888;
+  padding: 0 1ch 8px;
+}
+.docs-group a,
+.docs-section-list a {
+  display: flex;
+  gap: 1ch;
+  padding: 6px 0;
+  text-decoration: none;
+  color: #888888;
+}
+.docs-group a {
+  padding-inline: 1ch;
+}
+.docs-marker {
+  color: #55b8b8;
+  flex: 0 0 1ch;
+  white-space: pre;
+}
+.docs [aria-current="page"],
+.docs [aria-current="location"],
+.docs-group a:hover,
+.docs-section-list a:hover {
+  color: #e6e6e6;
+}
+.docs-group [aria-current="page"] {
+  font-weight: 700;
+}
+.docs-section-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.docs-toc > a {
+  display: block;
+  padding-block: 6px;
+  color: #888888;
+  text-decoration: none;
+}
+.docs-toc > a:hover {
+  color: #e6e6e6;
+}
+.docs-eyebrow {
+  color: #888888;
+  font-size: 14px;
+  line-height: 20px;
+  margin-bottom: 8px;
+}
+.docs article {
+  overflow-wrap: anywhere;
+}
+.docs article h1 {
+  margin: 0;
+  min-width: 0;
+  font-size: 40px;
+  line-height: 48px;
+}
+.docs article h2 {
+  color: #e6e6e6;
+  font-size: 24px;
+  line-height: 32px;
+  margin: 48px 0 16px;
+  scroll-margin-top: 24px;
+}
+.docs article p,
+.docs article ul,
+.docs article ol {
+  margin: 0 0 24px;
+}
+.docs article > p:first-of-type {
+  font-size: 18px;
+  line-height: 30px;
+}
+.docs article ul,
+.docs article ol {
+  padding-left: 3ch;
+}
+.docs article li + li {
+  margin-top: 16px;
+}
+.docs article a {
+  color: #55b8b8;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.docs article code {
+  background: #141414;
+}
+.docs article table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 24px;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 22px;
+}
+.docs article th,
+.docs article td {
+  padding: 8px 2ch 8px 0;
+  text-align: left;
+  vertical-align: top;
+  /* Wrap only between words; a narrow screen scrolls the table instead. */
+  overflow-wrap: normal;
+}
+.docs article th {
+  color: #888888;
+  border-bottom: 2px solid #292929;
+  white-space: nowrap;
+}
+.docs article td:first-child code {
+  white-space: nowrap;
+}
+.docs .terminal {
+  box-sizing: border-box;
+  max-width: 100%;
+  background: #141414;
+  margin: 24px 0;
+  padding: 16px 2ch;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+.docs-rule {
+  overflow: hidden;
+  white-space: nowrap;
+  color: #292929;
+  user-select: none;
+  line-height: 26px;
+  margin-block: 32px;
+}
+.docs-toc .docs-rule {
+  margin-block: 24px 12px;
+}
+.docs-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.docs-pager a {
+  padding: 16px;
+  background: #141414;
+  text-decoration: none;
+  color: #e6e6e6;
+  display: flex;
+  flex-direction: column;
+}
+.docs-pager a > span {
+  color: #888888;
+  font-size: 14px;
+  line-height: 20px;
+}
+.docs-pager a:hover b {
+  color: #55b8b8;
+}
+.docs-next {
+  text-align: right;
+}
+.docs-footer {
+  max-width: 1440px;
+  box-sizing: border-box;
+  margin: 80px auto 0;
+  padding: 0 32px 32px;
+  color: #888888;
+  font-size: 14px;
+  line-height: 20px;
+}
+.docs-footer > div:last-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.docs-footer a {
+  color: #888888;
+  text-decoration: none;
+  margin-left: 2ch;
+}
+.docs-site-links {
+  display: flex;
+  align-items: center;
+  gap: 3ch;
+}
+.docs-inline-toc,
+.docs-menu-navigation {
+  display: none;
+}
+@media (max-width: 1199px) {
+  .docs-shell {
+    grid-template-columns: 248px minmax(0, 760px);
+    gap: 32px;
+  }
+  .docs-toc {
+    display: none;
+  }
+  .docs-inline-toc {
+    display: block;
+    padding: 0 32px;
+  }
+  .docs-inline-toc button {
+    background: transparent;
+    border: 0;
+    color: #e6e6e6;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    width: 100%;
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .docs-inline-toc .docs-rule {
+    margin: 0;
+  }
+  .docs-inline-toc .docs-section-list {
+    margin: 0 0 24px;
+  }
+  .docs-inline-toc .docs-section-list a {
+    min-height: 44px;
+    box-sizing: border-box;
+    align-items: center;
+  }
+}
+@media (max-width: 719px) {
+  .docs-shell {
+    display: block;
+    padding: 32px 16px 0;
+  }
+  .docs-nav {
+    display: none;
+  }
+  .docs-site-links {
+    flex-wrap: wrap;
+    gap: 0 2ch;
+    margin-bottom: 16px;
+  }
+  .docs-menu-navigation {
+    display: block;
+    padding-top: 24px;
+  }
+  .docs-menu-navigation .docs-group a {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .docs-inline-toc {
+    padding-inline: 16px;
+  }
+  .docs article h1 {
+    font-size: 28px;
+    line-height: 36px;
+  }
+  .docs article h2 {
+    font-size: 20px;
+    line-height: 28px;
+  }
+  .docs .terminal {
+    max-width: calc(100% + 32px);
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+  .docs-pager {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .docs-pager > span:empty {
+    display: none;
+  }
+  .docs-footer {
+    padding-inline: 16px;
+    margin-top: 48px;
+  }
+}
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  padding: 12px 1ch;
+  background: #141414;
+  transform: translateY(-120%);
+}
+.skip-link:focus {
+  transform: none;
+}
+
+/* Shared public-site masthead, independent of each page's reading frame. */
+.site-masthead {
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: 32px;
+  box-sizing: border-box;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.site-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
+  white-space: nowrap;
+  font-size: 16px;
+}
+.site-header a {
+  text-decoration: none;
+}
+.site-wordmark {
+  color: #d7c84f;
+  font-weight: 700;
+}
+.site-slash {
+  color: #888888;
+}
+.site-path {
+  color: #e6e6e6;
+}
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 3ch;
+  font-size: 14px;
+}
+.site-nav a {
+  color: #888888;
+}
+.site-nav a:hover {
+  color: #e6e6e6;
+}
+.site-nav [aria-current="page"] {
+  color: #e6e6e6;
+  font-weight: 700;
+}
+.site-menu {
+  display: none;
+}
+.site-rule {
+  color: #292929;
+  white-space: nowrap;
+  overflow: hidden;
+  line-height: 24px;
+  /* The ─ glyph sits mid-line; pull it up so it marks the masthead's bottom edge. */
+  margin-top: -12px;
+  user-select: none;
+}
+@media (max-width: 719px) {
+  .site-masthead {
+    padding-inline: 16px;
+    flex-wrap: wrap;
+    gap: 0 16px;
+  }
+  .site-brand {
+    min-height: 64px;
+    align-items: center;
+  }
+  .site-nav {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .site-nav a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .site-enhanced .site-menu {
+    display: block;
+    background: #000000;
+    color: #e6e6e6;
+    border: 2px solid #e6e6e6;
+    min-height: 44px;
+    padding: 0 1ch;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .site-enhanced .site-nav {
+    display: none;
+  }
+  .site-menu-open .site-nav {
+    display: flex;
+  }
+  .site-menu-open .site-menu {
+    background: #e6e6e6;
+    color: #000000;
+  }
+}
+
+.docs-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+/* Ghost style, matching .btn.ghost: the outline is withheld, even on hover. */
+.docs-copy {
+  flex-shrink: 0;
+  min-height: 40px;
+  min-width: calc(16ch + 20px);
+  box-sizing: border-box;
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #888888;
+  font:
+    700 14px / 20px "JetBrains Mono",
+    monospace;
+  cursor: pointer;
+}
+.docs-copy:hover {
+  color: #55b8b8;
+}
+.docs-copy:active {
+  background: #e6e6e6;
+  color: #000000;
+  border-color: #e6e6e6;
+}
+.docs-copy:disabled {
+  cursor: wait;
+}
+.docs-copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 719px) {
+  .docs-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .docs-copy {
+    min-height: 44px;
   }
 }

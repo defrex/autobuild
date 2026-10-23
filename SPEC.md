@@ -395,7 +395,7 @@ files, including development configs, remain exactly as installed.
 - **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
   review → file`) under a repository lease; not a build and not a phase.
 - **ingesters** — other outer-loop processes turning signals into proposals (§12).
-- **operator** — UI process(es); see §14.
+- **operator UI** — UI process(es); see §14.
 
 Ticket-source ready scans run immediately when no completed measurement exists,
 then every
@@ -443,6 +443,9 @@ One name, used everywhere. Every noun lives in exactly one layer.
 
 | Term | Meaning |
 |---|---|
+| **Operator** | The role driving Autobuild through `ab` or MCP, normally an agent; a human may also drive the interface directly |
+| **Operator agent** | An agent taking the operator role, guided by `ab-operate` |
+| **Human (maintainer)** | The person authorizing work and making human decisions; addressed as “you” in reader-facing prose |
 | **Signal** | Raw input from the world — a Sentry issue, an observation |
 | **Proposal** | A synthesized candidate ticket sitting in Triage, awaiting grooming |
 | **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
@@ -456,7 +459,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Verdict** | Structured terminal outcome: reviews use `approve` \| `revise(findings)` \| `escalate(reason)`; agent verification uses `pass` \| `fail(report)` \| `skip(reason)` |
 | **Finding** | One structured item inside a `revise` verdict (file refs, description, severity) |
 | **Observation** | An out-of-scope discovery emitted mid-build: `followup` \| `refactor` \| `latent-bug` |
-| **Escalation** | A parked request for human input, answerable from any UI |
+| **Escalation** | A parked request for external judgment from the operator agent or human, answerable from any UI |
 | **Event** | An append-only log record; everything above leaves one |
 
 Reserved-word discipline: **build** names the whole pipeline execution and
@@ -473,7 +476,7 @@ mechanically:
 | `plan-review` | `/plan-review <build>` | `plan-review.verdict` | `plan-review` (rev N) |
 | `implement` | `/implement <build>` | `implement.completed` | diff + `implement-notes` |
 | `code-review` | `/code-review <build>` | `code-review.verdict` | `code-review` (rev N) |
-| `verify:e2e` | `/verify-app-e2e <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:e2e` on pass/fail when present |
+| `verify:acceptance` | `/verify-acceptance <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:acceptance` on pass/fail when present |
 | `finalize` | `/finalize <build>` | `finalize.completed` | PR ref, summary |
 | `reconcile` | `/reconcile <build>` | `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` | `reconcile-notes` + one replayed change |
 
@@ -481,8 +484,11 @@ Every phase skill takes **only the build slug**; everything else it needs
 comes from the store via the `ab` CLI (§8).
 
 Canonical skills installed into a repo carry the `ab-` namespace prefix
-(§16.3), for example `/ab-plan` and `/ab-code-review`. Repository-authored
-extension skills use their own names, such as `/verify-app-e2e`. This spec uses
+(§16.3), for example `/ab-plan` and `/ab-code-review`.
+
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+
+Repository-authored extension skills use their own names, such as `/verify-acceptance`. This spec uses
 the bare phase names throughout.
 
 ## 5. Pipeline grammar
@@ -679,10 +685,10 @@ ticket_assets repo, ticket_id, kind, name, revision, layout, manifest (JSON), si
 #### 7.1.1 Operator sessions (the third resource kind)
 
 An operator session is durable orchestrator-conversation state — a record keyed
-by repository and operator, hosted-only. It is neither a build nor a
+by repository and session owner (the human account stored in `operator`), hosted-only. It is neither a build nor a
 repository fact: folding it into the build streams would leak conversation
 facts into the build reducer, and folding it into the repository journal would
-mix one operator's chat with dispatcher and harvest history that every process
+mix one session owner's chat with dispatcher and harvest history that every process
 reads. The store's data model therefore gains a third resource family with the
 same shape as the other two:
 
@@ -733,7 +739,7 @@ stream read's ([docs/remote-store-protocol.md](docs/remote-store-protocol.md),
 
 #### 7.1.2 The embedded orchestrator (turns)
 
-The orchestrator is a role, not a deployment: the agent that files tickets,
+The operator agent is the agent that files tickets,
 watches builds, unblocks them, and discusses direction. Any agent can take it
 on — a coding-agent session at the repository root using the `ab` CLI or
 `ab mcp` needs no initialization — and the canonical `ab-operate` skill is its
@@ -745,8 +751,8 @@ exists). Posting a message to a session of an enabled repository starts a
 turn in the same invocation: an AI SDK tool-loop agent, running with the
 registry bound in process, reads the conversation from the session's durable
 state, streams its output as protocol parts onto the turn's session-scoped
-stream (§7.6), calls tools with the operator's attributed identity — the
-session operator as the human actor, `via: {kind: "session", id}` —
+stream (§7.6), calls tools with the session owner’s attributed identity — the
+authorizing human account as the `human` actor, `via: {kind: "session", id}` —
 checkpoints as it goes, and completes or suspends.
 
 **Turn lifecycle.** `turn.started` (naming a new session-scoped stream and
@@ -809,7 +815,7 @@ turn (`turn.failed`, kind `internal`) after 15 minutes of stream silence,
 closing the stream `aborted` and leaving the session `idle`. The reaper never
 touches suspended or awaiting-approval sessions — a turn suspended for
 approval is precisely an open stream that goes quiet for however long the
-operator takes.
+human takes.
 
 **Typed failures.** Model failures are typed on `turn.failed`:
 `provider-unavailable`, `exhausted`, `credentials`, `configuration` (plus
@@ -825,7 +831,7 @@ registry, and calls no model), and in origin mode it returns immediately
 unless the effective config enables the orchestrator. The system prompt is
 the canonical `ab-operate` skill shipped in `skills/operate/` — self-contained
 per the vendored-skill rule, teaching the tool surface, the attention set,
-and when to escalate to the operator rather than act — plus the current
+and when to escalate to the human rather than act — plus the current
 `operator-notes` artifact, the session's wake settings, and the session's
 repository identity. The model never supplies a repository argument: the
 tools' model-facing schemas strip `repo`, and the runner injects the
@@ -1052,7 +1058,7 @@ The base-selection invariants make this safe with Git:
 - **The base is chosen once, at first branch creation**, from the freshly
   fetched origin tip of the configured base branch (fetched into a
   build-scoped internal ref so concurrent dispatches cannot clobber each
-  other or the operator's refs). If the remote is unavailable, creation falls
+  other or the user's refs). If the remote is unavailable, creation falls
   back to the local base and records the diagnostic.
 - **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
   resumes the published branch. The kernel collapses and restacks at verify
@@ -1813,11 +1819,11 @@ deterministic fail-safe.
   their *logical step name*; core phases select `[roles.<phase>]`.
 
   ```toml
-  [verify.e2e]
+  [verify.acceptance]
   kind = "agent"
-  skill = "verify-app-e2e" # repository-authored skill
+  skill = "verify-acceptance" # repository-authored skill
 
-  [roles.e2e]        # the STEP name — not "verify-app-e2e"
+  [roles.acceptance]        # the STEP name — not "verify-acceptance"
   runtime = "pi"
   ```
 
@@ -2001,14 +2007,16 @@ body file changes the spec only.
 
 Only an operator answering an open `review-round-limit` policy escalation may
 set `escalation.answered.reviewRoundCeiling`. The same event both clears the
-human gate and replaces the cap; no standalone or pre-emptive form exists. A
+external judgment gate and replaces the cap; no standalone or pre-emptive form exists. A
 ceiling cannot accompany a spec revision because `spec.revised` resets both
 loops to the configured default. The value is attached only to the matching
 review-limit answer, so unrelated blockers answered in the same command do not
-acquire it and agents cannot widen their own build's loop.
+acquire it and build-phase agents cannot widen their own build's loop.
 
-Every open escalation remains a human judgment gate until an operator answers
-it. This includes all policy and setup causes. Starting either `ab dispatch` or
+Every open escalation remains an external judgment gate until an operator answers
+it. The answer may come from the operator agent or a human; build-phase agents
+cannot answer their own escalations. This includes all policy and setup causes;
+human authorization requirements still apply. Starting either `ab dispatch` or
 `ab dispatch --once` never appends `escalation.answered` and never re-arms a
 budget. Startup still recovers every actionable current build and delivers
 pending operator commands, whose decisions take precedence over a blocked wait;
@@ -2563,17 +2571,17 @@ live in the build log. Landing policy is declarative dispatcher configuration
 (§15.7); there is no writable repository auto-merge default.
 
 The **operator sandbox** is the third execution kind beside build and harvest
-executions: a persistent, credential-free, per-operator-per-repository
+executions: a persistent, credential-free, per-session-owner-per-repository
 environment behind registry tools (`sandbox.*`, AUT-340), provisioned like a
 build workspace and exposed to operator agents only through those tools. The
 typed tools are the only route to state from inside it — the environment
 receives no store, forge, ticket-provider, or model credential, and
 `[orchestrator].sandbox.environmentVariables` may never name one. Its lifecycle
 is repository-journal fact: provisioned/resumed/activity/stopped/released facts
-bracket one deterministic environment per operator × repository, the
+bracket one deterministic environment per session owner × repository, the
  dispatcher tick's idle settlement stops an environment whose evidence is
 stale (settling an orphan exactly as harvest executions are settled), and
-`ab repository status` reports each operator's sandbox. An operator's work
+`ab repository status` reports each session owner's sandbox. A session owner's work
 leaves the sandbox only through `sandbox.publish`, which takes the checkout's
 head (or an explicit commit) to a deterministic operator branch and a pull
 request against the base branch and records published/publish-failed journal
@@ -2662,9 +2670,9 @@ validated by the separate repository catalog so build reducers cannot
 accidentally interpret repository state.
 
 A human actor may carry an optional `via` marker for delegated writes —
-`{kind: "session", id}` (the operator's orchestrator session) or
+`{kind: "session", id}` (the human account's operator-agent session) or
 `{kind: "mcp", client}` (an MCP client) — so a team's audit trail can
-distinguish "the operator did this" from "the operator's orchestrator session
+distinguish "the human did this" from "the human’s delegated session
 did this" or "an MCP client did this" forever. `via` is valid only on human
 actors and only on build and repository events (session events are the
 delegate's own log); validation rejects it anywhere else. The hosted service
@@ -2684,7 +2692,7 @@ rejection is `EventValidationError`.
 
 1. **Closed vocabularies live in type names; open ones live in payloads.**
    Phases are a closed set → `plan.completed`. Verify and finalize steps are
-   config-defined (open) → `verify.completed {step: "e2e"}`.
+   config-defined (open) → `verify.completed {step: "acceptance"}`.
 2. **Events carry facts, never derived state.** Build status is a reduction
    (§15.5); no event ever says "status is now X".
 3. **Blobs live in artifacts; events carry refs** `{kind, rev}`.
@@ -2703,7 +2711,7 @@ rejection is `EventValidationError`.
 5. **Append-only; corrections are new events.**
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
-7. **[D2] Operator commands are events in the same log.** Humans append
+7. **[D2] Operator commands are events in the same log.** Operators (agents or humans) append
    `*-requested`/`*-cancelled` events (including queued-only discard), `escalation.answered`, and dispatcher
    setting facts; kernel or dispatcher plumbing acknowledges effects that
    require a boundary. The store is the *only* coordination surface — no side
@@ -2913,7 +2921,7 @@ plan-review.started{r1} → plan-review.verdict{approve}
 implement.started{r1} → implement.completed{commits, notes@1}
 code-review.started{r1} → code-review.verdict{approve}
 verify.started{types} → verify.completed{outcome:pass} → …unit
-verify.started{e2e} → pr-attachment.designated{artifact,filename,mediaType} → verify.completed{outcome:pass}
+verify.started{acceptance} → pr-attachment.designated{artifact,filename,mediaType} → verify.completed{outcome:pass}
 finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.completed{pr} → finalize.step-completed{release-notes}
 (later, janitor:) pr.merged → workspace.released → build.completed{merged} → pr-attachment.reclaimed{hostedSeq}
 ```
@@ -2940,7 +2948,7 @@ any unexpired execution lease, then releases a partial workspace and stale
 lease, returns the ticket to Ready, and appends `build.completed {outcome:
 discarded}` last. No runner is required.
 
-**A — verify failure:** `verify.completed {step: e2e, outcome: fail,
+**A — verify failure:** `verify.completed {step: acceptance, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
 2 → approve → verify re-runs **from the first step** (implement changed the
@@ -3488,16 +3496,16 @@ test = "bun run test"
 publish = "bun run publish"
 
 [verify]
-steps = ["types", "unit", "e2e"]
+steps = ["types", "unit", "acceptance"]
 [verify.types]
 kind = "check"                  # deterministic: command + pass/fail
 command = "typecheck"           # ref into [commands]
 [verify.unit]
 kind = "check"
 command = "test"
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
-skill = "verify-app-e2e"       # repository-authored agent verifier
+skill = "verify-acceptance"       # repository-authored agent verifier
 paths = ["web/**"]              # optional changed-path applicability
 
 [finalize]
@@ -3643,8 +3651,8 @@ is not re-verified, so breakage that only exists in the combination can land.
 This project ships 11 canonical default skills for the fixed phases, the
 non-phase surfaces (`spec`, `tickets`, and `guide`), and the outer-loop skills.
 Repository setup guidance ships as `guide/references/setup.md`, not as a skill;
-agent verifier skills are authored by each repository when needed. `ab init`
-installs into a repo:
+each repository authors its own acceptance-check skill. No generic verifier
+skill ships. `ab init` installs into a repo:
 
 - **A stack-neutral `autobuild.toml` skeleton**, rendered only when absent. It
   declares no setup command or verify step and inspects no language or package
@@ -3671,7 +3679,8 @@ installs into a repo:
   point: this repo's code-review standards and setup reference live in the
   vendored trees. Harness-specific discovery paths are symlinks to the one
   canonical editable copy. Setup directs the repository to author and configure
-  its own agent verifier when judgment-driven end-to-end coverage is warranted.
+  an acceptance-check skill selected from an agent verify step in every repository.
+  Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 - **Model-invocation discipline.** Phase skills are installed
   non-agent-invocable: they are invoked explicitly by the runner or a human,
   never auto-triggered by a model pattern-matching a description — a model
@@ -3746,7 +3755,7 @@ written. A replacement child marked as a handoff but missing that pre-update
 baseline — as when an older parent launches a newer child without the newer
 context — suppresses the entire automatic commit, names the cross-version
 compatibility reason, and leaves all upgrade-owned changes uncommitted for the
-operator. The skill-upgrade results and merge-derived exit status are unchanged.
+human. The skill-upgrade results and merge-derived exit status are unchanged.
 Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
 path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
 rebase, or cherry-pick likewise suppresses the whole commit and prints the

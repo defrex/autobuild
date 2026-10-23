@@ -115,17 +115,19 @@ exits nonzero on failure. Then:
    alternate. The runtime that launched setup and the temporary fresh-skeleton
    default do not constrain the final arrangement.
 3. Choose the ticket source and workflow states. Confirm account/team facts and
-   required environment credentials. Configure end-to-end verification with the
-   repository's real lifecycle and tools. When judgment is required, author a repository-owned
-   agent-verify skill and select it from an agent verify step.
+   required environment credentials. Author a repository-owned acceptance-check skill and select it from an agent
+   verify step in every repository. An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+   Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 4. Preserve an existing `autobuild.toml` and unrelated repository choices on a
    rerun. Change only choices the maintainer approves.
 5. Commit the config, setup files, lockfiles, and installed reference changes,
    then push them to `baseBranch`. A remote sandbox clones the authoritative
    GitHub revision; it cannot acquire local-only edits.
 6. Run `ab init --validate`. Fix every named failure, review warnings and unknowns, and rerun
-   validation. Only then use the installed grooming/ticket skills to create the
-   first groomed Ready ticket and start `ab dispatch`.
+   validation. Setup ends at successful validation. Ask the human to start
+   `bun ab dispatch`, then open their coding agent at the repository root with
+   `ab-operate` loaded to specify, create, groom, and shepherd the first ticket.
+   The setup agent must not start dispatch itself.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.
@@ -554,7 +556,7 @@ without the optional readiness capability report UNKNOWN and need an adapter
 upgrade; local Git passes these hosted-policy checks trivially.
 
 Known hard failures make `ab init --validate` exit unsuccessfully. Warnings and
-unknowns preserve the workspace validation result and require operator review.
+unknowns preserve the workspace validation result and require your review.
 Dispatch reports known hard failures once per invocation as durable
 `dispatcher.forge-readiness-failed` repository notices without adding an admission
 gate. External orchestrators follow these through `ab watch` with no slugs or an

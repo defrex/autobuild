@@ -91,3 +91,47 @@ One motion in product UI: a state word flashes reverse video for 180ms when it c
 - Don't round a corner, add a shadow, a gradient, or a hairline border.
 - Don't use a hue for anything but its state.
 - Don't render a light theme.
+
+## Docs Read register (2026-10-20)
+
+The approved `design/docs-layout` ticket asset defines a docs-only exception to
+“no sidebars”. Below the shared header, a 1440px frame with 32px gutters holds
+248px page navigation, an article capped at 760px, and a 220px On this page
+column. Gaps are 48px; side columns stick 24px from the viewport top and may
+scroll internally on short screens. Below 1200px the right column gives way to
+an inline section disclosure; the left column remains beside the article
+through 720px. Below 720px page groups fill the shared header menu before its
+site links. The article has 16px gutters, edge-to-edge scrolling code wells,
+and stacked pager halves. Navigation/disclosure targets are at least 44px tall.
+
+One face remains JetBrains Mono. Body is ink 16/26, first paragraph 18/30.
+Only h1 is title: bold 40/48 (28/36 phone). H2 is bold ink 24/32 (20/28
+phone). Eyebrows (`concepts · builds`), lowercase slash-suffixed group labels,
+navigation, and supporting controls use slack 14px. Current page is bold ink
+with a separate live `>`; current section is ink with the same marker. Other
+nav links are slack and ink on hover, without underlines. Article links remain
+live and underlined. Code uses well, blocks at 14/22 with local horizontal
+scrolling, inline code with well fill. No article copy changes are authorized.
+
+On this page links to every h2; below a clipped, aria-hidden rule glyph row
+are Edit this page ↗ and Back to top ↑. Phone and intermediate section lists
+are disclosed with an aria-expanded button; without JavaScript links remain
+visible. The pager follows the single page registry, with slack 14px direction
+labels and bold ink page names in well boxes. Article and footer separators
+are clipped rows of `─`, never hairlines. The footer reads Autobuild ·
+Apache-2.0 with Home and GitHub ↗. No new face, border, shadow, gradient,
+search, version picker, or callout is introduced by the layout change.
+
+This register leaves the landing page and its reference images unchanged.
+
+### Copy as Markdown (2026-10-20)
+
+Every docs title shares a row with a native Copy as Markdown button: ink 2px
+outline, ground fill, square corners, bold 14/20 label, minimum 40px height.
+Below 720px it sits beneath the title with a 16px gap and minimum 44px height.
+The title group retains 24px before the lead paragraph. Hover uses live and
+pressed uses reverse video; the shared focus outline applies. Success reads
+Copied for two seconds; failure reads Copy failed until the next attempt.
+A separate visually hidden polite atomic status announces both outcomes.
+Only the article is serialized, preserving formatting and canonical links;
+existing external resource links retain their authored destinations.

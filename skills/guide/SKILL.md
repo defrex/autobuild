@@ -187,6 +187,12 @@ Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
 ## Who does what
 
+The **operator** is the role driving Autobuild through `ab` or MCP, normally
+an agent. The **operator agent** takes that role; a human may drive the same
+interface directly. The human is **you**, or the **maintainer**. Human actor
+identities and session ownership attribute authority to the authorizing account,
+not to the agent driving the tools.
+
 The distinctions that change an administrator's answer:
 
 - **Agents supply judgment** — planning, reviewing, implementing, verifying,
@@ -429,8 +435,8 @@ Rules are strict and blank predicates are rejected with their array index.
 | `label` | No | Exact, case-sensitive source ticket label sampled at readiness. |
 | `mode` | Yes | `auto` or `consent`. |
 
-Help the operator choose policy around their release process. A solo team can
-use one catch-all `mode = "auto"` rule. A team requiring an operator's review
+Help the human choose policy around their release process. A solo team can
+use one catch-all `mode = "auto"` rule. A team requiring a human's review
 for every landing can use one catch-all `mode = "consent"` rule. For release
 nodes that collect work automatically but require a final click, put an
 `into = "root"`, `mode = "consent"` rule first, followed by a catch-all
@@ -568,6 +574,14 @@ from the repository's actual toolchain, and asks the user about choices source
 cannot answer; deterministic init code never guesses a language or package
 manager.
 
+Setup configures an **acceptance check** in every repository: a repository-owned
+agent verify step that runs the built software, exercises each acceptance
+criterion in the spec, attaches evidence, and returns a typed verdict. It is
+not a test suite and leaves no test files behind. Wire an existing maintained
+end-to-end or browser test suite into an ordinary `check` step. If none exists,
+do not create one during setup. The acceptance check neither substitutes for
+nor seeds a suite.
+
 ### `[verify]`
 
 Post-reconcile verification defaults to enabled: `[verify].afterReconcile = true`.
@@ -601,7 +615,7 @@ subtables are part of this section — their fields are listed here.
 | `steps` | `[]` | array of nonempty strings | Ordered configured universe of verify phases. Each name must have a matching `[verify.<step>]` table. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
-| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-app-e2e"`). |
+| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-acceptance"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
@@ -611,7 +625,7 @@ optional verification it warrants:
 
 ```toml
 +++
-verifySteps = ["types", "e2e"]
+verifySteps = ["types", "acceptance"]
 +++
 ```
 
@@ -645,13 +659,13 @@ post-step follows the same rule.
 
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
-[roles.e2e]        # the STEP name — not "verify-app-e2e"
+[roles.acceptance]        # the STEP name — not "verify-acceptance"
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
 ```
@@ -760,11 +774,11 @@ rule an agent verify step follows, so one convention covers both:
 
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
 [finalize]
 steps = ["release-notes"]
@@ -773,7 +787,7 @@ steps = ["release-notes"]
 kind = "agent"
 skill = "ab-release-notes"
 
-[roles.e2e]              # verify STEP name — not "verify-app-e2e"
+[roles.acceptance]              # verify STEP name — not "verify-acceptance"
 runtime = "pi"
 
 [roles.release-notes]    # finalize step name
@@ -1064,7 +1078,7 @@ keeps JSON stdout as one bare valid-ticket array. Tracker-wide safety checks
 remain fatal: the same id in two state dirs is a loud error naming both paths,
 as are root-level ticket files with no state and filesystem failures. When
 `dir` is defaulted, the backlog writes its own `.gitignore` of `*`, so git never sees it; an
-explicit `dir` is the user's and is left alone. Agents and operators drive it
+explicit `dir` is the user's and is left alone. Operator agents and humans drive it
 through the source-agnostic `ab ticket` commands rather than running `mv` or
 `mkdir` by hand; `ab ticket state create` makes a new state.
 
@@ -1077,7 +1091,7 @@ environment variable instead and say why.
 ### `[orchestrator]`
 
 Gates the operator-agent feature (AUT-340, AUT-342): the persistent,
-**credential-free** sandbox environment per operator × repository that an
+**credential-free** sandbox environment per session owner × repository that an
 operator agent drives through the `sandbox.*` registry tools (`ab mcp`, and
 every later binding), and — when the embedded orchestrator is enabled — the
 turn runner that answers operator sessions and wakes on build attention
@@ -1089,7 +1103,7 @@ changing it requires a dispatcher restart.
 | `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
 | `model` | — (required when `enabled = true`) | nonblank provider-qualified string, same vocabulary as `[roles]` | The turn runner's model, resolved through the deployment's gateway credential; a leading `vercel-ai-gateway/` prefix is accepted and stripped. |
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under. |
-| `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the operator answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
+| `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the human answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
 | `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the legacy hosted wake event set including `integration.verification-failed`, independent of CLI watch defaults; an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
 
@@ -1110,8 +1124,8 @@ operator tools remain the only route to build state from inside the sandbox.
 Tool bounds an operator agent should know: `sandbox.exec` waits at most **300
 seconds**; stdout and stderr are each truncated at **65,536 bytes** with a
 `[truncated by autobuild: output exceeded 65536 bytes]` marker; `sandbox.reset`
-and archiving an operator's last session are **destructive** (reset re-provisions
-from the current base head); there is at most **one** environment per operator
+and archiving a session owner's last session are **destructive** (reset re-provisions
+from the current base head); there is at most **one** environment per session owner
 and repository.
 
 Publication: `sandbox.publish` takes a title (1–200 characters), an optional
@@ -1123,9 +1137,9 @@ recorded when the sandbox was provisioned or last reset — a pre-existing envir
 base head asks you to run `sandbox.reset` first. The rule is PR only, never the
 base branch: the sandbox itself never pushes and holds no credential — the push
 and the PR creation are kernel plumbing through the workspace provider's
-publication capability, to one deterministic operator branch per operator and
+publication capability, to one deterministic operator branch per session owner and
 repository, so a later publish updates the same PR's head. A publication is a
-repository-journal fact naming the operator, the session, the branch, the
+repository-journal fact naming the session owner (the `operator` field), the session, the branch, the
 commit, and the PR; a refused or failed attempt is journaled too.
 
 ### `[upgrade]`
@@ -1175,9 +1189,12 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   setup prompt for the user to run in a coding agent.
 - The setup agent inspects the repository, configures real commands and verify
   steps, independently chooses pipeline role runtimes/models, configures the
-  ticket source and environment-only credentials, arranges repository-specific
-  end-to-end verification (authoring a repository-owned agent verifier when
-  judgment is warranted), and files one groomed dispatchable ticket.
+  ticket source and environment-only credentials, arranges
+  an acceptance check through a repository-owned agent verify skill in every
+  repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures
+  and reviewing warnings. The human then starts `bun ab dispatch` and opens
+  their operator agent with `ab-operate` to create, groom, and shepherd the
+  first ticket.
 - It never overwrites config once the file exists, even with `--force`; a rerun
   launches or prints a prompt that asks the agent to review and improve it.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
@@ -1277,7 +1294,7 @@ preserved through self-update handoff. If a replacement child receives the
 handoff marker without the pre-self-update baseline — possible when an older
 parent launches a newer child — it suppresses the entire automatic commit,
 names the cross-version compatibility reason, and leaves all upgrade-owned
-changes uncommitted for the operator. Skill-upgrade results and the report's
+changes uncommitted for you. Skill-upgrade results and the report's
 existing exit code remain unchanged.
 
 Any content conflict, discovery conflict, pre-existing dirt in an owned path,
@@ -2392,7 +2409,7 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
-| `ab-operate` | outside the pipeline; model-invocable | The orchestrator role's operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control landing consent and holds, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
+| `ab-operate` | outside the pipeline; model-invocable | The operator agent’s operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control landing consent and holds, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
 
 Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
 `ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not
@@ -2402,7 +2419,7 @@ description is exactly what the flag prevents. Those four exceptions drive no
 build phase, which is the criterion for membership (§16.3): `ab-spec` and
 `ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is
 read-only reference including the setup handoff guidance, and `ab-operate` is
-the manual for the orchestrator role, which any agent may take on.
+the manual for the operator-agent role, which any agent may take on.
 
 ## Revision-checked ticket writes
 

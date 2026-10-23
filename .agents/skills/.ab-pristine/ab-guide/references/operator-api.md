@@ -51,9 +51,9 @@ commands; see [owner workflow](setup.md#connected-projects).
 
 ## Operator sessions
 
-Operator sessions are the signed-in operator's durable orchestrator
+Operator sessions are the signed-in user's durable orchestrator
 conversations: a hosted-only third store resource. A session
-belongs to the operator who created it; other operators of the same repository
+belongs to the user who created it; other members of the same repository
 can read it and cannot write to it (`403 auth` on non-owner writes). Every
 write is attributed to the token's signed user — never a client-supplied
 identity — and carries no `via` marker: session events are the delegate's own
@@ -62,14 +62,14 @@ archived status is terminal.
 
 | Method and path | Result |
 |---|---|
-| `GET …/sessions` | The repository's session records, newest update first. Readable by any operator of the repository. |
-| `POST …/sessions` | `{"title"?:"…"}` → `201` + the created `SessionRecord`; the signed-in operator owns it. |
-| `GET …/sessions/{sid}` | `{session, state, turns}` where `state` is the reducer's derived state (`status`, `openTurn`, `pendingApproval`, `wakeGlobs`, `wakeCursors`, `turns`) and `turns` the ordered turn list. Readable by any operator of the repository. |
+| `GET …/sessions` | The repository's session records, newest update first. Readable by any member of the repository. |
+| `POST …/sessions` | `{"title"?:"…"}` → `201` + the created `SessionRecord`; the signed-in user owns it. |
+| `GET …/sessions/{sid}` | `{session, state, turns}` where `state` is the reducer's derived state (`status`, `openTurn`, `pendingApproval`, `wakeGlobs`, `wakeCursors`, `turns`) and `turns` the ordered turn list. Readable by any member of the repository. |
 | `POST …/sessions/{sid}/messages` | `{"text":"…"}` → appends `message.posted`. Owner only. |
 | `PUT …/sessions/{sid}/wake` | `{"globs":["…"]}` (possibly empty) → appends `session.wake-set`. Owner only. |
 | `POST …/sessions/{sid}/approvals` | `{"turn":"…","toolCallId":"…","decision":"approve"\|"deny"}` → `approval.answered`. Owner only; `409 refusal` when the reduced state has no matching pending approval. |
 | `POST …/sessions/{sid}/archive` | Empty body → `session.archived`. Owner only; `409 refusal` when already archived. |
-| `GET …/sessions/{sid}/turns/{turn}/stream?since=N&wait=N` | The turn's stream read: `{chunks,status,outcome?,artifact?}` with `since` strictly greater-than and the same bounded-wait semantics as the stream protocol (whole seconds, clamped at 30). Unknown turn is `404 not-found`. Readable by any operator of the repository. |
+| `GET …/sessions/{sid}/turns/{turn}/stream?since=N&wait=N` | The turn's stream read: `{chunks,status,outcome?,artifact?}` with `since` strictly greater-than and the same bounded-wait semantics as the stream protocol (whole seconds, clamped at 30). Unknown turn is `404 not-found`. Readable by any member of the repository. |
 
 Session state is a reduction of the session's event log, never a stored
 column; a `GET …/sessions/{sid}` response therefore always reflects the
@@ -257,12 +257,18 @@ record the first signal in the stop fact, and release its lease before exit.
 
 The default watch reports actionable conditions only:
 
+- `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
+
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
-- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
-  with auto-merge off or a current actionable merge-gate deferral. Armed consent
-  awaiting application is silent. One merge decision is reported per build/PR.
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
+  conflicted `restack.replayed` events. `build.consent-ready` is the single
+  signal for a ready consent or held landing, including first repository-wide
+  discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
+  Unready and stale candidates stay silent. `build.merge-decision` remains for
+  current actionable merge-gate deferrals and unsafe forge outcomes, once per
+  build/PR; it does not duplicate consent or hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
@@ -302,7 +308,9 @@ arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
 `ab wait --for attention` is build-only and uses the same build conditions:
-an open escalation or a merge decision. Existing conditions return immediately,
+current failed node verification, an open escalation, janitor failure attention,
+consent readiness, landing/conflict attention or a merge decision. Current failed
+verification satisfies attention even before its notification is written. Existing conditions return immediately,
 even with `--since`; live and backlog matches ignore routine outcomes and
 self-healing failures. A merge match uses the watch observation with
 `condition: "attention"`. Explicit `--event` globs remain event-only.

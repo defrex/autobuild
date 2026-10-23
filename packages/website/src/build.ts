@@ -1,11 +1,14 @@
 import { mkdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { renderPage } from './page'
+import { renderDocsPage } from './docs'
+import { loadDocsPages } from './docs-content'
 
 const SRC = import.meta.dir
 export const DEFAULT_OUT = join(SRC, '..', 'dist')
 
 export interface SiteFiles {
+  [path: `${string}.html`]: string
   'index.html': string
   'site.css': string
   'site.js': string
@@ -19,7 +22,8 @@ export function heroFrameText(): Promise<string> {
 }
 
 /** Everything the site is made of, as text. */
-export async function buildFiles(): Promise<SiteFiles> {
+export async function buildFiles(docsRoot?: string): Promise<SiteFiles> {
+  const pages = await loadDocsPages(docsRoot)
   const bundle = await Bun.build({
     entrypoints: [join(SRC, 'client.ts')],
     minify: true,
@@ -28,7 +32,8 @@ export async function buildFiles(): Promise<SiteFiles> {
   if (!bundle.success) throw new Error(bundle.logs.map(String).join('\n'))
   const [output] = bundle.outputs
   return {
-    'index.html': renderPage({ heroFrame: await heroFrameText() }),
+    ...Object.fromEntries(pages.map((page) => [page.file, renderDocsPage(page, pages)])),
+    'index.html': renderPage(),
     'site.css': await Bun.file(join(SRC, 'styles.css')).text(),
     'site.js': await (output as Bun.BuildArtifact).text(),
     'og.png': new Uint8Array(await Bun.file(join(SRC, 'og.png')).arrayBuffer()),
@@ -39,7 +44,11 @@ export async function buildSite(outDir: string = DEFAULT_OUT): Promise<string> {
   const files = await buildFiles()
   await rm(outDir, { recursive: true, force: true })
   await mkdir(outDir, { recursive: true })
-  for (const [name, content] of Object.entries(files)) await Bun.write(join(outDir, name), content)
+  for (const [name, content] of Object.entries(files)) {
+    const destination = join(outDir, name)
+    await mkdir(dirname(destination), { recursive: true })
+    await Bun.write(destination, content)
+  }
   return outDir
 }
 

@@ -3,7 +3,6 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
-import { copyText } from './client'
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
 
 const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
@@ -12,6 +11,7 @@ const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', '
 function textOf(html: string): string[] {
   const body = html.slice(html.indexOf('<body'))
   return body
+    .replace(/<header[\s\S]*?<\/header>/g, '')
     .replace(/<(script|style)[\s\S]*?<\/\1>/g, '')
     .replace(/<br\s*\/?>/g, ' ')
     .replace(/<[^>]+>/g, '\n')
@@ -24,23 +24,6 @@ function textOf(html: string): string[] {
     .filter((t) => t.length > 0)
 }
 
-/** The page or the reference without its hero dashboard figure. */
-function withoutHeroFigure(html: string): string {
-  return html
-    .replace(
-      /<div class="scroll desk-only" style="background: #141414;[\s\S]*?<\/div><\/div>\n/,
-      '',
-    )
-    .replace(
-      /<div class="phone-only" role="img" aria-label="Terminal dashboard[\s\S]*?<\/div><\/div>\n/,
-      '',
-    )
-    .replace(
-      /<div class="scroll" tabindex="0" role="region"[^>]*><pre class="frame">[\s\S]*?<\/pre><\/div>/,
-      '',
-    )
-}
-
 const tmp: string[] = []
 afterAll(async () => {
   for (const dir of tmp) await rm(dir, { recursive: true, force: true })
@@ -51,31 +34,68 @@ describe('static site', () => {
     const dir = await mkdtemp(join(tmpdir(), 'website-'))
     tmp.push(dir)
     await buildSite(dir)
-    expect((await readdir(dir)).sort()).toEqual(['index.html', 'og.png', 'site.css', 'site.js'])
+    expect((await readdir(dir)).sort()).toEqual([
+      'docs',
+      'index.html',
+      'og.png',
+      'site.css',
+      'site.js',
+    ])
   })
 
-  test('copy matches the design reference word for word, except the hero frame', async () => {
-    // The reference draws the hero dashboard by hand; the page shows the real
-    // captured frame instead, so both figures are set aside before comparing.
+  test('copy matches the design reference word for word', async () => {
     const { 'index.html': html } = await buildFiles()
     const updatedReference = (await readFile(REFERENCE, 'utf8'))
-      .replaceAll('bun add -g @defrex/autobuild', 'bun add -d --exact @defrex/autobuild')
+      .replaceAll('bun add -g @defrex/autobuild', INSTALL_COMMAND)
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
-    const reference = textOf(withoutHeroFigure(updatedReference))
+    const reference = textOf(updatedReference)
+    const landing = html
+      .replace(
+        /<section class="section">(?:(?!<section)[\s\S])*?autobuild · integration[\s\S]*?<\/section>/,
+        '',
+      )
+      .replace('<a class="btn" href="/docs/getting-started/">Getting started</a>', '')
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(words(textOf(withoutHeroFigure(html)))).toEqual(words(reference))
+    expect(words(textOf(landing))).toEqual(words(reference))
   })
 
-  test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
+  test('four figures are static drawings with capture IDs and no motion', async () => {
+    const { 'index.html': html, 'site.js': js } = await buildFiles()
+    for (const id of ['pipeline', 'dispatcher', 'intake', 'integration-tree']) {
+      expect(html.match(new RegExp(`data-capture-figure="${id}"`, 'g'))).toHaveLength(1)
+    }
+    expect(html).not.toContain('data-capture-animated')
+    expect(html).not.toContain('data-motion')
+    expect(js).not.toContain('__websiteCapture')
+    // Docs copy uses the canonical origin as a URL base, without a network service.
+    expect(js.replaceAll(SITE_URL, '')).not.toMatch(/https?:\/\//)
+  })
+
+  test('the hero leads into the getting-started commands, then Documentation and a ghost GitHub', async () => {
     const { 'index.html': html } = await buildFiles()
-    const hero = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
-    expect(hero).toContain('<pre class="frame">')
-    expect(hero).toContain('AUT-131')
-    expect(hero).toContain('[&gt;] implement(9m17s)')
-    expect(hero).not.toContain('phone-only')
-    expect(hero).not.toContain('\x1b')
+    const first = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
+    expect(first).toMatch(
+      /<\/div><\/div><div class="actions links"><a class="btn" href="\/docs\/">Documentation<\/a><a class="btn ghost" href="[^"]+">GitHub<\/a><\/div>$/,
+    )
+    expect(first).not.toContain('class="frame"')
+    expect(first).not.toContain('data-copy')
+    const terminal = (section: string): string =>
+      section.match(
+        /<div class="terminal">(?:<div class="cmd">[\s\S]*?<\/span><\/div>){4}<\/div>/,
+      )![0]
+    const last = html.slice(html.lastIndexOf('<section'))
+    expect(terminal(first)).toBe(terminal(last))
+    expect(terminal(first)).toContain(`<b>${INSTALL_COMMAND}</b>`)
+  })
+
+  test('sections carry no inline docs links', async () => {
+    const { 'index.html': html } = await buildFiles()
+    expect(html.slice(html.indexOf('<main'))).not.toMatch(/<p><a href="\/docs\//)
+    for (const path of ['builds', 'dispatcher', 'integration', 'seams', 'tickets']) {
+      expect(html).not.toContain(`href="/docs/${path}/"`)
+    }
   })
 
   test('structure: one h1, h2 per section, initial seam state, links', async () => {
@@ -87,18 +107,18 @@ describe('static site', () => {
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
     expect(html).toContain('fully local')
-    expect(html).toContain('bun add -d --exact @defrex/autobuild')
+    expect(html).toContain('bun add -D @defrex/autobuild')
     expect(html).toContain('bun ab init')
     expect(html).toContain('bun ab dispatch')
   })
 
   test('sections are separated by space alone and the page closes on GitHub', async () => {
     const { 'index.html': html, 'site.css': css } = await buildFiles()
-    expect(html).not.toContain('class="rule"')
+    expect(html.slice(html.indexOf('<main'))).not.toContain('site-rule')
     expect(html).not.toContain('inside one build-runner')
     expect(html).not.toContain('setup.md')
     const last = html.slice(html.lastIndexOf('<section'))
-    expect(last.match(/<a class="btn"/g)).toHaveLength(1)
+    expect(last.match(/<a class="btn"/g)).toHaveLength(2)
     expect(last).toContain(`<a class="btn" href="${REPO_URL}">View on GitHub</a>`)
     expect(css).toContain('gap: 288px')
     const phone = css.slice(css.indexOf('@media (max-width: 719px)'))
@@ -106,7 +126,8 @@ describe('static site', () => {
     expect(phone).toContain('padding-block: 48px 192px')
   })
 
-  test('each figure has a desktop and a portrait form with one description', async () => {
+  test('each drawn figure has a desktop and a portrait form with one description', async () => {
+    // The integration figure is preformatted terminal text that scrolls instead.
     const { 'index.html': html, 'site.css': css } = await buildFiles()
     expect(html.match(/class="scroll desk-only"/g)).toHaveLength(3)
     expect(html.match(/class="phone-only"/g)).toHaveLength(3)
@@ -181,35 +202,5 @@ describe('knob motion', () => {
     expect(reduced).toMatch(/\.knob\s*{[^}]*transition:\s*none/)
     expect(html).toMatch(/class="knob" style="left: [^"]*"/)
     expect(html).not.toMatch(/class="knob"[^>]*(animation|transition)/)
-  })
-})
-
-describe('copy control', () => {
-  test('copies the install command', async () => {
-    const written: string[] = []
-    const clipboard = {
-      writeText: async (t: string) => {
-        written.push(t)
-      },
-    }
-    expect(await copyText(clipboard, INSTALL_COMMAND)).toBe(true)
-    expect(written).toEqual(['bun add -d --exact @defrex/autobuild'])
-  })
-
-  test('a refused or missing clipboard does not throw', async () => {
-    expect(await copyText({ writeText: () => Promise.reject(new Error('denied')) }, 'x')).toBe(
-      false,
-    )
-    expect(
-      await copyText(
-        {
-          writeText: () => {
-            throw new Error('sync')
-          },
-        },
-        'x',
-      ),
-    ).toBe(false)
-    expect(await copyText(undefined, 'x')).toBe(false)
   })
 })

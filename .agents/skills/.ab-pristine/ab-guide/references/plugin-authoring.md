@@ -1,96 +1,111 @@
-# Authoring Autobuild plugins
+---
+title: "Writing a plugin"
+group: "guides"
+description: "Build, contract-test, package, and publish an Autobuild infrastructure adapter."
+label: "Plugins"
+order: 7
+---
 
-Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`.
-Here, `ab <command>` means the repository-installed CLI; run it as
-`bun ab <command>`, for example `bun ab init`.
+# Writing a plugin
 
-Use this reference when asked to connect Autobuild to another ticket tracker,
-agent runtime, workspace system, or forge. A plugin is a trusted Bun module
-loaded in-process from the consuming repository. **Definition of done for an
-adapter: the unchanged shared contract suite for its port passes.** Interface
-conformance or a successful `ab plugin doctor` alone is not certification.
+A plugin is a trusted Bun module, loaded in-process from the consuming repository, that connects Autobuild to another ticket tracker, agent runtime, workspace system or forge.
+
+Install Autobuild in the target repository with `bun add -d --exact @defrex/autobuild`; `ab <command>` below means `bun ab <command>` there.
+
+**Definition of done for an adapter: the unchanged shared contract suite for its port passes.** Interface conformance or a clean `ab plugin doctor` is not enough.
 
 ## 1. Choose the port and preserve its semantics
 
-Import public types only from `@defrex/autobuild/plugin-sdk`; package-internal module
-paths are not API.
+Import public types only from `@defrex/autobuild/plugin-sdk`; internal module paths are not API.
 
-| CLI port | Manifest map | Factory result | Required semantics |
+| Port | Manifest map | Factory returns | Selected by |
 |---|---|---|---|
-| `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, stable external creation-key projection, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
-| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
-| `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair; preserve unknown unpublished work. |
-| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. Optional API 1.8 failure classification and request observers are described below. |
+| `ticket-source` | `ticketSources` | `TicketSource` | `[tickets].source` |
+| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | `[roles.*].runtime` |
+| `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | `[workspace].provider` |
+| `forge` | `forges` | `Forge` | root `forge` key |
 
-Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
-actual build branch into a build-private ref, publish immutable exact-SHA refs
-under `refs/autobuild/archive/<slug>/<sha>`, and replace the explicit branch with
-an explicit expected remote head. Return `lease-mismatch` separately from
-transport, auth and policy failures. If the CAS succeeds but another writer
-advances it before readback, return `lease-mismatch` with `rewritten: true` and the
-observed `actual` head. The kernel records that write and retries the observed
-history without claiming completion. After an acknowledged replacement, reattach
-the matching detached workspace HEAD to the build branch so later implementation
-publication remains usable. Never overwrite unknown work or silently
-fall back to merging, ordinary pushes, archive branches or tags. Older forge
-plugins remain loadable and receive an actionable refusal at reconcile time.
-Remote workspace providers additionally need trusted `WorkspacePublication.rewrite`
-after guest execution teardown; ordinary `publish` cannot publish a restack.
-Every publication succeeds only after authoritative branch-head readback equals
-its frozen intended SHA, including recovery after a failed push. Remote-backed
-local refs are caches: set them unconditionally after confirmation, fetching the
-advertised ref if objects are missing, without resetting checkout files.
-`localExpected` is historical input only. Local-git's shared ref database remains
-authoritative and keeps CAS. Ordinary `pushBranch(workspacePath, branch, sha?)`
-receives the frozen SHA from kernel callers and remains fast-forward only;
-legacy callers may omit SHA to select HEAD. Implement `confirmPublication`
-to inspect the authoritative head and refresh caches only on an exact SHA match;
-kernel callers refuse adapters without it before attempting a push. Hosted `WorkspacePublication` must
-provide authoritative `isPublished` and confirm after writing, as well as before
-retrying. Remote inspection must not resume a stopped guest or run commands in
-it: refresh the guest cache inside trusted publication before stopping it. Missing inspection fails actionably. Unconfirmed candidate ancestry
-never proves publication.
+All four manifest maps have production selectors. Omitted forge and workspace selectors default to builtin `github` and `git-worktree`; roles keep normal runtime inheritance.
 
-Plugin API 1.3 adds the optional AgentRunner failure `cause` and the
-`exhaustion-failure` shared-contract scenario. Legacy failures without `cause`
-remain supported: `permanent: false` is eligible for a configured alternate,
-while `permanent: true` stops the chain. A runtime plugin that emits/depends on
-the richer cause should declare an API range containing `^1.3.0`.
+`BuildStore` and `BlobStore` contract types are exported for remote-server authors, but BuildStore is **not** an in-process manifest map: implement the language-neutral remote store protocol and run its conformance path. `TelemetrySource` is a frozen port type with no plugin registration surface in this release.
 
-Plugin API 1.4 adds optional `Ticket.creationKey`. Ticket-source plugins should
-project the stable external create/adoption key from `create`, `get`, and
-`listReady`; Autobuild uses it to correlate ready tickets with durable Harvest
-reservations while blocker recording is unfinished. Legacy tickets may omit the
-field and continue to dispatch normally. A plugin relying on this host gate
-should declare an API range containing `^1.4.0`.
+### `ticket-source`
 
-Plugin API 1.5 makes remote workspace locations explicit. `path` is the path in
-the workspace environment; set optional `localPath` only when that same working
-copy is directly reachable by the dispatcher. Workspace-owned executors receive
-the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID
-supervision remains host-owned. A workspace plugin relying on these fields
-should declare an API range containing `^1.5.0`.
+Lists, gets and claims tickets to start builds; receives comments, transitions, creates and updates. Owns lifecycle names, dependency completion, idempotent creation with a stable external creation-key projection, and partial-list diagnostics. Never consulted mid-build; not artifact storage.
 
-Plugin API 1.8 adds optional forge failure classification and request accounting.
-Import the runtime `ForgeFailure` constructor and `isForgeFailure`, plus types
-`ForgeFailureDetails`, `ForgeRequestObserver`, and `ForgeRequestContext` from
-`@defrex/autobuild/plugin-sdk`. Throw
-`new ForgeFailure(message, { kind: 'rate-limited', resetAt })` with a valid ISO
-reset timestamp, or `{ kind: 'transient', retry: 'retryable' }` for retryable
-transport errors. Ordinary policy/permission refusals remain deferrals. Never
-include credentials. The `forgeFailure: 'autobuild.forge-failure.v1'` discriminant
-and validated details work across separately loaded SDK copies.
+### `agent-runtime`
 
-Optionally implement `Forge.observeRequests(observer): () => void`; return a
-disposer and call registered observers once per wire request, including failed
-requests and pagination. Pass `ForgeRequestContext` with the build slug when
-known, or `{}` when unknown. Capture attribution before awaiting transport and
-notify after its outcome is known. Optional `outcome` is `restPrimary` for REST
-HTTP responses other than 304, `restNotModified` for REST 304, or `graphql` for
-GraphQL calls (including failures). Network failures have no proven REST debit
-and omit the category. The host fills missing build attribution from its
-current build-scoped operation; otherwise the request is repository/unattributed.
-Credential discovery and skipped calls are not provider requests. For example:
+Wrap an `AgentRunner` that supports:
+
+- start, continue and end, with complete transcripts and usage
+- per-turn environment refresh, and cancellation that keeps an endable handle for transcript deposition
+- typed failures: verbatim message, retry-compatible `permanent` bit, optional `cause: availability | exhaustion | credentials | configuration` routing evidence
+- the distribution-managed `ab` launcher
+
+Declare served model prefixes and a default. Optional tool-free `oneShot` sits beside the runner interface.
+
+### `workspace-provider`
+
+- Provision an absolute, writable working copy for the requested branch; return durable base evidence.
+- Resume an intact branch non-destructively, never silently re-cut from a newer base. Rematerialize a lost copy. Make release idempotent.
+- Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair. Preserve unknown unpublished work.
+
+### `forge`
+
+- Kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated and ungated auto-merge, head-guarded squash merge, and comments. Agents never receive forge credentials or push.
+- API 1.2: optional idempotent `closePr` and `deleteBranch` for abort cleanup. `closePr` must preserve a racing merge. Without them, cleanup stays visibly pending.
+- Optional `prAttachments` hosts images; the text-only path must work without it.
+
+### Reconcile rewrites
+
+Reconcile requires the optional grouped `Forge.rewrite` capability:
+
+1. Snapshot the actual build branch into a build-private ref.
+2. Publish immutable exact-SHA refs under `refs/autobuild/archive/<slug>/<sha>`.
+3. Replace the explicit branch, leased on an explicit expected remote head.
+
+- Return `lease-mismatch` separately from transport, auth and policy failures.
+- If the CAS succeeds but another writer advances the branch before readback, return `lease-mismatch` with `rewritten: true` and the observed `actual` head. The kernel records the write and retries without claiming completion.
+- After an acknowledged replacement, reattach the matching detached workspace HEAD to the build branch so later publication works.
+- Never overwrite unknown work or fall back to merging, ordinary pushes, archive branches or tags.
+- Older forge plugins still load; reconcile refuses them actionably.
+- Remote workspace providers also need trusted `WorkspacePublication.rewrite` after guest teardown; ordinary `publish` can't publish a restack.
+
+### Publication readback
+
+Publication succeeds only when an authoritative branch-head readback equals the frozen intended SHA, including recovery after a failed push. Unconfirmed candidate ancestry never proves publication.
+
+- `pushBranch(workspacePath, branch, sha?)` receives the frozen SHA from kernel callers and stays fast-forward only. Legacy callers may omit the SHA to select HEAD.
+- `confirmPublication` inspects the authoritative head and refreshes caches only on an exact SHA match. Kernel callers refuse adapters lacking it before pushing.
+- Remote-backed local refs are caches: set them unconditionally after confirmation, fetching the advertised ref if objects are missing, without resetting checkout files. `localExpected` is historical input only. Local-git's shared ref database stays authoritative and keeps CAS.
+- Hosted `WorkspacePublication` must provide authoritative `isPublished`, and confirm after writing and before retrying.
+- Remote inspection must not resume a stopped guest or run commands in it; refresh the guest cache inside trusted publication before stopping it. Missing inspection fails actionably.
+
+### Forge failures and request accounting
+
+API 1.8 adds optional forge failure classification. Import `ForgeFailure` and `isForgeFailure`, plus the types `ForgeFailureDetails`, `ForgeRequestObserver` and `ForgeRequestContext`, from `@defrex/autobuild/plugin-sdk`.
+
+```ts
+// Rate limit, with a valid ISO reset timestamp:
+throw new ForgeFailure(message, { kind: 'rate-limited', resetAt })
+// Retryable transport error:
+throw new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })
+```
+
+- Don't classify ordinary policy and permission refusals; they remain deferrals. Never include credentials.
+- The `forgeFailure: 'autobuild.forge-failure.v1'` discriminant and validated details work across separately loaded SDK copies. Arbitrary legacy errors aren't classified.
+
+Optional `Forge.observeRequests(observer): () => void` returns a disposer and calls each observer once per wire request, including failures and pagination.
+
+- Pass `ForgeRequestContext` with the build slug, or `{}` when unknown; the host fills missing attribution from its current build-scoped operation, else the request is repository/unattributed. Capture context before awaiting transport; notify after the outcome.
+- Credential discovery and skipped calls are not provider requests.
+
+| `outcome` | Request |
+|---|---|
+| `restPrimary` | REST HTTP response other than 304 |
+| `restNotModified` | REST 304 |
+| `graphql` | GraphQL call, including failures |
+| omitted | network failure (no proven REST debit) |
 
 ```ts
 observeRequests(observer: ForgeRequestObserver) {
@@ -103,48 +118,29 @@ for (const observer of this.observers) {
 }
 ```
 
-Optional `withReadScope(work)` wraps a complete dispatcher tick, sharing promises
-and observations across builds, and tears down on rejection too. Keep concurrent
-operations outside that scope independent. Optional `primeNodeReads({workspacePath,
-parent, head, prNumber?})` seeds opened-node facts. Priming is an optimization:
-non-cooldown failures produce a diagnostic and fall through to ordinary stage
-reads, preserving parent recovery when the previous parent disappeared.
-Neither capability changes the
-plugin API version requirement. Invalidate observations before writes, including
-uncertain writes and Git pushes; acknowledgement and readiness reads must stay
-fresh. Branch and ref endpoints share normalized facts, never HTTP validators.
+Declare `apiVersion: '^1.8.0'` for these capabilities. Legacy 1.x plugins load without observers and show unavailable counts.
 
-Declare `apiVersion: '^1.8.0'` when using these capabilities. Compatible legacy
-1.x plugins still load without observers and show unavailable counts. Arbitrary
-legacy errors are not classified automatically.
+### Read scopes
 
-Plugin API 1.7 extends the workspace-provider factory context with the
-host-derived seams a store-requiring remote provider needs. Workspace-provider
-factories additionally receive `storeRef` and `delegateCredential` (guaranteed present
-when the registration declares `capabilities.storeRequirements`),
-`runtimeReferences` (the host's effective runtime routes; absent at call sites
-that reference no runtimes), and the checkout-less `origin` and
-`remoteBranchHead` readers (absent means fall back to host `git` from
-`repoRoot`). All five are optional, and a factory that ignores them changes
-nothing. A plugin reading the new seams should declare an API range containing
-`^1.7.0`.
+Forge optimizations that don't change the required plugin API version:
 
-`BuildStore` and `BlobStore` contract types are exported for remote-server
-authors, but BuildStore is **not** an in-process manifest map. Implement the
-colocated language-neutral
-[remote store protocol](remote-store-protocol.md) and run its conformance path
-instead. `TelemetrySource` is a frozen port type with no plugin registration
-surface in this release.
+- **`withReadScope(work)`** wraps a dispatcher tick, sharing promises and observations across builds; tears down on rejection too. Operations outside the scope stay independent.
+- **`primeNodeReads({workspacePath, parent, head, prNumber?})`** seeds opened-node facts. Non-cooldown failures emit a diagnostic and fall through to ordinary stage reads, preserving recovery when the previous parent disappeared.
 
-All four manifest maps have production selectors. Use `[tickets].source` for a
-ticket source, the root `forge` key for a forge, `[workspace].provider` for a
-workspace provider, and `[roles.*].runtime` for an agent runtime. Omitted forge
-and workspace selectors retain the builtin `github` and `git-worktree` defaults;
-role inheritance retains its normal runtime fallback.
+Invalidate observations before writes, including uncertain writes and Git pushes. Acknowledgement and readiness reads stay fresh. Branch and ref endpoints share normalized facts, never HTTP validators.
+
+### API versions
+
+A plugin relying on a capability declares an `apiVersion` range containing its version (for example `^1.5.0`). Legacy plugins without newer fields keep working.
+
+- **1.2** Forge `closePr` and `deleteBranch`.
+- **1.3** `AgentRunner` failure `cause` and the `exhaustion-failure` contract scenario. Without `cause`, `permanent: false` is eligible for a configured alternate; `permanent: true` stops the chain.
+- **1.4** Optional `Ticket.creationKey`: the stable external create/adoption key, projected from `create`, `get` and `listReady`, correlating ready tickets with durable Harvest reservations while blocker recording is unfinished. Legacy tickets may omit it.
+- **1.5** `path` is the path in the workspace environment; set optional `localPath` only when the dispatcher can reach that same copy directly. Workspace-owned executors receive the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID supervision stays host-owned.
+- **1.7** Workspace factory seams.
+- **1.8** Forge failure classification and request observers.
 
 ## 2. Create a repository-local module
-
-Start in the consuming repository, for example:
 
 ```text
 my-repository/
@@ -152,8 +148,7 @@ my-repository/
 └── autobuild-plugin.ts
 ```
 
-Use erased imports in real adapter production code whenever the SDK symbols are
-only types:
+Use `import type` for SDK symbols that are only types:
 
 ```ts
 import type {
@@ -175,50 +170,40 @@ export default {
 } satisfies AutobuildPluginManifest
 ```
 
-Every module must default-export one strict `AutobuildPluginManifest`:
+### The manifest
 
-- `name` is a nonblank diagnostic/ownership identity; it need not equal the npm
-  package name.
-- `apiVersion` is a semver **range accepted by the plugin**, not the plugin's
-  package version. Choose the narrowest range containing the host plugin API
-  against which you ran contracts. `ab plugin list` reports the declared range
-  and host version; invalid or incompatible ranges fail loading.
-- The only registration keys are `ticketSources`, `agentRuntimes`,
-  `workspaceProviders`, and `forges`. Unknown manifest fields fail validation.
-  Adapter names are yours to choose: every declared name is registered
-  verbatim, including one such as `__proto__` that collides with an inherited
-  object property — declare that one computed, `{ ['__proto__']: factory }`,
-  since a plain `__proto__:` key in an object literal sets the prototype
-  instead of declaring an adapter. The parsed maps have a null prototype, so
-  reading an undeclared name answers `undefined` rather than an inherited
-  member. A blank or whitespace-only name is rejected: an adapter is selected
-  from configuration by name.
-- A registration may be a bare adapter factory, or
-  `{ factory, contract: { factory, live? } }`. The first factory returns the
-  adapter; the contract factory returns that port suite's fixture factory.
-  Ticket-source descriptors may additionally declare a deduplicated
-  `requiredEnv` list; the host rejects missing or empty credentials before
-  invoking that selected factory.
-- Every adapter and contract factory receives `{ config, env, repoRoot }`:
-  adapter-specific read-only `config`, the process `env`, and `repoRoot` as the
-  absolute consuming-repository root. Ticket sources receive the existing
-  `[tickets]` fields, workspace providers receive `[workspace.config]`, and
-  runtime and forge factories currently receive an empty `config` object.
-  Workspace providers additionally receive the host-derived seams (API 1.7):
-  `storeRef` and `delegateCredential` — guaranteed URL and exchange callback when the registration
-  declares `capabilities.storeRequirements` — plus `runtimeReferences`,
-  `origin`, and `remoteBranchHead`. Each seam is optional and absent when the
-  host call site supplies no such value; absent `origin`/`remoteBranchHead`
-  fall back to host `git` from `repoRoot`.
+Every module default-exports one strict `AutobuildPluginManifest`:
 
-Add the module specifier at the TOML root, before any table. Repository-path
-specifiers resolve from the config-bearing root, which is the immutable build
-worktree in scoped phases. npm package specifiers resolve from the consuming
-main checkout's installed dependencies first, then from the Autobuild
-installation the CLI runs from as a fallback. Install extensions in the
-consuming repository with `bun add -d --exact @defrex/autobuild-<extension>`;
-a repository copy wins over an installed one, and missing packages fail and
-are never installed automatically:
+- **`name`** Nonblank diagnostic and ownership identity; need not equal the npm package name.
+- **`apiVersion`** A semver **range accepted by the plugin**, not its package version: the narrowest range containing the host plugin API you ran contracts against. `ab plugin list` reports it beside the host version; invalid or incompatible ranges fail loading.
+- **Registration keys** Only `ticketSources`, `agentRuntimes`, `workspaceProviders` and `forges`; unknown fields fail validation.
+- **Adapter names** Register verbatim. Declare `__proto__` computed, `{ ['__proto__']: factory }`; a plain `__proto__:` key sets the prototype. Parsed maps have a null prototype, so undeclared names read `undefined`. Blank or whitespace-only names are rejected.
+- **Registrations** A bare adapter factory, or `{ factory, contract: { factory, live? } }` whose contract factory returns that port suite's fixture factory. Ticket-source descriptors may declare a deduplicated `requiredEnv` list; the host rejects missing or empty credentials before invoking the selected factory.
+
+### Factory context
+
+Every adapter and contract factory receives `{ config, env, repoRoot }`: read-only `config`, the process `env`, and `repoRoot`, the absolute consuming-repository root.
+
+| Port | `config` |
+|---|---|
+| ticket-source | the existing strict `[tickets]` fields; no untyped plugin-options table |
+| workspace-provider | the open `[workspace.config]` table, the only place for adapter-owned settings |
+| agent-runtime, forge | an empty object |
+
+Workspace-provider factories also receive optional host-derived seams (API 1.7), absent when the call site has none; ignoring them changes nothing.
+
+- **`storeRef`, `delegateCredential`** Store URL and credential-exchange callback; guaranteed when the registration declares `capabilities.storeRequirements`.
+- **`runtimeReferences`** The host's effective runtime routes.
+- **`origin`, `remoteBranchHead`** Checkout-less readers; when absent, fall back to host `git` from `repoRoot`.
+
+Remote workspace factories must call `delegateCredential(storeRef, undefined, target)` for per-resource grants before provisioning or launching guests; parent authority stays in host composition.
+
+- `storeToken` is retired and never supplied; factory environments exclude `AB_TOKEN`. Plugins that forwarded it must migrate to the callback and fail closed without it.
+- Launch credentials travel through the separate transient execution-auth argument, never serialized execution identity.
+
+### Configure and resolve
+
+List module specifiers at the TOML root, before any table, and select adapters:
 
 ```toml
 plugins = ["./autobuild-plugin.ts"]
@@ -229,67 +214,40 @@ source = "file"
 readyState = "ready"
 ```
 
-Inside a cached dispatcher generation, selection still uses those roots, but
-selected external plugin code and its installed dependency closure are copied
-into an immutable auxiliary snapshot. Native ESM, CommonJS `require`, delayed
-imports, export-from and module-anchored `createRequire` all resolve the core
-package to the same canonical frozen runtime, including SDK values and classes.
-There are no loader hooks or source transforms. Repo-path modules in a consuming
-repository use their literal import closure and literal `new URL(..., import.meta.url)`
-assets, rather than copying the checkout or its unused dev dependencies. Plugins
-with their own package boundary retain that package’s assets and dependency graph.
-Package-relative assets remain
-beside copied modules; `import.meta.url` and filenames name the snapshot, while
-cwd and factory `repoRoot` remain the consuming checkout. Explicit absolute
-paths remain plugin-controlled external resources.
+- Repository-path specifiers resolve from the config-bearing root, which is the immutable build worktree in scoped phases.
+- npm package specifiers resolve from the consuming main checkout's installed dependencies first, then from the Autobuild installation the CLI runs from.
+- Install extensions in the consuming repository with `bun add -d --exact @defrex/autobuild-<extension>`; a repository copy wins over an installed one, and missing packages fail and are never installed automatically.
+- Specifiers must be unique: an exact repeat fails config validation before any plugin loads, naming the value and both positions.
 
-Auxiliary snapshots use neutral compiler boundaries and cached Bun entrypoints
-pin the core config with `--no-install --tsconfig-override` before JavaScript
-runs. Autobuild-owned compiler chains cannot escape the runtime; installed
-third-party development configs are preserved byte-for-byte. New selections
-can prepare new snapshots without changing the generation's core identity.
-Live plugin processes retain their core runtime independently of Store leases.
-Plugin-loading CLI calls reclaim dead auxiliary snapshots during the generation,
-so edits between phase commands do not accumulate checkout-sized copies.
-Ordinary noncached consumers retain the separately loaded SDK compatibility
-rules described above.
+### Loading rules
 
-Each configured specifier string must be unique. An exact repeat fails config
-validation before Bun resolves or evaluates any plugin, identifies the repeated
-value and both list positions, and tells the operator to remove or deduplicate
-the entry. Distinct specifiers remain separate declarations.
+- Modules load in declaration order; registration is atomic per manifest.
+- Resolution or evaluation failure, a missing or malformed default export, an incompatible API range, or a collision fails before any claims or builds.
+- Within one port, builtin and earlier-plugin names can't be shadowed; a collision names the adapter and both owners. Different ports may share a name.
+- Plugins are trusted like configured shell commands: Bun evaluates them in-process with repository authority and no sandbox.
 
-Select only the adapters the repository uses. Set `forge = "acme"` for the
-example forge above; set `[tickets].source`, `[workspace].provider`, or a
-`[roles.*].runtime` to the matching registration name for the other ports.
-Ticket plugins receive the existing strict `[tickets]` fields—there is no
-untyped plugin-options table. Workspace plugins put adapter-owned settings only
-under the open `[workspace.config]` table.
+### Cached dispatcher generations
 
-Plugin modules load in declaration order. Resolution/evaluation failure, a
-missing or malformed default export, incompatible API range, or collision
-fails before claims/builds. Builtin and earlier-plugin names cannot be
-shadowed within one port; a collision between distinct plugins identifies the
-adapter and both owners. The same adapter name may exist on different ports.
-Registration is atomic per manifest. Plugins are trusted like configured shell
-commands: Bun evaluates them in-process with repository authority and no
-sandbox.
+In a cached dispatcher generation, selection uses the same roots, but selected external plugin code and its installed dependency closure are copied into an immutable auxiliary snapshot.
+
+- ESM, CommonJS `require`, delayed imports, export-from and module-anchored `createRequire` all resolve the core package, SDK values and classes included, to the same frozen runtime, without loader hooks or source transforms.
+- Repo-path modules copy their literal import closure and literal `new URL(..., import.meta.url)` assets, not the checkout or unused dev dependencies. Packaged plugins keep their package's assets and dependency graph.
+- Package-relative assets stay beside copied modules. `import.meta.url` and filenames name the snapshot; cwd and factory `repoRoot` remain the consuming checkout. Explicit absolute paths stay plugin-controlled external resources.
+- Snapshots use neutral compiler boundaries; cached Bun entrypoints pin the core config with `--no-install --tsconfig-override`. Autobuild-owned compiler chains can't escape the runtime; installed third-party development configs are preserved byte-for-byte.
+- New selections can prepare new snapshots without changing the generation's core identity. Live plugin processes keep their core runtime independently of Store leases.
+- Plugin-loading CLI calls reclaim dead snapshots, so edits between phase commands don't pile up checkout-sized copies.
+
+Noncached consumers follow the separately loaded SDK compatibility rules in section 1.
 
 ## 3. Keep secrets out of source and config
 
-Never put credentials in `autobuild.toml`, the manifest, committed fixtures, or
-contract output. Read them from the factory's `env` (for example
-`env.ACME_FORGE_TOKEN`) and document the required environment variables. Keep
-local values in ignored environment files or the process secret manager.
-Validate missing credentials when the selected adapter or live fixture is
-created, not at module top level, so registration remains lazy and diagnostics
-can inspect unrelated adapters. Ticket-source descriptors should declare
-`requiredEnv` when the host can enforce the credential names before factory
-invocation; other ports validate their environment in their factories.
+- Never put credentials in `autobuild.toml`, the manifest, committed fixtures or contract output.
+- Read them from the factory's `env` (for example `env.ACME_FORGE_TOKEN`), document the required environment variables, and keep local values in ignored env files or a secret manager.
+- Validate credentials when the selected adapter or live fixture is created, not at module top level, so registration stays lazy and diagnostics can inspect unrelated adapters. Ticket-source descriptors should declare `requiredEnv`; other ports check in their factories.
 
 ## 4. Add the contract harness first
 
-A contract-bearing registration has this shape:
+A contract-bearing registration:
 
 ```ts
 const manifest = {
@@ -304,25 +262,22 @@ const manifest = {
 } satisfies AutobuildPluginManifest
 ```
 
-The descriptor's factory returns a `TicketSourceContractFactory`,
-`AgentRunnerContractFactory`, `WorkspaceProviderContractFactory`, or
-`ForgeContractFactory` as appropriate. Use the matching harness types exported
-by `@defrex/autobuild/plugin-sdk`. The host invokes the unchanged shared suite; do not
-copy, wrap, skip, or weaken its assertions.
+The contract factory returns a `TicketSourceContractFactory`, `AgentRunnerContractFactory`, `WorkspaceProviderContractFactory` or `ForgeContractFactory` (harness types from `@defrex/autobuild/plugin-sdk`). The host runs the unchanged shared suite; don't copy, wrap, skip or weaken its assertions.
 
-Contract fixtures must isolate resources (UUID-namespaced records, branches,
-PRs, sessions, or workspaces), expose the independent controls/probes required
-by their harness type, clean up in `cleanup` even after assertion failure, and
-make retries/release idempotent where the port requires it. A fixture that
-contacts a provider or mutates external resources must declare
-`contract: { factory, live: true }`. Autobuild refuses to launch it unless the
-operator explicitly sets:
+Contract fixtures must:
+
+- isolate resources (UUID-namespaced records, branches, PRs, sessions or workspaces)
+- expose the independent controls and probes their harness type requires
+- clean up in `cleanup`, even after an assertion failure
+- make retries and release idempotent where the port requires it
+
+A fixture that contacts a provider or mutates external resources must declare `contract: { factory, live: true }` and runs only with an explicit opt-in:
 
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test forge acme
 ```
 
-Run the author loop from the consuming repository:
+Author loop:
 
 ```sh
 ab plugin list
@@ -330,25 +285,19 @@ ab plugin doctor
 ab plugin test ticket-source acme
 ```
 
-- `list` shows builtins and configured registrations, provenance, module
-  resolution, plugin API compatibility, and contract availability.
-- `doctor` attempts every configured module and exits nonzero if any fail. It
-  checks loading/registration, not adapter semantics.
-- `test` launches Bun's unchanged suite for exactly one port/adapter, forwards
-  per-test output, and returns its exit status.
+| Command | Does |
+|---|---|
+| `list` | builtins and configured registrations: provenance, resolution, API compatibility, contract availability |
+| `doctor` | loads every configured module, nonzero if any fail; not a semantics check |
+| `test` | runs the unchanged suite for one port and adapter, forwards per-test output, returns its exit status |
 
-Repeat after every adapter change. The adapter is done only when that command's
-shared suite is green (with the explicit live opt-in when applicable).
+Repeat after every adapter change until the suite is green, with the live opt-in when applicable.
 
 ## 5. Zero-network wiring walkthrough
 
-This executable scratch example proves module resolution, manifest spelling,
-configuration, and the TicketSource contract bridge without network access. It
-uses Autobuild's reference fake and is **only a wiring exercise**. Replace the
-fake and fixture with the real provider implementation; certification means the
-real adapter's harness passes the same unchanged suite.
+This scratch example proves module resolution, manifest spelling, configuration and the TicketSource contract bridge offline. It uses Autobuild's reference fake, so it is **only a wiring exercise**; your real adapter's harness must still pass the same suite.
 
-Create `autobuild-plugin.ts` with the exact block below.
+Create `autobuild-plugin.ts`:
 
 <!-- plugin-authoring-walkthrough-module:start -->
 ```ts
@@ -404,14 +353,11 @@ ab plugin list
 ab plugin test ticket-source walkthrough
 ```
 
-`ab init` preserves the existing config and vendors this guide. Doctor and list
-must show the `walkthrough` plugin/adapter, and the final command must exit zero
-with the TicketSource contract tests.
+`ab init` keeps the existing config and vendors this guide. Doctor and list show the `walkthrough` plugin and adapter; the contract run exits zero.
 
 ## 6. Package and publish when reuse warrants it
 
-A repository-local module is the shortest path and needs no packaging. For an
-npm plugin, keep one public module and an ordinary test/typecheck setup:
+A repository-local module needs no packaging. An npm plugin needs one public module plus ordinary test and typecheck setup:
 
 ```text
 acme-autobuild-plugin/
@@ -421,7 +367,7 @@ acme-autobuild-plugin/
 └── bun.lock
 ```
 
-A representative package manifest is:
+This manifest declares only the tested host release (`1.0.0-beta.2`); widen it only after the unchanged contracts pass on each added host.
 
 ```json
 {
@@ -435,24 +381,14 @@ A representative package manifest is:
     "test": "bun test",
     "prepublishOnly": "bun run typecheck && bun test"
   },
-  "devDependencies": { "autobuild": "^2.0.0", "typescript": "^7.0.0" },
-  "peerDependencies": { "autobuild": "^2.0.0" },
-  "peerDependenciesMeta": { "autobuild": { "optional": true } }
+  "devDependencies": { "@defrex/autobuild": "1.0.0-beta.2", "typescript": "5.9.3" },
+  "peerDependencies": { "@defrex/autobuild": "1.0.0-beta.2" },
+  "peerDependenciesMeta": { "@defrex/autobuild": { "optional": true } }
 }
 ```
 
-When production code imports only SDK types, those imports erase: Autobuild is
-an authoring/test dev dependency, not a runtime `dependencies` entry. An
-optional peer declaration communicates tested host-package compatibility to
-package consumers without making plugin execution depend on a second Autobuild
-copy. Runtime imports (for example importing a reference fake in the scratch
-walkthrough) are different and require a runtime dependency; do not ship the
-fake walkthrough as a production adapter.
-
-Keep the package's own semver independent from the manifest's `apiVersion`
-range. On an incompatible host plugin API, update the adapter and contracts,
-change the range only after they pass against that host, and release the
-package version according to the user-visible compatibility change.
+- **Dependencies.** Type-only SDK imports erase, so Autobuild is a dev dependency, not a runtime `dependencies` entry. The optional peer names the tested host without loading a second Autobuild copy. Runtime imports, such as the reference fake, need a runtime dependency; never ship the fake as a production adapter.
+- **Versions.** Package semver is independent of the host range and `apiVersion`. On an incompatible host plugin API, update adapter and contracts, change the range once they pass, and version the package by the user-visible compatibility change.
 
 Before publishing:
 
@@ -465,38 +401,26 @@ npm pack
 npm publish --access public
 ```
 
-Inspect the dry-run/tarball file list for source, secrets, local fixtures, and
-missing exports. Install the generated tarball in a scratch consuming
-repository, configure `plugins = ["@acme/autobuild-plugin"]`, and rerun
-`ab plugin doctor`, `ab plugin list`, and the contract command before publish.
-Use `--access public` for a public scoped package; omit it when registry/access
-policy says otherwise.
+1. Check the dry-run and tarball file lists for source, secrets, local fixtures and missing exports.
+2. Install the tarball in a scratch consuming repository with `plugins = ["@acme/autobuild-plugin"]`.
+3. Rerun `ab plugin doctor`, `ab plugin list` and the contract command.
+
+Drop `--access public` when the registry or access policy says otherwise.
 
 Official npm references: [`package.json` fields](https://docs.npmjs.com/cli/v11/configuring-npm/package-json),
 [`npm pack`](https://docs.npmjs.com/cli/v11/commands/npm-pack), and
 [`npm publish`](https://docs.npmjs.com/cli/v11/commands/npm-publish).
 
-Remote workspace factories must use `delegateCredential(storeRef, undefined,
-target)` to obtain per-resource grants before provisioning or launching guests.
-The callback keeps parent authority in host composition. `storeToken` is retired
-and is never supplied; factory environments also exclude `AB_TOKEN`. Launch
-credentials travel through the separate transient execution-auth argument, never
-through serialized execution identity. Existing plugins that forwarded
-`storeToken` must migrate to this callback and fail closed if it is unavailable.
-
 ## Optional ticket tree capability
 
-Existing ticket-source factories remain compatible without new methods or fields.
-Raw `Ticket.kind` is optional for source compatibility; public projections normalize
-it to `work`. An adapter opts in with `integrationTree: true` and implements
-`listAll(): Promise<TicketListing>` over every state, independently of ready filters.
-It must persist `kind?: 'work' | 'node'` and `target?: string | null` on drafts
-and updates: omitted preserves/defaults, explicit work resets kind, null clears
-target. Read targets are source-local canonical ticket ids. Validate same-source
-existence, node kind, self/ancestor cycles, corrupt chains and demotion with any
-children before writing any mixed patch, including revision-checked writes.
-Expose kind/target in revisions. Exhaust provider pagination and propagate
-infrastructure failures. Do not opt in if the source cannot preserve these semantics.
-Legacy sources receive ordinary CRUD unchanged; metadata writes are refused by
-the compatibility facade before legacy methods run. Unsupported sources should
-also refuse metadata explicitly at their own direct write boundary.
+Existing ticket sources stay compatible unchanged. Raw `Ticket.kind` is optional; public projections normalize it to `work`.
+
+An adapter opts in with `integrationTree: true` and must:
+
+- implement `listAll(): Promise<TicketListing>` over every state, ignoring ready filters, exhausting pagination and propagating infrastructure failures
+- persist `kind?: 'work' | 'node'` and `target?: string | null` on drafts and updates: omitted preserves or defaults, explicit `work` resets kind, `null` clears target
+- read targets as source-local canonical ticket ids
+- before writing any mixed patch, including revision-checked writes, validate same-source existence, node kind, self and ancestor cycles, corrupt chains, and demotion of a node with children
+- expose kind and target in revisions
+
+Don't opt in unless the source preserves these semantics. Legacy sources get ordinary CRUD; the compatibility facade refuses metadata writes before legacy methods run, and unsupported sources should also refuse metadata at their own write boundary.
