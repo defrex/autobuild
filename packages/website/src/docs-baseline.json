@@ -5,13 +5,8 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "5a901644eb45fb7a5fca772dfff3a2a95436066b982192719cd4dac6863dc983",
-    "headings": [
-      "From a ticket to a change",
-      "Agents judge; code moves the build",
-      "Where it fits",
-      "Using these docs"
-    ],
+    "textHash": "b2b6a8e527f64b09ec71392a3a9b02cf71cc9306e278e42868c5e30b7e87f932",
+    "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
   {
@@ -20,20 +15,14 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-    "textHash": "0baecb06dd74713e8cc6228a9072ebd6f67993b7919fc999c3c31b7ef70752f8",
+    "textHash": "006570627635abf2e6d3e0d0456b57610de005093672357bad0c0f61550c17a3",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
-      "3. Validate setup",
-      "4. Start dispatch",
-      "5. Ask your operator agent for the first change"
+      "3. Start dispatch",
+      "4. Ask your operator agent for the first change"
     ],
-    "code": [
-      "bun add -D @defrex/autobuild",
-      "bun ab init",
-      "bun ab init --validate",
-      "bun ab dispatch"
-    ]
+    "code": ["bun add -D @defrex/autobuild", "bun ab init", "bun ab dispatch"]
   },
   {
     "path": "/docs/builds/",

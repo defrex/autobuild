@@ -11,11 +11,9 @@ slug: ""
 
 Autobuild takes a groomed ticket through planning, implementation, review, verification, and pull request creation. It runs coding agents inside a fixed pipeline, with a separate workspace for each build. Three actors keep that work moving:
 
-- **You** decide goals, scope, tradeoffs, and how much authority to delegate. You mainly run the dispatcher and perform upgrades.
-- **Your operator agent** is an external agent that writes specs, files and grooms tickets, watches builds, answers questions within your instructions, and authorizes landing. The `ab` CLI is primarily its interface; remote agents use MCP.
+- **You** decide goals, scope, tradeoffs, and how much authority to delegate.
+- **Your operator agent** is an external agent that writes specs, files and grooms tickets, watches builds, answers questions within your instructions. The `ab` CLI is primarily its interface; remote agents use MCP.
 - **The dispatcher** claims ready work and runs the durable pipeline, including isolated agent sessions, checks, and publication.
-
-You mostly talk to your agent. Autobuild neither hosts nor starts that agent.
 
 
 ## From a ticket to a change
@@ -28,19 +26,10 @@ The dispatcher claims ready tickets and starts builds up to your configured capa
 1. **Spec.** Establish the ticket's spec as the contract for the build.
 2. **Plan and plan review.** An agent proposes an implementation plan. An independent reviewer checks it against the spec and can request revisions.
 3. **Implement and code review.** An agent commits the change. A fresh reviewer checks the implementation; findings send it back for another round.
-4. **Verify.** Your configured checks run in order. They can be commands or agent verifiers. A failed check returns the build to implementation.
+4. **Verify.** Your configured checks run in order. They can be commands or agent verifiers. A failed check returns the build to implementation. This effectively replaces CI.
 5. **Finalize.** An agent writes the pull request description and Autobuild opens the PR.
 
-Landing still depends on the configured policy and merge gates. If the PR conflicts, reconciliation is followed by verification again. A green build is not a promise of immediate merge. Related work can also be collected into an integration tree before landing.
-
-
-## Agents judge; code moves the build
-
-Agents plan, implement, and review. Deterministic code owns transitions, state, gating, and publication. Every phase reports through the typed CLI; agent output alone never decides whether a phase succeeded.
-
-Build state comes from a typed, append-only event log. Artifacts and feedback are stored with the build, so resumption uses durable state rather than a continuing chat. Open escalations remain parked until an answer is recorded.
-
-For the full model, read the [design specification](../SPEC.md) and [architecture map](architecture.md).
+Landing still depends on the configured policy and merge gates. If the PR conflicts, reconciliation is followed by verification again. Related work can also be collected into an integration tree before landing.
 
 
 ## Where it fits
