@@ -513,10 +513,13 @@ a.dim {
   padding: 8px 2ch 8px 0;
   text-align: left;
   vertical-align: top;
+  /* Wrap only between words; a narrow screen scrolls the table instead. */
+  overflow-wrap: normal;
 }
 .docs article th {
   color: #888888;
   border-bottom: 2px solid #292929;
+  white-space: nowrap;
 }
 .docs article td:first-child code {
   white-space: nowrap;
