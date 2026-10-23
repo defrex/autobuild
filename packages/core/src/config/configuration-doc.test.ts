@@ -912,7 +912,7 @@ describe('docs/configuration.md — executable examples', () => {
     const config = parseConfig(complete!.source)
     expect(resolvePlanVerifySteps(`${plans[0]!.source}\n\n# Plan\n`, config)).toEqual([
       'types',
-      'e2e',
+      'acceptance',
     ])
   })
 })

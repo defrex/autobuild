@@ -69,7 +69,9 @@ A conflict-free upgrade makes a local commit by default, limited to upgrade-owne
 
 ## Add a repository-local skill
 
-Reserve the `ab-` prefix for skills Autobuild ships and installs. Give repository additions plain names, such as `verify-app`, and create `.agents/skills/verify-app/SKILL.md` with its name, description, and instructions. Keep application-specific evidence requirements there.
+Reserve the `ab-` prefix for skills Autobuild ships and installs. Give repository additions plain names, such as `verify-acceptance`, and create `.agents/skills/verify-acceptance/SKILL.md` with its name, description, and instructions. Keep application-specific evidence requirements there.
+
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
 
 For an agent verifier, instruct the agent to run `ab context`, read the materialized inputs, inspect the application's required evidence, and report its typed `pass`, `fail`, or `skip` verdict through `ab verdict`. Define what evidence constitutes a pass or failure. The skill should use the verify session's CLI contract, rather than treating its prose response as the result.
 
@@ -77,14 +79,14 @@ Select that skill by its exact name in `autobuild.toml`:
 
 ```toml
 [verify]
-steps = ["app"]
+steps = ["acceptance"]
 
-[verify.app]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app"
+skill = "verify-acceptance"
 ```
 
-Merge this example into your existing configuration: append `app` to the existing ordered steps instead of replacing them. No prefix is inferred from `skill`. See the [configuration reference](configuration.md) for the complete verify-step schema.
+Merge this example into your existing configuration: append `acceptance` to the existing ordered steps instead of replacing them. No prefix is inferred from `skill`. See the [configuration reference](configuration.md) for the complete verify-step schema.
 
 ## Harness discovery
 
@@ -94,7 +96,7 @@ For a new local skill, add its Claude link from the repository root:
 
 ```sh
 mkdir -p .claude/skills
-ln -s ../../.agents/skills/verify-app .claude/skills/verify-app
+ln -s ../../.agents/skills/verify-acceptance .claude/skills/verify-acceptance
 ```
 
 Check the existing layout first. If `.claude/skills/` and `.agents/skills/` already alias the same directory, discovery is already satisfied and no per-skill link is needed. Preserve existing user-owned directories or foreign links; resolve a collision deliberately instead of overwriting another skill tree. Commit the local skill and any new discovery link together.
