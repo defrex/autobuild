@@ -172,7 +172,7 @@ export const CORE_ARTIFACT_KINDS = [
 ] as const
 export type CoreArtifactKind = (typeof CORE_ARTIFACT_KINDS)[number]
 
-/** `e2e` → `verify-report:e2e` */
+/** `acceptance` → `verify-report:acceptance` */
 export function verifyReportKind(step: string): string {
   return `verify-report:${step}`
 }

@@ -3605,8 +3605,8 @@ is not re-verified, so breakage that only exists in the combination can land.
 This project ships 11 canonical default skills for the fixed phases, the
 non-phase surfaces (`spec`, `tickets`, and `guide`), and the outer-loop skills.
 Repository setup guidance ships as `guide/references/setup.md`, not as a skill;
-agent verifier skills are authored by each repository when needed. `ab init`
-installs into a repo:
+each repository authors its own acceptance-check skill. No generic verifier
+skill ships. `ab init` installs into a repo:
 
 - **A stack-neutral `autobuild.toml` skeleton**, rendered only when absent. It
   declares no setup command or verify step and inspects no language or package
