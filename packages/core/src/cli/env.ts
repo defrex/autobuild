@@ -37,7 +37,7 @@ export interface CliEnv {
 
 export type AmbientReadSession = CliEnv | HarvestCliEnv
 
-const PHASE_FORMAT = "'<phase>[@<round>]' (e.g. 'implement@2', 'verify:e2e@1')"
+const PHASE_FORMAT = "'<phase>[@<round>]' (e.g. 'implement@2', 'verify:acceptance@1')"
 const BUILD_AMBIENT_TUPLE = 'AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION'
 const HARVEST_AMBIENT_TUPLE = 'AB_STORE/AB_REPO/AB_HARVEST/AB_PHASE/AB_SESSION'
 

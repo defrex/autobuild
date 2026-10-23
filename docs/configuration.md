@@ -18,6 +18,8 @@ and sessionless `ab init --validate` readiness check. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+
 ## `[store]`
 
 <!-- configuration-reference:store -->
@@ -160,7 +162,7 @@ There are three validation layers:
 1. TOML syntax and schema/cross-field validation happen while
    `autobuild.toml` is loaded. Errors start with the file path and either
    `TOML syntax error` or `invalid config`; schema errors then identify paths
-   such as `verify.e2e.skill` or `tickets.teamKey`.
+   such as `verify.acceptance.skill` or `tickets.teamKey`.
 2. Configured plugin modules are resolved from the repository, evaluated,
    manifest-validated, checked for plugin-API compatibility, and registered
    before production adapters, stores, claims, or runners are started.
@@ -1549,20 +1551,20 @@ There are two strict step variants:
 typecheck = "bun tsc --noEmit"
 
 [verify]
-steps = ["types", "e2e"]
+steps = ["types", "acceptance"]
 
 [verify.types]
 kind = "check"
 command = "typecheck"
 always = true
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 paths = ["web/**", "src/routes/**"]
 ```
 
-Autobuild does not ship a generic agent verifier. `verify-app-e2e` above is a
+Autobuild does not ship a generic agent verifier. `verify-acceptance` above is a
 skill authored by the repository for its own running application.
 
 Cross-field validation rejects:
@@ -1611,13 +1613,13 @@ agent finalize post-step follows.
 <!-- config-fragment:verify-role -->
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
-[roles.e2e]        # the STEP name — not "verify-app-e2e"
+[roles.acceptance]        # the STEP name — not "verify-acceptance"
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
 ```
@@ -1635,7 +1637,7 @@ optional verification warranted by that plan:
 <!-- plan-front-matter -->
 ```toml
 +++
-verifySteps = ["types", "e2e"]
+verifySteps = ["types", "acceptance"]
 +++
 ```
 
@@ -1817,11 +1819,11 @@ same rule an agent verify step follows, so one convention covers both:
 <!-- config-fragment:finalize-role -->
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
 [finalize]
 steps = ["release-notes"]
@@ -1830,7 +1832,7 @@ steps = ["release-notes"]
 kind = "agent"
 skill = "ab-release-notes"
 
-[roles.e2e]              # verify STEP name — not "verify-app-e2e"
+[roles.acceptance]              # verify STEP name — not "verify-acceptance"
 runtime = "pi"
 
 [roles.release-notes]    # finalize step name
@@ -3004,7 +3006,7 @@ test = "bun test"
 publish = "bun run publish"
 
 [verify]
-steps = ["types", "unit", "e2e"]
+steps = ["types", "unit", "acceptance"]
 
 [verify.types]
 kind = "check"
@@ -3015,9 +3017,9 @@ always = true
 kind = "check"
 command = "test"
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 paths = ["web/**", "src/routes/**"]
 
 [finalize]
@@ -3095,9 +3097,9 @@ installation and exits successfully. It prints the same setup pointer prompt ver
 with instructions to run it in a coding agent; unusable runtime reports include
 their reasons. The setup agent reads the installed guide reference, derives
 commands and verification from the actual repository, chooses pipeline roles,
-configures ticket workflow and environment-only credentials, arranges suitable
-end-to-end verification (authoring a repository-owned agent verifier when
-needed), and completes `bun ab init --validate`, fixing failures and reviewing
+configures ticket workflow and environment-only credentials, arranges
+an acceptance check through a repository-owned agent verify skill in every
+repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures and reviewing
 warnings. You then start `bun ab dispatch` and open your operator agent with
 `ab-operate` loaded to create, groom, and shepherd the first ticket.
 
@@ -3288,7 +3290,7 @@ Fix TOML structure first. A schema failure starts with:
 
 ```text
 /path/to/autobuild.toml: invalid config
-  verify.e2e.skill: ...
+  verify.acceptance.skill: ...
   tickets.teamKey: ...
 ```
 

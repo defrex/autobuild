@@ -574,6 +574,14 @@ from the repository's actual toolchain, and asks the user about choices source
 cannot answer; deterministic init code never guesses a language or package
 manager.
 
+Setup configures an **acceptance check** in every repository: a repository-owned
+agent verify step that runs the built software, exercises each acceptance
+criterion in the spec, attaches evidence, and returns a typed verdict. It is
+not a test suite and leaves no test files behind. Wire an existing maintained
+end-to-end or browser test suite into an ordinary `check` step. If none exists,
+do not create one during setup. The acceptance check neither substitutes for
+nor seeds a suite.
+
 ### `[verify]`
 
 Post-reconcile verification defaults to enabled: `[verify].afterReconcile = true`.
@@ -607,7 +615,7 @@ subtables are part of this section — their fields are listed here.
 | `steps` | `[]` | array of nonempty strings | Ordered configured universe of verify phases. Each name must have a matching `[verify.<step>]` table. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
-| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-app-e2e"`). |
+| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-acceptance"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
@@ -617,7 +625,7 @@ optional verification it warrants:
 
 ```toml
 +++
-verifySteps = ["types", "e2e"]
+verifySteps = ["types", "acceptance"]
 +++
 ```
 
@@ -651,13 +659,13 @@ post-step follows the same rule.
 
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
-[roles.e2e]        # the STEP name — not "verify-app-e2e"
+[roles.acceptance]        # the STEP name — not "verify-acceptance"
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
 ```
@@ -766,11 +774,11 @@ rule an agent verify step follows, so one convention covers both:
 
 ```toml
 [verify]
-steps = ["e2e"]
+steps = ["acceptance"]
 
-[verify.e2e]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app-e2e" # repository-authored skill
+skill = "verify-acceptance" # repository-authored skill
 
 [finalize]
 steps = ["release-notes"]
@@ -779,7 +787,7 @@ steps = ["release-notes"]
 kind = "agent"
 skill = "ab-release-notes"
 
-[roles.e2e]              # verify STEP name — not "verify-app-e2e"
+[roles.acceptance]              # verify STEP name — not "verify-acceptance"
 runtime = "pi"
 
 [roles.release-notes]    # finalize step name
@@ -1181,9 +1189,9 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   setup prompt for the user to run in a coding agent.
 - The setup agent inspects the repository, configures real commands and verify
   steps, independently chooses pipeline role runtimes/models, configures the
-  ticket source and environment-only credentials, arranges repository-specific
-  end-to-end verification (authoring a repository-owned agent verifier when
-  judgment is warranted), and completes `bun ab init --validate`, fixing failures
+  ticket source and environment-only credentials, arranges
+  an acceptance check through a repository-owned agent verify skill in every
+  repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures
   and reviewing warnings. The human then starts `bun ab dispatch` and opens
   their operator agent with `ab-operate` to create, groom, and shepherd the
   first ticket.
