@@ -8,28 +8,30 @@ description: "Configure verification gates, understand setup defaults, and colle
 
 # Verification
 
-Verification exercises the implemented result after code review. It is the gate between an approved change and finalization: a review can judge the implementation, but verification proves what the application actually does.
+Verification runs after code review and before finalize. Review judges the code; verification proves what the built software does.
 
-An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+Every repository needs an **acceptance check**: an agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence and returns a typed verdict. It is not a test suite and leaves no test files behind.
 
-Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. Planners prefer unit and integration tests at seams; add end-to-end or browser-automation tests only when the repository already maintains such a suite or the spec asks for one.
+- **Existing e2e or browser suite:** wire it in as an ordinary `check` step.
+- **No suite:** don't create one. The acceptance check neither replaces nor seeds one.
+- **Plans** prefer unit and integration tests at seams, adding e2e tests only where a suite already exists or the spec asks for one.
 
 ## Steps and outcomes
 
-Autobuild runs ordered `verify:*` phases. The `[verify]` table lists `steps`, and each step has its own table. Steps come in two kinds:
+`[verify].steps` lists ordered `verify:*` steps, each configured in its own table. There are two kinds:
 
-- **Check:** `kind = "check"` executes a named `command` from `[commands]`, without starting an agent. Exit zero passes; a nonzero exit fails, retaining command output.
-- **Agent:** `kind = "agent"` runs the exact configured `skill`. Your repository supplies this [agent-verifier skill](skills.md#add-a-repository-local-skill); no prefix is inferred. Its typed `ab verdict` records pass, fail, or skip.
+| Kind | Runs | Outcome |
+|---|---|---|
+| `check` | a named `command` from `[commands]`, no agent | exit 0 passes; nonzero fails, keeping the output |
+| `agent` | the exact `skill` you configure ([repository-local](skills.md#add-a-repository-local-skill), no prefix inferred) | `ab verdict` records pass, fail or skip |
 
-A pass advances to the next step. A failure returns its report or command output to implementation, then code review, then verification again. Retries are bounded by `[policy].maxVerifyAttempts`; reaching the limit requires guidance rather than an endless repair loop.
-
-A skip also advances, but remains distinct from a pass and consumes no failure retry budget. Plan exclusions and path misses produce deterministic skips. An agent may skip only when the entire step does not apply, with a nonblank reason. An applicable behavior that cannot be exercised is a failure, never a skip or silent pass.
+- **Pass** advances to the next step.
+- **Fail** sends the report back through implement and code review, then verification again, up to `[policy].maxVerifyAttempts`. At the limit the build escalates.
+- **Skip** advances without counting as a pass or spending retries. Plan exclusions and path misses skip deterministically. An agent may skip only when the whole step doesn't apply, with a reason; an applicable behavior it can't exercise is a failure.
 
 ## Select what a build needs
 
-For ordinary verification, the kernel considers the approved plan's selected set first, then path applicability, then execution. Merge these fragments into an existing configuration rather than replacing its other gates.
-
-This example defines commands and an ordered verify chain. Its `kind`, `command`, `skill`, and `always` fields use that schema; `paths` restricts the application verifier to relevant changes.
+The kernel applies the plan's selection first, then path applicability. Merge fragments like this into your existing configuration:
 
 <!-- config-fragment:selection -->
 ```toml
@@ -55,9 +57,9 @@ skill = "verify-acceptance"
 paths = ["web/**", "src/routes/**"]
 ```
 
-The example assumes a Bun/TypeScript application with a repository-authored `verify-acceptance` skill. Choose actual toolchain commands and an installed skill for your repository.
+This assumes a Bun/TypeScript app with a repository-authored `verify-acceptance` skill; use your own commands and skill.
 
-A plan can start with this TOML front matter:
+A plan selects steps with TOML front matter:
 
 <!-- plan-front-matter:selection -->
 ```toml
@@ -66,15 +68,23 @@ verifySteps = ["acceptance", "types"]
 +++
 ```
 
-The `verifySteps` array is the complete selected set, including every mandatory step. Execution still follows configuration order: types, then acceptance; unit is skipped. With no opening front matter, all configured steps are selected. An explicit empty array is valid only when no step is mandatory. Unknown or duplicate names, malformed metadata, and missing mandatory steps are rejected before the plan can complete.
+- `verifySteps` is the complete set, including every mandatory step. Execution keeps configuration order: types, then acceptance; unit is skipped.
+- No front matter selects every step. An empty array is valid only when no step is mandatory.
+- Unknown or duplicate names, malformed metadata and missing mandatory steps are rejected before the plan completes.
 
-`always = true` makes a step mandatory in plan selection and bypasses path gating. Otherwise, omitted paths mean unconditional applicability; supplied paths are positive, case-sensitive, repository-relative globs. Use literal segments, `*`, `?`, and whole-segment `**`; negation and absolute paths are invalid. Any matching build-owned changed path makes the selected step apply, including deletions and both sides of renames. After reconciliation the refreshed base excludes upstream-only changes. Failure to inspect the diff is an infrastructure failure, never permission to skip.
+Path rules:
 
-Post-reconcile cycles also honor the separately configured `afterReconcile` policy, evaluated before plan and path selection. Its default re-verifies; excluded steps are recorded as policy skips.
+- `always = true` makes a step mandatory and bypasses path gating.
+- Without `paths`, a step always applies. With `paths`, it applies when any build-owned changed path matches, including deletions and both sides of a rename.
+- Globs are case-sensitive and repository-relative: literal segments, `*`, `?` and whole-segment `**`. No negation or absolute paths.
+- After a reconcile, upstream-only changes don't count.
+- A diff that can't be inspected is an infrastructure failure, never a skip.
+
+After a reconcile, the separate `afterReconcile` policy is applied before plan and path selection. By default it re-verifies; excluded steps are recorded as policy skips.
 
 ## Route the verifier role
 
-Agent steps route by their logical step name, not their skill name. In this standalone fragment, [`[roles.acceptance]`](agent-runtimes.md#choosing-models) selects the agent for the acceptance step. The `runtime` and `model` fields inherit independently from the default role when omitted.
+Agent steps route by step name, not skill name: [`[roles.acceptance]`](agent-runtimes.md#choosing-models) picks the agent for the `acceptance` step. Omitted `runtime` and `model` each inherit from the default role.
 
 <!-- config-fragment:routing -->
 ```toml
@@ -96,40 +106,41 @@ model = "gpt-6.1-sol"
 
 ## What initialization sets up
 
-[`ab init` generates](getting-started.md#2-initialize-and-configure) a schema-valid skeleton with empty commands and an empty verification list (`steps = []`), then hands configuration to a setup agent. It installs the shipped skills and their setup reference, but no generic application verifier. A fresh skeleton is not a ready-made test chain.
+[`ab init`](getting-started.md#2-initialize-and-configure) writes a skeleton with empty commands and `steps = []`, then hands off to a setup agent. It installs no application verifier, so a fresh skeleton verifies nothing.
 
-The installed setup procedure tells the setup agent to inspect manifests, CI, tests, and repository conventions and configure:
+The setup agent reads manifests, CI, tests and conventions, asks you what it can't infer, and configures:
 
-- Real toolchain commands and ordered verification, with no invented commands or placeholders.
-- A repository-owned acceptance-check skill selected from an agent verify step in every repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
-- Reproducible fresh workspaces: locked dependencies, required system tools, and idempotent checkout bootstrap through `[commands].setup`. Remote system tooling belongs in [`[workspace.config].provisioning`](workspaces.md).
-- For browser applications, a dependency-free `scripts/browser-smoke.sh` that starts the dev server, launches headless Chromium through a repository-controlled path such as `CHROMIUM_BIN`, verifies the rendered page, and exits nonzero on failure.
+- real toolchain commands and an ordered verify chain, with no placeholders
+- a repository-owned acceptance-check skill on an agent step, wiring in an existing e2e suite as a `check` step but never creating one
+- reproducible workspaces: locked dependencies, required system tools and an idempotent `[commands].setup` bootstrap, with remote tooling in [`[workspace.config].provisioning`](workspaces.md)
+- for browser apps, a dependency-free `scripts/browser-smoke.sh` that starts the dev server, opens the page in headless Chromium (via a path such as `CHROMIUM_BIN`) and exits nonzero on failure
 
-Your agent derives what it can from the repository and involves you in choices requiring human decisions. Readiness validation checks the environment; it does not claim to execute the full application verify chain.
+`bun ab init --validate` checks the environment. It doesn't run your verify chain.
 
 ## Make verification convincing
 
-Put fast deterministic checks first, so simple failures return quickly. Use the acceptance check to drive the built application against every spec acceptance criterion: create the resource, run the workflow, observe its result, and clean up through the actual lifecycle. Choose the narrowest flow that catches the regression.
+- **Order:** fast deterministic checks first, so simple failures return quickly.
+- **Acceptance:** drive the built app through each criterion: create the resource, run the workflow, observe the result, clean up. Use the narrowest flow that catches the regression.
+- **Evidence:** for each criterion, record the criterion, action, observation and result. A failure includes reproduction inputs, expected and observed behavior, and native logs. Give passing screenshots, reports and recordings stable artifact kinds so later attempts replace them.
+- **Scope:** verifiers don't review style or fix code. A verifier skill reads context, exercises the app, attaches evidence and finishes with `ab verdict`. See [adding a repository-local skill](skills.md#add-a-repository-local-skill).
 
-Produce evidence a reviewer can open and reproduce. For each applicable acceptance criterion record the criterion, action, observation, and result. A failure needs reproduction inputs, expected and observed behavior, and relevant native logs. Passing screenshots, reports, or recordings should have stable artifact kinds so later attempts replace their designation.
-
-Verifiers verify; they do not review the diff for style or fix product code. A repository skill should preserve the agent-verifier CLI and evidence contract: read context, exercise the application, attach passing evidence explicitly, and finish with a typed verdict. See [adding a repository-local skill](skills.md#add-a-repository-local-skill) for naming and harness discovery.
-
-A **docs-drift verifier** is another useful repository-owned pattern: compare the behavior a build changes with the published instructions, and report passages that no longer hold. Autobuild doesn't install one by default. This repository configures one as its `docs` step, described in the worked example below.
+A **docs-drift verifier** is another useful pattern: it compares the behavior a build changes with your published docs and reports passages that no longer hold. Autobuild doesn't ship one; this repository runs one as its `docs` step.
 
 ## Worked example: this repository
 
-Autobuild's own configuration defines the following ordered chain. These are this repository's choices, not product defaults. The verify schema defines its `steps`, `kind`, `command`, `skill`, and `always` fields; path applicability defines its visual selectors.
+Autobuild's own chain. These are this repository's choices, not defaults.
 
-1. **lint — check.** Formatting and lint checks; mandatory.
-2. **types — check.** TypeScript type checking.
-3. **unit — check.** The repository test suite.
-4. **postgres — check.** Ensure PostgreSQL is running, exercise live store and service suites plus migration checks, and verify hosted-service packaging; mandatory.
-5. **dashboard — agent.** Capture terminal-dashboard frames and judge the rendered evidence.
-6. **web-dashboard — agent.** Capture operator web-app frames and judge them against the recorded design.
-7. **website — agent.** Capture marketing-site and docs frames at desktop and phone widths and compare with approved references.
-8. **docs — agent.** Review the build's exact commit range for changed user-facing behavior, and fail when a passage in `docs/` no longer describes it accurately.
+| # | Step | Kind | What it does |
+|---|---|---|---|
+| 1 | lint | check | formatting and lint; mandatory |
+| 2 | types | check | TypeScript type checking |
+| 3 | unit | check | the test suite |
+| 4 | postgres | check | live store, service and migration suites, plus hosted-service packaging; mandatory |
+| 5 | dashboard | agent | captures terminal-dashboard frames and judges them |
+| 6 | web-dashboard | agent | captures operator web-app frames and judges them against the design |
+| 7 | website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
+| 8 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
 
-The check steps reference named commands. The last four steps are optional and path-scoped, using the repository's terminal verifier (`ab-verify-dashboard`), web-app verifier (`verify-web-dashboard`), website verifier (`verify-website`), and docs verifier (`verify-docs`). The docs step applies to changes in product source, skills, templates, `SPEC.md`, `README.md` and `docs/`. The terminal skill's legacy `ab-` name is not a convention for new repository skills: reserve that prefix for shipped skills and give new local skills plain names.
+Steps 5 to 8 are optional and path-scoped, run by the repository skills `ab-verify-dashboard`, `verify-web-dashboard`, `verify-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`. The terminal verifier's `ab-` prefix is legacy; reserve it for shipped skills and give local skills plain names.
 
-Plan selection narrows this configured universe without changing its order. For this guide, lint, types, unit, postgres, website, and docs are warranted; the terminal and operator web-app surfaces are unaffected. Selecting website and docs still subjects each to its configured path check, and both include docs changes. Keeping both mandatory checks in the selection preserves the repository's gates, the website verifier supplies evidence of the published article and navigation, and the docs verifier confirms the article matches the behavior it describes.
+A plan for a docs change like this page would select lint, types, unit, postgres, website and docs. Website and docs still pass their path checks, since both cover `docs/`. The terminal and web-app surfaces are untouched, so their steps aren't selected.

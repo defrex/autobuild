@@ -8,36 +8,65 @@ order: 3
 
 # The dispatcher and durable state
 
-The dispatcher watches your configured ticket source for ready work. It claims eligible tickets, establishes their specs, and starts isolated build-runners up to the repository's capacity. Agents supply judgment inside the pipeline; deterministic code decides what runs next.
+The dispatcher is the long-running process that turns ready tickets into builds. Agents supply judgment inside the pipeline; deterministic code decides what runs next.
+
+```
+bun ab dispatch
+```
+
+It watches your ticket source, claims eligible tickets, establishes their specs, and starts isolated build-runners up to the repository's capacity.
 
 
 ## Ready work becomes a build
 
-The ready gate combines the configured workflow state with any required labels and source-specific filters. A ticket must also satisfy its blockers and destination checks before claim. Work that cannot yet start stays queued. [Tickets and specs](tickets.md) explains grooming; [Intake and harvest](intake.md) covers proposed work.
+A ticket is claimed when it passes every gate:
 
-Each work build runs in its own workspace: a local git worktree or a remote sandbox, depending on the selected workspace provider. Its build-runner owns the pipeline execution, keeping concurrent builds isolated. Capacity bounds concurrent execution; it does not make every queued ticket runnable at once.
+- **Ready state.** It sits in the configured workflow state, with any required labels and source-specific filters.
+- **Blockers.** Every ticket it depends on is done.
+- **Destination.** Its target, `main` or an integration node, accepts new work.
 
-An integration node can collect children without an active runner or workspace. Idle collecting nodes consume no runner capacity; node verification temporarily uses execution capacity. See [the integration tree](integration-overview.md).
+Work that can't start yet stays queued. [Tickets and specs](tickets.md) explains grooming, and [Intake and harvest](intake.md) covers proposed work.
+
+Each build runs in its own workspace, either a local git worktree or a remote sandbox, and its build-runner owns the pipeline from there. Capacity limits how many run at once:
+
+- Work builds each hold a slot while they run.
+- An integration node collecting children holds no slot. It takes one only while it verifies. See [the integration tree](integration-overview.md).
 
 
 ## The log is the source of truth
 
-Build processes append typed facts to a per-build, append-only event log in the BuildStore. Repository-wide workflows and operator settings use a separate repository journal. Specs, plans, reports, and other artifacts live with that durable record.
+Everything a build does is recorded as typed events in an append-only log in the BuildStore:
 
-State is reduced from events. A snapshot is only a cache that can be regenerated from the log. Agent stdout never determines a phase outcome: agents report through the typed `ab` CLI, and code validates deposits, applies gates, and records transitions.
+- **Per-build log.** Phase transitions, verdicts, escalations and answers.
+- **Repository journal.** Dispatcher runs, harvest and operator settings.
+- **Artifacts.** Specs, plans, reports and evidence, stored with the record.
+
+State is reduced from those events. A snapshot is only a cache, regenerated from the log.
+
+Agents never decide outcomes through their output. They report through the typed `ab` CLI, for example `ab done` or `ab verdict`, and code validates the deposit, applies the gates and records the transition.
 
 
 ## Resume the work, not the chat
 
-Running dispatch again recovers actionable current work from durable state. The runner reads the recorded phase, completed boundaries, artifacts, and feedback rather than needing a process or conversation to have survived. A replacement sandbox can resume the same build.
+A restart loses nothing. The dispatcher reads each build's recorded phase, completed boundaries, artifacts and feedback, and continues; no process or chat has to survive. A replacement sandbox can resume the same build.
 
-Recovery preserves authority boundaries. An unanswered escalation stays parked until your operator agent records an answer within your instructions, consulting you for unresolved product decisions. Pending operator commands and other actionable work can still proceed; restarting the dispatcher does not grant permission or reset an exhausted budget.
+Recovery keeps authority boundaries:
+
+- An unanswered escalation stays parked until your operator agent answers it.
+- Pending operator commands and other actionable work proceed as normal.
+- A restart never grants permission or resets an exhausted retry budget.
 
 
 ## The operator agent stays outside
 
-Your operator agent is an external coding agent that files and grooms tickets with you, watches builds, answers bounded escalations, and manages landing consent under your instructions. Locally it uses the CLI; remotely it can use the corresponding operator tools over MCP. You make the product calls.
+Your operator agent is an external coding agent, such as Claude Code or Codex, running under your instructions. It:
 
-Autobuild does not host or start your operator agent. It runs the build pipeline and exposes durable state and controls for your operator agent to use. Your operator agent's chat is separate from the build's paper trail.
+- files and grooms tickets with you
+- watches builds and answers bounded escalations
+- manages landing consent
 
-Read [operator surfaces](operator-surfaces.md) and [integrating related work](integration-overview.md) for the control and integration boundaries. Follow [one build end to end](builds.md) for the phases inside a runner.
+Locally it uses the `ab` CLI. Remotely it uses the same operator tools over MCP. You make the product calls.
+
+Autobuild never hosts or starts that agent; it exposes state and controls for the agent to use. The agent's chat is separate from the build's paper trail.
+
+Next: [operator surfaces](operator-surfaces.md) for the controls, and [one build end to end](builds.md) for the phases inside a runner.

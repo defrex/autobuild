@@ -46,14 +46,14 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "428f9ac2f1ea42a1a637edda0d090ddd5abcceea16633d085a4ab65fa2fde482",
+    "textHash": "96e5813cf6cfad0016c05c689aeba1e594b46db100813ad4b2a2c19c84ebfb75",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
       "Resume the work, not the chat",
       "The operator agent stays outside"
     ],
-    "code": []
+    "code": ["bun ab dispatch"]
   },
   {
     "path": "/docs/integration/",
@@ -124,7 +124,7 @@
     "title": "Verification",
     "group": "concepts",
     "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
-    "textHash": "c691337f3e752228bd66b3f08e1a1097582dc73477f08de42e5cf71c0e89aeb9",
+    "textHash": "deca69f4f4cda16f5af3475eb5fee7f2ae7e5cabc84646b06c633073d7b7ef9e",
     "headings": [
       "Steps and outcomes",
       "Select what a build needs",
