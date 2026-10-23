@@ -785,16 +785,17 @@ a.dim {
   gap: 16px;
   margin-bottom: 24px;
 }
+/* Ghost style, matching .btn.ghost: the outline is withheld, even on hover. */
 .docs-copy {
   flex-shrink: 0;
   min-height: 40px;
   min-width: calc(16ch + 20px);
   box-sizing: border-box;
   padding: 8px;
-  border: 2px solid #e6e6e6;
+  border: 2px solid transparent;
   border-radius: 0;
-  background: #000000;
-  color: #e6e6e6;
+  background: transparent;
+  color: #888888;
   font:
     700 14px / 20px "JetBrains Mono",
     monospace;
@@ -802,11 +803,11 @@ a.dim {
 }
 .docs-copy:hover {
   color: #55b8b8;
-  border-color: #55b8b8;
 }
 .docs-copy:active {
   background: #e6e6e6;
   color: #000000;
+  border-color: #e6e6e6;
 }
 .docs-copy:disabled {
   cursor: wait;
