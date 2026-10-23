@@ -71,7 +71,7 @@ describe('shipped skill self-containment', () => {
     const setup = guide?.files.find((file) => file.path === 'references/setup.md')
 
     expect(setup).toBeDefined()
-    expect(setup?.content).toContain('author a repository-owned\n   agent-verify skill')
+    expect(setup?.content).toContain('Author a repository-owned acceptance-check skill')
     expect(setup?.content).toContain('Run `ab context`')
     expect(setup?.content).not.toContain('skills/verify-e2e')
   })
