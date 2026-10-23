@@ -10,15 +10,15 @@ description: "Configure verification gates, understand setup defaults, and colle
 
 Verification runs after code review and before finalize. Review judges the code; verification proves what the built software does.
 
-Every repository needs an **acceptance check**: an agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence and returns a typed verdict. It is not a test suite and leaves no test files behind.
+Every repository needs an **acceptance check**: an agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence and returns a typed verdict. It isn't a test suite and leaves no test files.
 
 - **Existing e2e or browser suite:** wire it in as an ordinary `check` step.
-- **No suite:** don't create one. The acceptance check neither replaces nor seeds one.
-- **Plans** prefer unit and integration tests at seams, adding e2e tests only where a suite already exists or the spec asks for one.
+- **No suite:** don't create one; the acceptance check neither replaces nor seeds one.
+- **Plans** prefer unit and integration tests at seams, adding e2e tests only where a suite exists or the spec asks.
 
 ## Steps and outcomes
 
-`[verify].steps` lists ordered `verify:*` steps, each configured in its own table. There are two kinds:
+`[verify].steps` lists ordered `verify:*` steps, each configured in its own table.
 
 | Kind | Runs | Outcome |
 |---|---|---|
@@ -26,12 +26,12 @@ Every repository needs an **acceptance check**: an agent verify step that runs t
 | `agent` | the exact `skill` you configure ([repository-local](skills.md#add-a-repository-local-skill), no prefix inferred) | `ab verdict` records pass, fail or skip |
 
 - **Pass** advances to the next step.
-- **Fail** sends the report back through implement and code review, then verification again, up to `[policy].maxVerifyAttempts`. At the limit the build escalates.
+- **Fail** sends the report back through implement and code review, then verification, up to `[policy].maxVerifyAttempts`; then the build escalates.
 - **Skip** advances without counting as a pass or spending retries. Plan exclusions and path misses skip deterministically. An agent may skip only when the whole step doesn't apply, with a reason; an applicable behavior it can't exercise is a failure.
 
 ## Select what a build needs
 
-The kernel applies the plan's selection first, then path applicability. Merge fragments like this into your existing configuration:
+Plan selection applies first, then path applicability. Merge fragments like this into your configuration:
 
 <!-- config-fragment:selection -->
 ```toml
@@ -57,7 +57,7 @@ skill = "verify-acceptance"
 paths = ["web/**", "src/routes/**"]
 ```
 
-This assumes a Bun/TypeScript app with a repository-authored `verify-acceptance` skill; use your own commands and skill.
+Substitute your own commands and acceptance skill.
 
 A plan selects steps with TOML front matter:
 
@@ -80,7 +80,7 @@ Path rules:
 - After a reconcile, upstream-only changes don't count.
 - A diff that can't be inspected is an infrastructure failure, never a skip.
 
-After a reconcile, the separate `afterReconcile` policy is applied before plan and path selection. By default it re-verifies; excluded steps are recorded as policy skips.
+After a reconcile, the `afterReconcile` policy applies before plan and path selection. By default it re-verifies; excluded steps are recorded as policy skips.
 
 ## Route the verifier role
 
@@ -106,29 +106,29 @@ model = "gpt-6.1-sol"
 
 ## What initialization sets up
 
-[`ab init`](getting-started.md#2-initialize-and-configure) writes a skeleton with empty commands and `steps = []`, then hands off to a setup agent. It installs no application verifier, so a fresh skeleton verifies nothing.
+[`ab init`](getting-started.md#2-initialize-and-configure) writes a skeleton with empty commands and `steps = []`, which verifies nothing, then hands off to a setup agent.
 
-The setup agent reads manifests, CI, tests and conventions, asks you what it can't infer, and configures:
+The setup agent reads manifests, CI, tests and conventions, asks what it can't infer, and configures:
 
 - real toolchain commands and an ordered verify chain, with no placeholders
-- a repository-owned acceptance-check skill on an agent step, wiring in an existing e2e suite as a `check` step but never creating one
+- a repository-owned acceptance-check skill on an agent step, plus any existing e2e suite as a `check` step
 - reproducible workspaces: locked dependencies, required system tools and an idempotent `[commands].setup` bootstrap, with remote tooling in [`[workspace.config].provisioning`](workspaces.md)
 - for browser apps, a dependency-free `scripts/browser-smoke.sh` that starts the dev server, opens the page in headless Chromium (via a path such as `CHROMIUM_BIN`) and exits nonzero on failure
 
-`bun ab init --validate` checks the environment. It doesn't run your verify chain.
+`bun ab init --validate` checks the environment, not your verify chain.
 
 ## Make verification convincing
 
-- **Order:** fast deterministic checks first, so simple failures return quickly.
-- **Acceptance:** drive the built app through each criterion: create the resource, run the workflow, observe the result, clean up. Use the narrowest flow that catches the regression.
+- **Order:** fast deterministic checks first.
+- **Acceptance:** drive the built app through each criterion (create the resource, run the workflow, observe, clean up) with the narrowest flow that catches the regression.
 - **Evidence:** for each criterion, record the criterion, action, observation and result. A failure includes reproduction inputs, expected and observed behavior, and native logs. Give passing screenshots, reports and recordings stable artifact kinds so later attempts replace them.
-- **Scope:** verifiers don't review style or fix code. A verifier skill reads context, exercises the app, attaches evidence and finishes with `ab verdict`. See [adding a repository-local skill](skills.md#add-a-repository-local-skill).
+- **Scope:** verifiers don't review style or fix code. See [adding a repository-local skill](skills.md#add-a-repository-local-skill).
 
-A **docs-drift verifier** is another useful pattern: it compares the behavior a build changes with your published docs and reports passages that no longer hold. Autobuild doesn't ship one; this repository runs one as its `docs` step.
+A **docs-drift verifier** is another useful pattern: it reports published-doc passages that a build's behavior changes no longer match. Autobuild doesn't ship one; this repository's `docs` step is one.
 
 ## Worked example: this repository
 
-Autobuild's own chain. These are this repository's choices, not defaults.
+Autobuild's own chain: this repository's choices, not defaults.
 
 | # | Step | Kind | What it does |
 |---|---|---|---|
@@ -141,6 +141,6 @@ Autobuild's own chain. These are this repository's choices, not defaults.
 | 7 | website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
 | 8 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
 
-Steps 5 to 8 are optional and path-scoped, run by the repository skills `ab-verify-dashboard`, `verify-web-dashboard`, `verify-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`. The terminal verifier's `ab-` prefix is legacy; reserve it for shipped skills and give local skills plain names.
+Steps 5 to 8 are optional and path-scoped, run by repository skills `ab-verify-dashboard`, `verify-web-dashboard`, `verify-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`. The terminal verifier's `ab-` prefix is legacy; local skills get plain names.
 
-A plan for a docs change like this page would select lint, types, unit, postgres, website and docs. Website and docs still pass their path checks, since both cover `docs/`. The terminal and web-app surfaces are untouched, so their steps aren't selected.
+A plan for a docs change like this page selects lint, types, unit, postgres, website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched dashboard steps aren't selected.
