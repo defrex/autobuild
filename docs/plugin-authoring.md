@@ -111,7 +111,11 @@ and validated details work across separately loaded SDK copies.
 Optionally implement `Forge.observeRequests(observer): () => void`; return a
 disposer and call registered observers once per wire request, including failed
 requests and pagination. Pass `ForgeRequestContext` with the build slug when
-known, or `{}` when unknown. The host fills missing build attribution from its
+known, or `{}` when unknown. Capture attribution before awaiting transport and
+notify after its outcome is known. Optional `outcome` is `restPrimary` for REST
+HTTP responses other than 304, `restNotModified` for REST 304, or `graphql` for
+GraphQL calls (including failures). Network failures have no proven REST debit
+and omit the category. The host fills missing build attribution from its
 current build-scoped operation; otherwise the request is repository/unattributed.
 Credential discovery and skipped calls are not provider requests. For example:
 
@@ -120,10 +124,22 @@ observeRequests(observer: ForgeRequestObserver) {
   this.observers.add(observer)
   return () => { this.observers.delete(observer) }
 }
-// At the actual transport boundary:
-for (const observer of this.observers) observer({ build: context.build })
-return transport(method, path, options)
+// Capture context before awaiting the transport. After response/failure:
+for (const observer of this.observers) {
+  observer({ build: context.build, ...(outcome ? { outcome } : {}) })
+}
 ```
+
+Optional `withReadScope(work)` wraps a complete dispatcher tick, sharing promises
+and observations across builds, and tears down on rejection too. Keep concurrent
+operations outside that scope independent. Optional `primeNodeReads({workspacePath,
+parent, head, prNumber?})` seeds opened-node facts. Priming is an optimization:
+non-cooldown failures produce a diagnostic and fall through to ordinary stage
+reads, preserving parent recovery when the previous parent disappeared.
+Neither capability changes the
+plugin API version requirement. Invalidate observations before writes, including
+uncertain writes and Git pushes; acknowledgement and readiness reads must stay
+fresh. Branch and ref endpoints share normalized facts, never HTTP validators.
 
 Declare `apiVersion: '^1.8.0'` when using these capabilities. Compatible legacy
 1.x plugins still load without observers and show unavailable counts. Arbitrary
@@ -239,6 +255,31 @@ forge = "acme"
 source = "file"
 readyState = "ready"
 ```
+
+Inside a cached dispatcher generation, selection still uses those roots, but
+selected external plugin code and its installed dependency closure are copied
+into an immutable auxiliary snapshot. Native ESM, CommonJS `require`, delayed
+imports, export-from and module-anchored `createRequire` all resolve the core
+package to the same canonical frozen runtime, including SDK values and classes.
+There are no loader hooks or source transforms. Repo-path modules in a consuming
+repository use their literal import closure and literal `new URL(..., import.meta.url)`
+assets, rather than copying the checkout or its unused dev dependencies. Plugins
+with their own package boundary retain that package’s assets and dependency graph.
+Package-relative assets remain
+beside copied modules; `import.meta.url` and filenames name the snapshot, while
+cwd and factory `repoRoot` remain the consuming checkout. Explicit absolute
+paths remain plugin-controlled external resources.
+
+Auxiliary snapshots use neutral compiler boundaries and cached Bun entrypoints
+pin the core config with `--no-install --tsconfig-override` before JavaScript
+runs. Autobuild-owned compiler chains cannot escape the runtime; installed
+third-party development configs are preserved byte-for-byte. New selections
+can prepare new snapshots without changing the generation's core identity.
+Live plugin processes retain their core runtime independently of Store leases.
+Plugin-loading CLI calls reclaim dead auxiliary snapshots during the generation,
+so edits between phase commands do not accumulate checkout-sized copies.
+Ordinary noncached consumers retain the separately loaded SDK compatibility
+rules described above.
 
 Each configured specifier string must be unique. An exact repeat fails config
 validation before Bun resolves or evaluates any plugin, identifies the repeated

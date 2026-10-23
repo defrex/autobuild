@@ -10,6 +10,10 @@ description: "Configure verification gates, understand setup defaults, and colle
 
 Verification exercises the implemented result after code review. It is the gate between an approved change and finalization: a review can judge the implementation, but verification proves what the application actually does.
 
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+
+Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. Planners prefer unit and integration tests at seams; add end-to-end or browser-automation tests only when the repository already maintains such a suite or the spec asks for one.
+
 ## Steps and outcomes
 
 Autobuild runs ordered `verify:*` phases. The configuration reference defines [`[verify]`, `steps`, and each step table](configuration.md#verify-and-verifystep), with two kinds:
@@ -34,7 +38,7 @@ typecheck = "bun tsc --noEmit"
 test = "bun test"
 
 [verify]
-steps = ["types", "unit", "app"]
+steps = ["types", "unit", "acceptance"]
 
 [verify.types]
 kind = "check"
@@ -45,24 +49,24 @@ always = true
 kind = "check"
 command = "test"
 
-[verify.app]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app"
+skill = "verify-acceptance"
 paths = ["web/**", "src/routes/**"]
 ```
 
-The example assumes a Bun/TypeScript application with a repository-authored `verify-app` skill. Choose actual toolchain commands and an installed skill for your repository.
+The example assumes a Bun/TypeScript application with a repository-authored `verify-acceptance` skill. Choose actual toolchain commands and an installed skill for your repository.
 
 A plan can start with this [TOML front matter](configuration.md#plan-selected-steps):
 
 <!-- plan-front-matter:selection -->
 ```toml
 +++
-verifySteps = ["app", "types"]
+verifySteps = ["acceptance", "types"]
 +++
 ```
 
-The `verifySteps` array is the complete selected set, including every mandatory step. Execution still follows configuration order: types, then app; unit is skipped. With no opening front matter, all configured steps are selected. An explicit empty array is valid only when no step is mandatory. Unknown or duplicate names, malformed metadata, and missing mandatory steps are rejected before the plan can complete.
+The `verifySteps` array is the complete selected set, including every mandatory step. Execution still follows configuration order: types, then acceptance; unit is skipped. With no opening front matter, all configured steps are selected. An explicit empty array is valid only when no step is mandatory. Unknown or duplicate names, malformed metadata, and missing mandatory steps are rejected before the plan can complete.
 
 [`always = true`](configuration.md#verify-and-verifystep) makes a step mandatory in plan selection and bypasses path gating. Otherwise, omitted paths mean unconditional applicability; supplied paths are positive, case-sensitive, repository-relative globs. Use literal segments, `*`, `?`, and whole-segment `**`; negation and absolute paths are invalid. Any matching build-owned changed path makes the selected step apply, including deletions and both sides of renames. After reconciliation the refreshed base excludes upstream-only changes. Failure to inspect the diff is an infrastructure failure, never permission to skip.
 
@@ -70,22 +74,22 @@ Post-reconcile cycles also honor the separately configured [`afterReconcile` pol
 
 ## Route the verifier role
 
-Agent steps route by their logical step name, not their skill name. In this standalone fragment, [`[roles.app]`](configuration.md#role-routing-for-an-agent-verify-step) selects the agent for the app step. The [`runtime` and `model` fields](configuration.md#roles) inherit independently from the default role when omitted.
+Agent steps route by their logical step name, not their skill name. In this standalone fragment, [`[roles.acceptance]`](configuration.md#role-routing-for-an-agent-verify-step) selects the agent for the acceptance step. The [`runtime` and `model` fields](configuration.md#roles) inherit independently from the default role when omitted.
 
 <!-- config-fragment:routing -->
 ```toml
 [verify]
-steps = ["app"]
+steps = ["acceptance"]
 
-[verify.app]
+[verify.acceptance]
 kind = "agent"
-skill = "verify-app"
+skill = "verify-acceptance"
 
 [roles.default]
 runtime = "codex"
 model = "gpt-6.1-sol"
 
-[roles.app]
+[roles.acceptance]
 runtime = "codex"
 model = "gpt-6.1-sol"
 ```
@@ -97,7 +101,7 @@ model = "gpt-6.1-sol"
 The [installed setup procedure](../skills/guide/references/setup.md#make-the-environment-reproducible) tells the setup agent to inspect manifests, CI, tests, and repository conventions and configure:
 
 - Real toolchain commands and ordered verification, with no invented commands or placeholders.
-- End-to-end flows through the repository's real lifecycle and tools. Where judgment is needed, a repository-owned agent-verifier skill.
+- A repository-owned acceptance-check skill selected from an agent verify step in every repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 - Reproducible fresh workspaces: locked dependencies, required system tools, and idempotent checkout bootstrap through [`[commands].setup`](configuration.md#commands). Remote system tooling belongs in [`[workspace.config].provisioning`](configuration.md#vercel-sandbox).
 - For browser applications, a dependency-free `scripts/browser-smoke.sh` that starts the dev server, launches headless Chromium through a repository-controlled path such as `CHROMIUM_BIN`, verifies the rendered page, and exits nonzero on failure.
 
@@ -105,7 +109,7 @@ Your agent derives what it can from the repository and involves you in choices r
 
 ## Make verification convincing
 
-Put fast deterministic checks first, so simple failures return quickly. Include at least one honest end-to-end step that drives the real application: create the resource, run the workflow, observe its result, and clean up through the actual lifecycle. Choose the narrowest flow that catches the regression.
+Put fast deterministic checks first, so simple failures return quickly. Use the acceptance check to drive the built application against every spec acceptance criterion: create the resource, run the workflow, observe its result, and clean up through the actual lifecycle. Choose the narrowest flow that catches the regression.
 
 Produce evidence a reviewer can open and reproduce. For each applicable acceptance criterion record the criterion, action, observation, and result. A failure needs reproduction inputs, expected and observed behavior, and relevant native logs. Passing screenshots, reports, or recordings should have stable artifact kinds so later attempts replace their designation.
 

@@ -30,7 +30,7 @@ test('verification guide plan selects its companion universe in configured order
     )!
     const config = parseConfig(companion[3]! + scaffold)
     const selected = resolvePlanVerifySteps(plan[3]!, config)
-    expect(selected).toEqual(['types', 'app'])
+    expect(selected).toEqual(['types', 'acceptance'])
     for (const step of config.verify.steps) {
       if (config.verify.stepConfigs[step]?.always) expect(selected).toContain(step)
     }
