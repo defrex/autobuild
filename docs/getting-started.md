@@ -32,21 +32,10 @@ bun ab init
 
 Initialization vendors the editable `ab-*` skills, writes a stack-neutral `autobuild.toml`, and hands repository-aware setup to a coding agent. Follow that handoff to choose a runtime and model, ticket tracker, forge, workspace, and meaningful verification commands for your stack.
 
-An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. See the [verification guide](verification.md).
-
-Review the generated configuration and skills as repository files. Setup must establish the tools and credentials your chosen adapters need; installation alone does not configure a working pipeline. The [configuration reference](configuration.md) covers every field.
+An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. See the [verification guide](verification.md).
 
 
-## 3. Validate setup
-
-```
-bun ab init --validate
-```
-
-Fix every named failure, review warnings and unknowns, and rerun validation before proceeding. Validation checks readiness without claiming tickets or starting builds.
-
-
-## 4. Start dispatch
+## 3. Start dispatch
 
 ```
 bun ab dispatch
@@ -55,15 +44,9 @@ bun ab dispatch
 Run this yourself and leave it running. The dispatcher claims tickets as they enter the tracker's configured ready state and shows a live dashboard. A draft or triage ticket is not ready merely because it exists.
 
 
-## 5. Ask your operator agent for the first change
+## 4. Ask your operator agent for the first change
 
-Open your coding agent at the repository root and load the installed `ab-operate` skill:
-
-- Claude Code: `/ab-operate`
-- Codex: `$ab-operate`
-- Pi: `/skill:ab-operate`
-
-Then ask in plain language:
+Open your coding agent at the repository root, then ask in plain language:
 
 > Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through landing. Ask me before granting landing consent.
 
