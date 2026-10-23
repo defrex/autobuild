@@ -9,12 +9,12 @@ slug: "configuration"
 
 # Repository configuration
 
-`autobuild.toml` declares how your repository runs Autobuild: infrastructure, commands, agent roles, checks and operating limits. This page maps the choices you make.
+`autobuild.toml` declares your repository's infrastructure, commands, agent roles, checks and operating limits.
 
 
 ## Commands and extension steps
 
-Named commands define repository tasks. Verify and finalize steps run them, or an agent skill, in order:
+Verify and finalize steps run named commands or agent skills, in order:
 
 ```toml
 [commands]
@@ -33,16 +33,16 @@ kind = "agent"
 skill = "verify-acceptance" # repository-authored skill
 ```
 
-- **Verify** is an ordered list of deterministic command checks and agent verifiers. Optional steps are selected by a build's plan when relevant.
-- **Finalize** post-steps run after PR creation, for work such as updating a changelog. A failed post-step is recorded without failing an otherwise green build.
-- **Verify and finalize are the only extension points.** Configuration can't add phases or reorder the fixed pipeline.
+- **Verify**: command checks and agent verifiers. A build's plan selects optional steps.
+- **Finalize** post-steps run after PR creation, e.g. a changelog update. A failed post-step is recorded without failing a green build.
+- These are the only extension points; configuration can't add or reorder phases.
 
-See the [verification guide](verification.md) for step selection and outcomes.
+See the [verification guide](verification.md).
 
 
 ## Roles, models, and limits
 
-Agent roles inherit runtime and model from `roles.default` and can override them per job. Ordered `alternates` are the fallback chain when a provider is unavailable.
+Roles inherit runtime and model from `roles.default` and override them per job. Ordered `alternates` are fallbacks when a provider is unavailable.
 
 ```toml
 capacity = 2
@@ -61,38 +61,33 @@ sessionBudgetSeconds = 3600
 ```
 
 - **Capacity** bounds concurrent work.
-- **Policy limits** bound review rounds, retries and session budgets, and decide when automation stops for attention. They complement useful checks and clear specs; they don't establish correctness.
+- **Policy limits** bound review rounds, retries and session budgets, and decide when automation stops for attention.
 
 
 ## Admission and landing
 
-- **Tickets.** `[tickets]` chooses the source and the readiness criteria the dispatcher uses to admit work.
-- **Landing.** `[[landing]]` rules are ordered and first-match: predicates on source and destination select automatic landing or explicit consent. [Integrating related work](integration-overview.md#policy-authorizes-landing) covers matching and defaults; [Working with your operator agent](operating.md) covers consent and hold commands.
-- **Reloads.** Build execution configuration is pinned for reproducibility; dispatcher policy and role settings reload live.
+- **Tickets.** `[tickets]` sets the source and readiness criteria for admitting work.
+- **Landing.** Ordered, first-match `[[landing]]` rules on source and destination select automatic landing or explicit consent. See [Integrating related work](integration-overview.md#policy-authorizes-landing) for matching and defaults, [Working with your operator agent](operating.md) for consent and hold commands.
+- **Reloads.** Build execution configuration is pinned; dispatcher policy and role settings reload live.
 - **Secrets** stay out of committed TOML.
 
 
 ## Editable skills and installation
 
-The vendored `ab-*` skills are repository files you can edit. They supply agent judgment (how to plan, implement, review and operate in your project); code still owns transitions, state and gates, which no skill edit replaces.
-
+The vendored `ab-*` skills are editable repository files supplying agent judgment: how to plan, implement, review and operate. Code owns transitions, state and gates.
 
 ```
 bun ab init
 bun ab init --validate
 ```
 
-- **`init`** writes a stack-neutral configuration when none exists, vendors skills, and hands repository-aware setup to a coding agent. It preserves existing configuration and doesn't invent checks from your stack; setup chooses meaningful commands and adapter prerequisites.
+- **`init`** writes a stack-neutral configuration if none exists, vendors skills, and hands repository-aware setup (commands, adapter prerequisites) to a coding agent. Existing configuration is preserved.
 - **`init --validate`** checks readiness for the configured arrangement.
 
-Every repository must configure an **acceptance check**: a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence and returns a typed verdict. It isn't a test suite and leaves no test files behind.
-
-- An existing end-to-end or browser suite goes in an ordinary `check` step.
-- If none exists, setup doesn't create one; the acceptance check neither replaces nor seeds a suite.
-
+Every repository must configure an **acceptance check**: an agent verify step that runs the built software, exercises each acceptance criterion, attaches evidence and returns a typed verdict. It leaves no test files behind. An existing end-to-end or browser suite goes in an ordinary `check` step; setup doesn't create one.
 
 ```
 bun ab upgrade
 ```
 
-`upgrade` updates the installation on its distribution channel and merges upstream skill changes with your edits, surfacing conflicts for you to resolve rather than replacing customized skills. See [Upgrading](upgrading.md) and [Skills](skills.md#how-upgrades-preserve-customization).
+`upgrade` updates the installation on its distribution channel and merges upstream skill changes into your edits, surfacing conflicts instead of overwriting. See [Upgrading](upgrading.md) and [Skills](skills.md#how-upgrades-preserve-customization).

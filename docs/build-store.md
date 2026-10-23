@@ -10,21 +10,18 @@ order: 10
 
 ## Responsibility
 
-The BuildStore persists everything a build records:
+The BuildStore persists typed append-only events and repository journals, artifacts, blobs, session streams and leases.
 
-- typed append-only events and repository journals
-- artifacts, blobs and session streams
-- leases
-
-Authoritative state is reduced from events; snapshots are disposable caches. Atomic sequence checks and transactions protect concurrent writes, and durable records let a replacement runner resume without its predecessor's process or chat.
-
-The Store is chosen separately from ticket storage and dispatcher placement. Selecting Postgres doesn't relocate execution.
+- State is reduced from events; snapshots are disposable caches.
+- Atomic sequence checks and transactions guard concurrent writes.
+- A replacement runner resumes from durable records, without its predecessor's process or chat.
+- Chosen independently of tickets and dispatcher placement.
 
 ## Shipped adapters
 
 ### SQLite and filesystem blobs
 
-The local default needs no service credential:
+The default; needs no service credential:
 
 <!-- seam-config:start -->
 ```toml
@@ -34,17 +31,17 @@ readyState = "ready"
 ```
 <!-- seam-config:end -->
 
-History lives beneath `.autobuild/`. To move it, pass a filesystem Store reference or set a nonblank `AB_STORE`:
+History lives in `.autobuild/`. To move it, pass a filesystem path or set a nonblank `AB_STORE`:
 
 ```sh
 bun ab builds --store /srv/autobuild/project-store
 ```
 
-Keep the database and blob directory durable together and writable by the dispatcher identity.
+Keep the database and blob directory together, durable and writable by the dispatcher identity.
 
 ### Postgres with object storage
 
-The server-side `@defrex/autobuild-postgres-store` package persists to PostgreSQL plus S3-compatible storage or Vercel Blob. The CLI doesn't install it, and there's no `[store] provider` selector or direct PostgreSQL URL mode. A repository on this backend selects its HTTP service:
+The server-side `@defrex/autobuild-postgres-store` package persists to PostgreSQL plus S3-compatible storage or Vercel Blob. The CLI never connects to PostgreSQL directly (no `[store] provider`); a repository selects the HTTP service:
 
 <!-- seam-config:start -->
 ```toml
@@ -57,7 +54,7 @@ readyState = "ready"
 ```
 <!-- seam-config:end -->
 
-Install the adapter in the service project and compose it server-side:
+In the service project:
 
 ```sh
 bun add @defrex/autobuild-postgres-store
@@ -71,11 +68,9 @@ import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 const store = await openPostgresBuildStoreFromEnv(process.env)
 ```
 
-- **Migrate first.** Run the matching release's idempotent migration before opening the service. Migration needs schema-creation permission; runtime needs access to the resulting tables.
-- **Configure one blob backend.** S3 needs a bucket, prefix and GetObject/PutObject credentials. Vercel Blob needs a read-write token, or an OIDC identity plus store ID.
-- **Keep credentials server-side.** Database and blob secrets never leave the service.
-
-Choose one backend in the service's environment:
+- **Migrate first** with the matching release's idempotent migration. Migration needs schema-creation permission; runtime needs access to the resulting tables.
+- **One blob backend.** S3 needs a bucket, prefix and GetObject/PutObject credentials; Vercel Blob needs a read-write token, or an OIDC identity plus store ID.
+- **Database and blob secrets** never leave the service.
 
 ```sh
 # S3-compatible storage
@@ -98,14 +93,14 @@ export BLOB_READ_WRITE_TOKEN='<blob read-write token>'
 
 ### Remote HTTP client and service
 
-`[store] url`, as above, selects the shipped HTTP client. Connect once per host and user, from a checkout with the intended origin:
+`[store] url` selects the shipped HTTP client. Connect once per host and user, from a checkout with the intended origin:
 
 ```sh
 bun ab connect https://builds.example.com
 bun ab builds
 ```
 
-Browser approval registers the project and saves a project credential outside the repository. A URL alone grants no authority; in CI, set `AB_TOKEN`, which must authorize the registered project.
+Browser approval registers the project and saves its credential outside the repository. A URL alone grants no authority; in CI, set `AB_TOKEN` for the registered project.
 
 Store selection precedence:
 
@@ -114,15 +109,15 @@ Store selection precedence:
 3. committed `[store] url`
 4. the local default
 
-A configured remote service with missing credentials fails with connection guidance; it never silently creates local state.
+A remote Store with missing credentials fails with connection guidance; it never falls back to local state.
 
 ## Writing your own
 
-A BuildStore isn't a plugin manifest registration: there's no `buildStores` map. [Writing a plugin](plugin-authoring.md) explains how it differs from the four registered adapter ports.
+A BuildStore isn't a plugin registration (no `buildStores` map; see [Writing a plugin](plugin-authoring.md)).
 
 To add a backend:
 
 1. Implement `BuildStore` and `BlobStore` with the storage types from `@defrex/autobuild/store-adapter`.
-2. Run the unchanged `describeBuildStoreContract` and `describeBlobStoreContract` suites from `@defrex/autobuild/testing`, against isolated fixtures with real persistence semantics.
+2. Pass the unchanged `describeBuildStoreContract` and `describeBlobStoreContract` suites from `@defrex/autobuild/testing`, on isolated fixtures with real persistence.
 
-To serve it to the shipped CLI, implement the normative remote store protocol; don't invent a second route catalog. Its conformance section covers identity and version headers, validation and authentication order, registered-project scoping, atomic transactions, streams, leases and persistence. Test the real remote client against your server with isolated fixtures, in addition to the backend contracts.
+To serve it to the shipped CLI, implement the normative remote store protocol, not a new route catalog. Meet its conformance section and test the real remote client against your server.
