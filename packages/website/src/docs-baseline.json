@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "b2b6a8e527f64b09ec71392a3a9b02cf71cc9306e278e42868c5e30b7e87f932",
+    "textHash": "c7e3f82792ef5c9da77b09b7d8c2cf538e4969eacc04e2bac6964c6d2ee5fe71",
     "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
@@ -15,7 +15,7 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-    "textHash": "eef2745b9586ec0eea7e26ac96c57636a7e406de89bac449a6ddd58778c24097",
+    "textHash": "b5f2074202a894b37560bcb38eae48b5060b4667ac726259fc174170f503d051",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
@@ -30,7 +30,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "395936403b8687492ee812d3d7f88f178541f858ff4e05a45429d986a0446e0c",
+    "textHash": "9327ba70bdc44999dc99e30121b2f08c8aaaf3ac3ec3c8cd2b421bca4c9ceb19",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -38,7 +38,11 @@
       "When a human is needed",
       "The reconcile epilogue"
     ],
-    "code": []
+    "code": [
+      "spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize",
+      "bun ab answer <slug> --revise-spec revised-spec.md",
+      "(pr.conflicted → reconcile → verify:*)* → merged or closed"
+    ]
   },
   {
     "path": "/docs/dispatcher/",
@@ -46,7 +50,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "96e5813cf6cfad0016c05c689aeba1e594b46db100813ad4b2a2c19c84ebfb75",
+    "textHash": "ac9f53549845abd5a2d5febb606398cd1e472f6ca441ce4b00d1726881a0044b",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
@@ -61,14 +65,18 @@
     "title": "Integrating related work",
     "group": "concepts",
     "description": "Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.",
-    "textHash": "8883b70f81ef39f6407c83bf962e2599485d4cecd85a301a6765cef663257d82",
+    "textHash": "f9c8ed9be22ac0e69a4fedaf078e43f797ad6af7cb2c5d58b69d966dbd183fe4",
     "headings": [
       "Targets form the tree",
       "One identity per leaf change",
       "Blockers are a separate graph",
       "Policy authorizes landing"
     ],
-    "code": []
+    "code": [
+      "bun ab ticket create \"Checkout redesign\" --body checkout.md --kind node\nbun ab ticket create \"Cart summary\" --body cart.md --target <node-id>",
+      "bun ab ticket block <id> <blocker-id>",
+      "# Leaves land on the root automatically; everything else needs consent.\n[[landing]]\nfrom = \"leaf\"\ninto = \"root\"\nmode = \"auto\"\n\n[[landing]]\nmode = \"consent\""
+    ]
   },
   {
     "path": "/docs/tickets/",
@@ -76,14 +84,17 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "b4e3c125652d4ab001b62c8ffb4cad5cf60c0e6a48e5d7153f2e34f2fd7f43d5",
+    "textHash": "81e4d81dd13fb03c2fa9cc881c6d0882781015377739182997eec06b86e1edc1",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
       "Ready is a gate, not a guarantee",
       "Work and node tickets"
     ],
-    "code": []
+    "code": [
+      "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+      "bun ab answer <slug> --revise-spec-from-ticket"
+    ]
   },
   {
     "path": "/docs/intake/",
@@ -91,13 +102,16 @@
     "title": "Intake and harvest",
     "group": "concepts",
     "description": "Turn outside signals and agent observations into reviewed proposals for your operator agent to triage and groom.",
-    "textHash": "6548c43e3ae40fc132ac107448fb1b2692c895dab40634a82827fa7b67c93841",
+    "textHash": "00841a9d802949c582c813d2c2eca5e2789a18593953d2ab797017c1ed2b31e2",
     "headings": [
       "Sources carry proposals",
       "Observations become reviewed tickets",
       "Triage is the default gate"
     ],
-    "code": []
+    "code": [
+      "ab observe --kind followup --files src/retry.ts \"Retry budget ignores jitter\"",
+      "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\nproposalState = \"ready\""
+    ]
   },
   {
     "path": "/docs/skills/",
@@ -105,7 +119,7 @@
     "title": "Skills",
     "group": "concepts",
     "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-    "textHash": "3074245a06ed39bc4424ebc43d6d0a11f065bcf0bee41cfbd81b7bf351d3e2bc",
+    "textHash": "01ab7b235b98b49f0df242f8d34fb9d8e02cefc5d9b9f7207897feb7640bb149",
     "headings": [
       "Strong defaults, yours to edit",
       "The shipped skills",
@@ -145,7 +159,7 @@
     "title": "Working with your operator agent",
     "group": "guides",
     "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
-    "textHash": "229cee0f0a440f5c99f02f55dde1a0d5c5cba7bea2880c18e1b97fb2c05e05cb",
+    "textHash": "3a2235989fdce99e9bfa145bf15c35de0c7a20edc3f0d90bff0789415e2919cd",
     "headings": [
       "Choose a harness",
       "Give the agent memory",
@@ -170,7 +184,7 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "8270ccba0b300e81010d92cb43b375080461723347b33dea8593640ad3b92ad5",
+    "textHash": "1c3056e2b4f9363311725ad9b6f9879e0a40e044042de15efb2b0f6a7ec5d33f",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",
@@ -186,13 +200,18 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "f5cd76e9a16d64751a7a7064b1d459aff0c0f33571c0b182ead5c62f96b0fedc",
+    "textHash": "31332bcd1dcd6cf1d8fd0b7bda296bc0aa8b105519f5db792d0b7d33263bdda5",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",
       "Admission and landing",
       "Editable skills and installation"
     ],
-    "code": ["bun ab init\nbun ab init --validate", "bun ab upgrade"]
+    "code": [
+      "[commands]\ntypecheck = \"bun tsc --noEmit\"\n\n[verify]\nsteps = [\"types\", \"acceptance\"]\n\n[verify.types]\nkind = \"check\"\ncommand = \"typecheck\"\nalways = true\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\" # repository-authored skill",
+      "capacity = 2\n\n[roles.default]\nruntime = \"claude\"\n\n[roles.code-review]\nruntime = \"pi\"\nmodel = \"kimi-coding/k3\"\n\n[policy]\nmaxReviewRounds = 6\nmaxVerifyAttempts = 3\nsessionBudgetSeconds = 3600",
+      "bun ab init\nbun ab init --validate",
+      "bun ab upgrade"
+    ]
   }
 ]

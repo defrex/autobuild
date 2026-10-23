@@ -10,15 +10,26 @@ order: 13
 
 ## Responsibility
 
-A ticket source owns ticket CRUD, lifecycle transitions, claiming, labels, blockers, and creation identity. It supplies work to dispatch; the build's pinned spec, execution history, transcripts, and artifacts live in the BuildStore. Changing a ticket after claim does not silently replace the pinned contract. See [Tickets are the interface](tickets.md) for grooming and the ready gate.
+A ticket source owns ticket CRUD, lifecycle transitions, claiming, labels, blockers and creation identity.
+
+- **It supplies work.** The build's pinned spec, execution history, transcripts and artifacts live in the BuildStore.
+- **A claim pins the contract.** Editing a ticket after claim doesn't silently replace the pinned spec.
+
+See [Tickets are the interface](tickets.md) for grooming and the ready gate.
 
 ## Shipped adapters
 
-Each example is a complete minimal `autobuild.toml`. Install Autobuild with `bun add -d --exact @defrex/autobuild`; run repository commands as `bun ab <command>`. Credentials belong in the dispatcher environment or ignored `.env`, never TOML.
+Install with `bun add -d --exact @defrex/autobuild`. Each example is a complete minimal `autobuild.toml`. Credentials go in the dispatcher environment or an ignored `.env`, never TOML.
+
+| Source | Choose it for | Credential |
+|---|---|---|
+| `file` | a tracker you edit and back up with filesystem tools | none |
+| `linear` | a team already grooming issues in Linear | `LINEAR_API_KEY` |
+| `hosted` | a project-scoped tracker shared by agents and clients | saved `ab connect` credential |
 
 ### Local files (`file`)
 
-Choose files for a tracker you can inspect, edit, and back up with ordinary filesystem tools. No service credential is required. The dispatcher needs a writable ticket directory. By default it is `.autobuild/tickets/`; selecting a different local Store root relocates that default with the Store. A remote Store keeps default file tickets local. An explicit `dir` resolves from the repository root and is not automatically ignored, so decide whether to track it.
+The dispatcher needs a writable ticket directory, `.autobuild/tickets/` by default. A different local Store root moves that default with it; a remote Store keeps it local. An explicit `dir` resolves from the repository root and isn't ignored automatically, so decide whether to track it.
 
 <!-- seam-config:start -->
 ```toml
@@ -34,11 +45,15 @@ doneState = "done"
 ```
 <!-- seam-config:end -->
 
-File claims always move to `doing`; `claimedState` is not configurable for this source. State names correspond to directories, such as `.tickets/ready/` and `.tickets/doing/`. Initialize through `bun ab init`, then use `bun ab ticket states` and the ticket commands to manage the tracker. Only tickets in `readyState` carrying every `readyLabels` entry and with resolved blockers can be claimed. An empty label list adds no label gate. Proposals stay in triage for grooming in this example.
+- **States are directories**, such as `.tickets/ready/` and `.tickets/doing/`. Claims always move to `doing`; `claimedState` isn't configurable for this source.
+- **Claiming** requires `readyState`, every `readyLabels` entry and resolved blockers. An empty label list adds no label gate.
+- **Proposals** stay in triage for grooming in this example.
+
+Initialize with `bun ab init`, then manage the tracker with `bun ab ticket states` and the other ticket commands.
 
 ### Linear (`linear`)
 
-Choose Linear when your team already grooms issues in its workflow. Create a personal API key using [Linear's API setup](https://linear.app/developers/graphql), grant access to the selected team, and export `LINEAR_API_KEY` on the dispatcher host. The identity needs to read issues, teams, workflow states, labels and dependencies, and to create/update issues, comments, labels and blocking relationships used by ticket operations. A read-only key is insufficient.
+Create a personal API key through [Linear's API setup](https://linear.app/developers/graphql) with access to the team, and export `LINEAR_API_KEY` on the dispatcher host. A read-only key won't work: the identity reads issues, teams, workflow states, labels and dependencies, and writes issues, comments, labels and blocking relationships.
 
 <!-- seam-config:start -->
 ```toml
@@ -55,11 +70,22 @@ doneState = "Done"
 ```
 <!-- seam-config:end -->
 
-Replace `ENG` and the case-sensitive workflow names with your team's actual values. `teamKey` selects the team; `readyState`, all `readyLabels`, and optional `readyAssignee` filter admission. Omitted Linear labels default to `["autobuild"]`; explicit `[]` removes that gate. There is no project filter in the ticket configuration: do not add a `project` key. Team access and state/label selection should match the intended queue. API rate limits are shared with other callers.
+Replace `ENG` and the case-sensitive workflow names with your team's values.
+
+- **Admission.** `teamKey` selects the team; `readyState`, every `readyLabels` entry and optional `readyAssignee` filter what's admitted.
+- **Labels.** Omitted `readyLabels` defaults to `["autobuild"]`; explicit `[]` removes that gate.
+- **No project filter.** Don't add a `project` key. Scope the queue through team access, states and labels.
+- **Rate limits** are shared with your other API callers.
 
 ### Hosted (`hosted`)
 
-Choose hosted tickets for a project-scoped service shared by agents and clients, including projects whose builds run locally. This is an independent tracker, not a Linear proxy; it needs no Linear credential. Register/connect the project with `bun ab connect --tickets https://tickets.example.com`, using the service's authorized connection flow. The saved service/project credential authorizes ticket operations and policy publication.
+An independent tracker, not a Linear proxy; it works even when builds run locally. Connect the project through the service's authorized flow:
+
+```sh
+bun ab connect --tickets https://tickets.example.com
+```
+
+The saved project credential authorizes ticket operations and policy publication.
 
 <!-- seam-config:start -->
 ```toml
@@ -77,24 +103,42 @@ doneState = "done"
 ```
 <!-- seam-config:end -->
 
-`teamKey` identifies the registered project's team. This example leaves builds on the default local Store. Without `tickets.url`, hosted tickets use the selected remote BuildStore service (`AB_STORE` or `[store].url`); an explicit ticket URL is required when builds use a local Store. A separate ticket service needs its own project credential. A Store-only connection does not confer authority on an unrelated service. Delegated child sessions are read-only; they cannot redefine project policy.
+- `teamKey` identifies the registered project's team.
+- **URL.** Without `tickets.url`, hosted tickets use the remote BuildStore service (`AB_STORE` or `[store].url`). With a local Store, as in this example, the URL is required.
+- **Authority.** A separate ticket service needs its own project credential; a Store connection grants nothing there. Delegated child sessions are read-only and can't redefine project policy.
 
 ### Optional ticket tree
 
-File, Linear, and hosted all declare `integrationTree: true`. File persists kind/target in frontmatter; hosted uses transactional project data; Linear maps node kind to the exact `node` label and target to its parent relationship. Targets must resolve to canonical ids in the same source. Blockers remain a separate graph: a target chooses integration destination, not execution order. See [integration](integration-overview.md).
+All three sources declare `integrationTree: true`:
 
-For an update, omitted `kind` or `target` preserves the existing value. A new ticket defaults to work; explicit `kind = "work"` resets kind, and `target = null` clears a target in the typed API. Null is an API value, not TOML syntax. Tree implementations must enumerate every state through exhaustive `listAll`, independent of ready filters. Before any part of a mixed patch writes, validate target existence, node kind, self/ancestor cycles, corrupt ancestor chains, and demotion of a node with children. Invalid metadata must reject the entire patch. Sources without the capability receive ordinary CRUD but must refuse kind/target writes; they must never silently discard them.
+| Source | Stores kind and target as |
+|---|---|
+| `file` | frontmatter |
+| `hosted` | transactional project data |
+| `linear` | the exact `node` label, and the parent relationship |
+
+- **Targets** resolve to canonical ids in the same source. Blockers are a separate graph: a target picks the integration destination, not execution order. See [integration](integration-overview.md).
+- **Updates.** Omitted `kind` or `target` keeps the existing value. New tickets default to work; explicit `kind = "work"` resets kind, and `target = null` clears a target in the typed API (null isn't TOML syntax).
+- **Validation.** Before any part of a mixed patch writes, check target existence, node kind, self/ancestor cycles, corrupt ancestor chains and demotion of a node with children. Invalid metadata rejects the whole patch.
+- **Enumeration.** Tree implementations list every state through exhaustive `listAll`, independent of ready filters.
+- **Without the capability**, a source keeps ordinary CRUD but must refuse kind/target writes, never drop them silently.
 
 ## Writing your own
 
-Implement `TicketSource`, register it in the manifest's `ticketSources` map, and select the registered name with `tickets.source`. Import types and harnesses from `@defrex/autobuild/plugin-sdk`, never internal source paths. Follow [Writing a plugin](plugin-authoring.md) for factories, registration, packaging and publishing.
+Implement `TicketSource`, register it in the manifest's `ticketSources` map, and select it with `tickets.source`. Import types and harnesses from `@defrex/autobuild/plugin-sdk`, never internal paths. [Writing a plugin](plugin-authoring.md) covers factories, registration, packaging and publishing.
 
-Preserve lifecycle and claim semantics, blocker completion, idempotent creation under retries, and stable externally visible creation keys. `listReady` returns partial valid results with diagnostics for malformed individual records; infrastructure failures must still propagate. Declare revision support honestly: guarded writes must reject stale revisions, while unsupported guards must fail explicitly. Never report success for a partial mixed update.
+An adapter must:
 
-Provide a `TicketSourceContractFactory` returning a `TicketSourceContractHarness` with the source, lifecycle states, a writable fixture label, and cleanup. Live fixtures should reserve creation keys before create and track created tickets/labels for cleanup even after a response is lost. Run `describeTicketSourceContract` against the adapter unchanged, or expose that fixture through the plugin contract descriptor and run:
+- preserve lifecycle and claim semantics and blocker completion
+- create idempotently under retries, with stable externally visible creation keys
+- return partial valid results from `listReady`, with diagnostics for malformed records, while still propagating infrastructure failures
+- declare revision support honestly: guarded writes reject stale revisions, and unsupported guards fail explicitly
+- never report success for a partial mixed update
+
+Test it with a `TicketSourceContractFactory` returning a `TicketSourceContractHarness`: the source, lifecycle states, a writable fixture label and cleanup. Live fixtures reserve creation keys before creating and track what they create, so cleanup survives a lost response. Run `describeTicketSourceContract` unchanged, or expose the fixture through the plugin contract descriptor and run:
 
 ```sh
 bun ab plugin test ticket-source acme
 ```
 
-Tree support adds semantic obligations to this same port, not a separate plugin port or harness. Declare it only when you can preserve the [optional tree contract](plugin-authoring.md#optional-ticket-tree-capability), including exhaustive pagination, canonical targets, revision coverage and atomic rejection.
+Tree support adds obligations to this same port and harness, not a separate one. Declare it only when you can keep the [optional tree contract](plugin-authoring.md#optional-ticket-tree-capability): exhaustive pagination, canonical targets, revision coverage and atomic rejection.

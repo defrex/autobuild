@@ -88,7 +88,7 @@ test('production copy covers every article, responsive geometry, formatting and 
         const rect = button.getBoundingClientRect(), heading = title.getBoundingClientRect(), style = win.getComputedStyle(button)
         check(rect.height >= (width < 720 ? 44 : 40), path + width + ' height')
         check(width < 720 ? rect.top >= heading.bottom && rect.left === heading.left : rect.left >= heading.right && rect.top < heading.bottom, path + width + ' placement')
-        check(style.fontSize === '14px' && style.fontWeight === '700' && style.lineHeight === '20px' && style.borderTopWidth === '2px' && style.borderRadius === '0px' && style.backgroundColor === 'rgb(0, 0, 0)' && style.borderTopColor === 'rgb(230, 230, 230)', path + ' styles')
+        check(style.fontSize === '14px' && style.fontWeight === '700' && style.lineHeight === '20px' && style.borderTopWidth === '2px' && style.borderRadius === '0px' && style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.borderTopColor === 'rgba(0, 0, 0, 0)' && style.color === 'rgb(136, 136, 136)', path + ' styles')
         check(doc.documentElement.scrollWidth <= width, path + width + ' overflow')
         check(button.textContent === 'Copied' && status.textContent === 'Copied' && status.getAttribute('aria-live') === 'polite' && status.getAttribute('aria-atomic') === 'true', path + ' success announcement')
       }

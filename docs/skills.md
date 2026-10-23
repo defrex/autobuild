@@ -8,74 +8,112 @@ description: "Understand Autobuild's agent skills, customize their defaults for 
 
 # Skills
 
-Skills guide the agents that plan, implement, review, and operate Autobuild. Each skill covers a phase or role. They supply judgment; deterministic code still owns build state, transitions, gates, and publication.
+Skills guide the agents that plan, implement, review and operate Autobuild, one skill per phase or role. They supply judgment; deterministic code still owns build state, transitions, gates and publication.
 
 ## Strong defaults, yours to edit
 
-`ab init` installs the shipped skills as ordinary repository files under `.agents/skills/ab-<name>/`. Each directory contains a `SKILL.md` and may include supporting references or scripts. These are strong defaults you are meant to customize, rather than immutable prompts.
+`ab init` installs the shipped skills as ordinary repository files under `.agents/skills/ab-<name>/`. Each directory holds a `SKILL.md` and may include supporting references or scripts. They're defaults meant to be customized, not immutable prompts.
 
-For example, add your project's required implementation conventions to `.agents/skills/ab-implement/SKILL.md`: use the shared database adapter, follow the existing error vocabulary, and run the project's integration checks. Preserve the skill's typed CLI reporting contract, including its context, notes deposit, and completion command. Customize how agents do the work while keeping the lifecycle's deterministic gates intact.
+For example, add your implementation conventions to `.agents/skills/ab-implement/SKILL.md`:
 
-Commit your edits with the repository so every agent works from the same instructions. Edit the live skill tree, not its pristine baseline.
+- use the shared database adapter
+- follow the existing error vocabulary
+- run the project's integration checks
+
+Change how agents do the work, not the lifecycle's deterministic gates. Keep each skill's typed CLI reporting contract: its context, notes deposit and completion command.
+
+Commit your edits so every agent works from the same instructions. Edit the live skill tree, never its pristine baseline.
 
 ## The shipped skills
 
 `ab init` installs these twelve skills:
 
-- `ab-spec` — **Pre-build grooming.** Help you turn intent into a complete ticket spec; this is not a running spec-phase session.
-- `ab-plan` — **Plan.** Produce an implementation plan from the spec.
-- `ab-plan-review` — **Plan review.** Independently check the plan against the spec.
-- `ab-implement` — **Implement.** Execute the approved plan and commit the change.
-- `ab-code-review` — **Code review.** Independently review the implementation against the contract.
-- `ab-finalize` — **Finalize.** Write the pull request description after verification.
-- `ab-reconcile` — **Reconcile.** Resolve conflicts in a kernel-prepared replay onto a refreshed base.
-- `ab-operate` — **External operator agent.** Guide your agent as it files tickets, watches builds, answers escalations, and controls landing.
-- `ab-tickets` — **Ticket management.** Read, create, groom, and update tickets through the tracker interface.
-- `ab-harvest` — **Harvest synthesis.** Turn claimed observations into structured ticket proposals.
-- `ab-harvest-review` — **Harvest review.** Independently review those proposals.
-- `ab-guide` — **Reference.** Explain the system, configuration, setup, and installed skills.
+| Skill | Role | Purpose |
+|---|---|---|
+| `ab-spec` | Pre-build grooming | Turn intent into a complete ticket spec with you; not a spec-phase session |
+| `ab-plan` | Plan | Produce an implementation plan from the spec |
+| `ab-plan-review` | Plan review | Check the plan against the spec independently |
+| `ab-implement` | Implement | Execute the approved plan and commit the change |
+| `ab-code-review` | Code review | Review the implementation against the contract independently |
+| `ab-finalize` | Finalize | Write the pull request description after verification |
+| `ab-reconcile` | Reconcile | Resolve conflicts in a kernel-prepared replay onto a refreshed base |
+| `ab-operate` | External operator agent | File tickets, watch builds, answer escalations, control landing |
+| `ab-tickets` | Ticket management | Read, create, groom and update tickets through the tracker interface |
+| `ab-harvest` | Harvest synthesis | Turn claimed observations into structured ticket proposals |
+| `ab-harvest-review` | Harvest review | Review those proposals independently |
+| `ab-guide` | Reference | Explain the system, configuration, setup and installed skills |
 
-The runner invokes phase skills; do not start them manually. Spec grooming and ticket management happen before builds. The operator agent works outside the pipeline, and observation harvest is a separate repository workflow. Autobuild does not ship a generic agent-verifier skill: your repository supplies skills for its own evidence and checks.
+- **Phase skills** are invoked by the runner. Don't start them manually.
+- **Spec grooming and ticket management** happen before builds.
+- **The operator agent** works outside the pipeline; observation harvest is a separate repository workflow.
+- **No generic agent verifier ships.** Your repository supplies skills for its own evidence and checks.
 
 ## How upgrades preserve customization
 
-Init also records the upstream files under `.agents/skills/.ab-pristine/ab-<name>/`. This tracked tree is the last upstream baseline, not another editable copy.
+Init also records upstream files under `.agents/skills/.ab-pristine/ab-<name>/`. This tracked tree is the last upstream baseline, not another editable copy.
 
-`ab upgrade` compares three versions of each distributed file: the pristine base, your edited local file, and the incoming upstream default. This includes supporting files as well as `SKILL.md`. Independent edits combine cleanly. When edits overlap, an agent proposes a resolution biased toward your deliberate customization. Deterministic validation checks that the proposal preserves clean regions, contains no new unresolved conflict markers, and retains the skill's frontmatter identity.
+`ab upgrade` runs a three-way merge on every distributed file, supporting files included:
 
-After a successful update, pristine advances to the incoming upstream bytes, not the customized merge. This leaves your edits visible for the next upgrade. New upstream support files arrive too; removed upstream files are deleted if unedited, while customized copies remain as repository-local support files.
+- **Base:** the pristine copy
+- **Local:** your edited file
+- **Incoming:** the new upstream default
+
+Independent edits combine cleanly. When edits overlap, an agent proposes a resolution biased toward your customization. Deterministic validation then checks that it:
+
+- preserves clean regions
+- adds no unresolved conflict markers
+- keeps the skill's frontmatter identity
+
+After a successful update, pristine advances to the incoming upstream bytes, not the merged result, so your edits stay visible to the next upgrade. New upstream support files arrive too. Removed upstream files are deleted if unedited; customized copies stay as repository-local support files.
 
 ### Reading the upgrade report
 
-Merging happens per file. A conflicted file keeps both its live and pristine bytes untouched, while other files can advance independently. Each skill's report aggregates its file outcomes, with `conflicted` taking precedence over `resolved`, `merged`, `adopted`, and `current`.
+Merging is per file. A conflicted file keeps its live and pristine bytes untouched while other files advance. Each skill reports the aggregate of its files, with `conflicted` taking precedence over `resolved`, `merged`, `adopted` and `current`.
 
-- `current` — Upstream has not changed from the baseline; the local file stands as it is.
-- `adopted` — Incoming upstream bytes were adopted and pristine advanced. This also covers restoring a missing live file, adding a new support file, or removing an unedited upstream-deleted support file.
-- `merged` — Independent changes combined cleanly and pristine advanced. A customized upstream-deleted support file is also preserved with this outcome, relinquishing its pristine record.
-- `resolved` — Overlapping edits received a local-biased agent resolution that passed validation; pristine advanced to incoming upstream.
-- `conflicted` — Resolution was unavailable, failed, was declined as ambiguous, or failed validation. That file's live and pristine bytes stay untouched; conflict markers never enter the live skill.
-- `installed` — A distributed skill absent from both the live and pristine trees was installed fresh.
-- `removed` — An eligible retired skill's unchanged live tree and owned discovery link were removed, or its already-missing live tree's obsolete provenance and owned dangling link were cleaned up.
-- `kept` — A retired skill was customized, configured, or unsafe to remove; or a user-owned Claude discovery entry was preserved even though the canonical tree could be removed. Obsolete pristine ownership is cleared.
-- `unknown` — An installed `ab-*` name is absent from the distribution and was left alone. This is protective behavior, not a reason to use the reserved prefix for new skills.
+| Outcome | Meaning |
+|---|---|
+| `current` | Upstream is unchanged from the baseline; the local file stands. |
+| `adopted` | Incoming bytes adopted and pristine advanced. Also covers restoring a missing live file, adding a new support file, or removing an unedited upstream-deleted support file. |
+| `merged` | Independent changes combined and pristine advanced. Also a customized upstream-deleted support file, kept and released from its pristine record. |
+| `resolved` | A local-biased agent resolution passed validation; pristine advanced to incoming. |
+| `conflicted` | Resolution was unavailable, failed, was declined as ambiguous, or failed validation. Live and pristine stay untouched; conflict markers never enter the live skill. |
+| `installed` | A distributed skill missing from both live and pristine trees was installed fresh. |
+| `removed` | An eligible retired skill's unchanged live tree and owned discovery link were removed, or an already-missing tree's obsolete provenance and dangling owned link were cleaned up. |
+| `kept` | A retired skill was customized, configured or unsafe to remove, or a user-owned Claude discovery entry was preserved while the canonical tree could go. Obsolete pristine ownership is cleared. |
+| `unknown` | An installed `ab-*` name isn't in the distribution and was left alone. Don't take this as license to use the reserved prefix. |
 
-Without a pristine record, upgrade cannot infer your edits. An absent local file can be installed, and a local file already identical to incoming upstream can establish its baseline. A differing local file is reported as `conflicted` rather than overwritten. Review the reported pristine path and merge by hand when needed.
+**No pristine record.** Upgrade can't infer your edits:
 
-The `removed` and `kept` retirement outcomes apply only to `ab-setup` and `ab-verify-e2e`. A pristine record proves their Autobuild provenance; a same-named repository-authored skill without one is left alone. A retired skill referenced by an agent verify or finalize step is kept, as is one whose configuration cannot be inspected safely. Retirement clears obsolete ownership after classification, so it does not repeatedly resurrect or report the old skill.
+- an absent local file is installed
+- a local file identical to incoming establishes the baseline
+- a differing local file is reported `conflicted`, not overwritten; review the reported pristine path and merge by hand
 
-Claude discovery collisions are separate from content conflicts. A distinct real directory or foreign symlink at `.claude/skills/<name>` is preserved, reported, and makes upgrade exit nonzero, even when an eligible retired canonical tree is removed. Preserved user-owned symlinks retain their exact target text. Content-level `conflicted` results alone retain an exit-zero contract, including timeouts or cancelled resolution; inspect the report rather than relying only on the exit code.
+**Retirement.** `removed` and `kept` apply only to `ab-setup` and `ab-verify-e2e`.
 
-A conflict-free upgrade makes a local commit by default, limited to upgrade-owned changes; `--no-commit` leaves them for you to commit. Conflicts or unsafe Git conditions suppress that automatic commit with an explanation. Review the output and diff. [Upgrading](upgrading.md) covers the full procedure.
+- A pristine record proves Autobuild provenance; a same-named repository skill without one is left alone.
+- A retired skill used by an agent verify or finalize step is kept, as is one whose configuration can't be inspected safely.
+- Retirement clears obsolete ownership after classification, so the old skill doesn't come back or get reported again.
+
+**Exit status.**
+
+- **Discovery collisions fail.** A distinct real directory or foreign symlink at `.claude/skills/<name>` is preserved, reported, and makes upgrade exit nonzero, even when a retired canonical tree is removed. Preserved user-owned symlinks keep their exact target text.
+- **Content conflicts don't.** `conflicted` results alone, including timeouts and cancelled resolution, still exit zero. Read the report, not just the exit code.
+
+**Commit.** A conflict-free upgrade makes a local commit limited to upgrade-owned changes; `--no-commit` leaves them to you. Conflicts or unsafe Git conditions suppress the commit with an explanation. Review the output and diff. [Upgrading](upgrading.md) covers the full procedure.
 
 ## Add a repository-local skill
 
-Reserve the `ab-` prefix for skills Autobuild ships and installs. Give repository additions plain names, such as `verify-acceptance`, and create `.agents/skills/verify-acceptance/SKILL.md` with its name, description, and instructions. Keep application-specific evidence requirements there.
+The `ab-` prefix is reserved for skills Autobuild ships. Give your own skills plain names, such as `verify-acceptance`, in `.agents/skills/verify-acceptance/SKILL.md` with a name, description and instructions. Application-specific evidence requirements belong there.
 
-An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+Every repository must configure an **acceptance check**: a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence and returns a typed verdict. It isn't a test suite and leaves no test files behind.
 
-For an agent verifier, instruct the agent to run `ab context`, read the materialized inputs, inspect the application's required evidence, and report its typed `pass`, `fail`, or `skip` verdict through `ab verdict`. Define what evidence constitutes a pass or failure. The skill should use the verify session's CLI contract, rather than treating its prose response as the result.
+An agent verifier skill should tell the agent to:
 
-Select that skill by its exact name in `autobuild.toml`:
+1. Run `ab context` and read the materialized inputs.
+2. Gather the application's required evidence.
+3. Report `pass`, `fail` or `skip` through `ab verdict`. Its prose response is not the result.
+
+Define what evidence counts as a pass or failure. Then select the skill by exact name in `autobuild.toml`:
 
 ```toml
 [verify]
@@ -86,11 +124,11 @@ kind = "agent"
 skill = "verify-acceptance"
 ```
 
-Merge this example into your existing configuration: append `acceptance` to the existing ordered steps instead of replacing them. No prefix is inferred from `skill`. See [Verification](verification.md#steps-and-outcomes) for verify-step kinds and outcomes.
+Merge this into your existing configuration: append `acceptance` to your ordered steps rather than replacing them. No prefix is inferred from `skill`. See [Verification](verification.md#steps-and-outcomes) for step kinds and outcomes.
 
 ## Harness discovery
 
-Codex and Pi discover the canonical `.agents/skills/` tree directly. Claude Code discovers `.claude/skills/`; init creates links there for shipped skills, pointing to the same canonical directories. There is one editable copy.
+Codex and Pi read the canonical `.agents/skills/` tree directly. Claude Code reads `.claude/skills/`, where init links each shipped skill to its canonical directory. There's one editable copy.
 
 For a new local skill, add its Claude link from the repository root:
 
@@ -99,4 +137,6 @@ mkdir -p .claude/skills
 ln -s ../../.agents/skills/verify-acceptance .claude/skills/verify-acceptance
 ```
 
-Check the existing layout first. If `.claude/skills/` and `.agents/skills/` already alias the same directory, discovery is already satisfied and no per-skill link is needed. Preserve existing user-owned directories or foreign links; resolve a collision deliberately instead of overwriting another skill tree. Commit the local skill and any new discovery link together.
+- **Check first.** If `.claude/skills/` and `.agents/skills/` already alias the same directory, no per-skill link is needed.
+- **Don't overwrite.** Preserve existing user-owned directories and foreign links; resolve collisions deliberately.
+- **Commit together.** Commit the local skill and its discovery link in one change.
