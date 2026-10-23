@@ -65,7 +65,7 @@ The `removed` and `kept` retirement outcomes apply only to `ab-setup` and `ab-ve
 
 Claude discovery collisions are separate from content conflicts. A distinct real directory or foreign symlink at `.claude/skills/<name>` is preserved, reported, and makes upgrade exit nonzero, even when an eligible retired canonical tree is removed. Preserved user-owned symlinks retain their exact target text. Content-level `conflicted` results alone retain an exit-zero contract, including timeouts or cancelled resolution; inspect the report rather than relying only on the exit code.
 
-A conflict-free upgrade makes a local commit by default, limited to upgrade-owned changes; `--no-commit` leaves them for you to commit. Conflicts or unsafe Git conditions suppress that automatic commit with an explanation. Review the output and diff. The [upgrade reference](../skills/guide/SKILL.md#setup-and-upgrades) has the detailed behavior.
+A conflict-free upgrade makes a local commit by default, limited to upgrade-owned changes; `--no-commit` leaves them for you to commit. Conflicts or unsafe Git conditions suppress that automatic commit with an explanation. Review the output and diff. [Upgrading](upgrading.md) covers the full procedure.
 
 ## Add a repository-local skill
 
@@ -86,7 +86,7 @@ kind = "agent"
 skill = "verify-acceptance"
 ```
 
-Merge this example into your existing configuration: append `acceptance` to the existing ordered steps instead of replacing them. No prefix is inferred from `skill`. See the [configuration reference](configuration.md) for the complete verify-step schema.
+Merge this example into your existing configuration: append `acceptance` to the existing ordered steps instead of replacing them. No prefix is inferred from `skill`. See [Verification](verification.md#steps-and-outcomes) for verify-step kinds and outcomes.
 
 ## Harness discovery
 

@@ -111,12 +111,13 @@ test('docs renderer escapes page metadata', () => {
   expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
 })
 
-test('feature guides are text-only and link to repository references', () => {
-  for (const page of DOCS_PAGES.slice(2)) {
-    if (baseline.some((entry) => entry.path === page.path))
-      expect(page.content).toContain(`${REPO_URL}/blob/main/docs/`)
-    expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
+test('published pages link only within the site, and feature guides are text-only', () => {
+  for (const page of DOCS_PAGES) {
+    expect(page.content, page.source).not.toContain(`${REPO_URL}/blob/`)
+    expect(page.content, page.source).not.toContain(`${REPO_URL}/tree/`)
   }
+  for (const page of DOCS_PAGES.slice(2))
+    expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
 })
 
 test('layout preserves article words and headings from independent HTML baselines', () => {

@@ -158,8 +158,7 @@ nothing. A plugin reading the new seams should declare an API range containing
 
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the
-colocated language-neutral
-[remote store protocol](remote-store-protocol.md) and run its conformance path
+language-neutral remote store protocol and run its conformance path
 instead. `TelemetrySource` is a frozen port type with no plugin registration
 surface in this release.
 

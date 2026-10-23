@@ -50,4 +50,4 @@ A target chooses the integration destination; blockers choose prerequisites. The
 
 Outside signals and agent discoveries enter through [Intake and harvest](intake.md), where proposals are groomed before becoming ready work.
 
-Read the [spec standard](spec-standard.md) and [ticket-source configuration reference](configuration.md) for the full contract. Follow the [dispatcher guide](dispatcher.md) to see what happens at claim, or [Getting started](getting-started.md) for a first ticket.
+Follow the [dispatcher guide](dispatcher.md) to see what happens at claim, or [Getting started](getting-started.md) for a first ticket.

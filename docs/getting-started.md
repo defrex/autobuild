@@ -50,8 +50,8 @@ Open your coding agent at the repository root, then ask in plain language:
 
 > Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through landing. Ask me before granting landing consent.
 
-The agent uses the grooming and ticket skills to develop acceptance criteria, scope, and evidence with you. Keep the first change small and give it checks that demonstrate success; the [spec standard](spec-standard.md) defines a buildable ticket. Dispatch is already running, so moving the ticket to ready makes it eligible for claim immediately.
+The agent uses the grooming and ticket skills to develop acceptance criteria, scope, and evidence with you. Keep the first change small and give it checks that demonstrate success; the [spec standard](tickets.md#groom-a-buildable-spec) defines a buildable ticket. Dispatch is already running, so moving the ticket to ready makes it eligible for claim immediately.
 
 Your agent watches recorded progress and answers build questions within your instructions, bringing unresolved decisions back to you. Landing follows the configured policy and gates; a green build does not guarantee immediate merge.
 
-Continue with [Working with your operator agent](operating.md). The [configuration reference](configuration.md), [architecture map](architecture.md), and [design specification](../SPEC.md) cover the details.
+Continue with [Working with your operator agent](operating.md). The [configuration reference](configuration-overview.md) maps the settings you can change.

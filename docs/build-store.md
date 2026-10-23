@@ -59,7 +59,7 @@ import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 const store = await openPostgresBuildStoreFromEnv(process.env)
 ```
 
-Run the matching release's idempotent migration before opening the service. Migration needs schema creation permissions; runtime needs access to the resulting tables. Configure the selected blob backend separately: S3 needs bucket/prefix configuration and GetObject/PutObject credentials; Vercel Blob needs a read-write token or OIDC identity plus store ID. The [adapter deployment reference](../packages/postgres-store/README.md) and [hosted service reference](hosted-service.md) specify environment names, migration recovery, and service secrets. Database and blob credentials stay on the server. For example, choose one backend in that service's environment:
+Run the matching release's idempotent migration before opening the service. Migration needs schema creation permissions; runtime needs access to the resulting tables. Configure the selected blob backend separately: S3 needs bucket/prefix configuration and GetObject/PutObject credentials; Vercel Blob needs a read-write token or OIDC identity plus store ID. Database and blob credentials stay on the server. For example, choose one backend in that service's environment:
 
 ```sh
 # S3-compatible storage
@@ -89,7 +89,7 @@ bun ab connect https://builds.example.com
 bun ab builds
 ```
 
-Browser approval registers the project and saves a project credential outside the repository. For CI, supply `AB_TOKEN` explicitly in the environment; it must authorize the registered project. A URL alone grants no authority. See [project connection](hosted-service.md#connect-a-project).
+Browser approval registers the project and saves a project credential outside the repository. For CI, supply `AB_TOKEN` explicitly in the environment; it must authorize the registered project. A URL alone grants no authority.
 
 Store selection precedence is explicit `--store`, nonblank `AB_STORE`, committed `[store] url`, then the local default. A configured remote service with missing credentials fails with connection guidance rather than silently creating local state.
 
@@ -99,4 +99,4 @@ BuildStore is not an in-process plugin manifest registration: there is no `build
 
 Implement `BuildStore` and `BlobStore` using the exported storage types, and run the unchanged `describeBuildStoreContract` and `describeBlobStoreContract` suites from `@defrex/autobuild/testing`. The types are available through `@defrex/autobuild/store-adapter`. Use isolated fixtures with real persistence semantics.
 
-To serve a new backend to the shipped CLI, implement the normative [remote store protocol](remote-store-protocol.md). Its conformance section covers identity/version headers, validation and authentication ordering, registered-project scoping, atomic transactions, streams, leases, and persistence. Test the actual remote client against your server with isolated fixtures, in addition to the backend contracts. Do not substitute a second route catalog for that protocol.
+To serve a new backend to the shipped CLI, implement the normative remote store protocol. Its conformance section covers identity/version headers, validation and authentication ordering, registered-project scoping, atomic transactions, streams, leases, and persistence. Test the actual remote client against your server with isolated fixtures, in addition to the backend contracts. Do not substitute a second route catalog for that protocol.

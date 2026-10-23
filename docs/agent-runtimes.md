@@ -121,7 +121,7 @@ alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 
 The `acceptance` extension illustrates routing an agent verifier; author the repository-owned `verify-acceptance` skill before using it. Agent verify roles use the logical step name (`roles.acceptance`), not the skill name. Check steps run commands and need no model.
 
-Each role inherits omitted fields independently from `roles.default`; an explicit `args` list replaces the inherited list. Alternates are ordered availability routes, not additional reviewers. Classified availability or exhaustion can select another route; credential failures and ordinary configuration failures need repair. A classified missing runtime executable may also use an alternate. A fallback may reduce provider independence, so inspect which runtime actually ran. See [role configuration](configuration.md#roles) for routing details.
+Each role inherits omitted fields independently from `roles.default`; an explicit `args` list replaces the inherited list. Alternates are ordered availability routes, not additional reviewers. Classified availability or exhaustion can select another route; credential failures and ordinary configuration failures need repair. A classified missing runtime executable may also use an alternate. A fallback may reduce provider independence, so inspect which runtime actually ran.
 
 ## Writing your own
 

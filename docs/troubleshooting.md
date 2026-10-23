@@ -7,7 +7,7 @@ description: "Diagnose configuration, idle dispatch, authentication, stalled bui
 
 # Troubleshooting
 
-Start from the symptom and recorded state. Your operator agent inspects the CLI and suggests corrections; you manage dispatcher processes and credentials. The [configuration reference](configuration.md#troubleshooting) provides detailed diagnostics.
+Start from the symptom and recorded state. Your operator agent inspects the CLI and suggests corrections; you manage dispatcher processes and credentials.
 
 ## Invalid configuration
 
@@ -15,7 +15,7 @@ Start from the symptom and recorded state. Your operator agent inspects the CLI 
 
 **Likely cause:** Malformed TOML, misplaced fields, inconsistent step definitions, or runtime/model settings inherited from `roles.default`.
 
-**Fix:** Repair syntax first, then every named schema path in `autobuild.toml`. Check that listed steps have matching subtables and command names exist. Inspect merged default and child roles: each setting inherits independently. Use `bun ab models` or plugin documentation to select a supported model. See the [configuration reference](configuration.md). `dispatch --once` can execute real work; use it only when a real tick is intended.
+**Fix:** Repair syntax first, then every named schema path in `autobuild.toml`. Check that listed steps have matching subtables and command names exist. Inspect merged default and child roles: each setting inherits independently. Use `bun ab models` or plugin documentation to select a supported model. `dispatch --once` can execute real work; use it only when a real tick is intended.
 
 ## tick: idle with expected work
 
@@ -25,7 +25,7 @@ Start from the symptom and recorded state. Your operator agent inspects the CLI 
 
 **Fix:** Inspect `bun ab repository status`, `bun ab builds --queued`, and source tickets. Check intake, repository pause, the exact ready state, and all required labels. Check blockers and destination eligibility: the target node must be open and required changes present in the destination. Already-claimed tickets are excluded from new claims.
 
-Compare actual execution occupancy with capacity. Ordinary paused or blocked work retains its slot, but idle collecting nodes consume no runner capacity. Node verification and reconciliation have special accounting for descendant-held slots; see [integration trees](integration-tree.md#tickets-and-admission). Resume a deliberately paused repository only when work should proceed.
+Compare actual execution occupancy with capacity. Ordinary paused or blocked work retains its slot, but idle collecting nodes consume no runner capacity. Node verification and reconciliation have special accounting for descendant-held slots. Resume a deliberately paused repository only when work should proceed.
 
 For harvesting, inspect `bun ab harvest status`, the acknowledged harvest gate, and unclaimed observations. Triggers are `policy.harvestThreshold` observations or `policy.harvestMaxDrift` other merged builds since the oldest observation; zero disables drift. Harvest uses no build slot.
 
@@ -42,7 +42,7 @@ For harvesting, inspect `bun ab harvest status`, the acknowledged harvest gate, 
 - Agent providers: authenticate the runtime selected by the effective role. Install Codex and run `codex login` when its adapter diagnostic requires it; for Pi, verify provider login and the provider-qualified model. Permission, billing, and quota failures need provider-side correction.
 - Hosted store: run `bun ab connect` to inspect service, project, and credential status. Reconnect on the affected host/user when saved credentials are missing or rejected. Check the effective store URL and `AB_STORE` or `AB_TOKEN` overrides; overrides can select another service or replace saved credentials. Build/session grants have narrower authority.
 
-Follow [hosted connection setup](hosted-service.md#connect-a-project) for saved credentials and precedence. Keep secrets out of diagnostic reports.
+See [Build store](build-store.md#shipped-adapters) for saved credentials and store selection precedence. Keep secrets out of diagnostic reports.
 
 ## Stuck or wedged builds
 
@@ -54,7 +54,7 @@ Follow [hosted connection setup](hosted-service.md#connect-a-project) for saved 
 
 Use `bun ab resume BUILD` for a cleanly paused build. Use `bun ab answer BUILD "guidance"` for an open escalation, or choose the documented retry resolution when appropriate. Restart does not clear escalation gates. Terminal builds cannot restart; abort is irreversible. If process recovery is needed, you stop and drain the dispatcher cleanly, then restart it; your operator agent diagnoses and asks you to manage the process.
 
-See [answering blocked builds](answering-blocked-builds.md) and the [health reference](../skills/guide/SKILL.md#status-durable-progress-and-lease-health-are-separate). Preserve event logs and let the kernel manage leases and recovery.
+See [answering blocked builds](operating.md#answer-and-pause). Preserve event logs and let the kernel manage leases and recovery.
 
 ## Hosted project selection
 
@@ -64,4 +64,4 @@ See [answering blocked builds](answering-blocked-builds.md) and the [health refe
 
 **Fix:** Check the active PostgreSQL project registry. Existing build or ticket data does not register a project. Every allowlisted user sees all active entries; verify sign-in access separately from credentials. With deployment database credentials, an administrator can run `ab-hosted-store projects list`, `projects add`, or `projects remove`. Mutations require `--user IDENTITY` for declared attribution; project tokens cannot administer registrations.
 
-Check `AB_DISPATCHER_REPOSITORIES` in the hosted dispatch environment. Unset, it selects all active registrations; an explicit ordered list is intersected with current registrations. A missing dashboard selection falls back to the first registered origin. Registry errors fail closed. Follow [connected projects](setup.md#connected-projects) and the [hosted service reference](hosted-service.md).
+Check `AB_DISPATCHER_REPOSITORIES` in the hosted dispatch environment. Unset, it selects all active registrations; an explicit ordered list is intersected with current registrations. A missing dashboard selection falls back to the first registered origin. Registry errors fail closed.

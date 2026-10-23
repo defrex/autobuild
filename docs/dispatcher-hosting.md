@@ -34,7 +34,7 @@ bun ab dispatch
 bun ab dispatch --once
 ```
 
-Install the selected runtime CLI, dependencies, Git, and check tools on the host. Supply runtime authentication, forge credentials, and any remote Store/project or workspace provisioning credentials before launch. Local SQLite needs no service login. [Repository setup](setup.md) covers reproducibility and readiness; [Forges](forges.md) covers authentication precedence.
+Install the selected runtime CLI, dependencies, Git, and check tools on the host. Supply runtime authentication, forge credentials, and any remote Store/project or workspace provisioning credentials before launch. Local SQLite needs no service login. [Workspaces](workspaces.md) covers reproducibility and readiness; [Forges](forges.md) covers authentication precedence.
 
 A service manager may own the foreground process under an identity with the same configuration and credentials. Stop with graceful termination and allow drain/suspension to finish before restarting. Durable state supports resumption; restarting does not answer escalations or grant landing consent. See [the dispatcher lifecycle](dispatcher.md).
 
@@ -83,9 +83,9 @@ export DATABASE_URL='<postgres connection URL>'
 export AI_GATEWAY_API_KEY='<runtime API credential>'
 ```
 
-The service also needs its Store signing/blob/auth secrets and registered projects; see the [hosted service reference](hosted-service.md). Hosted invocation mints project-scoped execution authority; a separately launched origin-mode CLI uses its saved project credential or explicit `AB_TOKEN`. Origin dispatch reads configuration from the forge, requires exported forge credentials, and cannot load checkout-relative plugin modules.
+The service also needs its Store signing/blob/auth secrets and registered projects. Hosted invocation mints project-scoped execution authority; a separately launched origin-mode CLI uses its saved project credential or explicit `AB_TOKEN`. Origin dispatch reads configuration from the forge, requires exported forge credentials, and cannot load checkout-relative plugin modules.
 
-On Vercel, the invocation's OIDC identity authenticates Sandbox provisioning; do not add `VERCEL_TOKEN` to that service. Outside that arrangement, provisioning needs the durable token/team/project or short-lived OIDC credentials described in [setup](setup.md). Forward only the declared runtime API credentials to guests, never Store or forge secrets.
+On Vercel, the invocation's OIDC identity authenticates Sandbox provisioning; do not add `VERCEL_TOKEN` to that service. Outside that arrangement, provisioning needs the durable token/team/project or short-lived OIDC credentials described in [Workspaces](workspaces.md). Forward only the declared runtime API credentials to guests, never Store or forge secrets.
 
 Schedule authenticated invocations with deployment configuration:
 
@@ -95,10 +95,10 @@ Schedule authenticated invocations with deployment configuration:
 }
 ```
 
-Build and ship the running distribution's guest archive into the function bundle before deploying. The [hosted dispatcher deployment reference](hosted-dispatcher.md) covers packaging, the provider plugin, repository selection, and credential overrides. A bundled function cannot assume a source checkout or Bun is available for packing at runtime.
+Build and ship the running distribution's guest archive into the function bundle before deploying. A bundled function cannot assume a source checkout or Bun is available for packing at runtime.
 
 Each invocation is bounded (default work budget 240 seconds within a 300-second route). Unfinished work resumes on subsequent ticks while guests continue independently. The durable repository supervisor lease makes overlapping invocations yield safely. Selecting Postgres alone never moves dispatch to this service.
 
 ## Writing your own
 
-Dispatcher hosting has no plugin manifest port. Deploy or invoke the supported local/origin dispatcher entrypoints and compose supported Store, workspace, and forge adapters. Use [Writing a plugin](plugin-authoring.md) for adapter extensions, and the [remote store protocol](remote-store-protocol.md) for a custom storage service. Keep coordination in durable state rather than adding private channels between processes.
+Dispatcher hosting has no plugin manifest port. Deploy or invoke the supported local/origin dispatcher entrypoints and compose supported Store, workspace, and forge adapters. Use [Writing a plugin](plugin-authoring.md) for adapter extensions, and [Build store](build-store.md#writing-your-own) for a custom storage service. Keep coordination in durable state rather than adding private channels between processes.

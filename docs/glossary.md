@@ -7,8 +7,6 @@ description: "Definitions for tickets, integration, execution boundaries, and ag
 
 # Glossary
 
-The [architecture reference](architecture.md) maps these terms to code.
-
 ## Build
 
 One execution for a claimed ticket, identified by an immutable slug and recorded in a durable event stream. Work builds run the [fixed pipeline](builds.md); node builds collect, verify, and land contributions.
@@ -19,11 +17,11 @@ A source-tracked unit of proposed work or a finite integration point. It becomes
 
 ## Spec
 
-The build's contract: observable intent, rationale, acceptance criteria, scope limits, and evidence. Grooming establishes it before dispatch under the [spec standard](spec-standard.md).
+The build's contract: observable intent, rationale, acceptance criteria, scope limits, and evidence. Grooming establishes it before dispatch under the [spec standard](tickets.md#groom-a-buildable-spec).
 
 ## Node
 
-A finite integration build that collects child contributions, verifies its exact head and parent, and lands into its parent. It can nest and closes when complete; see [integration trees](integration-tree.md).
+A finite integration build that collects child contributions, verifies its exact head and parent, and lands into its parent. It can nest and closes when complete; see [integration trees](integration-overview.md).
 
 ## Target
 
@@ -43,15 +41,15 @@ A configured deterministic check or evidence-judging agent that tests whether a 
 
 ## Escalation
 
-A durable question or failure requiring an external answer before work proceeds. Your operator agent records authorized guidance or retry through the [answer interface](answering-blocked-builds.md).
+A durable question or failure requiring an external answer before work proceeds. Your operator agent records authorized guidance or retry through the [answer interface](operating.md#answer-and-pause).
 
 ## Landing
 
-The guarded integration of a ready contribution into its destination. Authorization follows [landing policy](landing-policy.md) and remains subject to verification and forge gates.
+The guarded integration of a ready contribution into its destination. Authorization follows [landing policy](integration-overview.md#policy-authorizes-landing) and remains subject to verification and forge gates.
 
 ## Restack
 
-A kernel-owned replay of a leaf's net change or a node's ordered contributions onto a refreshed destination. Clean replay needs no agent; see [restacking](restacking.md).
+A kernel-owned replay of a leaf's net change or a node's ordered contributions onto a refreshed destination. Clean replay needs no agent; see [restacking](integration-overview.md#one-identity-per-leaf-change).
 
 ## Reconcile
 

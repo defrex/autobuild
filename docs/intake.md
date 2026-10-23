@@ -22,11 +22,11 @@ Scheduled ingesters for signals such as telemetry remain proposed extensions; th
 
 Agents record discoveries as observations while staying within their current spec. Autobuild's shipped observation harvest collects those discoveries, synthesizes proposals, reviews them, and files approved tickets. Harvest is a repository workflow, not another build phase.
 
-Your operator agent reviews the resulting proposals with your goals in mind, resolves questions with you, and grooms selected tickets to the [spec standard](spec-standard.md).
+Your operator agent reviews the resulting proposals with your goals in mind, resolves questions with you, and grooms selected tickets to the [spec standard](tickets.md#groom-a-buildable-spec).
 
 
 ## Triage is the default gate
 
 Proposals default to the configured Triage state for grooming by your operator agent before dispatch. A repository can explicitly waive that harvest grooming gate with `[tickets].proposalState`, including choosing its ready state. That waiver does not waive blocker eligibility or the dispatch spec gate.
 
-Read the [ticket-source configuration reference](configuration.md) and [design specification](../SPEC.md) for the intake model. The [dispatcher guide](dispatcher.md) explains readiness and claim; [Tickets and specs](tickets.md) explains buildable contracts, pinned specs, and deliberate revisions.
+The [dispatcher guide](dispatcher.md) explains readiness and claim; [Tickets and specs](tickets.md) explains buildable contracts, pinned specs, and deliberate revisions.

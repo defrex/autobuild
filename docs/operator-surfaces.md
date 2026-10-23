@@ -51,7 +51,7 @@ Run `bun ab connect https://builds.example.com` to approve the registered projec
 
 ### Web app
 
-The hosted web app presents registered repositories and their durable builds. You sign in through the deployment's GitHub authentication and email allowlist. Browser access does not depend on a local CLI credential. The [hosted service deployment reference](hosted-service.md) covers the database, blob, signing, OAuth, and allowlist secrets; those belong on the service, never in repository TOML or browser bundles.
+The hosted web app presents registered repositories and their durable builds. You sign in through the deployment's GitHub authentication and email allowlist. Browser access does not depend on a local CLI credential. The database, blob, signing, OAuth, and allowlist secrets belong on the service, never in repository TOML or browser bundles.
 
 ### Local stdio MCP
 
@@ -67,10 +67,10 @@ This is a client process command, not an Autobuild TOML setting. Run it from the
 
 A remote operator agent connects its MCP client to `https://builds.example.com/mcp` using Streamable HTTP. OAuth discovery, dynamic registration, PKCE, and rotating refresh tokens handle authentication. You authorize through the deployment's sign-in and allowlist. Every call rechecks access and repository scope; durable writes name the authorizing identity and MCP client. Project `AB_TOKEN` credentials are not a substitute for this OAuth flow.
 
-Follow the [MCP connection reference](mcp.md) for client examples and discovery details. An agent with a shell may keep using the CLI instead.
+An agent with a shell may keep using the CLI instead.
 
 ## Writing your own
 
-There is no operator-surface plugin map. Build a client of the versioned, authenticated [Operator API](operator-api.md), or connect through [MCP](mcp.md). Tools, schemas, annotations, and execution derive from one registry, preserving CLI/API/MCP parity and write attribution. Follow the API's request/version and authentication requirements rather than inferring commands from dashboard markup.
+There is no operator-surface plugin map. Build a client of the versioned, authenticated Operator API, or connect through MCP. Tools, schemas, annotations, and execution derive from one registry, preserving CLI/API/MCP parity and write attribution. Follow the API's request/version and authentication requirements rather than inferring commands from dashboard markup.
 
 [Writing a plugin](plugin-authoring.md) covers infrastructure adapters, a separate extension route. A new surface does not create a new pipeline phase or an embedded operator agent.

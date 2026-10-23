@@ -37,7 +37,7 @@ bun ab init --validate
 
 Credential precedence is nonblank `GITHUB_TOKEN`, then `GH_TOKEN`, then the local `gh auth token` login. The last fallback is only available for checkout-mode local workspaces. Origin mode and Vercel Sandbox require an exported token. Keep kernel credentials out of guest-forwarded variables; private cloning uses a separate read-only identity.
 
-The identity needs repository access, Contents:write for publication, and Pull requests:write for PR operations. Readiness inspection also needs Metadata:read and Administration:read (classic private-repository tokens use repo scope). Landing also depends on repository rules, required checks, merge settings, and the identity's permissions. Authentication alone does not promise permission to merge. Run the [setup readiness checks](setup.md) before dispatch; branch protection can still defer a later landing.
+The identity needs repository access, Contents:write for publication, and Pull requests:write for PR operations. Readiness inspection also needs Metadata:read and Administration:read (classic private-repository tokens use repo scope). Landing also depends on repository rules, required checks, merge settings, and the identity's permissions. Authentication alone does not promise permission to merge. Run the setup readiness checks (`bun ab init --validate`) before dispatch; branch protection can still defer a later landing.
 
 ### Local git
 
@@ -74,4 +74,4 @@ Implement idempotent PR creation, exact-SHA confirmation, guarded landing, comme
 
 API 1.8 exposes `ForgeFailure`: classify a rate limit with `{ kind: 'rate-limited', resetAt }` using a valid ISO reset timestamp, and retryable transport failures with `{ kind: 'transient', retry: 'retryable' }`. Ordinary policy or permission refusals remain deferrals. Optional `observeRequests` observers count each actual wire request, including failures and pagination, with build attribution when known; skipped calls and credential discovery are not requests. Omitted observers mean unavailable counts, not zero requests. Keep tokens out of failures and telemetry.
 
-The [architecture reference](architecture.md) maps forge composition and guarded publication to the implementation. The shared plugin guide is the detailed capability contract.
+The shared plugin guide is the detailed capability contract.

@@ -55,11 +55,11 @@ doneState = "Done"
 ```
 <!-- seam-config:end -->
 
-Replace `ENG` and the case-sensitive workflow names with your team's actual values. `teamKey` selects the team; `readyState`, all `readyLabels`, and optional `readyAssignee` filter admission. Omitted Linear labels default to `["autobuild"]`; explicit `[]` removes that gate. There is no project filter in the ticket configuration: do not add a `project` key. Team access and state/label selection should match the intended queue. API rate limits are shared with other callers; see the [configuration reference](configuration.md#tickets).
+Replace `ENG` and the case-sensitive workflow names with your team's actual values. `teamKey` selects the team; `readyState`, all `readyLabels`, and optional `readyAssignee` filter admission. Omitted Linear labels default to `["autobuild"]`; explicit `[]` removes that gate. There is no project filter in the ticket configuration: do not add a `project` key. Team access and state/label selection should match the intended queue. API rate limits are shared with other callers.
 
 ### Hosted (`hosted`)
 
-Choose hosted tickets for a project-scoped service shared by agents and clients, including projects whose builds run locally. This is an independent tracker, not a Linear proxy; it needs no Linear credential. Register/connect the project with `bun ab connect --tickets https://tickets.example.com`, using the service's authorized connection flow. The saved service/project credential authorizes ticket operations and policy publication; see [connecting a project](hosted-service.md#connect-a-project) for administration and explicit credential overrides.
+Choose hosted tickets for a project-scoped service shared by agents and clients, including projects whose builds run locally. This is an independent tracker, not a Linear proxy; it needs no Linear credential. Register/connect the project with `bun ab connect --tickets https://tickets.example.com`, using the service's authorized connection flow. The saved service/project credential authorizes ticket operations and policy publication.
 
 <!-- seam-config:start -->
 ```toml
@@ -81,7 +81,7 @@ doneState = "done"
 
 ### Optional ticket tree
 
-File, Linear, and hosted all declare `integrationTree: true`. File persists kind/target in frontmatter; hosted uses transactional project data; Linear maps node kind to the exact `node` label and target to its parent relationship. Targets must resolve to canonical ids in the same source. Blockers remain a separate graph: a target chooses integration destination, not execution order. See [integration](integration.md).
+File, Linear, and hosted all declare `integrationTree: true`. File persists kind/target in frontmatter; hosted uses transactional project data; Linear maps node kind to the exact `node` label and target to its parent relationship. Targets must resolve to canonical ids in the same source. Blockers remain a separate graph: a target chooses integration destination, not execution order. See [integration](integration-overview.md).
 
 For an update, omitted `kind` or `target` preserves the existing value. A new ticket defaults to work; explicit `kind = "work"` resets kind, and `target = null` clears a target in the typed API. Null is an API value, not TOML syntax. Tree implementations must enumerate every state through exhaustive `listAll`, independent of ready filters. Before any part of a mixed patch writes, validate target existence, node kind, self/ancestor cycles, corrupt ancestor chains, and demotion of a node with children. Invalid metadata must reject the entire patch. Sources without the capability receive ordinary CRUD but must refuse kind/target writes; they must never silently discard them.
 

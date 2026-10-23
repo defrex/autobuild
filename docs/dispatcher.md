@@ -40,4 +40,4 @@ Your operator agent is an external coding agent that files and grooms tickets wi
 
 Autobuild does not host or start your operator agent. It runs the build pipeline and exposes durable state and controls for your operator agent to use. Your operator agent's chat is separate from the build's paper trail.
 
-Read the [architecture map](architecture.md), [operator API reference](operator-api.md), and [integration-tree reference](integration-tree.md) for the process and control boundaries. Follow [one build end to end](builds.md) for the phases inside a runner.
+Read [operator surfaces](operator-surfaces.md) and [integrating related work](integration-overview.md) for the control and integration boundaries. Follow [one build end to end](builds.md) for the phases inside a runner.
