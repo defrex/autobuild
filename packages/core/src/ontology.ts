@@ -37,7 +37,7 @@ export function isPhase(value: string): value is Phase {
   return isCorePhase(value) || isVerifyPhase(value)
 }
 
-/** `verify:e2e` → `e2e` */
+/** `verify:acceptance` → `acceptance` */
 export function verifyStep(phase: VerifyPhase): string {
   return phase.slice('verify:'.length)
 }
