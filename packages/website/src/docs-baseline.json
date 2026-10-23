@@ -20,7 +20,7 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-    "textHash": "daa0414b0998662f75b5eadbba08eb0019353daeb9f17c3621db62291b3edd64",
+    "textHash": "0baecb06dd74713e8cc6228a9072ebd6f67993b7919fc999c3c31b7ef70752f8",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
@@ -116,7 +116,7 @@
     "title": "Skills",
     "group": "concepts",
     "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-    "textHash": "a94c4b5d9e5ddcb22cfa1c3c6a4da9f65352a1c1647504710ef638e4bffdeb31",
+    "textHash": "0b0db94f571314370bb666b6eb8ec42c652f5440511ab476b565fda0b0fcea39",
     "headings": [
       "Strong defaults, yours to edit",
       "The shipped skills",
@@ -125,8 +125,8 @@
       "Harness discovery"
     ],
     "code": [
-      "[verify]\nsteps = [\"app\"]\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"",
-      "mkdir -p .claude/skills\nln -s ../../.agents/skills/verify-app .claude/skills/verify-app"
+      "[verify]\nsteps = [\"acceptance\"]\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\"",
+      "mkdir -p .claude/skills\nln -s ../../.agents/skills/verify-acceptance .claude/skills/verify-acceptance"
     ]
   },
   {
@@ -135,7 +135,7 @@
     "title": "Verification",
     "group": "concepts",
     "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
-    "textHash": "caa384b2730dc7d9f6bfff690b5ed326cd7b3ab67225cfbff49e6f1cb78581ac",
+    "textHash": "a852e1f0299af5b35cc3cefeef2bedd13c41a4c2d08f388fdc096a9a1ef3bd0e",
     "headings": [
       "Steps and outcomes",
       "Select what a build needs",
@@ -145,9 +145,9 @@
       "Worked example: this repository"
     ],
     "code": [
-      "[commands]\ntypecheck = \"bun tsc --noEmit\"\ntest = \"bun test\"\n\n[verify]\nsteps = [\"types\", \"unit\", \"app\"]\n\n[verify.types]\nkind = \"check\"\ncommand = \"typecheck\"\nalways = true\n\n[verify.unit]\nkind = \"check\"\ncommand = \"test\"\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"\npaths = [\"web/**\", \"src/routes/**\"]",
-      "+++\nverifySteps = [\"app\", \"types\"]\n+++",
-      "[verify]\nsteps = [\"app\"]\n\n[verify.app]\nkind = \"agent\"\nskill = \"verify-app\"\n\n[roles.default]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\n\n[roles.app]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\""
+      "[commands]\ntypecheck = \"bun tsc --noEmit\"\ntest = \"bun test\"\n\n[verify]\nsteps = [\"types\", \"unit\", \"acceptance\"]\n\n[verify.types]\nkind = \"check\"\ncommand = \"typecheck\"\nalways = true\n\n[verify.unit]\nkind = \"check\"\ncommand = \"test\"\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\"\npaths = [\"web/**\", \"src/routes/**\"]",
+      "+++\nverifySteps = [\"acceptance\", \"types\"]\n+++",
+      "[verify]\nsteps = [\"acceptance\"]\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\"\n\n[roles.default]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\n\n[roles.acceptance]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\""
     ]
   },
   {
@@ -197,7 +197,7 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "ca38a90f3f3129ec2e4453f3ea8a31e9b1f028f40d6404ef08d25489f51fef19",
+    "textHash": "5587ad742eb451cf830a7f7a6b8cb2fe929cfff977de857cf0d39560ed8752f7",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",

@@ -115,9 +115,9 @@ exits nonzero on failure. Then:
    alternate. The runtime that launched setup and the temporary fresh-skeleton
    default do not constrain the final arrangement.
 3. Choose the ticket source and workflow states. Confirm account/team facts and
-   required environment credentials. Configure end-to-end verification with the
-   repository's real lifecycle and tools. When judgment is required, author a repository-owned
-   agent-verify skill and select it from an agent verify step.
+   required environment credentials. Author a repository-owned acceptance-check skill and select it from an agent
+   verify step in every repository. An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
+   Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 4. Preserve an existing `autobuild.toml` and unrelated repository choices on a
    rerun. Change only choices the maintainer approves.
 5. Commit the config, setup files, lockfiles, and installed reference changes,
