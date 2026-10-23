@@ -37,7 +37,7 @@ export function isPhase(value: string): value is Phase {
   return isCorePhase(value) || isVerifyPhase(value)
 }
 
-/** `verify:e2e` → `e2e` */
+/** `verify:acceptance` → `acceptance` */
 export function verifyStep(phase: VerifyPhase): string {
   return phase.slice('verify:'.length)
 }
@@ -172,7 +172,7 @@ export const CORE_ARTIFACT_KINDS = [
 ] as const
 export type CoreArtifactKind = (typeof CORE_ARTIFACT_KINDS)[number]
 
-/** `e2e` → `verify-report:e2e` */
+/** `acceptance` → `verify-report:acceptance` */
 export function verifyReportKind(step: string): string {
   return `verify-report:${step}`
 }

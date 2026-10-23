@@ -62,9 +62,13 @@ Put the selection in an opening TOML front-matter block in the same
 
 ```toml
 +++
-verifySteps = ["types", "e2e"]
+verifySteps = ["types", "acceptance"]
 +++
 ```
+
+Here, `acceptance` is an acceptance check: a repository-owned agent verify step
+that runs the built software against each spec acceptance criterion, attaches
+evidence, and returns a typed verdict. It leaves no test files behind.
 
 The array is the complete selected set, including every mandatory step. Its
 written order does not reorder execution; the kernel canonicalizes to
@@ -83,7 +87,9 @@ verdict.
 - **Steps** — ordered, concrete, each naming the files it touches and what
   changes. An implementer should be able to execute steps top to bottom.
 - **Testing** — what gets unit-tested and at which seams; what the verify
-  steps will exercise.
+  steps will exercise. Prefer unit and integration tests at seams. Add end-to-end
+  or browser-automation tests only when the repository already maintains such a
+  suite or the spec explicitly asks for one.
 - **Risks** — the parts most likely to go wrong, and how the implementer
   will know.
 
