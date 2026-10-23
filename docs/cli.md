@@ -7,7 +7,7 @@ description: "Every command, grouped by your responsibilities and your operator 
 
 # CLI
 
-Examples use the repository-installed CLI: `bun ab <command>`. Run `bun ab help <command>` for flags and subcommands. See [Operating](operating.md) for workflows.
+Run the repository-installed CLI as `bun ab <command>`, and `bun ab help <command>` for flags and subcommands. See [Operating](operating.md) for workflows.
 
 ## For you
 
@@ -45,4 +45,4 @@ Examples use the repository-installed CLI: `bun ab <command>`. Run `bun ab help 
 - `escalate` — Park the build with a question for you.
 - `harvest` — Inspect or drive observation harvesting.
 
-Phase commands such as `context`, `done`, and `verdict` use runner-scoped session authority. The runner invokes phase agents; this inventory does not instruct your operator agent to start phases manually. See [Skills](skills.md).
+Phase commands such as `context`, `done` and `verdict` use runner-scoped session authority: the runner invokes phase agents, so your operator agent never starts phases manually. See [Skills](skills.md).

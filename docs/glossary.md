@@ -9,52 +9,52 @@ description: "Definitions for tickets, integration, execution boundaries, and ag
 
 ## Build
 
-One execution for a claimed ticket, identified by an immutable slug and recorded in a durable event stream. Work builds run the [fixed pipeline](builds.md); node builds collect, verify, and land contributions.
+One execution of a claimed ticket, named by an immutable slug and recorded as a durable event stream. Work builds run the [fixed pipeline](builds.md); node builds collect, verify and land contributions.
 
 ## Ticket
 
-A source-tracked unit of proposed work or a finite integration point. It becomes eligible for dispatch after meeting configured readiness and dependency gates; see [Tickets](tickets.md).
+A tracked unit of proposed work or a finite integration point. It becomes dispatchable once it passes readiness and dependency gates; see [Tickets](tickets.md).
 
 ## Spec
 
-The build's contract: observable intent, rationale, acceptance criteria, scope limits, and evidence. Grooming establishes it before dispatch under the [spec standard](tickets.md#groom-a-buildable-spec).
+The build's contract: intent, rationale, acceptance criteria, scope limits and evidence. Grooming establishes it before dispatch under the [spec standard](tickets.md#groom-a-buildable-spec).
 
 ## Node
 
-A finite integration build that collects child contributions, verifies its exact head and parent, and lands into its parent. It can nest and closes when complete; see [integration trees](integration-overview.md).
+A finite integration build that collects child contributions, verifies its exact head against its parent, and lands into that parent. Nodes nest and close when complete; see [integration trees](integration-overview.md).
 
 ## Target
 
-A ticket's integration destination: a node ticket, or the configured root when omitted. Targets decide where work lands; blockers separately decide when it can start.
+Where a ticket's work lands: a node ticket, or the configured root when omitted. Blockers, not targets, decide when work can start.
 
 ## Seam
 
-A narrow interface separating the kernel from infrastructure such as ticket sources, stores, or runtimes. See [Seams](seams.md).
+A narrow interface between the kernel and infrastructure such as ticket sources, stores or runtimes. See [Seams](seams.md).
 
 ## Adapter
 
-An implementation of a seam for a particular provider or environment. Adapters supply infrastructure behavior while the kernel retains lifecycle decisions.
+A seam implementation for one provider or environment. It supplies infrastructure behavior; the kernel keeps lifecycle decisions.
 
 ## Verifier
 
-A configured deterministic check or evidence-judging agent that tests whether a build meets its contract. Verifiers report typed outcomes; code owns subsequent transitions.
+A deterministic check or evidence-judging agent that tests a build against its contract. It reports a typed outcome; code owns what happens next.
 
 ## Escalation
 
-A durable question or failure requiring an external answer before work proceeds. Your operator agent records authorized guidance or retry through the [answer interface](operating.md#answer-and-pause).
+A durable question or failure that parks work until someone answers it. Your operator agent records guidance or a retry through the [answer interface](operating.md#answer-and-pause).
 
 ## Landing
 
-The guarded integration of a ready contribution into its destination. Authorization follows [landing policy](integration-overview.md#policy-authorizes-landing) and remains subject to verification and forge gates.
+Guarded integration of a ready contribution into its destination. [Landing policy](integration-overview.md#policy-authorizes-landing) authorizes it; verification and forge gates still apply.
 
 ## Restack
 
-A kernel-owned replay of a leaf's net change or a node's ordered contributions onto a refreshed destination. Clean replay needs no agent; see [restacking](integration-overview.md#one-identity-per-leaf-change).
+Kernel-owned replay of a leaf's net change, or a node's ordered contributions, onto a refreshed destination. A clean replay needs no agent; see [restacking](integration-overview.md#one-identity-per-leaf-change).
 
 ## Reconcile
 
-The agent phase resolving conflicts in a kernel-prepared replay against a frozen refreshed base. The kernel publishes the result and runs required verification.
+The agent phase that resolves conflicts in a kernel-prepared replay against a frozen, refreshed base. The kernel then publishes the result and runs required verification.
 
 ## Operator agent
 
-Your external agent role that writes specs, files and grooms tickets, watches the dispatcher, answers escalations, and manages authorized landing. It works outside the hosted build pipeline through the CLI or connected tools; you are the human supplying intent and authority.
+Your external agent: it writes specs, files and grooms tickets, watches the dispatcher, answers escalations and manages authorized landing. It works outside the pipeline through the CLI or connected tools; you supply intent and authority.

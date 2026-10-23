@@ -8,29 +8,34 @@ order: 1
 
 # Getting started
 
-Start in the repository you want Autobuild to build. You need [Bun](https://bun.sh), git, and the local prerequisites for the agent runtime you select: Claude Code, Codex CLI, or Pi.
+Start in the repository you want Autobuild to build. You need:
 
-The GitHub forge needs an authenticated [gh CLI](https://cli.github.com) or an exported `GITHUB_TOKEN` or `GH_TOKEN`. The local-git forge needs no account or remote. Setup will help choose the arrangement for your repository.
+- [Bun](https://bun.sh) and git
+- the local prerequisites for the agent runtime you select: Claude Code, Codex CLI, or Pi
+- for the GitHub forge, an authenticated [gh CLI](https://cli.github.com) or an exported `GITHUB_TOKEN` or `GH_TOKEN`. The local-git forge needs no account or remote, and setup helps you choose.
 
 
 ## 1. Install in the repository
-
 
 ```
 bun add -D @defrex/autobuild
 ```
 
-This adds Autobuild as a development dependency. If installation creates `package.json` and `bun.lock`, commit them and ignore `node_modules/`. Run the repository-installed CLI with `bun ab`.
+This adds Autobuild as a development dependency; run the CLI as `bun ab`. If installation creates `package.json` and `bun.lock`, commit them and ignore `node_modules/`.
 
 
 ## 2. Initialize and configure
-
 
 ```
 bun ab init
 ```
 
-Initialization vendors the editable `ab-*` skills, writes a stack-neutral `autobuild.toml`, and hands repository-aware setup to a coding agent. Follow that handoff to choose a runtime and model, ticket tracker, forge, workspace, and meaningful verification commands for your stack.
+Initialization vendors the editable `ab-*` skills, writes a stack-neutral `autobuild.toml`, and hands repository-aware setup to a coding agent. Follow that handoff to choose:
+
+- a runtime and model
+- a ticket tracker and forge
+- a workspace
+- meaningful verification commands for your stack
 
 An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. See the [verification guide](verification.md).
 
@@ -41,7 +46,7 @@ An **acceptance check** is a repository-owned agent verify step that runs the bu
 bun ab dispatch
 ```
 
-Run this yourself and leave it running. The dispatcher claims tickets as they enter the tracker's configured ready state and shows a live dashboard. A draft or triage ticket is not ready merely because it exists.
+Run this yourself and leave it running. The dispatcher shows a live dashboard and claims tickets as they enter the tracker's configured ready state. A draft or triage ticket isn't ready merely because it exists.
 
 
 ## 4. Ask your operator agent for the first change
@@ -50,8 +55,11 @@ Open your coding agent at the repository root, then ask in plain language:
 
 > Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through landing. Ask me before granting landing consent.
 
-The agent uses the grooming and ticket skills to develop acceptance criteria, scope, and evidence with you. Keep the first change small and give it checks that demonstrate success; the [spec standard](tickets.md#groom-a-buildable-spec) defines a buildable ticket. Dispatch is already running, so moving the ticket to ready makes it eligible for claim immediately.
+The agent uses the grooming and ticket skills to work out acceptance criteria, scope, and evidence with you.
 
-Your agent watches recorded progress and answers build questions within your instructions, bringing unresolved decisions back to you. Landing follows the configured policy and gates; a green build does not guarantee immediate merge.
+- Keep the first change small, with checks that demonstrate success. The [spec standard](tickets.md#groom-a-buildable-spec) defines a buildable ticket.
+- Dispatch is already running, so moving the ticket to ready makes it eligible for claim immediately.
+- Your agent watches recorded progress and answers build questions within your instructions, bringing unresolved decisions back to you.
+- Landing follows the configured policy and gates; a green build doesn't guarantee immediate merge.
 
 Continue with [Working with your operator agent](operating.md). The [configuration reference](configuration-overview.md) maps the settings you can change.

@@ -10,15 +10,29 @@ order: 14
 
 ## Responsibility
 
-A runtime transports agent turns: start, continue, cancel and end sessions, capture transcripts and usage, and classify failures. Roles choose the runtime and model; the workspace provider decides where they execute. Neither choice starts your external operator agent, which writes specs, grooms tickets, watches dispatch, answers escalations and authorizes landing through the CLI or MCP.
+A runtime transports agent turns: it starts, continues, cancels and ends sessions, captures transcripts and usage, and classifies failures.
+
+- **Roles** choose the runtime and model.
+- **The workspace provider** decides where they execute.
+- **Neither starts your operator agent.** That external agent writes specs, grooms tickets, watches dispatch, answers escalations and authorizes landing through the CLI or MCP.
 
 ## Shipped adapters
 
-Install Autobuild with `bun add -d --exact @defrex/autobuild`. These are complete minimal configs for local execution. Install and authenticate the chosen CLI on the dispatcher host, then run `bun ab init --validate` before dispatch. A local subscription login is host state: it does not automatically move to a remote sandbox. For remote execution, provision every selected runtime and alternate explicitly and forward only its required API credentials; see [Workspaces](workspaces.md).
+Install with `bun add -d --exact @defrex/autobuild`. Each example is a complete minimal config for local execution: install and authenticate the chosen CLI on the dispatcher host, then run `bun ab init --validate` before dispatch.
+
+A local subscription login is host state and doesn't move to a remote sandbox. For remote execution, provision every selected runtime and alternate explicitly and forward only its API credentials; see [Workspaces](workspaces.md).
+
+| Runtime | Models | Model ids | Default when `model` is omitted |
+|---|---|---|---|
+| `claude` | Anthropic, via Claude Code | `claude-` family | the CLI's default |
+| `codex` | OpenAI, via the Codex CLI | `gpt-` family | the CLI's default |
+| `pi` | many providers | `provider/model` | `kimi-coding/k3` |
+
+Set the model with the role's `model` field. Model and output protocol flags are adapter-owned, so don't repeat them in `args`.
 
 ### Claude Code (`claude`)
 
-Choose Claude Code for Anthropic models through its CLI and configured authentication. Install the `claude` executable following [Claude Code setup](https://code.claude.com/docs/en/setup), launch `claude` and complete login. Local use needs the configured account login or supported API authentication; API-backed environments need the appropriate provider credential, such as `ANTHROPIC_API_KEY`, rather than copied interactive login state. Consult [Claude authentication](https://code.claude.com/docs/en/authentication) for account requirements.
+Install `claude` following [Claude Code setup](https://code.claude.com/docs/en/setup), then launch it and log in, or use supported API authentication. API-backed environments need a provider credential such as `ANTHROPIC_API_KEY`, not copied login state. See [Claude authentication](https://code.claude.com/docs/en/authentication) for account requirements.
 
 <!-- seam-config:start -->
 ```toml
@@ -31,11 +45,9 @@ runtime = "claude"
 ```
 <!-- seam-config:end -->
 
-Omitting `model` uses the CLI's unnamed default. Explicit model ids for this adapter use the `claude-` family; model/output protocol flags are adapter-owned, so use the role's `model` field rather than duplicating those flags in `args`.
-
 ### Codex (`codex`)
 
-Choose Codex for OpenAI models through the `codex` CLI. Install it using the [official CLI instructions](https://developers.openai.com/codex/cli), run `codex login`, and authenticate before starting local builds. [Codex authentication](https://developers.openai.com/codex/auth) supports account login and API-key authentication. API use requires its own credential, commonly `OPENAI_API_KEY`, and billing authority; a subscription login on your machine does not authenticate a fresh sandbox.
+Install `codex` using the [official CLI instructions](https://developers.openai.com/codex/cli) and run `codex login` before local builds. [Codex authentication](https://developers.openai.com/codex/auth) supports account login or an API key. API use needs its own credential, commonly `OPENAI_API_KEY`, and billing authority; your machine's subscription login doesn't authenticate a fresh sandbox.
 
 <!-- seam-config:start -->
 ```toml
@@ -48,11 +60,9 @@ runtime = "codex"
 ```
 <!-- seam-config:end -->
 
-Omitting `model` uses the CLI's default. Explicit Codex model ids use the `gpt-` family in Autobuild's runtime registry. Use the `model` role field, not a competing model flag in `args`.
-
 ### Pi (`pi`)
 
-Choose Pi for provider-qualified models across providers. Install the `pi` executable using [Pi's setup guide](https://github.com/earendil-works/pi/tree/main/packages/coding-agent). For local use, start `pi` and use `/login` for a supported subscription, or supply the selected provider's API credentials. For example, a Vercel AI Gateway route needs `AI_GATEWAY_API_KEY`. Pi's provider configuration determines which account serves the requested model.
+Install `pi` using [Pi's setup guide](https://github.com/earendil-works/pi/tree/main/packages/coding-agent). Locally, start `pi` and `/login` with a supported subscription, or supply the provider's API credentials; a Vercel AI Gateway route, for example, needs `AI_GATEWAY_API_KEY`. Pi's provider configuration decides which account serves the model.
 
 <!-- seam-config:start -->
 ```toml
@@ -66,13 +76,16 @@ model = "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
 ```
 <!-- seam-config:end -->
 
-Pi accepts provider-qualified `provider/model` ids. Its registry default is `kimi-coding/k3` when no model is supplied; select an explicit route when using another provider. Example ids illustrate syntax, not promised availability. Confirm the chosen provider and model are available to your account.
+Set an explicit route when using a provider other than the `kimi-coding/k3` default. Example ids show syntax, not availability: confirm the provider and model are available to your account.
 
 ## Choosing models
 
-Start with one strong general coding model as the producer default for planning and implementation. Use a different strong model for plan review, code review and agent verification, preferably from another provider. Independent review can expose different assumptions; it does not guarantee correctness. If your operator agent already works well for spec critique, its model is a useful reviewer candidate while another model builds. Check quality on your repository along with cost, latency and account limits.
+- **Producers.** Use one strong general coding model as the default for planning and implementation.
+- **Reviewers.** Use a different strong model, preferably from another provider, for plan review, code review and agent verification. Independent review can expose different assumptions; it doesn't guarantee correctness.
+- **Operator model.** If your operator agent already critiques specs well, its model is a good reviewer candidate.
+- **Measure** quality on your repository, along with cost, latency and account limits.
 
-This repository's worked example, recorded on **2026-10-21**, uses GPT `gpt-6.1-sol` through Codex for producers and `claude-opus-5-5` through Claude for reviewers, with reciprocal alternates. These are dated example ids, not product defaults or a current model catalog. Keep the producer/reviewer separation as ids change; check current provider availability and `bun ab models` before adopting the example.
+This repository's example, recorded on **2026-10-21**, uses `gpt-6.1-sol` through Codex for producers and `claude-opus-5-5` through Claude for reviewers, with reciprocal alternates. These are dated ids, not product defaults or a catalog. Check provider availability and `bun ab models` before adopting them, and keep the producer/reviewer split as ids change.
 
 <!-- seam-config:start -->
 ```toml
@@ -119,22 +132,31 @@ alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 ```
 <!-- seam-config:end -->
 
-The `acceptance` extension illustrates routing an agent verifier; author the repository-owned `verify-acceptance` skill before using it. Agent verify roles use the logical step name (`roles.acceptance`), not the skill name. Check steps run commands and need no model.
-
-Each role inherits omitted fields independently from `roles.default`; an explicit `args` list replaces the inherited list. Alternates are ordered availability routes, not additional reviewers. Classified availability or exhaustion can select another route; credential failures and ordinary configuration failures need repair. A classified missing runtime executable may also use an alternate. A fallback may reduce provider independence, so inspect which runtime actually ran.
+- **Verifier roles** use the logical step name (`roles.acceptance`), not the skill name. Author the repository-owned `verify-acceptance` skill before using this example. Check steps run commands and need no model.
+- **Inheritance.** Each role inherits omitted fields from `roles.default` independently; an explicit `args` list replaces the inherited one.
+- **Alternates** are ordered availability routes, not extra reviewers. Classified availability or exhaustion failures, or a missing runtime executable, select the next route; credential and ordinary configuration failures need repair. A fallback may cost provider independence, so check which runtime actually ran.
 
 ## Writing your own
 
-Implement `AgentRunner`, return it in a `RuntimeRegistration`, and register the factory in `agentRuntimes`. Import the public types from `@defrex/autobuild/plugin-sdk` and follow [Writing a plugin](plugin-authoring.md) for manifest mechanics.
+Implement `AgentRunner`, return it in a `RuntimeRegistration`, and register the factory in `agentRuntimes`. Import public types from `@defrex/autobuild/plugin-sdk`; [Writing a plugin](plugin-authoring.md) covers manifest mechanics.
 
-Preserve start/continue/end session identity, complete transcripts and usage, and a refreshed environment on each turn. Use the distribution-managed `ab` launcher supplied for the session; never substitute a CLI from the build branch. Cancellation must retain an endable handle so the runner can deposit the partial transcript. Failures need verbatim diagnostics, the retry-compatible `permanent` bit and, when classifiable, `cause: availability | exhaustion | credentials | configuration`. Do not misclassify authentication as capacity loss.
+A runtime must:
 
-Declare `servesModels` prefixes and an optional matching `defaultModel`; these validate routing without inventing a fixed catalog. Optional tool-free `oneShot` is separate from phase sessions. Native resume is also optional: only implementations declaring it should run `describeNativeResumeContract` with a `NativeResumeContractFixture` and preserve fresh-process identity/continuation semantics.
+- preserve start/continue/end session identity, complete transcripts and usage, and a refreshed environment on each turn
+- use the distribution-managed `ab` launcher supplied for the session, never a CLI from the build branch
+- keep an endable handle after cancellation, so the runner can deposit the partial transcript
+- report failures with verbatim diagnostics, the retry-compatible `permanent` bit and, when classifiable, `cause: availability | exhaustion | credentials | configuration`; never classify authentication as capacity loss
+- declare `servesModels` prefixes and an optional matching `defaultModel`, which validate routing without a fixed catalog
 
-Build an `AgentRunnerContractFactory` with `AgentRunnerContractHarness` fixtures for successful turns, typed failures and cancellation, including turn-environment observations and cleanup. Run the unchanged `describeAgentRunnerContract`, or expose its fixture through the plugin descriptor and run:
+Optional capabilities:
+
+- **`oneShot`**, tool-free and separate from phase sessions.
+- **Native resume.** Only implementations that declare it run `describeNativeResumeContract` with a `NativeResumeContractFixture`, and they must preserve fresh-process identity and continuation semantics.
+
+Test with an `AgentRunnerContractFactory` whose `AgentRunnerContractHarness` fixtures cover successful turns, typed failures and cancellation, including turn-environment observations and cleanup. Run `describeAgentRunnerContract` unchanged, or expose its fixture through the plugin descriptor and run:
 
 ```sh
 bun ab plugin test agent-runtime acme
 ```
 
-Exercise declared streaming and one-shot capabilities through their harness fixtures too. A CLI that emits plausible text without preserving the session contract is not a conforming runtime.
+Exercise declared streaming and one-shot capabilities through their harness fixtures too. A CLI that emits plausible text without keeping the session contract isn't a conforming runtime.

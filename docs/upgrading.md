@@ -7,33 +7,47 @@ description: "Update the pinned installation, preserve customization, and resume
 
 # Upgrading
 
-Autobuild is an exact pinned development dependency. Choose the intended released version and review the manifest and lockfile together.
+Autobuild is an exact pinned development dependency. Pick the released version you intend, and review the manifest and lockfile together.
 
 ## Update the installation
 
-You stop the existing dispatcher cleanly and wait for its sessions to drain or suspend before updating its running installation. Your operator agent diagnoses the need and asks you to manage the process.
+First, stop the dispatcher cleanly and let its sessions drain or suspend. Your operator agent diagnoses the need; you manage the process.
 
-For an explicitly chosen version, run from the owning project. Replace `VERSION` with the exact released version you intend to install:
+To install an exact version, run from the project that owns the installation, replacing `VERSION`:
 
 ```sh
 bun add -d --exact @defrex/autobuild@VERSION
 bun ab upgrade --no-self-update
 ```
 
-Alternatively, normal `bun ab upgrade` updates a recognized installation on its distribution channel, then continues with the updated distribution to merge skills and apply supported migrations. Unsupported installations report why self-update was skipped; inspect that output. `--no-self-update` skips only the installation update.
+- **Self-update.** Plain `bun ab upgrade` updates a recognized installation on its distribution channel, then uses the new distribution to merge skills and apply supported migrations. An unsupported installation reports why it skipped.
+- **`--no-self-update`** skips only the installation update.
+- **Two scopes.** Package and lockfile changes belong to the project that owns the installation. Skill merges and config migrations apply to the target repository, which can differ.
 
-Package and lockfile changes belong to the project owning the installation. Skill merging and config migration apply to the target repository, which can differ. Review and commit the intended version bump; inspect what upgrade committed automatically before making another commit.
+Review and commit the version bump. Check what upgrade committed automatically before you commit again.
 
 ## Review configuration and skills
 
-Upgrade preserves existing configuration rather than replacing `autobuild.toml` wholesale. Supported migrations can amend it. Explicit valid landing policy stays byte-for-byte unchanged. When policy is absent, upgrade reads the target repository's configured journal: legacy ON becomes leaf auto, OFF or no fact becomes leaf consent, and nodes use consent in either case. An unavailable journal requires restoring access or deliberately configuring policy before retrying.
+Upgrade keeps your `autobuild.toml`; supported migrations may amend it.
 
-Skills compare live files, the pristine upstream baseline, and incoming defaults. Independent changes merge; overlapping edits can receive validated agent resolutions. Successful files advance pristine to incoming bytes. Unresolved conflicts leave affected live and pristine files unchanged while other files can advance. See [how upgrades preserve customization](skills.md#how-upgrades-preserve-customization).
+- **Explicit landing policy.** A valid policy stays byte-for-byte unchanged.
+- **Absent landing policy.** Upgrade reads the target repository's journal: legacy ON becomes leaf auto; OFF or no fact becomes leaf consent; nodes get consent either way. If the journal is unavailable, restore access or configure policy deliberately, then retry.
 
-Inspect the [upgrade report](skills.md#how-upgrades-preserve-customization) and diff even after exit zero: content conflicts alone do not fail the command. A conflict-free upgrade makes a narrowly scoped local commit by default. `--no-commit`, conflicts, or unsafe Git conditions leave edits uncommitted with an explanation. Resolve reported files deliberately and commit the reviewed result.
+Skills [merge three ways](skills.md#how-upgrades-preserve-customization) between live files, the pristine baseline and incoming defaults. Overlapping edits can get validated agent resolutions. Each successful file advances pristine to the incoming bytes; an unresolved conflict leaves that file's live and pristine copies unchanged while other files advance.
+
+Read the [upgrade report](skills.md#how-upgrades-preserve-customization) and the diff even after exit zero: content conflicts alone don't fail the command. A conflict-free upgrade makes a narrowly scoped local commit. With `--no-commit`, conflicts or unsafe Git state, edits stay uncommitted with an explanation; resolve the reported files and commit the result.
 
 ## Restart and resume
 
-Restart your normal dispatcher with the upgraded repository-installed CLI (`bun ab dispatch`). Avoid simultaneous old and new writers. Durable state resumes work after a clean stop; restart does not answer escalations. Your operator agent should inspect attention separately.
+Restart your normal dispatcher with the upgraded repository-installed CLI:
 
-Drain old work before switching versions if it must retain old execution behavior; there is no claim-version switch preserving all old behavior. Upgrade a hosted service before connected projects within its compatibility window. Consult [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or landing policy.
+```sh
+bun ab dispatch
+```
+
+- **One writer.** Don't run old and new dispatchers at the same time.
+- **Durable resume.** Work resumes from durable state after a clean stop. Restart doesn't answer escalations; your operator agent checks attention separately.
+- **Old behavior.** Drain old work before switching if it must keep the old execution behavior. No claim-version switch preserves it.
+- **Hosted services.** Upgrade the hosted service before its connected projects, within its compatibility window.
+
+Read [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or landing policy.

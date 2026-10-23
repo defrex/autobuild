@@ -8,42 +8,53 @@ order: 7
 
 # Infrastructure seams
 
-Autobuild separates the pipeline from the infrastructure that runs it. Adapters supply storage, agent execution, code publication, workspaces, and tickets. Choose each responsibility explicitly; selecting a remote database does not move computation to a remote machine.
+Autobuild separates the pipeline from the infrastructure that runs it. Adapters supply storage, agent execution, code publication, workspaces and tickets, and you choose each one independently: a remote database doesn't move computation to a remote machine.
 
 
 ## Storage and tickets
 
-The default local BuildStore uses SQLite and filesystem artifacts. A separate Postgres adapter provides database-backed storage. The hosted HTTP service exposes a network-accessible Store backed by Postgres. A storage adapter and the service that exposes it are distinct parts of a deployment.
+The BuildStore and the ticket source are separate choices.
 
-Ticket sources are selected independently of the BuildStore: local files, Linear, or hosted tickets. Using a hosted Store does not require using hosted tickets. See [Build store](build-store.md) and [Tickets](ticket-sources.md) for the boundaries.
+- **BuildStore.** Local SQLite with filesystem artifacts is the default. A Postgres adapter provides database-backed storage, and the hosted HTTP service exposes a Postgres-backed Store over the network. The adapter and the service that exposes it are distinct parts of a deployment.
+- **Tickets.** Local files, Linear, or hosted tickets. A hosted Store doesn't require hosted tickets.
+
+See [Build store](build-store.md) and [Tickets](ticket-sources.md).
 
 
 ## Agents, code, and workspaces
 
+- **Agent runtimes.** Claude Code, Codex and Pi ship. Roles choose runtimes and models; the model doesn't decide where an agent runs.
+- **Forges.** GitHub and local git ship. Local git works without GitHub pull requests, but remote setups need GitHub's publication path.
+- **Workspaces.** Local builds use disposable git worktrees. Vercel Sandbox provisions remote machines for build runners, agents and checks.
 
-- **Agent runtimes.** Claude Code, Codex, and Pi are shipped adapters. Roles choose runtimes and models. Model selection does not itself decide where an agent runs.
-- **Forges.** GitHub and local git are shipped adapters. Local git permits local operation without GitHub pull requests; it does not supply the GitHub publication path required by the remote setup.
-- **Workspaces.** Local builds use disposable git worktrees. Vercel Sandbox provisions remote machines for build runners, agents, and checks.
-
-Each environment needs the selected runtime, tools, dependencies, and credentials. Remote execution also needs provisioning and reproducible setup. [Workspaces](workspaces.md) covers provisioning and readiness checks.
+Every environment needs the selected runtime, tools, dependencies and credentials; remote ones also need reproducible provisioning. [Workspaces](workspaces.md) covers provisioning and readiness checks.
 
 
 ## What runs where
 
-**All local.** Your machine runs the dispatcher, build runners, agent runtime CLIs, checks, git worktrees, and local Store. File tickets and the local-git forge can keep this arrangement independent of GitHub. You can watch dispatch in the terminal and operate through the local CLI.
+| Piece | All local | All remote |
+|---|---|---|
+| Dispatcher | your machine | hosted, scheduled, origin-mode configuration |
+| Build runners, agents, checks | your machine, in git worktrees | Vercel Sandbox |
+| Store | local SQLite | hosted Store on Postgres |
+| Tickets | file or any other source | a remote ticket source |
+| Forge | local git or GitHub | GitHub |
+| Operator access | terminal dashboard and local CLI | browser or MCP connector |
 
-**All remote.** A hosted scheduled dispatcher uses origin-mode repository configuration. Vercel Sandbox runs build runners, agents, and checks; GitHub holds code and receives publication. A hosted Store backed by Postgres records progress, and a remote ticket source supplies work. Your operator agent and you use the browser or MCP connector. The operator agent remains external. Provisioning and credentials are still required; this is not enabled merely by choosing Postgres.
+- **File tickets and local git** keep the all-local arrangement independent of GitHub.
+- **The operator agent stays external** in both arrangements.
+- **All remote still needs provisioning and credentials.** Choosing Postgres alone doesn't enable it.
+- **Mixed deployments** work within adapter constraints, for example a local dispatcher with a hosted Store and remote sandboxes.
 
-Mixed deployments are supported within adapter constraints, such as a local dispatcher using a hosted Store and remote sandboxes. [Dispatcher hosting](dispatcher-hosting.md) explains scheduled operation, placement, and credentials.
+[Dispatcher hosting](dispatcher-hosting.md) explains scheduled operation, placement and credentials.
 
 
 ## Extend the boundaries
 
-Configured plugin modules can register ticket sources, agent runtimes, workspace providers, and forges. BuildStore extensions use the storage adapter or remote protocol contract, rather than a plugin manifest registration.
-
-Ordered verify and finalize steps and editable skills extend repository behavior while the phase grammar stays fixed. See [Configuration](configuration-overview.md) for extension points and [Writing a plugin](plugin-authoring.md) for plugin modules.
-
-Hosting and operator surfaces are deployment and access choices, not plugin registration ports.
+- **Plugin modules** register ticket sources, agent runtimes, workspace providers and forges. See [Writing a plugin](plugin-authoring.md).
+- **BuildStores** implement the storage adapter or remote protocol contract, not a plugin manifest registration.
+- **Verify and finalize steps** and editable skills extend repository behavior; the phase grammar stays fixed. See [Configuration](configuration-overview.md).
+- **Hosting and operator surfaces** are deployment and access choices, not plugin ports.
 
 ## Seam guides
 
