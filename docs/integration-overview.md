@@ -43,4 +43,4 @@ Ordered `[[landing]]` rules in `autobuild.toml` select `auto` or `consent`. Rule
 
 Under your instructions, your operator agent uses `ab land <slug>` to record consent to a ready landing and clear a hold. It uses `ab hold <slug>` to suppress landing even before readiness and withdraw consent. Neither these controls nor automatic authorization bypass readiness, verification, forge checks, protection, or merge gates.
 
-Read the [integration-tree reference](integration-tree.md) for admission and node lifecycle, the [restacking reference](restacking.md) for change identity and recovery, and the [landing-policy reference](landing-policy.md) for rules and forge requirements. The [Tickets and specs](tickets.md) explains the input side of the tree.
+The [Tickets and specs](tickets.md) page explains the input side of the tree.

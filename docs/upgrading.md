@@ -26,7 +26,7 @@ Package and lockfile changes belong to the project owning the installation. Skil
 
 ## Review configuration and skills
 
-Upgrade preserves existing configuration rather than replacing `autobuild.toml` wholesale. Supported migrations can amend it. Explicit valid landing policy stays byte-for-byte unchanged. When policy is absent, upgrade reads the target repository's configured journal: legacy ON becomes leaf auto, OFF or no fact becomes leaf consent, and nodes use consent in either case. An unavailable journal requires restoring access or deliberately configuring policy before retrying. Read the [1.0 migration notes](migration-1.0.md) for all rules.
+Upgrade preserves existing configuration rather than replacing `autobuild.toml` wholesale. Supported migrations can amend it. Explicit valid landing policy stays byte-for-byte unchanged. When policy is absent, upgrade reads the target repository's configured journal: legacy ON becomes leaf auto, OFF or no fact becomes leaf consent, and nodes use consent in either case. An unavailable journal requires restoring access or deliberately configuring policy before retrying.
 
 Skills compare live files, the pristine upstream baseline, and incoming defaults. Independent changes merge; overlapping edits can receive validated agent resolutions. Successful files advance pristine to incoming bytes. Unresolved conflicts leave affected live and pristine files unchanged while other files can advance. See [how upgrades preserve customization](skills.md#how-upgrades-preserve-customization).
 
@@ -36,4 +36,4 @@ Inspect the [upgrade report](skills.md#how-upgrades-preserve-customization) and 
 
 Restart your normal dispatcher with the upgraded repository-installed CLI (`bun ab dispatch`). Avoid simultaneous old and new writers. Durable state resumes work after a clean stop; restart does not answer escalations. Your operator agent should inspect attention separately.
 
-Drain old work before switching versions if it must retain old execution behavior; there is no claim-version switch preserving all old behavior. Upgrade a hosted service before connected projects within its compatibility window. Consult the [migration notes](migration-1.0.md), [setup reference](setup.md), and [configuration reference](configuration.md) before changing infrastructure or landing policy.
+Drain old work before switching versions if it must retain old execution behavior; there is no claim-version switch preserving all old behavior. Upgrade a hosted service before connected projects within its compatibility window. Consult [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or landing policy.

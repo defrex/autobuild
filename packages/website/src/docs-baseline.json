@@ -15,7 +15,7 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-    "textHash": "006570627635abf2e6d3e0d0456b57610de005093672357bad0c0f61550c17a3",
+    "textHash": "eef2745b9586ec0eea7e26ac96c57636a7e406de89bac449a6ddd58778c24097",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
@@ -30,7 +30,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "3aae5f80b0e9b82649a256b48e0f0bb83d4f69e9af8578968038580ceb60bc60",
+    "textHash": "395936403b8687492ee812d3d7f88f178541f858ff4e05a45429d986a0446e0c",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -46,7 +46,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "1f9a277ca8345f1fd4d2079b9508a2c5b29ccbd40f39077e30563709d5de4d68",
+    "textHash": "428f9ac2f1ea42a1a637edda0d090ddd5abcceea16633d085a4ab65fa2fde482",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
@@ -61,7 +61,7 @@
     "title": "Integrating related work",
     "group": "concepts",
     "description": "Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.",
-    "textHash": "5392fba8bf6292043972a0e8aeb26b2cb76efa986898416175f7e5220d5fbc79",
+    "textHash": "8883b70f81ef39f6407c83bf962e2599485d4cecd85a301a6765cef663257d82",
     "headings": [
       "Targets form the tree",
       "One identity per leaf change",
@@ -76,7 +76,7 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "ce3877e7c05da20887d4e5de4078ecad9c982725ce7707217c12c6a1fe351066",
+    "textHash": "b4e3c125652d4ab001b62c8ffb4cad5cf60c0e6a48e5d7153f2e34f2fd7f43d5",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -91,7 +91,7 @@
     "title": "Intake and harvest",
     "group": "concepts",
     "description": "Turn outside signals and agent observations into reviewed proposals for your operator agent to triage and groom.",
-    "textHash": "a376ec2861d10808ee552197ccc1481a58ec0a7f9c646325b5ffa33fba0e657e",
+    "textHash": "6548c43e3ae40fc132ac107448fb1b2692c895dab40634a82827fa7b67c93841",
     "headings": [
       "Sources carry proposals",
       "Observations become reviewed tickets",
@@ -105,7 +105,7 @@
     "title": "Skills",
     "group": "concepts",
     "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-    "textHash": "0b0db94f571314370bb666b6eb8ec42c652f5440511ab476b565fda0b0fcea39",
+    "textHash": "3074245a06ed39bc4424ebc43d6d0a11f065bcf0bee41cfbd81b7bf351d3e2bc",
     "headings": [
       "Strong defaults, yours to edit",
       "The shipped skills",
@@ -124,7 +124,7 @@
     "title": "Verification",
     "group": "concepts",
     "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
-    "textHash": "a852e1f0299af5b35cc3cefeef2bedd13c41a4c2d08f388fdc096a9a1ef3bd0e",
+    "textHash": "c691337f3e752228bd66b3f08e1a1097582dc73477f08de42e5cf71c0e89aeb9",
     "headings": [
       "Steps and outcomes",
       "Select what a build needs",
@@ -145,7 +145,7 @@
     "title": "Working with your operator agent",
     "group": "guides",
     "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
-    "textHash": "fc58259b5a16ef511373949cf73775ffd5f534478057c778182da0b668cdf6da",
+    "textHash": "229cee0f0a440f5c99f02f55dde1a0d5c5cba7bea2880c18e1b97fb2c05e05cb",
     "headings": [
       "Choose a harness",
       "Give the agent memory",
@@ -170,7 +170,7 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "820d9cd9a77d9bedf5886575b855319614cd03b1bbf3c7c2910060b906514b78",
+    "textHash": "8270ccba0b300e81010d92cb43b375080461723347b33dea8593640ad3b92ad5",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",
@@ -186,7 +186,7 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "5587ad742eb451cf830a7f7a6b8cb2fe929cfff977de857cf0d39560ed8752f7",
+    "textHash": "f5cd76e9a16d64751a7a7064b1d459aff0c0f33571c0b182ead5c62f96b0fedc",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",

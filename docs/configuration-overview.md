@@ -9,7 +9,7 @@ slug: "configuration"
 
 # Repository configuration
 
-`autobuild.toml` declares how your repository runs Autobuild. It chooses infrastructure, commands, agent roles, checks, and operating limits. Use the [full configuration reference](configuration.md) for every field and its defaults; this page maps the choices you need to make.
+`autobuild.toml` declares how your repository runs Autobuild. It chooses infrastructure, commands, agent roles, checks, and operating limits. This page maps the choices you need to make.
 
 
 ## Commands and extension steps
@@ -28,9 +28,9 @@ Capacity bounds concurrent work. Policy limits bound review rounds, retries, and
 
 ## Admission and landing
 
-Ticket settings choose the source and readiness criteria the dispatcher uses to admit work. Landing rules are ordered and first-match: predicates select automatic authorization or explicit consent for a source and destination. The [landing policy reference](landing-policy.md) describes defaults, readiness, and forge gates. See [Working with your operator agent](operating.md) for consent and hold commands.
+Ticket settings choose the source and readiness criteria the dispatcher uses to admit work. Landing rules are ordered and first-match: predicates select automatic authorization or explicit consent for a source and destination. [Integrating related work](integration-overview.md#policy-authorizes-landing) describes rule matching and defaults. See [Working with your operator agent](operating.md) for consent and hold commands.
 
-Build execution configuration is pinned for reproducibility, while dispatcher policy and role settings have live reload behavior. Consult the [configuration reference](configuration.md) for the boundary before changing settings during a build. Keep secrets outside committed TOML.
+Build execution configuration is pinned for reproducibility, while dispatcher policy and role settings have live reload behavior. Keep secrets outside committed TOML.
 
 
 ## Editable skills and installation
@@ -52,4 +52,4 @@ An **acceptance check** is a repository-owned agent verify step that runs the bu
 bun ab upgrade
 ```
 
-`upgrade` updates the installation on its distribution channel and merges upstream skill changes with repository edits, surfacing conflicts for resolution. It preserves customization rather than blindly replacing the installed skills. See [Upgrading](upgrading.md), [Skills](skills.md#how-upgrades-preserve-customization), the [setup reference](setup.md) and [skill installation contract](../SPEC.md#163-skill-installation-vendored-namespaced-editable-d11) for installation, validation, and upgrade details.
+`upgrade` updates the installation on its distribution channel and merges upstream skill changes with repository edits, surfacing conflicts for resolution. It preserves customization rather than blindly replacing the installed skills. See [Upgrading](upgrading.md) and [Skills](skills.md#how-upgrades-preserve-customization) for upgrade details.

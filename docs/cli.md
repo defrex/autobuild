@@ -7,7 +7,7 @@ description: "Every command, grouped by your responsibilities and your operator 
 
 # CLI
 
-Examples use the repository-installed CLI: `bun ab <command>`. Run `bun ab help <command>` for flags and subcommands. See [Operating](operating.md) and the [operator API reference](operator-api.md) for workflows.
+Examples use the repository-installed CLI: `bun ab <command>`. Run `bun ab help <command>` for flags and subcommands. See [Operating](operating.md) for workflows.
 
 ## For you
 

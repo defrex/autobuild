@@ -44,7 +44,7 @@ Intact reprovision preserves the branch and uncommitted work. A lost working dir
 
 Choose Sandbox when build runners, agents and checks should execute on independent remote machines. Install `@defrex/autobuild-vercel-sandbox` in the consuming project and register it in `plugins`. Commit your setup/configuration so remote clones can read it. This arrangement requires an HTTPS hosted BuildStore, an HTTPS `github.com/owner/repository` origin, `forge = "github"`, and dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`. A local gh login alone is insufficient for Sandbox publication.
 
-Supply `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID` on the dispatcher host. Alternatively use short-lived `VERCEL_OIDC_TOKEN` from a linked project (`vercel link`, `vercel env pull`); its lifetime must cover the operation, so durable token credentials suit a continuously running local dispatcher. See [Vercel SDK authentication](https://vercel.com/docs/sandbox/sdk-reference) and [repository setup](setup.md) for credential and readiness details.
+Supply `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID` on the dispatcher host. Alternatively use short-lived `VERCEL_OIDC_TOKEN` from a linked project (`vercel link`, `vercel env pull`); its lifetime must cover the operation, so durable token credentials suit a continuously running local dispatcher. See [Vercel SDK authentication](https://vercel.com/docs/sandbox/sdk-reference) for credential details.
 
 <!-- seam-config:start -->
 ```toml
@@ -90,7 +90,7 @@ Connect the project with `bun ab connect https://builds.example.com` and supply 
 
 Ordered `provisioning` steps run as root after checkout and pinned Bun verification, before dependencies, runtime provisioning and `commands.setup`. Every selected primary and alternate runtime needs its own pinned `runtimeProvisioning.<runtime>` install and exact-version preflight. A local subscription login is not copied. Runtime provisioning receives only the credentials named in `environmentVariables`. Fresh and replacement sandboxes repeat provisioning; preflights run again before each build runner. Keep checkout setup idempotent.
 
-Run `bun ab init --validate` before dispatch. It tests a disposable environment and deletes it even after failure, reports named provisioning/setup/runtime/Store checks, and starts no build or agent. Sandbox lifetime is bounded by `timeoutSeconds`; provider operations also have bounded timeouts. An intact environment resumes without discarding work. If it expires or is lost, recovery rematerializes from durable workspace/publication evidence; unpublished work that existed only on a destroyed machine cannot be recovered by a model. See [setup and recovery](setup.md) for readiness failures and lifecycle details.
+Run `bun ab init --validate` before dispatch. It tests a disposable environment and deletes it even after failure, reports named provisioning/setup/runtime/Store checks, and starts no build or agent. Sandbox lifetime is bounded by `timeoutSeconds`; provider operations also have bounded timeouts. An intact environment resumes without discarding work. If it expires or is lost, recovery rematerializes from durable workspace/publication evidence; unpublished work that existed only on a destroyed machine cannot be recovered by a model.
 
 ### Private repositories
 

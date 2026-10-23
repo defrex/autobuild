@@ -47,4 +47,4 @@ Your operator agent manages landing consent under your instructions. It is a sep
 
 After finalize, Autobuild continues watching the destination. A clean restack onto a newer base is automatic and starts no agent. A conflicted replay enters `reconcile`: an agent resolves the kernel-prepared change on a frozen refreshed base, then the configured post-reconcile verification runs. This epilogue repeats as needed until the PR is merged or closed.
 
-The [design specification](../SPEC.md) defines the pipeline and review limits. Read the [architecture map](architecture.md) for its boundaries and the [restacking reference](restacking.md) for replay and verification details. The [dispatcher guide](dispatcher.md) explains how builds run and resume.
+Read [integrating related work](integration-overview.md#one-identity-per-leaf-change) for replay and verification details. The [dispatcher guide](dispatcher.md) explains how builds run and resume.

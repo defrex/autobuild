@@ -15,7 +15,7 @@ You own goals, scope, tradeoffs, and authority. You run the dispatcher and perfo
 
 ## Choose a harness
 
-Use a local coding agent opened at the repository root with the installed `ab-operate` skill loaded, or an external remote agent connected through the authenticated hosted MCP endpoint. A local agent with shell access normally uses the CLI; `bun ab mcp` also serves the tools over stdio. Remote access is covered in the [hosted MCP guide](mcp.md) and [operator API reference](operator-api.md).
+Use a local coding agent opened at the repository root with the installed `ab-operate` skill loaded, or an external remote agent connected through the authenticated hosted MCP endpoint. A local agent with shell access normally uses the CLI; `bun ab mcp` also serves the tools over stdio. Remote access is covered in [Operator surfaces](operator-surfaces.md).
 
 We recommend running the operator agent on the same model as your reviewer roles. It needs comparable judgment to interpret findings and escalation answers. This is a recommendation for your harness, not a model setting Autobuild enforces.
 
@@ -66,7 +66,7 @@ bun ab wait my-build --for attention --json --timeout 5m
 bun ab answer my-build "Keep the public API compatible"
 ```
 
-An open escalation parks work until an answer is recorded. Guidance becomes input to the next round. The answer command also supports a bare retry and explicit revised-spec resolutions when the contract itself needs to change; consult CLI help and the [design specification](../SPEC.md) before choosing a resolution.
+An open escalation parks work until an answer is recorded. Guidance becomes input to the next round. The answer command also supports a bare retry and explicit revised-spec resolutions when the contract itself needs to change; consult CLI help before choosing a resolution.
 
 
 ```
@@ -89,7 +89,7 @@ bun ab land my-build
 bun ab hold my-build
 ```
 
-`land` requires a ready build, clears its hold, and grants consent to land into its destination. `hold` suppresses landing and revokes consent, even before readiness. Consent survives head changes, restacking, verification, and re-finalization until hold or completion; accepted node reparenting revokes it. Review the [landing policy reference](landing-policy.md) for the exact readiness and forge requirements.
+`land` requires a ready build, clears its hold, and grants consent to land into its destination. `hold` suppresses landing and revokes consent, even before readiness. Consent survives head changes, restacking, verification, and re-finalization until hold or completion; accepted node reparenting revokes it.
 
 
 ## Choose an operator surface
@@ -98,7 +98,7 @@ The live terminal dashboard shown by `bun ab dispatch` and the hosted web operat
 
 Any external agent with shell access can operate through the CLI. `bun ab mcp` serves the operator tools locally over stdio. The hosted service exposes its authenticated `/mcp` connector for agents running elsewhere, without requiring a repository checkout on the machine running your agent.
 
-Read the [operator API reference](operator-api.md) and [hosted MCP guide](mcp.md) for remote access. The [design specification](../SPEC.md) records the CLI and escalation contracts.
+Read [Operator surfaces](operator-surfaces.md) for remote access.
 
 
 ## An example session
