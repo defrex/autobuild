@@ -499,6 +499,28 @@ a.dim {
 .docs article code {
   background: #141414;
 }
+.docs article table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 24px;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 22px;
+}
+.docs article th,
+.docs article td {
+  padding: 8px 2ch 8px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.docs article th {
+  color: #888888;
+  border-bottom: 2px solid #292929;
+}
+.docs article td:first-child code {
+  white-space: nowrap;
+}
 .docs .terminal {
   box-sizing: border-box;
   max-width: 100%;

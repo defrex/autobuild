@@ -10,7 +10,11 @@ order: 9
 
 ## Responsibility
 
-The forge publishes code and represents pull requests. The kernel owns pushes, PR creation and state, comments, landing, and merge. Build agents commit locally; they never push or receive forge credentials. Publication succeeds only when authoritative branch-head readback equals the frozen intended SHA.
+The forge publishes code and represents pull requests.
+
+- **The kernel owns the forge.** Pushes, PR creation and state, comments, landing and merge all happen in deterministic code.
+- **Agents only commit locally.** They never push and never see forge credentials.
+- **Publication is exact.** It succeeds only when the branch head read back from the forge equals the SHA the kernel meant to publish.
 
 ## Shipped adapters
 
@@ -35,9 +39,25 @@ export GITHUB_TOKEN='<push-capable repository token>'
 bun ab init --validate
 ```
 
-Credential precedence is nonblank `GITHUB_TOKEN`, then `GH_TOKEN`, then the local `gh auth token` login. The last fallback is only available for checkout-mode local workspaces. Origin mode and Vercel Sandbox require an exported token. Keep kernel credentials out of guest-forwarded variables; private cloning uses a separate read-only identity.
+Autobuild looks for a credential in this order:
 
-The identity needs repository access, Contents:write for publication, and Pull requests:write for PR operations. Readiness inspection also needs Metadata:read and Administration:read (classic private-repository tokens use repo scope). Landing also depends on repository rules, required checks, merge settings, and the identity's permissions. Authentication alone does not promise permission to merge. Run the setup readiness checks (`bun ab init --validate`) before dispatch; branch protection can still defer a later landing.
+1. `GITHUB_TOKEN`, if nonblank
+2. `GH_TOKEN`, if nonblank
+3. your local `gh auth token` login, for checkout-mode local workspaces only
+
+Origin mode and Vercel Sandbox need an exported token. Keep kernel credentials out of guest-forwarded variables; private cloning uses a separate read-only identity.
+
+The token needs these permissions:
+
+| Permission | Used for |
+|---|---|
+| Contents: write | publishing branches |
+| Pull requests: write | opening and updating PRs |
+| Metadata: read, Administration: read | readiness checks |
+
+A classic token on a private repository needs the `repo` scope instead.
+
+A valid token doesn't guarantee a merge. Landing also depends on branch protection, required checks, merge settings and the identity's own permissions, so a rule can still defer a landing after `bun ab init --validate` passes.
 
 ### Local git
 
@@ -51,13 +71,27 @@ readyState = "ready"
 ```
 <!-- seam-config:end -->
 
-Local git needs an installed Git executable and writable repository, with no external forge credential. PR records and comments are JSON blobs under private `refs/autobuild/` refs in the shared git database; PR URLs refer to local branch refs. Publication confirms local branch identity rather than uploading to GitHub.
+Local git needs only Git and a writable repository; there's no external forge or credential.
 
-Landing uses a head-guarded squash commit and compare-and-swap ref updates. A checked-out destination must pass index/worktree safety checks; unsafe local changes defer landing. This adapter does not supply remote sandbox publication. Use GitHub for the supported remote arrangement.
+- **Pull requests** are JSON records under private `refs/autobuild/` refs, and PR URLs point at local branch refs.
+- **Publication** confirms the local branch rather than uploading anywhere.
+- **Landing** makes a head-guarded squash commit with compare-and-swap ref updates. If the destination is checked out with unsafe local changes, landing waits.
+
+Local git doesn't support remote sandboxes. Use GitHub for remote builds.
 
 ## Writing your own
 
-Follow [Writing a plugin](plugin-authoring.md) from a repository-local module through packaging. Register a `ForgePluginFactory` in `forges`, expose a `ForgeContractFactory`, and run `bun ab plugin test forge acme` against the unchanged shared harness before relying on dispatch:
+[Writing a plugin](plugin-authoring.md) walks through a repository-local module and packaging. For a forge:
+
+1. Register a `ForgePluginFactory` in `forges`.
+2. Expose a `ForgeContractFactory`.
+3. Run the shared harness, unchanged, before relying on dispatch:
+
+```sh
+bun ab plugin test forge acme
+```
+
+Then select it:
 
 <!-- seam-config:start -->
 ```toml
@@ -70,8 +104,24 @@ readyState = "ready"
 ```
 <!-- seam-config:end -->
 
-Implement idempotent PR creation, exact-SHA confirmation, guarded landing, comments, and the adapter's advertised capabilities. Never infer publication from ancestry or a successful push response alone. Reconciliation requires the optional grouped `Forge.rewrite` capability: immutable exact-SHA archives, branch snapshots, and replacement guarded by the expected authoritative head. Report lease mismatches separately and preserve unknown work. Missing capabilities must fail safely with an actionable refusal, rather than falling back to an ordinary push.
+An adapter must provide:
 
-API 1.8 exposes `ForgeFailure`: classify a rate limit with `{ kind: 'rate-limited', resetAt }` using a valid ISO reset timestamp, and retryable transport failures with `{ kind: 'transient', retry: 'retryable' }`. Ordinary policy or permission refusals remain deferrals. Optional `observeRequests` observers count each actual wire request, including failures and pagination, with build attribution when known; skipped calls and credential discovery are not requests. Omitted observers mean unavailable counts, not zero requests. Keep tokens out of failures and telemetry.
+- idempotent PR creation
+- exact-SHA publication confirmation; never infer it from ancestry or a successful push response
+- guarded landing and comments
+- every capability it advertises
+
+Reconciliation needs the optional `Forge.rewrite` capability group: immutable exact-SHA archives, branch snapshots, and replacement guarded by the expected head. Report lease mismatches separately and preserve unknown work. A missing capability must fail with an actionable refusal, never fall back to an ordinary push.
+
+Classify failures with `ForgeFailure` (API 1.8):
+
+```ts
+{ kind: 'rate-limited', resetAt }            // resetAt: a valid ISO timestamp
+{ kind: 'transient', retry: 'retryable' }    // retryable transport failures
+```
+
+Ordinary policy or permission refusals stay deferrals.
+
+Optional `observeRequests` observers count every actual wire request, including failures and pagination, attributed to a build when known. Skipped calls and credential discovery aren't requests, and an omitted observer means "unknown", not zero. Keep tokens out of failures and telemetry.
 
 The shared plugin guide is the detailed capability contract.
