@@ -83,3 +83,94 @@ live(
     }
   },
 )
+
+live(
+  'browser context exposes only eligible new-project destinations and fixes every reconnect',
+  async () => {
+    const admin = new SQL(testURL!),
+      schema = `context_${crypto.randomUUID().replaceAll('-', '')}`
+    await admin.unsafe(`CREATE SCHEMA ${schema}`)
+    const url = new URL(testURL!)
+    url.searchParams.set('options', `-csearch_path=${schema}`)
+    let sql: SQL | undefined
+    try {
+      await migratePostgres(url.href)
+      sql = new SQL(url.href)
+      const root = { email: 'root@example.com', isSuperUser: () => true }
+      const member = { email: 'member@example.com', isSuperUser: () => false }
+      const outsider = { email: 'outsider@example.com', isSuperUser: () => false }
+      const access = new PostgresOrganizationStore(sql),
+        store = new PostgresConnectionStore(sql),
+        registry = new PostgresProjectRegistry(sql)
+      const a = await access.create(root, 'A', 'a'),
+        b = await access.create(root, 'B', 'b')
+      const start = (repo: string) =>
+        store.start({
+          repo,
+          credentialId: crypto.randomUUID().replaceAll('-', ''),
+          digest: 'a'.repeat(64),
+        })
+      const fresh = await start('https://github.com/example/new')
+      expect(
+        (await store.approvalContext(fresh.code, root.email, root)).organizations,
+      ).toHaveLength(2)
+      await expect(
+        store.approvalContext(fresh.code, outsider.email, outsider),
+      ).rejects.toMatchObject({ status: 403 })
+      await access.addMember(root, a.id, member.email)
+      expect(
+        (await store.approvalContext(fresh.code, member.email, member)).organizations.map(
+          (o) => o.id,
+        ),
+      ).toEqual([a.id])
+      await access.addMember(root, b.id, member.email)
+      expect(
+        (await store.approvalContext(fresh.code, member.email, member)).organizations,
+      ).toHaveLength(2)
+      await access.removeMember(root, b.id, member.email)
+      expect(
+        (await store.approvalContext(fresh.code, member.email, member)).organizations,
+      ).toHaveLength(1)
+      expect(await registry.has(fresh.repo)).toBe(false)
+      await expect(
+        store.decide(fresh.code, member.email, true, member, b.id),
+      ).rejects.toMatchObject({ status: 403 })
+      await store.decide(fresh.code, member.email, true, member)
+      const reconnect = await start(fresh.repo)
+      expect(await store.approvalContext(reconnect.code, member.email, member)).toMatchObject({
+        assignment: 'fixed',
+        organizations: [],
+      })
+      await registry.remove(fresh.repo, 'fixture')
+      expect((await store.approvalContext(reconnect.code, member.email, member)).assignment).toBe(
+        'fixed',
+      )
+      await expect(store.decide(reconnect.code, root.email, true, root, b.id)).rejects.toThrow(
+        'project moves',
+      )
+      await access.removeMember(root, a.id, member.email)
+      await access.addMember(root, b.id, member.email)
+      expect(
+        (await store.approvalContext(reconnect.code, member.email, member)).connection,
+      ).toBeNull()
+      const legacy = await start('https://github.com/example/legacy')
+      await registry.add(legacy.repo, 'fixture')
+      await registry.remove(legacy.repo, 'fixture')
+      expect((await store.approvalContext(legacy.code, root.email, root)).assignment).toBe('fixed')
+      expect((await store.approvalContext(legacy.code, member.email, member)).connection).toBeNull()
+      const emptyRoot = { email: root.email, isSuperUser: () => true }
+      await sql`DELETE FROM project_organizations`
+      await sql`DELETE FROM member`
+      await sql`DELETE FROM organization_emails`
+      await sql`DELETE FROM organization`
+      const zero = await start('https://github.com/example/zero')
+      expect(
+        (await store.approvalContext(zero.code, emptyRoot.email, emptyRoot)).organizations,
+      ).toEqual([])
+    } finally {
+      await sql?.close()
+      await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+      await admin.close()
+    }
+  },
+)
