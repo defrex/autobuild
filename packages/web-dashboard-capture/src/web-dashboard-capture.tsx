@@ -1,3 +1,4 @@
+import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
 import { handoffCapture } from '../../../tools/handoff-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
@@ -86,6 +87,23 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 const SCENARIOS: readonly WebFrameSpec[] = [
+  ...ACCESS_SCENARIOS.flatMap((name) =>
+    ['wide', 'narrow'].map((size) => ({
+      id: `access-${name}-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 1600,
+      requires: [
+        name.startsWith('members')
+          ? 'Members'
+          : name.startsWith('orgs')
+            ? 'Organizations'
+            : name.startsWith('projects')
+              ? 'Projects'
+              : 'Connect project',
+      ],
+      forbids: ['connected by', 'Oct 22'],
+    })),
+  ),
   ...['wide', 'narrow'].map((size) => ({
     id: `integration-consent-pending-${size}`,
     width: size === 'wide' ? 1440 : 390,
@@ -97,7 +115,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       id: `builds-menu-${size}`,
       width: size === 'wide' ? 1440 : 390,
       height: 2200,
-      requires: ['Theme', 'System', 'Light', 'Dark', 'sign out'],
+      requires: ['Theme', 'System', 'Light', 'Dark', 'Sign out'],
     },
     {
       id: `builds-titles-${size}`,
@@ -714,6 +732,8 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
 }
 
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
+  const access = accessFixture(spec.id)
+  if (access) return access
   if (spec.id.startsWith('integration-consent-pending-'))
     return shell(builds(models.integration, { pending: 'capture:landing' }), {
       model: models.integration,
