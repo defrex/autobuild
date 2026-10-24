@@ -230,15 +230,15 @@ const STEP_COLOR: Record<PipelineStep['state'], ColorName> = {
 
 /**
  * Elapsed duration, ASCII only: `Xs` under a minute, `MmSSs` under an hour,
- * `HhMMm` above — seconds/minutes zero-padded when a larger unit precedes, so
- * the field width is stable as it ticks (`38s`, `4m12s`, `1h04m`).
+ * `HhMMmSSs` above — seconds/minutes zero-padded when a larger unit precedes, so
+ * the field width is stable as it ticks (`38s`, `4m12s`, `1h04m07s`).
  */
 export function formatDuration(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000))
   if (totalSec < 60) return `${totalSec}s`
   const totalMin = Math.floor(totalSec / 60)
   if (totalMin < 60) return `${totalMin}m${String(totalSec % 60).padStart(2, '0')}s`
-  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m`
+  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m${String(totalSec % 60).padStart(2, '0')}s`
 }
 
 function renderStep(step: PipelineStep, color: boolean, now: number): string {
