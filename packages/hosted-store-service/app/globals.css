@@ -919,7 +919,7 @@ input.short {
   margin-top: 36px;
   max-width: var(--measure);
 }
-.machine {
+.access-page .machine {
   font-family: var(--mono);
   font-size: 0.93em;
 }
