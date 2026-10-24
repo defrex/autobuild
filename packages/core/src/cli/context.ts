@@ -121,6 +121,9 @@ export interface ContextManifest {
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
   /** The feedback this phase occurrence was started with (§15.3, §10). */
+  verifyStageFailure?: import('../kernel/verify-stage-state').VerifyStageFailure
+  verifyReports?: { step: string; report: import('../ontology').ArtifactRef; path: string }[]
+  cancelledVerify?: { step: string; attempt: number; cause: { step: string }; status: 'not-run' }[]
   feedback?: Feedback
   /** Chains a human resolved via dismiss-finding — the reviewer is told so (§15.6-B). */
   dismissedFindingIds?: string[]
@@ -250,7 +253,11 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
 
   /** Latest rev when `rev` omitted; silently skips absent kinds — the tree is
    * a projection of what exists, and the manifest shows what materialized. */
-  async function writeArtifact(desiredPath: string, kind: string, rev?: number): Promise<void> {
+  async function writeArtifact(
+    desiredPath: string,
+    kind: string,
+    rev?: number,
+  ): Promise<string | undefined> {
     const node = state.nodeRestack
     const sourceKind =
       phase === 'reconcile' && node?.conflict && ['spec', 'plan', 'implement-notes'].includes(kind)
@@ -267,6 +274,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, artifact.content)
     materialized[relPath] = { kind: artifact.meta.kind, rev: artifact.meta.revision }
+    return `${contextDir}/${relPath}`
   }
 
   const manifest: ContextManifest = {
@@ -379,6 +387,12 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // Verify reports at latest rev, one file per step (§8.3: routed-back
   // failure reports for implement; the full set for finalize).
   if (inputs.verifyReports === true) {
+    manifest.cancelledVerify = Object.values(state.verifyStage.cancellations).map((c) => ({
+      step: c.step,
+      attempt: c.attempt,
+      cause: c.cause,
+      status: 'not-run' as const,
+    }))
     const metas = await store.listArtifacts(build)
     const kinds = new Set(
       metas.map((meta) => meta.kind).filter((kind) => kind.startsWith('verify-report:')),
@@ -390,6 +404,32 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   if (inputs.findings === 'current' || inputs.currentFeedback === true) {
+    if (phase === 'implement') {
+      const receiptSeq = state.verifyStage.implementations[String(round)]
+      const receipt = state.verifyStage.failures.find((f) => f.seq === receiptSeq)
+      if (receipt) {
+        manifest.verifyStageFailure = receipt
+        manifest.verifyReports = []
+        for (const failed of receipt.failed) {
+          if (!failed.report) continue
+          const path = await writeArtifact(
+            `verify/${failed.step}.md`,
+            failed.report.kind,
+            failed.report.rev,
+          )
+          if (path === undefined)
+            throw new Error(
+              `Missing routed verify report ${failed.report.kind}@${failed.report.rev}`,
+            )
+          manifest.verifyReports.push({ step: failed.step, report: failed.report, path })
+        }
+        manifest.cancelledVerify = receipt.cancelled.map((c) => ({
+          ...c,
+          attempt: receipt.attempt,
+          status: 'not-run' as const,
+        }))
+      }
+    }
     const feedback = currentFeedback(events, phase, round)
     if (feedback !== null) {
       manifest.feedback = feedback
@@ -400,7 +440,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
           .map((id) => byId.get(id))
           .filter((finding): finding is Finding => finding !== undefined)
         await writeDerived('findings.json', `${JSON.stringify(resolved, null, 2)}\n`)
-      } else if ('verify' in feedback) {
+      } else if ('verify' in feedback && manifest.verifyReports === undefined) {
         // The verify failure report routed back into the code loop (§5) — the
         // exact rev the feedback cites, not just the latest.
         await writeArtifact(
@@ -408,7 +448,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
           feedback.verify.report.kind,
           feedback.verify.report.rev,
         )
-      } else {
+      } else if ('guidance' in feedback) {
         // A human escalation answer fed in as authoritative feedback (§15.6-B).
         await writeDerived('guidance.json', `${JSON.stringify(feedback.guidance, null, 2)}\n`)
       }

@@ -2303,3 +2303,49 @@ test('node publication refuses live runner or writer leases, then succeeds after
     expect(await reviseNode(store)).toMatchObject({ nodeRevision: true, specRev: 2 })
   }
 })
+
+test('shared CLI/operator answer validation rejects a captured cancelled verifier escalation', async () => {
+  const store = await makeStore()
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'agent', attempt: 1 },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'cancelled-agent',
+      role: 'agent',
+      runner: 'test',
+      phase: 'verify:agent',
+      round: 1,
+    },
+  })
+  await store.append(SLUG, {
+    actor: agentActor('agent', 'cancelled-agent'),
+    type: 'escalation.raised',
+    payload: {
+      id: 'cancelled-question',
+      phase: 'verify:agent',
+      source: 'agent',
+      question: 'question',
+    },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.cancelled',
+    payload: { step: 'agent', attempt: 1, cause: { step: 'types' } },
+  })
+  const before = (await store.getEvents(SLUG)).length
+  await expect(
+    controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'operator' },
+      action: { kind: 'answer', text: 'late answer', escalationIds: ['cancelled-question'] },
+    }),
+  ).rejects.toThrow('cancelled')
+  expect((await store.getEvents(SLUG)).length).toBe(before)
+})

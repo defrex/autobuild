@@ -1,3 +1,10 @@
+import {
+  advanceVerifyStage,
+  initialVerifyStageState,
+  verifyMemberKey,
+  runningVerifyMembers,
+  type VerifyStageState,
+} from './verify-stage-state'
 import { advancePollingActivity } from './node-polling'
 import { integrationFailed } from './integration-state'
 import {
@@ -47,6 +54,8 @@ export interface OpenEscalation {
   phase: EscalationTarget
   round?: number
   source: EscalationSource
+  /** Raising agent identity, for occurrence-scoped cancellation. */
+  session?: string
   /** Policy guard identity. Absent only on historical policy raises. */
   policyCause?: PolicyEscalationCause
   deferral?: 'own-build-read'
@@ -324,10 +333,12 @@ export interface BuildState {
    * longer exists — implement or reconcile changed it, and a new cycle re-runs
    * from the FIRST step. 0 before any boundary lands. This is the same filter
    * engine.ts:275-276 applies over its post-restart index. */
+  verifyStage: VerifyStageState
   verify: {
     maxAttemptSeen: number
     results: VerifyResult[]
     currentStep?: string
+    running?: string[]
     cycleSince: number
   }
   /** Highest `reconcile.started.attempt` — the kernel's own occurrence
@@ -427,6 +438,7 @@ export interface BuildAcc {
   codeReviewApproval: BuildState['codeReviewApproval']
   planReviewFindings: Finding[][]
   codeReviewFindings: Finding[][]
+  verifyStage: VerifyStageState
   verify: BuildState['verify']
   reconcileAttempts: number
   observations: ObservationRecord[]
@@ -448,7 +460,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 21
+export const BUILD_REDUCER_VERSION = 22
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -475,6 +487,7 @@ function initialBuildAcc(): BuildAcc {
     codeReviewApproval: undefined,
     planReviewFindings: [],
     codeReviewFindings: [],
+    verifyStage: initialVerifyStageState(),
     verify: { maxAttemptSeen: 0, results: [], cycleSince: 0 },
     reconcileAttempts: 0,
     observations: [],
@@ -619,6 +632,26 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     if (event.type.startsWith('node.') || (acc.kind === 'node' && event.type === 'target.moved')) {
       acc.nodeRestack ??= { items: [] }
       advanceNodeRestack(acc.nodeRestack, [event])
+    }
+    advanceVerifyStage(acc.verifyStage, event)
+    if (event.type === 'verify.cancelled') {
+      for (const escalation of [...openEscalations.values(), ...answeredEscalations]) {
+        const session = escalation.session
+        const key = session === undefined ? undefined : acc.verifyStage.owners[session]
+        const cancellation = key === undefined ? undefined : acc.verifyStage.cancellations[key]
+        if (!cancellation) continue
+        if (
+          'answeredSeq' in escalation &&
+          'resolution' in escalation &&
+          escalation.resolution === 'abort'
+        )
+          pending.abort = pending.abort.filter((command) => command.seq !== escalation.answeredSeq)
+        openEscalations.delete(escalation.id)
+        const index = answeredEscalations.findIndex((e) => e.id === escalation.id)
+        if (index >= 0) answeredEscalations.splice(index, 1)
+        if (!acc.verifyStage.superseded.some((e) => e.escalation.id === escalation.id))
+          acc.verifyStage.superseded.push({ escalation, cancellation })
+      }
     }
     switch (event.type) {
       // Facts the projection does not need (workspace liveness is the
@@ -976,6 +1009,18 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         complete('code-review', event.seq, { round })
         break
 
+      case 'integration.prepared':
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        break
+      case 'verify.cancelled':
+        if (
+          acc.verifyStage.cancellations[verifyMemberKey(event.payload.step, event.payload.attempt)]
+            ?.seq === event.seq
+        )
+          complete(verifyPhase(event.payload.step), event.seq, { attempt: event.payload.attempt })
+        break
+      case 'verify.stage-failed':
+        break
       case 'verify.started':
         verify.maxAttemptSeen = Math.max(verify.maxAttemptSeen, event.payload.attempt)
         verify.currentStep = event.payload.step
@@ -987,6 +1032,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'verify.completed': {
         const result = normalizeVerifyCompletion(event.payload)
+        if (acc.verifyStage.cancellations[verifyMemberKey(result.step, result.attempt)]) break
         verify.maxAttemptSeen = Math.max(verify.maxAttemptSeen, result.attempt)
         verify.results.push({
           ...(result.baseSha === undefined ? {} : { baseSha: result.baseSha }),
@@ -1101,20 +1147,27 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
-      case 'escalation.raised':
-        openEscalations.set(event.payload.id, {
+      case 'escalation.raised': {
+        const escalation: OpenEscalation = {
           id: event.payload.id,
           phase: event.payload.phase,
           round: event.payload.round,
           source: event.payload.source,
+          ...(event.actor.kind === 'agent' ? { session: event.actor.session } : {}),
           ...(event.payload.policyCause !== undefined
             ? { policyCause: event.payload.policyCause }
             : {}),
           question: event.payload.question,
           refs: event.payload.refs,
           seq: event.seq,
-        })
+        }
+        const key =
+          escalation.session === undefined ? undefined : acc.verifyStage.owners[escalation.session]
+        const cancellation = key === undefined ? undefined : acc.verifyStage.cancellations[key]
+        if (cancellation) acc.verifyStage.superseded.push({ escalation, cancellation })
+        else openEscalations.set(escalation.id, escalation)
         break
+      }
       case 'escalation.answered': {
         // Matched by id — answers may arrive out of raise order. An answer
         // with no open raise is ignored (total over any prefix).
@@ -1172,6 +1225,19 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   acc.round = round
   acc.currentPhase = currentPhase
   acc.lastCompletedPhase = lastCompletedPhase
+  const running = runningVerifyMembers(acc.verifyStage, verify.cycleSince)
+  if (Object.keys(acc.verifyStage.members).length)
+    verify.running = running.map((member) => member.step)
+  if (acc.verifyStage.concurrent && running.length) {
+    verify.currentStep = running.at(-1)!.step
+    if (!currentPhase || currentPhase.phase.startsWith('verify:'))
+      currentPhase = {
+        phase: verifyPhase(running.at(-1)!.step),
+        attempt: running.at(-1)!.attempt,
+        seq: running.at(-1)!.seq,
+      }
+  } else if (acc.verifyStage.concurrent) verify.currentStep = undefined
+  acc.currentPhase = currentPhase
   acc.openEscalations = [...openEscalations.values()]
   acc.pr = pr
   acc.prState = prState
@@ -1262,6 +1328,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     codeReviewApproved: acc.codeReviewApproved,
     codeReviewApproval: acc.codeReviewApproval,
     reviewFindings: { planReview: acc.planReviewFindings, codeReview: acc.codeReviewFindings },
+    verifyStage: acc.verifyStage,
     verify: acc.verify,
     reconcileAttempts: acc.reconcileAttempts,
     observations: acc.observations,

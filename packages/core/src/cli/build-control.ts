@@ -611,6 +611,11 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     case 'answer': {
       const captured =
         opts.action.escalationIds === undefined ? undefined : new Set(opts.action.escalationIds)
+      if (captured && state.verifyStage.superseded.some((item) => captured.has(item.escalation.id)))
+        throw new BuildControlError(
+          'no-open-escalations',
+          'Cannot answer a stale escalation: its verifier occurrence was cancelled by fail-fast',
+        )
       const guidance = (opts.action.text ?? '').trim()
       const actor = humanActor(user, opts.via)
       const requestedCeiling = opts.action.reviewRoundCeiling
@@ -805,15 +810,43 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
             },
           })
         }
-        await opts.store.append(opts.slug, {
-          actor: KERNEL,
-          type: 'spec.revised',
-          payload: {
-            artifact,
-            escalation: decision.escalationSeq,
-            ...(assets !== undefined ? { assets } : {}),
-          },
-        })
+        if (freshState.verifyStage.concurrent) {
+          // Cancellation can supersede the verifier while body preparation or
+          // answer writes are in flight. Revalidate effective authorization at
+          // the atomic revision boundary, rather than trusting that old read.
+          for (;;) {
+            const current = (await readBuildFacts(opts.store, opts.slug)).value.state
+            const authorization = decideRevise(opts.slug, current, captured)
+            if (authorization.kind === 'refuse') throwRefusal(authorization)
+            if (authorization.kind !== 'complete')
+              throw new BuildControlError(
+                'missing-authorization',
+                'Spec revision authorization is no longer effective',
+              )
+            if (
+              await opts.store.appendIfCurrent(opts.slug, current.lastSeq, {
+                actor: KERNEL,
+                type: 'spec.revised',
+                payload: {
+                  artifact: authorization.artifact,
+                  escalation: authorization.escalationSeq,
+                  ...(authorization.assets === undefined ? {} : { assets: authorization.assets }),
+                },
+              })
+            )
+              break
+          }
+        } else {
+          await opts.store.append(opts.slug, {
+            actor: KERNEL,
+            type: 'spec.revised',
+            payload: {
+              artifact,
+              escalation: decision.escalationSeq,
+              ...(assets !== undefined ? { assets } : {}),
+            },
+          })
+        }
         if (alsoPaused) {
           await opts.store.append(opts.slug, {
             actor,

@@ -291,6 +291,8 @@ export function watchSelection(storeRef: string): { intervalMs: number } {
 export interface WatchRecordState {
   status: BuildStatus
   phase: Phase | null
+  runningVerifySteps?: string[]
+  cancelledVerifySteps?: { step: string; cause: { step: string } }[]
   round: number
   openEscalations: { id: string; question: string }[]
   pr: { number: number; url: string; headSha: string } | null
@@ -364,6 +366,16 @@ function projectState(state: BuildState): WatchRecordState {
   return {
     status: state.status,
     phase: state.phase ?? null,
+    ...((state.verify.running?.length ?? 0) > 1
+      ? { runningVerifySteps: state.verify.running }
+      : {}),
+    ...(Object.values(state.verifyStage.cancellations).some((c) => c.seq > state.verify.cycleSince)
+      ? {
+          cancelledVerifySteps: Object.values(state.verifyStage.cancellations)
+            .filter((c) => c.seq > state.verify.cycleSince)
+            .map((c) => ({ step: c.step, cause: c.cause })),
+        }
+      : {}),
     round: state.round,
     openEscalations: state.openEscalations.map((escalation) => ({
       id: escalation.id,
@@ -410,6 +422,10 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'verify.cancelled':
+      return `verify:${event.payload.step} not run: cancelled by verify:${event.payload.cause.step} (attempt ${event.payload.attempt})`
+    case 'verify.stage-failed':
+      return `verify stage failed (attempt ${event.payload.attempt}): ${event.payload.failed.map((f) => f.step).join(', ')}; ${event.payload.cancelled.map((c) => `${c.step} cancelled by ${c.cause.step}`).join(', ')}`
     case 'integration.verification-failed':
       return `verification failed: ${event.payload.steps.join(', ')}; head ${event.payload.head}; parent ${event.payload.parent}; ${event.payload.guidance}`
     case 'build.janitor-failing':

@@ -1568,3 +1568,11 @@ pending controls, landing intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
+
+Verification stages are planned purely in `kernel/verify-stages.ts`, shared by
+leaf and integration decisions in `kernel/engine.ts`. The build runner keeps
+only live per-member handles and recovery contexts; durable starts, outcomes,
+cancellations and failed-stage receipts drive every barrier and restart.
+Fail-fast cancellation records facts before whole-execution teardown and
+replacement. `kernel/verify-stage-state.ts` owns occurrence/session associations,
+including escalation supersession and complete implement feedback references.

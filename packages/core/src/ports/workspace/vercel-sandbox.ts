@@ -1959,6 +1959,22 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       this.sessions.delete(identity.workspaceRef)
       return observation
     }
+    const currentSession = sandbox.currentSession?.().sessionId
+    if (
+      identity.sessionId !== undefined &&
+      currentSession !== undefined &&
+      currentSession !== identity.sessionId
+    )
+      return { state: 'lost' }
+    // Terminal provider status proves the recorded incarnation is stopped.
+    // Never stop a newer resumed session or demand a second stop of one that
+    // the provider already confirms stopped.
+    if (
+      sandbox.sessionStatus === 'stopped' ||
+      sandbox.sessionStatus === 'aborted' ||
+      sandbox.sessionStatus === 'failed'
+    )
+      return { state: 'lost' }
     if (sandbox.sessionStatus !== undefined && sandbox.sessionStatus !== 'running') {
       return settled({ state: 'lost' })
     }

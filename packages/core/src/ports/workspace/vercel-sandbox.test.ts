@@ -362,62 +362,65 @@ function harness(
     }
     throw new Error(`unexpected host command: ${cmd.join(' ')}`)
   }
-  const provider = scopedProvider({
-    config: {
-      image: 'vercel/sandbox/universal:latest',
-      vcpus: 4,
-      timeoutSeconds: 2700,
-      ...(options.snapshotExpirationSeconds === undefined
+  const makeProvider = () =>
+    scopedProvider({
+      config: {
+        image: 'vercel/sandbox/universal:latest',
+        vcpus: 4,
+        timeoutSeconds: 2700,
+        ...(options.snapshotExpirationSeconds === undefined
+          ? {}
+          : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
+        failoverRegions: [],
+        environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN'],
+        provisioning: options.provisioning ?? [],
+        ...(options.provisionRuntimes
+          ? {
+              runtimeProvisioning: {
+                plugin: { install: 'install-plugin@abc123', preflight: 'plugin --version 1.2.3' },
+                pi: { install: 'install-pi@0.84.4', preflight: 'pi --version 0.84.4' },
+              },
+            }
+          : {}),
+      },
+      env: {
+        ANTHROPIC_API_KEY: 'runtime-secret',
+        AB_TOKEN: 'scoped-store-token',
+        GITHUB_TOKEN: 'forge-secret',
+        VERCEL_TOKEN: 'provider-secret',
+        UNDECLARED_SECRET: 'never-copy',
+      },
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-store-token',
+      delegateCredential: async () => 'delegated-store-token',
+      repo: '/repo',
+      facade,
+      exec,
+      packageArchive: async () => {
+        archiveFetches += 1
+        if (options.failArchiveAfterFirst === true && archiveFetches > 1) {
+          throw new Error('archive fetch failed')
+        }
+        return new Uint8Array([1, 2, 3])
+      },
+      // Seam-less mode omits the seam entirely (the point of
+      // `defaultIdentityStamp`): the provider falls through to its default
+      // `distributionStampFor(archiveBytes())` resolution.
+      ...(options.defaultIdentityStamp
         ? {}
-        : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
-      failoverRegions: [],
-      environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN'],
-      provisioning: options.provisioning ?? [],
-      ...(options.provisionRuntimes
-        ? {
-            runtimeProvisioning: {
-              plugin: { install: 'install-plugin@abc123', preflight: 'plugin --version 1.2.3' },
-              pi: { install: 'install-pi@0.84.4', preflight: 'pi --version 0.84.4' },
-            },
-          }
+        : { distributionIdentity: async () => identityState.current }),
+      // Bounded observation waits resolve in milliseconds, never the 5 s default.
+      observeWaitMs: 25,
+      ...(options.setupCommand !== undefined ? { setupCommand: options.setupCommand } : {}),
+      ...(options.sandboxEnvironmentVariables !== undefined
+        ? { sandboxEnvironmentVariables: options.sandboxEnvironmentVariables }
         : {}),
-    },
-    env: {
-      ANTHROPIC_API_KEY: 'runtime-secret',
-      AB_TOKEN: 'scoped-store-token',
-      GITHUB_TOKEN: 'forge-secret',
-      VERCEL_TOKEN: 'provider-secret',
-      UNDECLARED_SECRET: 'never-copy',
-    },
-    storeRef: 'https://store.example.test',
-    storeToken: 'scoped-store-token',
-    delegateCredential: async () => 'delegated-store-token',
-    repo: '/repo',
-    facade,
-    exec,
-    packageArchive: async () => {
-      archiveFetches += 1
-      if (options.failArchiveAfterFirst === true && archiveFetches > 1) {
-        throw new Error('archive fetch failed')
-      }
-      return new Uint8Array([1, 2, 3])
-    },
-    // Seam-less mode omits the seam entirely (the point of
-    // `defaultIdentityStamp`): the provider falls through to its default
-    // `distributionStampFor(archiveBytes())` resolution.
-    ...(options.defaultIdentityStamp
-      ? {}
-      : { distributionIdentity: async () => identityState.current }),
-    // Bounded observation waits resolve in milliseconds, never the 5 s default.
-    observeWaitMs: 25,
-    ...(options.setupCommand !== undefined ? { setupCommand: options.setupCommand } : {}),
-    ...(options.sandboxEnvironmentVariables !== undefined
-      ? { sandboxEnvironmentVariables: options.sandboxEnvironmentVariables }
-      : {}),
-    runtimeReferences:
-      options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
-  })
+      runtimeReferences:
+        options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
+    })
+  const provider = makeProvider()
   return {
+    restart: makeProvider,
     provider,
     sandbox,
     facade,
@@ -1922,7 +1925,7 @@ describe('VercelSandboxProvider', () => {
     let publications = 0
     const deps = {
       store,
-      execution: h.provider.buildExecution,
+      execution: h.restart().buildExecution,
       settlePublication: async () => {
         publications += 1
       },
@@ -1941,6 +1944,26 @@ describe('VercelSandboxProvider', () => {
     expect((await store.getEvents('remote-build')).map((e) => e.type)).toEqual(['execution.ended'])
     expect((await store.getBuild('remote-build'))?.lease).toBeUndefined()
     expect(publications).toBe(1)
+  })
+
+  test('recovered observation never stops a newer sandbox session', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const stops = h.sandbox.stops
+    h.sandbox.stopFailures = 1
+    expect(
+      await h.restart().buildExecution.observe!({
+        provider: 'vercel-sandbox',
+        workspaceRef: workspace.ref,
+        sessionId: 'previous-session',
+        commandId: 'previous-command',
+      }),
+    ).toEqual({ state: 'lost' })
+    expect(h.sandbox.stops).toBe(stops)
   })
 
   test('observe stops re-issuing polls once the environment lifetime plus margin has passed', async () => {

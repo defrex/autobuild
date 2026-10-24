@@ -61,11 +61,11 @@ import { effectiveRuntimeReferences } from './roles'
  * rather than silent, but a diagnostic that contradicts the source is its own
  * defect: §16.1 errors are feedback to whoever edits the file.
  */
-function stepSection<T, C>(
+function stepSection<T, C, S = string[]>(
   label: string,
-  stepsSchema: z.ZodType<string[]>,
+  stepsSchema: z.ZodType<S>,
   tableSchema: z.ZodType<T>,
-  compose: (steps: string[], stepConfigs: Record<string, T>, afterReconcile: boolean) => C,
+  compose: (steps: S, stepConfigs: Record<string, T>, afterReconcile: boolean) => C,
   allowAfterReconcile = false,
 ) {
   const afterReconcileSchema = z.boolean().default(true)
@@ -73,7 +73,7 @@ function stepSection<T, C>(
     .unknown()
     .transform((input, ctx): C => {
       const stepConfigs: Record<string, T> = Object.create(null)
-      let steps: string[] = []
+      let steps = stepsSchema.parse(undefined)
       let afterReconcile = afterReconcileSchema.parse(undefined)
       for (const [key, raw] of ownEntries(input, label, ctx)) {
         if (key === 'afterReconcile' && allowAfterReconcile) {
@@ -96,7 +96,10 @@ function stepSection<T, C>(
     .prefault({})
   documentSchema(stepsSchema, {
     description:
-      'Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.',
+      (allowAfterReconcile
+        ? 'Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. '
+        : 'Ordered names of the configured step tables. ') +
+      'Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.',
   })
   documentSchema(tableSchema, {
     description:
@@ -479,6 +482,8 @@ documentSchema(verifyPathGlobSchema, {
 })
 
 const verifyApplicabilityShape = {
+  /** Absence preserves historical serialized configuration identity. */
+  failFast: z.boolean().optional(),
   afterReconcile: z.boolean().optional(),
   /** Any-match positive path selectors; absent means unconditional. */
   paths: z
@@ -504,6 +509,7 @@ documentFields(verifyCheckStepSchema, {
     'Name of an existing command in [commands]; required for check steps and forbidden for agent steps.',
   afterReconcile:
     'Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.',
+  failFast: 'Cancel unfinished members of this stage when this step fails. Defaults to false.',
   paths: 'Apply only when at least one changed path matches. Available to both variants.',
   always:
     '`true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.',
@@ -521,6 +527,7 @@ documentFields(verifyAgentStepSchema, {
   skill: 'Exact installed skill name; required for agent steps and forbidden for check steps.',
   afterReconcile:
     'Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.',
+  failFast: 'Cancel unfinished members of this stage when this step fails. Defaults to false.',
   paths: 'Apply only when at least one changed path matches. Available to both variants.',
   always:
     '`true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.',
@@ -536,6 +543,8 @@ export interface VerifyConfig {
   afterReconcile: boolean
   /** Step order — each entry names a `verify:<step>` phase (§15.2.1). */
   steps: string[]
+  /** Present only when the source contains grouped entries. */
+  stages?: string[][]
   /** The [verify.<step>] tables, keyed by step name. */
   stepConfigs: Record<string, VerifyStepConfig>
 }
@@ -548,11 +557,30 @@ export interface VerifyConfig {
  */
 export const verifySectionSchema = stepSection(
   '[verify]',
-  z.array(z.string().min(1)).default([]),
+  z
+    .array(
+      z.union([
+        z.string().min(1),
+        z.array(z.string().min(1)).min(1, 'verify stage must not be empty'),
+      ]),
+    )
+    .default([]),
   verifyStepConfigSchema,
-  (steps, stepConfigs, afterReconcile): VerifyConfig => ({ steps, stepConfigs, afterReconcile }),
+  (entries, stepConfigs, afterReconcile): VerifyConfig => ({
+    steps: entries.flat(),
+    stepConfigs,
+    afterReconcile,
+    ...(entries.some(Array.isArray)
+      ? { stages: entries.map((entry) => (typeof entry === 'string' ? [entry] : entry)) }
+      : {}),
+  }),
   true,
 )
+
+/** Historical configurations have singleton stages without additional metadata. */
+export function verifyStages(config: VerifyConfig): readonly (readonly string[])[] {
+  return config.stages ?? config.steps.map((step) => [step])
+}
 
 // ── [finalize.<step>] ────────────────────────────────────────────────────────
 
@@ -1290,7 +1318,15 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   // while sibling issues are collected. Guard the cross-check so malformed
   // tables report validation feedback instead of throwing inside validation.
   if (config.verify?.stepConfigs !== undefined) {
+    const seen = new Set<string>()
     config.verify.steps.forEach((step, index) => {
+      if (seen.has(step))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['verify', 'steps', index],
+          message: `duplicate verify step ${JSON.stringify(step)} across or within stages`,
+        })
+      seen.add(step)
       if (!Object.hasOwn(config.verify.stepConfigs, step)) {
         ctx.addIssue({
           code: 'custom',

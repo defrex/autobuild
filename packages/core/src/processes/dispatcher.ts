@@ -4445,7 +4445,13 @@ export class Dispatcher {
       if (record.lease) {
         if (new Date(record.lease.expiresAt).getTime() > now) continue // healthy
       } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
-        if ((await this.store.buildFacts(record.slug)).lastExecution !== 'relaunch') continue // absent lease within the first-claim grace (see DispatcherOpts)
+        const facts = await this.store.buildFacts(record.slug)
+        const cleanup = facts.state.verifyStage.cleanupExecutionSeq
+        if (
+          facts.lastExecution !== 'relaunch' &&
+          !(cleanup !== undefined && facts.state.verifyStage.executionSeq <= cleanup)
+        )
+          continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
       const facts = await this.store.buildFacts(record.slug)
       const state = facts.state

@@ -115,6 +115,8 @@ export const executionProgress = {
   'code-review.verdict': 'progress',
   'verify.reconcile-policy-captured': 'progress',
   'verify.started': 'progress',
+  'verify.cancelled': 'progress',
+  'verify.stage-failed': 'progress',
   'verify.completed': 'progress',
   'finalize.started': 'progress',
   'finalize.completed': 'progress',

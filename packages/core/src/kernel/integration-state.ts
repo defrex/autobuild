@@ -49,7 +49,10 @@ export function integrationComplete(state: Pick<BuildState, 'integration'>): boo
     observation.contributions.length > 0
   )
 }
-type CycleState = Pick<BuildState, 'integration' | 'restartSince' | 'nodeComparison' | 'verify'>
+type CycleState = Pick<
+  BuildState,
+  'integration' | 'restartSince' | 'nodeComparison' | 'verify' | 'verifyStage'
+>
 
 /** A spec revision invalidates execution eligibility, never historical receipts. */
 export function integrationCycleCurrent(
@@ -77,12 +80,23 @@ export function integrationCurrent(state: BuildState): boolean {
 export function integrationConfig(config: import('../config/schema').Config): string {
   return JSON.stringify({ verify: config.verify, commands: config.commands })
 }
+function usesVerifyStages(config: string): boolean {
+  try {
+    return Array.isArray(JSON.parse(config).verify?.stages)
+  } catch {
+    return false
+  }
+}
 export function integrationFailed(state: CycleState): boolean {
   const cycle = state.integration?.cycle
   return (
     integrationCycleCurrent(state) &&
     state.nodeComparison?.headSha === cycle!.head &&
     state.nodeComparison?.parentSha === cycle!.parent &&
+    (!usesVerifyStages(cycle!.config) ||
+      state.verifyStage.failures.some(
+        (f) => f.restackId === cycle!.id && f.cycle === cycle!.seq,
+      )) &&
     state.verify.results.some(
       (result) =>
         result.seq > cycle!.seq && result.restackId === cycle!.id && result.outcome === 'fail',
@@ -176,6 +190,11 @@ export function missingIntegrationFailures(
   )
     return []
   if (state.integration?.failures?.some((failure) => failure.id === cycle.id)) return []
+  if (
+    usesVerifyStages(cycle.config) &&
+    !state.verifyStage.failures.some((f) => f.cycle === cycle.seq && f.restackId === cycle.id)
+  )
+    return []
   const steps = [
     ...new Set(
       state.verify.results

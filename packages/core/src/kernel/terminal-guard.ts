@@ -13,7 +13,7 @@ interface TerminalGuardAcc {
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
   return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string }>({
-    version: 2,
+    version: 3,
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -101,6 +101,15 @@ function checkEvent(
         'Remote publication is pending; do not run ab done again (§8.4).',
     )
   }
+  if (
+    event.type === 'verify.cancelled' &&
+    isVerifyPhase(env.phase) &&
+    event.payload.step === verifyStep(env.phase) &&
+    event.payload.attempt === env.round
+  )
+    throw new Error(
+      `terminal rejected: ${env.phase}@${env.round} was cancelled by verify:${event.payload.cause.step}`,
+    )
   if (event.type !== spec.terminalEvent) return
   if (
     (event.type === 'verify.completed' || event.type === 'finalize.completed') &&
