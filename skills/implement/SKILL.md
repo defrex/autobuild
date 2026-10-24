@@ -24,6 +24,8 @@ Guidance is an external operator answer, from the operator agent or a human.
    is no immediate feedback. A `verifyStageFailure` receipt additionally lists
    every failed report and cancelled/not-run member; it remains available on
    guidance rounds. Read its `verifyReports` paths and `cancelledVerify` entries.
+   Cancellation feedback belongs only to that receipt; a later round without a
+   receipt carries no cancellation list.
    When the manifest lists `assets`, they are the build's pinned ticket assets
    under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.

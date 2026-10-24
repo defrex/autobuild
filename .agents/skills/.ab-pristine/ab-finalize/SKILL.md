@@ -26,7 +26,9 @@ Guidance is an external operator answer, from the operator agent or a human.
      notes), including deviations from the plan.
    - **Verification** — which verify steps ran and what they proved; note
      anything a human should re-check by hand. Historical cancelled steps are
-     not-run evidence, never passes; describe the satisfied current cycle.
+     not-run evidence, never passes; describe the satisfied current cycle. The
+     finalize manifest omits `cancelledVerify`; earlier reports are historical,
+     not a list of unfinished current gates.
    - Follow the PR template if the context includes one.
    Do not paste the audit trail — the kernel's summary comment appends verdict
    history and links into the store.

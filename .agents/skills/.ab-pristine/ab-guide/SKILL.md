@@ -657,7 +657,9 @@ recorded outcome. One failed cycle spends one verify-attempt unit.
 `verify.stage-failed` is the decisive full-feedback receipt. The legacy
 `feedback.verify` object still names the first failed report; the implement
 manifest also lists all reports and not-run cancellations through its receipt
-reference, including on guidance rounds.
+reference, including on guidance rounds. Rounds without a referenced receipt
+have no cancellation list. Finalize receives historical reports but no
+`cancelledVerify` list; its evidence is the satisfied current cycle.
 
 A plan may begin with strict TOML front matter selecting the complete set of
 optional verification it warrants:

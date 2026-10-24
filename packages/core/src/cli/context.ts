@@ -387,12 +387,6 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // Verify reports at latest rev, one file per step (§8.3: routed-back
   // failure reports for implement; the full set for finalize).
   if (inputs.verifyReports === true) {
-    manifest.cancelledVerify = Object.values(state.verifyStage.cancellations).map((c) => ({
-      step: c.step,
-      attempt: c.attempt,
-      cause: c.cause,
-      status: 'not-run' as const,
-    }))
     const metas = await store.listArtifacts(build)
     const kinds = new Set(
       metas.map((meta) => meta.kind).filter((kind) => kind.startsWith('verify-report:')),

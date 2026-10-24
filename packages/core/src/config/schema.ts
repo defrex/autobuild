@@ -95,6 +95,12 @@ function stepSection<T, C, S = string[]>(
     })
     .prefault({})
   documentSchema(stepsSchema, {
+    ...(allowAfterReconcile
+      ? {
+          constraints:
+            'Each name is nonempty; each grouped stage contains at least one nonempty name. Names must be unique within and across stages.',
+        }
+      : {}),
     description:
       (allowAfterReconcile
         ? 'Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. '
@@ -483,7 +489,7 @@ documentSchema(verifyPathGlobSchema, {
 
 const verifyApplicabilityShape = {
   /** Absence preserves historical serialized configuration identity. */
-  failFast: z.boolean().optional(),
+  failFast: documentSchema(z.boolean().optional(), { default: 'false (omission is preserved)' }),
   afterReconcile: z.boolean().optional(),
   /** Any-match positive path selectors; absent means unconditional. */
   paths: z

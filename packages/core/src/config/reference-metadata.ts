@@ -2,6 +2,8 @@ import type { z } from 'zod'
 
 /** Documentation describes input semantics; it never participates in validation. */
 export interface ReferenceMetadata {
+  /** Semantic default when omission is intentionally preserved in serialized config. */
+  default?: string
   description?: string
   constraints?: string
   required?: string

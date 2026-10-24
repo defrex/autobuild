@@ -185,3 +185,8 @@ ordered reports and cancelled members; `implement.started.verifyStageFailure`
 references it. `ab context` materializes all reports and lists cancelled members
 as not run, including when guidance is the immediate feedback. Older readers
 defer on the decisive new event rather than misreading the stage's outcome.
+
+Implement cancellation feedback is scoped to its referenced failed-stage receipt,
+including guidance rounds. Later implement rounds without that receipt have no
+`cancelledVerify` list. Finalize receives historical reports but omits that list;
+its current verification gates have passed or been skipped.

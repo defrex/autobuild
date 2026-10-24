@@ -7942,3 +7942,152 @@ test('two agent verifiers start concurrently in one workspace with separate cont
   await work
   expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'phase.failed')).toBe(false)
 })
+
+for (const interruption of ['crash', 'shutdown'] as const) {
+  test(`a stage recovers both native agents and its unfinished check after ${interruption}`, async () => {
+    const shutdown = new AbortController()
+    const configToml = `${CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = [["types", "unit", "e2e", "other"]]',
+    )}\n[verify.other]\nkind="agent"\nskill="verify-other"\n`
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const seen = new Set<string>()
+    const observe = (name: string) => {
+      seen.add(name)
+      if (seen.size === 3) started()
+    }
+    let destination: BuildStore
+    const h = await makeHarness({
+      configToml,
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      checkExec: async () => {
+        observe('unit')
+        return new Promise(() => {})
+      },
+      handlers: () => {
+        const verify: SkillHandler = async (ctx) => {
+          const step = ctx.opts.env.AB_PHASE!.split('@')[0]!.slice(7)
+          if (!ctx.message) {
+            observe(step)
+            return new Promise(() => {})
+          }
+          expect(ctx.message).toContain(
+            `interrupted (${interruption === 'crash' ? 'runner-loss' : 'shutdown'})`,
+          )
+          await destination.append(SLUG, {
+            actor: agentActor(step, ctx.opts.env.AB_SESSION!),
+            type: 'verify.completed',
+            payload: { step, attempt: roundOf(ctx), outcome: 'pass' },
+          })
+          return defaultTurnResult()
+        }
+        return { 'ab-verify-e2e': verify, 'verify-other': verify }
+      },
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'types', attempt: 1, outcome: 'pass' },
+    })
+    await h.br.attach()
+    const work = h.br.step()
+    await ready
+    const crashPrefix = await h.store.getEvents(SLUG)
+    shutdown.abort()
+    await work
+    const stopped = await h.store.getEvents(SLUG)
+    expect(
+      ofType(stopped, 'session.suspended')
+        .map((e) => e.payload.phase)
+        .sort(),
+    ).toEqual(['verify:e2e', 'verify:other'])
+    const prefix = interruption === 'crash' ? crashPrefix : stopped
+    const recoveredStore = new MemoryBuildStore()
+    await recoveredStore.createBuild({
+      slug: SLUG,
+      repo: 'acme/app',
+      ticket: TICKET,
+      branch: BRANCH,
+    })
+    for (const meta of await h.store.listArtifacts(SLUG)) {
+      const artifact = (await h.store.getArtifact(SLUG, meta.kind, meta.revision))!
+      await recoveredStore.putArtifact(SLUG, {
+        kind: meta.kind,
+        content: artifact.content,
+        metadata: meta.metadata,
+      })
+    }
+    for (const event of prefix)
+      await recoveredStore.append(SLUG, {
+        actor: event.actor,
+        type: event.type,
+        payload: event.payload,
+      } as EventWrite)
+    destination = recoveredStore
+    const checks: string[] = []
+    let nextId = 1000
+    const recoveredConfig = parseConfig(configToml)
+    recoveredConfig.roles.default = { runtime: 'scripted' }
+    const next = new BuildRunner({
+      store: recoveredStore.scopeBuild(SLUG),
+      config: recoveredConfig,
+      runtimes: {
+        scripted: { runner: h.runner, servesModels: ['m-'] },
+        pi: { runner: h.runner, servesModels: ['kimi-'] },
+        claude: { runner: h.runner, servesModels: ['claude-'] },
+      },
+      workspacePath: h.workspacePath,
+      workspaceProvider: 'git-worktree',
+      branch: BRANCH,
+      slug: SLUG,
+      forge: h.forge,
+      clock: () => new Date(),
+      instance: 'successor',
+      host: 'sandbox-a',
+      ids: (kind) => `${kind}_${++nextId}`,
+      exec: async (cmd) => {
+        if (cmd[0] === 'sh') checks.push(cmd[2]!)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
+    await next.attach()
+    await next.step()
+    const events = await recoveredStore.getEvents(SLUG)
+    expect(checks).toEqual(['bun test'])
+    expect(
+      ofType(events, 'verify.completed')
+        .map((e) => [e.payload.step, e.payload.attempt])
+        .sort(),
+    ).toEqual([
+      ['e2e', 1],
+      ['other', 1],
+      ['types', 1],
+      ['unit', 1],
+    ])
+    expect(ofType(events, 'verify.started').filter((e) => e.payload.step === 'types')).toHaveLength(
+      1,
+    )
+    const resumptions = ofType(events, 'session.resumed')
+    expect(resumptions).toHaveLength(2)
+    expect(new Set(resumptions.map((e) => e.payload.handle.nativeId)).size).toBe(2)
+    expect(resumptions.map((e) => e.payload.cause)).toEqual([
+      interruption === 'crash' ? 'runner-loss' : 'shutdown',
+      interruption === 'crash' ? 'runner-loss' : 'shutdown',
+    ])
+    expect(ofType(events, 'session.resume-fallback')).toHaveLength(0)
+    expect(
+      ofType(events, 'session.ended').filter(
+        (e) => 'outcome' in e.payload && e.payload.outcome === 'reclaimed',
+      ),
+    ).toHaveLength(0)
+    expect(reduceBuild(events).sessions.open).toHaveLength(0)
+    await recoveredStore.close()
+  })
+}

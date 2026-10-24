@@ -274,3 +274,45 @@ test('node detail preserves unknown, empty, and rewritten hand-pushed identities
     { sha: 'direct', originalSha: 'direct' },
   ])
 })
+
+test('grouped node detail waits for settlement before requesting repairs for all failed members', () => {
+  const s = state()
+  s.integration!.observation!.openChildren = []
+  s.integration!.cycle = {
+    seq: 10,
+    id: 'cycle',
+    head: 'head',
+    parent: 'base',
+    config: JSON.stringify({ verify: { steps: ['lint', 'unit'], stages: [['lint', 'unit']] } }),
+  }
+  s.nodeComparison = { headSha: 'head', parentSha: 'base', ahead: 1 }
+  s.nodeRestack = { contributionBase: 'base', items: [] }
+  s.verify.results = [
+    {
+      seq: 11,
+      step: 'lint',
+      attempt: 1,
+      outcome: 'fail',
+      restackId: 'cycle',
+      headSha: 'head',
+      baseSha: 'base',
+    },
+  ]
+  expect(detail(s).verification).not.toContain('file a repair')
+  expect(detail(s).verifySteps).toEqual([
+    { step: 'lint', outcome: 'fail' },
+    { step: 'unit', outcome: 'pending' },
+  ])
+  s.verifyStage.failures.push({
+    seq: 20,
+    cycle: 10,
+    attempt: 1,
+    stage: ['lint', 'unit'],
+    restackId: 'cycle',
+    headSha: 'head',
+    baseSha: 'base',
+    failed: [{ step: 'lint' }, { step: 'unit' }],
+    cancelled: [],
+  })
+  expect(detail(s).verification).toBe('lint, unit failed — file a repair child targeting NODE')
+})

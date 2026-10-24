@@ -714,7 +714,10 @@ export class BuildRunner {
       release()
     }
   }
-  private readonly stageRecoveries = new Map<string, OpenSession>()
+  private readonly stageRecoveries = new Map<
+    string,
+    { session: OpenSession; cause: 'shutdown' | 'pause' | 'runner-loss' }
+  >()
   private recovery: OpenSession | undefined
   private recoveryBoundaryMs = 0
   private recoveryCause: 'shutdown' | 'pause' | 'runner-loss' = 'runner-loss'
@@ -996,10 +999,12 @@ export class BuildRunner {
         this.recoveryBoundaryMs = this.deps.clock().getTime()
         retained.add(candidate.session)
         if (decision.kind === 'run-verify-stage')
-          this.stageRecoveries.set(
-            verifyMemberKey(candidate.phase!.slice(7), candidate.round!),
-            candidate,
-          )
+          this.stageRecoveries.set(verifyMemberKey(candidate.phase!.slice(7), candidate.round!), {
+            session: candidate,
+            cause: state.sessions.suspended.some((s) => s.session === candidate.session)
+              ? (candidate.suspensionCause ?? 'shutdown')
+              : 'runner-loss',
+          })
         else this.recovery = candidate
         this.recoveryCause = state.sessions.suspended.some((s) => s.session === candidate.session)
           ? (candidate.suspensionCause ?? 'shutdown')
@@ -2269,9 +2274,10 @@ export class BuildRunner {
               : interrupted.signal,
           })
           child.verifyWrites = this.verifyWrites
-          child.recovery = this.stageRecoveries.get(key)
+          const recovery = this.stageRecoveries.get(key)
+          child.recovery = recovery?.session
           child.recoveryBoundaryMs = this.recoveryBoundaryMs
-          child.recoveryCause = child.recovery?.suspensionCause ?? 'runner-loss'
+          child.recoveryCause = recovery?.cause ?? 'runner-loss'
           this.stageRecoveries.delete(key)
           const entry: MemberExecution = {
             runner: child,
