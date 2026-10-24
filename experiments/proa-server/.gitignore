@@ -1,0 +1,9 @@
+.env
+/target/
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/node_modules/
+/public/styles.css
+/public/_proa/
+/captures/

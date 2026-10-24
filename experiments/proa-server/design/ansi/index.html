@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ANSI reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/*
+ * ANSI: the terminal's colors are the only signals, on a calm light or dark
+ * ground. Reference page for the Autobuild web app; every value here is a
+ * proposal for the build to carry into app/globals.css as tokens.
+ */
+:root {
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --fs: 15px;
+  --lh: 1.5;
+  --gap: 24px;
+  --measure: 72ch;
+  --frame: 1180px;
+  --idcol: 6.5rem;
+}
+/* Light ground: deep inks so each hue survives daylight. */
+:root, :root[data-theme="light"] {
+  color-scheme: light;
+  --ground: #fbfbfc;
+  --ink: #1a1d24;
+  --slack: #5f6571;
+  --rule: #dfe2e8;
+  --well: #f5f6f8;
+  --blue: #2557e6;
+  --green: #10862f;
+  --amber: #b35c00;
+  --teal: #007f8a;
+  --red: #d32b33;
+  --red-wash: #fef2f1;
+  --select: #c9d5f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #101219;
+    --ink: #dcdfe5;
+    --slack: #858b97;
+    --rule: #262a35;
+    --well: #181b24;
+    --blue: #86a3f2;
+    --green: #8fcf6e;
+    --amber: #e8aa52;
+    --teal: #52c3c3;
+    --red: #f07777;
+    --red-wash: #2a1719;
+    --select: #2c3a66;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #101219;
+  --ink: #dcdfe5;
+  --slack: #858b97;
+  --rule: #262a35;
+  --well: #181b24;
+  --blue: #86a3f2;
+  --green: #8fcf6e;
+  --amber: #e8aa52;
+  --teal: #52c3c3;
+  --red: #f07777;
+  --red-wash: #2a1719;
+  --select: #2c3a66;
+}
+@media (min-width: 1280px) { :root { --fs: 16px; } }
+
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--ground); }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 var(--fs)/var(--lh) var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--select); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+input, textarea, select, button { font: inherit; color: inherit; }
+.m { font-family: var(--mono); font-size: 0.93em; font-variant-numeric: tabular-nums; font-feature-settings: "calt" 0, "liga" 0; }
+.slack { color: var(--slack); }
+.blue { color: var(--blue); }
+.green { color: var(--green); }
+.amber { color: var(--amber); }
+.teal { color: var(--teal); }
+.red { color: var(--red); }
+.b { font-weight: 700; }
+
+/* Reference chrome: outside the product, removed by #bare. */
+.ref {
+  font: 400 13px/1.4 var(--mono);
+  color: var(--slack);
+  border-bottom: 1px dashed var(--rule);
+  padding: 8px 16px;
+  display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+}
+.ref a { color: var(--slack); }
+.ref a[aria-current] { color: var(--ink); font-weight: 700; }
+body.bare .ref { display: none; }
+
+/* Frame */
+.frame { max-width: var(--frame); margin: 0 auto; padding: 0 24px 64px; }
+.mast {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 16px 0 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.word { font-weight: 700; letter-spacing: -0.01em; }
+.project { font-family: var(--mono); font-size: 0.93em; }
+.mast .spacer { flex: 1; }
+
+/* Text controls: words, never pills. */
+.ctl {
+  white-space: nowrap;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--ink); text-decoration: underline; text-decoration-color: var(--rule);
+  text-underline-offset: 0.25em; text-decoration-thickness: 1px;
+}
+.ctl:hover { color: var(--teal); text-decoration-color: currentColor; }
+.ctl.slack { color: var(--slack); }
+.ctl.slack:hover { color: var(--teal); }
+.ctl.danger { color: var(--red); }
+.btn {
+  display: inline-block; cursor: pointer;
+  background: none; color: var(--ink);
+  border: 1.5px solid var(--ink); border-radius: 0;
+  padding: 3px 12px; font-weight: 600;
+}
+.btn:hover { border-color: var(--teal); color: var(--teal); }
+.btn:active { background: var(--ink); color: var(--ground); }
+.btn.primary { background: var(--ink); color: var(--ground); }
+.btn.primary:hover { background: var(--teal); border-color: var(--teal); color: var(--ground); }
+.btn.danger { border-color: var(--red); color: var(--red); }
+.btn.danger.primary { background: var(--red); color: var(--ground); }
+.field {
+  background: var(--well); border: 1.5px solid var(--rule); border-radius: 0;
+  padding: 4px 10px; min-width: 0;
+}
+.field:focus { border-color: var(--teal); outline: none; }
+.field::placeholder { color: var(--slack); }
+
+/* Control line */
+.controls {
+  display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--rule);
+}
+.controls .spacer { flex: 1; }
+.kv .k { color: var(--slack); }
+
+/* Builds list */
+.listhead {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 20px 0 6px; color: var(--slack); font-size: 0.93em;
+}
+.build { border-bottom: 1px solid var(--rule); padding: 14px 0 16px; }
+.build-head {
+  display: grid; grid-template-columns: var(--idcol) 1fr auto; gap: 0 16px; align-items: baseline;
+}
+.build-title { font-weight: 600; }
+.status { font-family: var(--mono); font-weight: 700; font-size: 0.93em; letter-spacing: 0.02em; }
+.build-meta { margin-left: calc(var(--idcol) + 16px); color: var(--slack); font-size: 0.93em; }
+.steps {
+  margin: 8px 0 0 calc(var(--idcol) + 16px);
+  display: flex; flex-wrap: wrap; gap: 2px 18px;
+  font-family: var(--mono); font-size: 0.93em; font-variant-numeric: tabular-nums;
+}
+.steps .t { color: var(--slack); }
+.step-current { font-weight: 700; }
+.pending { color: var(--slack); }
+
+/* Sign-off: only where a human acts. */
+.signoff {
+  margin: 14px 0 0 calc(var(--idcol) + 16px);
+  border: 1.5px solid var(--red);
+  background: var(--red-wash);
+  padding: 14px 16px 16px;
+  max-width: 88ch;
+}
+.signoff .q { font-weight: 600; }
+.signoff .why { color: var(--slack); font-size: 0.93em; margin: 2px 0 10px; }
+.signoff textarea { width: 100%; min-height: 72px; resize: vertical; display: block; }
+.signoff .actions { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-top: 10px; }
+.legend {
+  margin-top: 20px; color: var(--slack); font-size: 0.93em;
+  display: flex; flex-wrap: wrap; gap: 4px 20px;
+}
+
+/* Account menu */
+.menu {
+  position: relative;
+  display: flex; gap: 14px; align-items: baseline;
+}
+.menu-panel {
+  position: absolute; right: 0; top: calc(100% + 10px); z-index: 2;
+  min-width: 280px; background: var(--ground);
+  border: 1.5px solid var(--ink); padding: 10px 0;
+}
+.menu-panel a, .menu-panel .row { display: block; padding: 5px 16px; color: var(--ink); text-decoration: none; }
+.menu-panel a:hover { color: var(--teal); }
+.menu-panel .sep { border-top: 1px solid var(--rule); margin: 8px 0; }
+.menu-panel .label { color: var(--slack); font-size: 0.93em; padding: 2px 16px; }
+.seg { display: flex; gap: 14px; padding: 4px 16px; }
+.seg [aria-pressed="true"] { color: var(--ink); font-weight: 700; text-decoration: none; }
+.su { color: var(--slack); font-size: 0.85em; font-family: var(--mono); }
+
+/* Reading pages: organizations, members, projects. */
+.page { max-width: var(--measure); padding-top: 28px; }
+h1 { font-size: 1.6em; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 1.05em; margin: 36px 0 8px; }
+.lede { color: var(--slack); margin: 0 0 20px; max-width: 64ch; }
+.addrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.addrow .field { flex: 1 1 260px; }
+.help { color: var(--slack); font-size: 0.93em; margin: 6px 0 0; }
+.rows { border-top: 1px solid var(--rule); margin-top: 8px; }
+.r {
+  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 9ch 10ch;
+  gap: 4px 16px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--rule);
+}
+.r .act { text-align: right; }
+.r .who { min-width: 0; overflow-wrap: anywhere; }
+.r.confirm { grid-template-columns: 1fr; background: var(--red-wash); padding: 12px 12px; margin: 0 -12px; border-bottom: 1px solid var(--red); }
+.r.confirm .line { color: var(--red); font-weight: 600; }
+.r.confirm .actions { display: flex; gap: 10px 18px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.ownerline { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; margin: 0 0 4px; }
+.orgs .r { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 11ch 12ch; }
+.projects .r { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; }
+.projects .r .act { white-space: nowrap; }
+.r.confirm, .orgs .r.confirm, .projects .r.confirm { grid-template-columns: 1fr; }
+.empty { border: 1.5px dashed var(--rule); padding: 20px 20px 22px; margin-top: 12px; }
+.empty p { margin: 0 0 12px; }
+.count { font-family: var(--mono); font-size: 0.93em; }
+
+/* Connect and sign-in */
+.narrow { max-width: 56ch; margin: 0 auto; padding-top: 56px; }
+.code { font-family: var(--mono); font-size: 1.5em; letter-spacing: 0.12em; font-weight: 700; }
+.choice { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.choice input { accent-color: var(--teal); }
+.refused { border: 1.5px solid var(--amber); padding: 14px 16px; margin-top: 20px; }
+.refused .line { color: var(--amber); font-weight: 600; }
+
+[data-view] { display: none; }
+[data-view].on { display: block; }
+
+/* Phone: one escalation owns the screen, answer at thumb reach. */
+@media (max-width: 719px) {
+  :root { --fs: 15px; }
+  .frame { padding: 0 16px 40px; }
+  .build-head { grid-template-columns: 1fr auto; }
+  .build-head .id { grid-column: 1 / -1; }
+  .build-meta, .steps, .signoff { margin-left: 0; }
+  .controls .spacer { display: none; }
+  .mast { flex-wrap: wrap; row-gap: 2px; }
+  .clock { display: none; }
+  .r, .orgs .r, .projects .r { grid-template-columns: minmax(0, 1fr) auto; }
+  .r > :nth-child(1) { grid-column: 1; grid-row: 1; }
+  .r > :nth-child(2) { grid-column: 1; grid-row: 2; }
+  .r > :nth-child(3) { grid-column: 2; grid-row: 1; text-align: right; }
+  .r > :nth-child(4) { grid-column: 2; grid-row: 2; text-align: right; }
+  .projects .r > :nth-child(3) { grid-column: 1 / -1; grid-row: 3; text-align: left; }
+  .r.confirm > * { grid-column: 1; grid-row: auto; text-align: left; }
+  .phone-escalation .signoff { margin: 14px -16px 0; border-left: 0; border-right: 0; padding: 16px; }
+  .phone-escalation .signoff .actions .btn.primary { flex: 1 1 100%; padding: 10px; }
+  .menu-panel { position: fixed; left: 0; right: 0; top: 52px; }
+}
+</style>
+</head>
+<body>
+<nav class="ref" aria-label="Reference views">
+  <span>ANSI reference — not product UI</span>
+  <a href="#builds">builds</a>
+  <a href="#builds-menu">account menu</a>
+  <a href="#members">members</a>
+  <a href="#members-confirm">remove confirm</a>
+  <a href="#orgs">organizations</a>
+  <a href="#orgs-empty">no orgs yet</a>
+  <a href="#projects">projects</a>
+  <a href="#connect">connect</a>
+  <a href="#signin-refused">sign-in refused</a>
+  <span>theme:</span>
+  <a href="#" data-theme-set="system">system</a>
+  <a href="#" data-theme-set="light">light</a>
+  <a href="#" data-theme-set="dark">dark</a>
+</nav>
+
+<!-- ───────────── Builds (home) ───────────── -->
+<section data-view="builds builds-menu" class="frame">
+  <header class="mast">
+    <span class="word">Autobuild</span>
+    <span class="project">acme/web</span>
+    <button class="ctl slack">switch project</button>
+    <span class="spacer"></span>
+    <div class="menu">
+      <span class="su">super user</span>
+      <button class="ctl" aria-haspopup="menu" aria-expanded="false" data-menu>aron@autobuild.run</button>
+      <div class="menu-panel" role="menu" hidden data-menu-panel>
+        <div class="label">acme/web · Acme Product</div>
+        <a role="menuitem" href="#builds">Builds</a>
+        <a role="menuitem" href="#members">Members</a>
+        <div class="sep"></div>
+        <div class="label">Super user</div>
+        <a role="menuitem" href="#orgs">Organizations</a>
+        <a role="menuitem" href="#projects">Projects</a>
+        <div class="sep"></div>
+        <div class="label">Theme</div>
+        <div class="seg" role="group" aria-label="Theme">
+          <button class="ctl slack" data-theme-set="system" aria-pressed="true">System</button>
+          <button class="ctl slack" data-theme-set="light" aria-pressed="false">Light</button>
+          <button class="ctl slack" data-theme-set="dark" aria-pressed="false">Dark</button>
+        </div>
+        <div class="sep"></div>
+        <a role="menuitem" href="#signin-refused">Sign out</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <span class="kv"><span class="k">Intake</span> <button class="ctl m green b">ON</button></span>
+    <span class="kv"><span class="k">Harvest</span> <button class="ctl m green b">ON</button></span>
+    <span class="kv"><span class="k">Active</span> <span class="m">3/4</span></span>
+    <span class="kv"><span class="k">Queued</span> <span class="m">1</span></span>
+    <span class="kv"><span class="k">Dispatcher</span> <span class="m green">running</span></span>
+    <span class="spacer"></span>
+    <button class="ctl">Pause all</button>
+    <button class="ctl">Resume all</button>
+    <span class="m slack clock">16:42:07</span>
+  </div>
+
+  <div class="listhead">
+    <span>4 builds · 1 needs you</span>
+    <span class="m">acme-104 … acme-97</span>
+  </div>
+
+  <article class="build phone-escalation" aria-label="acme-104, blocked">
+    <div class="build-head">
+      <span class="id m blue">acme-104</span>
+      <span class="build-title">Let designers preview the pricing page before it ships</span>
+      <span class="status red">BLOCKED</span>
+    </div>
+    <div class="build-meta"><span class="m">pricing-preview</span> · work · target main · landing off</div>
+    <div class="steps" aria-label="Pipeline">
+      <span class="green">[x] plan <span class="t">1m17s</span></span>
+      <span class="green">[x] plan-review <span class="t">1m02s</span></span>
+      <span class="teal step-current">[&gt;] implement <span class="t">12m40s · round 2</span></span>
+      <span class="pending">[ ] code-review</span>
+      <span class="pending">[ ] verify:unit</span>
+      <span class="pending">[ ] verify:web</span>
+      <span class="pending">[ ] finalize</span>
+      <span class="pending">[ ] merge</span>
+    </div>
+    <div class="signoff" role="group" aria-label="Escalation from implement">
+      <div class="q red">! implement asks: Should the preview link expire, or stay valid until the page ships?</div>
+      <p class="why">The build stopped to ask a person. Your answer resumes it from where it paused.</p>
+      <label class="slack" for="ans" style="font-size:.93em">Your answer</label>
+      <textarea id="ans" class="field" placeholder="Expire after 7 days; anyone in Acme Product can open it."></textarea>
+      <div class="actions">
+        <button class="btn primary">Answer and resume</button>
+        <button class="ctl">Retry without an answer</button>
+        <button class="ctl danger">Abort…</button>
+      </div>
+    </div>
+  </article>
+
+  <article class="build" aria-label="acme-101, running">
+    <div class="build-head">
+      <span class="id m blue">acme-101</span>
+      <span class="build-title">Keep second resolution on elapsed timers past one hour</span>
+      <span class="status green">RUNNING</span>
+    </div>
+    <div class="build-meta"><span class="m">timer-seconds</span> · work · target main · landing off</div>
+    <div class="steps" aria-label="Pipeline">
+      <span class="green">[x] plan <span class="t">1m26s</span></span>
+      <span class="green">[x] plan-review <span class="t">28s</span></span>
+      <span class="amber">[~] implement <span class="t">36m43s · round 2</span></span>
+      <span class="teal step-current">[&gt;] code-review <span class="t">45s · round 2</span></span>
+      <span class="amber">[~] verify:lint <span class="t">21s</span></span>
+      <span class="amber">[~] verify:unit <span class="t">16m59s</span></span>
+      <span class="amber">[~] verify:postgres <span class="t">failed · 1m23s</span></span>
+      <span class="pending">[ ] verify:web</span>
+      <span class="pending">[ ] finalize</span>
+      <span class="pending">[ ] merge</span>
+    </div>
+  </article>
+
+  <article class="build" aria-label="acme-99, landing ready">
+    <div class="build-head">
+      <span class="id m blue">acme-99</span>
+      <span class="build-title">Show who approved each landing in the build trail</span>
+      <span class="status green">RUNNING</span>
+    </div>
+    <div class="build-meta"><span class="m">landing-approver</span> · work · target main · <a class="ctl blue" href="#">PR #612 open</a></div>
+    <div class="steps" aria-label="Pipeline">
+      <span class="green">[x] plan</span><span class="green">[x] plan-review</span><span class="green">[x] implement</span><span class="green">[x] code-review</span><span class="green">[x] verify</span><span class="green">[x] finalize</span>
+      <span class="teal step-current">[&gt;] merge <span class="t">waiting for consent</span></span>
+    </div>
+    <div class="signoff" style="border-color: var(--amber); background: var(--ground)">
+      <div class="q amber">! Landing needs your consent</div>
+      <p class="why">Every check passed. Landing merges PR #612 into main.</p>
+      <div class="actions"><button class="btn primary">Land</button><button class="ctl">Hold</button></div>
+    </div>
+  </article>
+
+  <article class="build" aria-label="acme-97, queued">
+    <div class="build-head">
+      <span class="id m blue">acme-97</span>
+      <span class="build-title">Add an empty state to the asset library</span>
+      <span class="status teal">QUEUED</span>
+    </div>
+    <div class="build-meta"><span class="m">asset-empty-state</span> · work · target main · waiting for a free slot</div>
+  </article>
+
+  <div class="legend">
+    <span><span class="m green">[x]</span> done</span>
+    <span><span class="m teal">[&gt;]</span> happening now</span>
+    <span><span class="m amber">[~]</span> in progress or retried</span>
+    <span><span class="m slack">[ ]</span> not started</span>
+  </div>
+</section>
+
+<!-- ───────────── Members ───────────── -->
+<section data-view="members members-confirm" class="frame">
+  <header class="mast">
+    <span class="word">Autobuild</span>
+    <a class="ctl slack" href="#builds">Builds</a>
+    <span class="spacer"></span>
+    <button class="ctl">priya@acme.dev</button>
+  </header>
+  <div class="page">
+    <h1>Members</h1>
+    <div class="ownerline">
+      <span>Acme Product</span>
+      <button class="ctl slack">switch organization</button>
+    </div>
+    <p class="lede">Members can see and operate every project Acme Product owns: <span class="m">acme/web</span>, <span class="m">acme/api</span>, <span class="m">acme/design-system</span>.</p>
+
+    <label for="add" class="b">Add a member</label>
+    <div class="addrow" style="margin-top:6px">
+      <input id="add" class="field m" type="email" placeholder="name@company.com">
+      <button class="btn primary">Add member</button>
+    </div>
+    <p class="help">They join the first time they sign in with GitHub using this email. Until then they show as pending.</p>
+
+    <h2>5 people</h2>
+    <div class="rows" role="table" aria-label="Members">
+      <div class="r" role="row">
+        <span class="who" role="cell"><span class="b">Priya Raman</span> <span class="slack">(you)</span><br><span class="m slack">priya@acme.dev</span></span>
+        <span class="meta" role="cell">Owner · manages members</span>
+        <span role="cell" class="m green b">JOINED</span>
+        <span class="act" role="cell"></span>
+      </div>
+      <div class="r" role="row">
+        <span class="who" role="cell"><span class="b">Dana Okafor</span><br><span class="m slack">dana@acme.dev</span></span>
+        <span class="meta slack" role="cell">Member</span>
+        <span role="cell" class="m green b">JOINED</span>
+        <span class="act" role="cell"><button class="ctl slack">Remove</button></span>
+      </div>
+      <div class="r confirm" role="row" data-only="members-confirm">
+        <div class="line">Remove Sam Lee? They lose access to all 3 projects as soon as you confirm.</div>
+        <div class="actions"><button class="btn danger primary">Remove Sam Lee</button><button class="ctl">Cancel</button></div>
+      </div>
+      <div class="r" role="row" data-hide="members-confirm">
+        <span class="who" role="cell"><span class="b">Sam Lee</span><br><span class="m slack">sam@acme.dev</span></span>
+        <span class="meta slack" role="cell">Member</span>
+        <span role="cell" class="m green b">JOINED</span>
+        <span class="act" role="cell"><button class="ctl slack">Remove</button></span>
+      </div>
+      <div class="r" role="row">
+        <span class="who" role="cell"><span class="m">ines@acme.dev</span></span>
+        <span class="meta slack" role="cell">Not signed in yet</span>
+        <span role="cell" class="m amber b">PENDING</span>
+        <span class="act" role="cell"><button class="ctl slack">Remove</button></span>
+      </div>
+      <div class="r" role="row">
+        <span class="who" role="cell"><span class="b">Theo Marsh</span><br><span class="m slack">theo@acme.dev</span></span>
+        <span class="meta slack" role="cell">Member</span>
+        <span role="cell" class="m green b">JOINED</span>
+        <span class="act" role="cell"><button class="ctl slack">Remove</button></span>
+      </div>
+    </div>
+    <p class="help">Only a super user can change the owner. Removing someone takes effect on their next request.</p>
+  </div>
+</section>
+
+<!-- ───────────── Organizations (super user) ───────────── -->
+<section data-view="orgs orgs-empty" class="frame">
+  <header class="mast">
+    <span class="word">Autobuild</span>
+    <a class="ctl slack" href="#builds">Builds</a>
+    <span class="spacer"></span>
+    <span class="su">super user</span>
+    <button class="ctl">aron@autobuild.run</button>
+  </header>
+  <div class="page orgs">
+    <h1>Organizations</h1>
+    <p class="lede">Each organization owns projects. Its members reach all of them. Super users reach everything.</p>
+
+    <label for="neworg" class="b">New organization</label>
+    <div class="addrow" style="margin-top:6px">
+      <input id="neworg" class="field" placeholder="Organization name">
+      <button class="btn primary">Create</button>
+    </div>
+    <p class="help">You won't become a member. Add members and choose an owner next.</p>
+
+    <div data-only="orgs-empty">
+      <div class="empty">
+        <p class="b">No organizations yet.</p>
+        <p class="slack">Create the first one above, then add people by email. Until a project belongs to an organization, only super users can see it.</p>
+        <a class="ctl" href="#projects">See projects waiting for an organization</a>
+      </div>
+    </div>
+
+    <div data-hide="orgs-empty">
+      <h2>3 organizations</h2>
+      <div class="rows" role="table" aria-label="Organizations">
+        <div class="r" role="row">
+          <a class="ctl b" href="#members" role="cell">Acme Product</a>
+          <span class="meta" role="cell">Owner <span class="m">priya@acme.dev</span></span>
+          <span class="count" role="cell">5 members</span>
+          <span class="count act" role="cell">3 projects</span>
+        </div>
+        <div class="r" role="row">
+          <a class="ctl b" href="#members" role="cell">Northwind Labs</a>
+          <span class="meta amber" role="cell">No owner yet</span>
+          <span class="count" role="cell">2 members</span>
+          <span class="count act" role="cell">1 project</span>
+        </div>
+        <div class="r" role="row">
+          <a class="ctl b" href="#members" role="cell">Autobuild</a>
+          <span class="meta" role="cell">Owner <span class="m">aron@autobuild.run</span></span>
+          <span class="count" role="cell">1 member</span>
+          <span class="count act" role="cell">1 project</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────── Projects (super user) ───────────── -->
+<section data-view="projects" class="frame">
+  <header class="mast">
+    <span class="word">Autobuild</span>
+    <a class="ctl slack" href="#builds">Builds</a>
+    <span class="spacer"></span>
+    <span class="su">super user</span>
+    <button class="ctl">aron@autobuild.run</button>
+  </header>
+  <div class="page projects">
+    <h1>Projects</h1>
+    <p class="lede">A project belongs to one organization. Moving it changes who can reach it immediately.</p>
+
+    <h2 class="amber">2 waiting for an organization</h2>
+    <p class="help" style="margin-top:0">Only super users can see these until you assign them.</p>
+    <div class="rows" role="table" aria-label="Projects waiting for an organization">
+      <div class="r" role="row">
+        <span class="m who" role="cell">github.com/acme/mobile</span>
+        <span class="meta slack" role="cell">connected by dana@acme.dev · Oct 22</span>
+        <span class="act" role="cell"><select class="field" aria-label="Organization"><option>Acme Product</option><option>Northwind Labs</option><option>Autobuild</option></select> <button class="btn">Assign</button></span>
+      </div>
+      <div class="r" role="row">
+        <span class="m who" role="cell">github.com/defrex/autobuild-website</span>
+        <span class="meta slack" role="cell">registered before organizations</span>
+        <span class="act" role="cell"><select class="field" aria-label="Organization"><option>Autobuild</option><option>Acme Product</option><option>Northwind Labs</option></select> <button class="btn">Assign</button></span>
+      </div>
+    </div>
+
+    <h2>5 assigned</h2>
+    <div class="rows" role="table" aria-label="Assigned projects">
+      <div class="r" role="row"><span class="m who" role="cell">github.com/acme/web</span><span class="meta" role="cell">Acme Product</span><span class="act" role="cell"><button class="ctl slack">Move…</button></span></div>
+      <div class="r confirm" role="row">
+        <div class="line">Move acme/api to Northwind Labs? Acme Product's 5 members lose access as soon as you confirm.</div>
+        <div class="actions"><select class="field" aria-label="Destination"><option>Northwind Labs</option></select><button class="btn danger primary">Move project</button><button class="ctl">Cancel</button></div>
+      </div>
+      <div class="r" role="row"><span class="m who" role="cell">github.com/acme/design-system</span><span class="meta" role="cell">Acme Product</span><span class="act" role="cell"><button class="ctl slack">Move…</button></span></div>
+      <div class="r" role="row"><span class="m who" role="cell">github.com/northwind/ledger</span><span class="meta" role="cell">Northwind Labs</span><span class="act" role="cell"><button class="ctl slack">Move…</button></span></div>
+      <div class="r" role="row"><span class="m who" role="cell">github.com/defrex/autobuild</span><span class="meta" role="cell">Autobuild</span><span class="act" role="cell"><button class="ctl slack">Move…</button></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────── Connect approval ───────────── -->
+<section data-view="connect" class="frame">
+  <header class="mast">
+    <span class="word">Autobuild</span>
+    <span class="spacer"></span>
+    <button class="ctl">dana@acme.dev</button>
+  </header>
+  <div class="narrow">
+    <h1>Connect a project</h1>
+    <p class="lede"><span class="m">ab connect</span> is asking to connect this project. Check that the code matches your terminal.</p>
+    <div class="code">7F3A-C91E-2B</div>
+    <p class="m" style="margin:14px 0 24px">github.com/acme/mobile</p>
+
+    <fieldset style="border:0;padding:0;margin:0">
+      <legend class="b" style="padding:0">Add it to an organization</legend>
+      <p class="help" style="margin:2px 0 8px">Everyone in the organization you pick can reach this project.</p>
+      <label class="choice"><input type="radio" name="org" checked> <span><span class="b">Acme Product</span> <span class="slack">· 5 members</span></span></label>
+      <label class="choice"><input type="radio" name="org"> <span><span class="b">Acme Research</span> <span class="slack">· 2 members</span></span></label>
+    </fieldset>
+    <div class="addrow" style="margin-top:24px">
+      <button class="btn primary">Approve</button>
+      <button class="btn">Deny</button>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────── Sign-in, refused ───────────── -->
+<section data-view="signin-refused" class="frame">
+  <header class="mast"><span class="word">Autobuild</span></header>
+  <div class="narrow">
+    <h1>Sign in</h1>
+    <p class="lede">Autobuild uses your GitHub account. Your organization's owner adds you by the email on that account.</p>
+    <button class="btn primary">Continue with GitHub</button>
+    <div class="refused" role="alert">
+      <div class="line">You're not in an organization yet.</div>
+      <p style="margin:4px 0 0">You signed in as <span class="m">ines.alt@gmail.com</span>, which no organization has added. Ask your organization's owner to add this email, or sign in with the GitHub account they added.</p>
+    </div>
+  </div>
+</section>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  function setTheme(t) {
+    if (t === 'system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t);
+    document.querySelectorAll('[data-theme-set]').forEach(function (b) {
+      if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', String(b.dataset.themeSet === t));
+    });
+  }
+  function route() {
+    var parts = location.hash.replace(/^#/, '').split('&');
+    var view = parts[0] || 'builds';
+    var params = {};
+    parts.slice(1).forEach(function (p) { var kv = p.split('='); params[kv[0]] = kv[1] || '1'; });
+    document.body.classList.toggle('bare', 'bare' in params);
+    if (params.theme) setTheme(params.theme);
+    document.querySelectorAll('[data-view]').forEach(function (s) {
+      s.classList.toggle('on', s.dataset.view.split(' ').indexOf(view) !== -1);
+    });
+    document.querySelectorAll('[data-only]').forEach(function (e) { e.hidden = e.dataset.only !== view; });
+    document.querySelectorAll('[data-hide]').forEach(function (e) { e.hidden = e.dataset.hide === view; });
+    var panel = document.querySelector('[data-menu-panel]');
+    var open = view === 'builds-menu';
+    panel.hidden = !open;
+    document.querySelector('[data-menu]').setAttribute('aria-expanded', String(open));
+    document.querySelectorAll('.ref a[href^="#"]:not([data-theme-set])').forEach(function (a) {
+      if (a.getAttribute('href') === '#' + view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-theme-set]');
+    if (t) { e.preventDefault(); setTheme(t.dataset.themeSet); }
+    var m = e.target.closest('[data-menu]');
+    if (m) { location.hash = location.hash.indexOf('builds-menu') === 1 ? 'builds' : 'builds-menu'; }
+  });
+  window.addEventListener('hashchange', route);
+  route();
+})();
+</script>
+</body>
+</html>
