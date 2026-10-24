@@ -1236,7 +1236,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"4", "supportedClientRange":{"minVersion":"0.9.0",
+  "protocolVersion":"5", "supportedClientRange":{"minVersion":"0.9.0",
   "maxVersionExclusive":"0.12.0"}}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
