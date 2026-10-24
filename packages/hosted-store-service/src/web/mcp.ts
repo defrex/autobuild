@@ -7,9 +7,9 @@ import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/pro
  * API's token-verified protocol.
  *
  * Attribution path per tool call: the MCP bearer token resolves to the
- * signed-in operator (Better Auth's token store, then the email allowlist
- * re-checked — sign-in admission stops an outside person at the front door,
- * this re-check cuts off anyone dropped from the list with a live token);
+ * signed-in operator (Better Auth's token store, then current super-user
+ * designation or organization membership); admission and repository access
+ * are rechecked inside every tool callback, including with a live token;
  * the endpoint mints the same short-lived attributed operator token the web
  * gateway mints, plus a `via` marker naming the MCP client from its OAuth
  * registration; the operator server executes the named registry tool with
@@ -128,7 +128,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
 
   /** Resolve the bearer token to the signed-in operator: Better Auth's MCP
    * token store finds the oauthAccessToken row (the plugin does not check
-   * expiry — the resource must), the user must still satisfy the allowlist,
+   * expiry — the resource must), the user must still be admitted,
    * and the client name comes from the token's OAuth registration. */
   async function operator(request: Request): Promise<McpOperator | Response> {
     const session = await options.auth.api.getMcpSession({ headers: request.headers })

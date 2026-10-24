@@ -1,6 +1,6 @@
 import type { SQL } from 'bun'
 
-/** Better Auth 1.4.18 core + MCP/OIDC/JWT plugin PostgreSQL schema. Changes to
+/** Better Auth 1.4.18 core + organization/MCP/OIDC/JWT PostgreSQL schema. Changes to
  * the pinned auth package must deliberately update this marker and DDL.
  *
  * v3 notes the plugin's declared-schema drift: the pinned 1.4.18 MCP plugin's
@@ -142,6 +142,9 @@ export const AUTH_SCHEMA_V3_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(AUTH_SCHEMA_V3_DDL)
   .digest('hex')
 
+/** v4 adds organization plugin records, email grants and project assignments.
+ * The email ledger is authoritative; member rows mirror persisted identities.
+ * Organization/team/invitation HTTP management remains disabled in the service. */
 export const AUTH_SCHEMA_DDL = `
 ${AUTH_SCHEMA_V3_DDL}
 ALTER TABLE session ADD COLUMN IF NOT EXISTS "activeOrganizationId" text;
