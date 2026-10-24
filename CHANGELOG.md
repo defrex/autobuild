@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.0.1 — 2026-10-24
+
+This release fixes a compatibility problem between the PostgreSQL store and Bun 1.4.4. When the store retried statements after a cached-plan failure, Bun 1.4.4 rejected them with an `ERR_INVALID_ARG_VALUE` error, and those retries now succeed.
+
+- [#722](https://github.com/defrex/autobuild/pull/722) — Fix PostgreSQL store cached-plan retries on Bun 1.4.4, which rejected the retried statements with `ERR_INVALID_ARG_VALUE`
+
 ## v1.0.0 — 2026-10-24
 
 This release introduces the integration tree model. Node tickets open integration branches, cascade parent changes to their descendants, verify complete nodes, and land guarded stacks under a declarative landing policy, and both dashboards show this progress. Running dispatchers now upgrade themselves from immutable cached runtime generations: they drain in-flight builds, show handoffs, and roll back after repeated takeover failures, while live agent sessions suspend and resume natively across runner stops, pauses, and phase boundaries. Autobuild also recovers better from forge failures and rate limits, polls GitHub and the store less often when idle, and gains a full documentation site with concept guides, adapter and CLI references, and a configuration reference generated from the config schema. If you are upgrading from 1.0.0-beta.3 or earlier, stop the dispatcher gracefully, let it drain, and restart it once to adopt the new launcher.

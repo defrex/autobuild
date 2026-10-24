@@ -1,6 +1,6 @@
 {
   "name": "@defrex/autobuild",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Agent-driven software delivery from groomed ticket to merged PR",
   "repository": {
     "type": "git",
