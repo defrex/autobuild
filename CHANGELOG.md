@@ -2,10 +2,68 @@
 
 ## Unreleased
 
+## v1.0.0 — 2026-10-24
+
+This release introduces the integration tree model. Node tickets open integration branches, cascade parent changes to their descendants, verify complete nodes, and land guarded stacks under a declarative landing policy, and both dashboards show this progress. Running dispatchers now upgrade themselves from immutable cached runtime generations: they drain in-flight builds, show handoffs, and roll back after repeated takeover failures, while live agent sessions suspend and resume natively across runner stops, pauses, and phase boundaries. Autobuild also recovers better from forge failures and rate limits, polls GitHub and the store less often when idle, and gains a full documentation site with concept guides, adapter and CLI references, and a configuration reference generated from the config schema. If you are upgrading from 1.0.0-beta.3 or earlier, stop the dispatcher gracefully, let it drain, and restart it once to adopt the new launcher.
+
+- [#721](https://github.com/defrex/autobuild/pull/721) — Define acceptance checks and constrain e2e suite creation
+- [#720](https://github.com/defrex/autobuild/pull/720) — Show active rollback holds in both dashboards
+- [#719](https://github.com/defrex/autobuild/pull/719) — Poll idle integration nodes on GitHub less often
+- [#718](https://github.com/defrex/autobuild/pull/718) — Update self-hosting procedures for automatic dispatcher upgrades
+- [#717](https://github.com/defrex/autobuild/pull/717) — Read each GitHub fact once per tick, conditionally
+- [#716](https://github.com/defrex/autobuild/pull/716) — Relaunch remote sandbox runners at runtime phase boundaries
+- [#715](https://github.com/defrex/autobuild/pull/715) — Prove node verification failures report attention with provenance
+- [#714](https://github.com/defrex/autobuild/pull/714) — Relaunch local build runners at runtime phase boundaries
+- [#713](https://github.com/defrex/autobuild/pull/713) — Teach charter-style node tickets and iteration inside nodes
+- [#712](https://github.com/defrex/autobuild/pull/712) — Roll back dispatcher runtimes after repeated takeover failures
+- [#711](https://github.com/defrex/autobuild/pull/711) — Show handoffs and draining builds in both dashboards
+- [#710](https://github.com/defrex/autobuild/pull/710) — Treat hand-pushed node commits as authorized maintainer intent
+- [#709](https://github.com/defrex/autobuild/pull/709) — Raise operator attention for failed integration verification
+- [#708](https://github.com/defrex/autobuild/pull/708) — Drain in-flight builds during dispatcher upgrades
+- [#707](https://github.com/defrex/autobuild/pull/707) — Give node verifiers the specs of contributing builds
+- [#705](https://github.com/defrex/autobuild/pull/705) — Allow operators to revise node specs without an escalation
+- [#704](https://github.com/defrex/autobuild/pull/704) — Follow the base branch in source mode
+- [#703](https://github.com/defrex/autobuild/pull/703) — Suspend and natively resume local harvest turns
+- [#702](https://github.com/defrex/autobuild/pull/702) — Upgrade running dispatchers through durable generation cutover
+- [#701](https://github.com/defrex/autobuild/pull/701) — Gate this repository's builds on documentation drift
+- [#700](https://github.com/defrex/autobuild/pull/700) — Refresh concept documentation for the operator agent
+- [#699](https://github.com/defrex/autobuild/pull/699) — Document ticket, agent runtime, and workspace adapters
+- [#698](https://github.com/defrex/autobuild/pull/698) — Add CLI, upgrading, troubleshooting and glossary reference pages
+- [#697](https://github.com/defrex/autobuild/pull/697) — Run dispatch from immutable cached runtime generations. **Upgrading from 1.0.0-beta.3 or earlier: gracefully restart the launcher manually to adopt this change.** Stop a running `ab dispatch` with Ctrl-C (or SIGTERM), let it drain, and start it again on the new version. Earlier dispatchers have no launcher, so they cannot adopt it automatically; later upgrades with an unchanged launcher contract are picked up without a restart.
+- [#696](https://github.com/defrex/autobuild/pull/696) — Document infrastructure seams and the plugin authoring workflow
+- [#695](https://github.com/defrex/autobuild/pull/695) — Add a verification concept guide
+- [#694](https://github.com/defrex/autobuild/pull/694) — Document Autobuild around the operator agent
+- [#693](https://github.com/defrex/autobuild/pull/693) — Generate the configuration reference from the config schema
+- [#692](https://github.com/defrex/autobuild/pull/692) — Document shipped skills, customization, and upgrade behavior
+- [#691](https://github.com/defrex/autobuild/pull/691) — Prefer fewer, larger tickets cut at seams in the spec standard
+- [#690](https://github.com/defrex/autobuild/pull/690) — Generate the docs site from canonical Markdown sources
+- [#689](https://github.com/defrex/autobuild/pull/689) — Reserve operator for the driving role in SPEC, skills and CLI help
+- [#688](https://github.com/defrex/autobuild/pull/688) — Preserve in-flight builds across ticket-source migrations
+- [#686](https://github.com/defrex/autobuild/pull/686) — Record runtime identity for dispatcher runs and runner attaches
+- [#685](https://github.com/defrex/autobuild/pull/685) — Batch Linear ticket exports and wait out rate limits
+- [#684](https://github.com/defrex/autobuild/pull/684) — Restack integration nodes only when needed
+- [#683](https://github.com/defrex/autobuild/pull/683) — Add Copy as Markdown to every docs page
+- [#682](https://github.com/defrex/autobuild/pull/682) — Keep the dispatcher running after repository read failures
+- [#681](https://github.com/defrex/autobuild/pull/681) — Recover from persistent forge failures and rate limits
+- [#680](https://github.com/defrex/autobuild/pull/680) — Count distinct verify failures and defer unreadable phase sessions
+- [#679](https://github.com/defrex/autobuild/pull/679) — Confirm forge publications and preserve change identity across rewrites
+- [#678](https://github.com/defrex/autobuild/pull/678) — Explain integration builds in dashboard detail views
+- [#677](https://github.com/defrex/autobuild/pull/677) — Show integration progress in dashboard rows
+- [#676](https://github.com/defrex/autobuild/pull/676) — Tolerate newer facts and reductions within the supported window
+- [#675](https://github.com/defrex/autobuild/pull/675) — Teach ticket-filing skills to choose an integration destination
+- [#674](https://github.com/defrex/autobuild/pull/674) — Lay out docs pages as a standard documentation site
+- [#673](https://github.com/defrex/autobuild/pull/673) — Recommend per-build fragments in setup guidance
+- [#671](https://github.com/defrex/autobuild/pull/671) — Use the runner's CLI inside build sessions
+- [#670](https://github.com/defrex/autobuild/pull/670) — Share the website header across landing and docs pages
+- [#669](https://github.com/defrex/autobuild/pull/669) — Bound the website capture unit test to four real landing frames
+- [#668](https://github.com/defrex/autobuild/pull/668) — Prevent integration runners from starving behind blocked descendants
+- [#667](https://github.com/defrex/autobuild/pull/667) — Make pause suspend live sessions immediately
+- [#666](https://github.com/defrex/autobuild/pull/666) — Document and diagnose self-hosted dispatcher updates
+- [#665](https://github.com/defrex/autobuild/pull/665) — Record changelog entries as per-PR fragments
 - [#664](https://github.com/defrex/autobuild/pull/664) — Suspend live sessions on runner stop and resume them natively
 - [#663](https://github.com/defrex/autobuild/pull/663) — Show the integration tree on the landing page
-- [#661](https://github.com/defrex/autobuild/pull/661) — Keep review ranges scoped to each build after restacks
 - [#662](https://github.com/defrex/autobuild/pull/662) — Record native agent session handles for cross-process continuation
+- [#661](https://github.com/defrex/autobuild/pull/661) — Keep review ranges scoped to each build after restacks
 - [#660](https://github.com/defrex/autobuild/pull/660) — Document operating, seams and configuration on the website
 - [#659](https://github.com/defrex/autobuild/pull/659) — Document builds, dispatch, integration and tickets on the website
 - [#657](https://github.com/defrex/autobuild/pull/657) — Add a documentation section to the website
@@ -26,15 +84,16 @@
 - [#641](https://github.com/defrex/autobuild/pull/641) — Cascade parent changes through descendant node branches
 - [#640](https://github.com/defrex/autobuild/pull/640) — Restack leaf builds at verify entry and while awaiting landing
 - [#639](https://github.com/defrex/autobuild/pull/639) — Open integration node branches and route targeted builds
-- [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
 - [#638](https://github.com/defrex/autobuild/pull/638) — Support node kinds and targets in hosted tickets
+- [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
 - [#636](https://github.com/defrex/autobuild/pull/636) — Reconcile builds by replaying one change onto the refreshed base
-- [#633](https://github.com/defrex/autobuild/pull/633) — Add node tickets and source-local integration targets
 - [#635](https://github.com/defrex/autobuild/pull/635) — Pause unfocused dashboard polling and relax idle refreshes
 - [#634](https://github.com/defrex/autobuild/pull/634) — Reduce idle dispatcher ticks to six store requests
+- [#633](https://github.com/defrex/autobuild/pull/633) — Add node tickets and source-local integration targets
 - [#632](https://github.com/defrex/autobuild/pull/632) — Preserve stable build identity across squash landings
 - [#631](https://github.com/defrex/autobuild/pull/631) — Reduce hosted authentication and repository read overhead
 - [#630](https://github.com/defrex/autobuild/pull/630) — Scope hosted project build listings in Postgres
+
 ## v0.14.0 — 2026-10-17
 
 This release is mostly about performance and efficiency. Reducer values are now served from persisted state, and that is the default read path, so reads no longer have to rebuild state from the full event log. The interactive dashboard reads repository events incrementally instead of re-reading them, and the dispatcher no longer emits idle ticks when nothing has changed, which cuts redundant work and noise.
