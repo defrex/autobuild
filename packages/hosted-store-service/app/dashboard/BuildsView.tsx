@@ -650,7 +650,7 @@ function BuildRow({
       {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
       )}
-      {row.blockers.length > 0 && (
+      {!row.integrationRow && row.status === 'blocked' && row.blockers.length > 0 && (
         <section className="signoff" aria-label={`Escalation for ${row.slug}`}>
           {row.blockers.map((blocker) => (
             <p className="q" key={blocker}>
@@ -706,6 +706,13 @@ function BuildRow({
           )}
         </section>
       )}
+      {!row.integrationRow &&
+        row.status !== 'blocked' &&
+        row.blockers.map((blocker) => (
+          <p className="sub alert" key={blocker}>
+            ! {blocker}
+          </p>
+        ))}
       {awaitingConsent(row) && (
         <LandingSignoff
           slug={row.slug}

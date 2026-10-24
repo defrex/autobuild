@@ -203,6 +203,42 @@ test('blocked rows show complete question, plain explanation and a single answer
   expect(html).toContain('aria-label="Step marks"')
 })
 
+test('auto-merge deferrals remain alerts without escalation controls or stop/resume copy', () => {
+  const row = pinnedBuild({})
+  const reason = 'Auto-merge gate could not apply consent for PR #12: the PR has merge conflicts'
+  row.blockers = [reason]
+  const html = renderBuildsView(row)
+  expect(html).toContain(`<p class="sub alert">! ${reason}</p>`)
+  expect(html).not.toContain('Escalation for')
+  expect(html).not.toContain('The build stopped to ask a person.')
+  expect(html).not.toContain('Answer escalation')
+  expect(html).not.toContain('class="composer"')
+})
+
+test('failed integration nodes keep their integration alert without a duplicate escalation', () => {
+  const row = pinnedBuild({})
+  row.kind = 'integration'
+  row.status = 'blocked'
+  row.integration = 'verification failed'
+  row.blockers = ['verification failed: file a repair child targeting this node']
+  row.integrationRow = {
+    destination: 'main',
+    openChildren: [],
+    children: { known: true, landed: 1, building: 0, queued: 0, total: 1 },
+    verified: false,
+    steps: [{ label: 'verify', state: 'current', qualifier: 'failed' }],
+    alert: { tone: 'red', text: 'unit failed — file a repair child targeting NODE-900' },
+  }
+  const html = renderBuildsView(row)
+  expect(html).toContain('integration-alert alert')
+  expect(html).toContain('unit failed — file a repair child targeting NODE-900')
+  expect(html).not.toContain('! verification failed: file a repair child targeting this node')
+  expect(html).not.toContain('Escalation for')
+  expect(html).not.toContain('The build stopped to ask a person.')
+  expect(html).not.toContain('Answer escalation')
+  expect(html).not.toContain('class="composer"')
+})
+
 test('landing sign-off requires the recorded consent decision and current waiting merge', () => {
   const row = pinnedBuild({})
   row.pr = { url: 'https://forge.example/pr/1', state: 'open' }
