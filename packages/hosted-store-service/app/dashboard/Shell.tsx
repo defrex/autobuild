@@ -8,8 +8,9 @@ export interface OperatorShellProps {
   repositories: readonly string[]
   identity: string
   /** The last poll's wall clock, formatted; absent before the first frame. */
-  menuOpen?: boolean
   clock?: string
+  /** Initial account-menu disclosure for offline presentation fixtures. */
+  menuOpen?: boolean
   pending?: boolean
   error?: string
   onRepo: (repo: string) => void

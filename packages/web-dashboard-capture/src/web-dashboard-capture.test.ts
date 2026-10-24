@@ -198,6 +198,19 @@ function models(): WebFixtureModels {
         build({
           slug: 'integration-ready',
           kind: 'integration',
+          status: 'collecting',
+          integration: 'awaiting consent',
+          landing: {
+            decision: {
+              seq: 10,
+              mode: 'consent',
+              from: 'node',
+              into: { kind: 'root' },
+              labels: [],
+              rule: { default: true },
+              candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+            },
+          },
           integrationRow: {
             destination: 'main',
             openChildren: [],
@@ -699,4 +712,15 @@ test('offline captures use the exact packaged production font files for both rol
   expect(css).toContain("--font-mono: 'ANSI mono'")
   expect(css).not.toContain('local(')
   expect(css).not.toContain('DejaVu')
+})
+
+test('pending node consent frames preserve Land/Hold and disable both while the request settles', async () => {
+  for (const spec of WEB_FRAME_SPECS.filter((frame) =>
+    frame.id.startsWith('integration-consent-pending-'),
+  )) {
+    const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+    expect(html).toContain('class="signoff landing"')
+    expect(html).toMatch(/class="btn primary" disabled="">Land<\/button>/)
+    expect(html).toMatch(/class="btn" disabled="">Hold<\/button>/)
+  }
 })

@@ -605,7 +605,7 @@ textarea {
   color: var(--slack);
   border-color: var(--slack);
 }
-.signoff .btn:disabled {
+.signoff:not(.landing) .btn:disabled {
   background: var(--red-wash);
 }
 .sessions li {

@@ -86,6 +86,12 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 const SCENARIOS: readonly WebFrameSpec[] = [
+  ...['wide', 'narrow'].map((size) => ({
+    id: `integration-consent-pending-${size}`,
+    width: size === 'wide' ? 1440 : 390,
+    height: 4400,
+    requires: ['Landing awaits consent', 'Land', 'Hold'],
+  })),
   ...['wide', 'narrow'].flatMap((size) => [
     {
       id: `builds-menu-${size}`,
@@ -708,6 +714,10 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
 }
 
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
+  if (spec.id.startsWith('integration-consent-pending-'))
+    return shell(builds(models.integration, { pending: 'capture:landing' }), {
+      model: models.integration,
+    })
   if (spec.id.startsWith('integration-detail-')) {
     const state = spec.id.slice('integration-detail-'.length)
     const slug = state === 'wide' || state === 'narrow' ? 'integration-with-pr' : `queue-${state}`

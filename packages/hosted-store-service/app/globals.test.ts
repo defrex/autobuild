@@ -105,3 +105,11 @@ test('ANSI named rules and both palettes stay recorded with the built system', (
     for (const color of Object.values(palette)) expect(design).toContain(color)
   expect(design).not.toMatch(/Teletext|No Hairline|One Cell|dark only/)
 })
+
+test('disabled landing controls retain ground while only escalations use red wash', () => {
+  expect(css).toMatch(/\.btn:disabled\s*\{[^}]*background:\s*var\(--ground\)/)
+  expect(css).toMatch(
+    /\.signoff:not\(\.landing\) \.btn:disabled\s*\{[^}]*background:\s*var\(--red-wash\)/,
+  )
+  expect(css).not.toMatch(/\.signoff \.btn:disabled\s*\{/)
+})

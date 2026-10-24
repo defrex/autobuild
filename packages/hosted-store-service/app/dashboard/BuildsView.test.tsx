@@ -247,3 +247,55 @@ test('Land and Hold forward the existing typed actions and both disable while pe
   for (const control of create(true).props.children[1].props.children)
     expect(control.props.disabled).toBe(true)
 })
+
+test('node landing sign-off follows projected readiness, never an open PR or current merge alone', () => {
+  const row = pinnedBuild({})
+  row.kind = 'integration'
+  row.status = 'collecting'
+  row.pr = { url: 'https://forge.example/pr/node', state: 'open' }
+  row.landing = {
+    decision: {
+      seq: 10,
+      mode: 'consent',
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      rule: { default: true },
+      candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+    },
+  }
+  row.integrationRow = {
+    destination: 'main',
+    openChildren: [],
+    children: { known: true, landed: 1, building: 0, queued: 0, total: 1 },
+    verified: true,
+    steps: [{ label: 'merge', state: 'current', qualifier: 'waiting' }],
+  }
+  for (const state of [
+    'collecting',
+    'verifying',
+    'verification failed',
+    'ready to land',
+    'reparenting',
+  ] as const) {
+    row.integration = state
+    expect(awaitingConsent(row), state).toBe(false)
+    expect(renderBuildsView(row)).not.toContain('class="signoff landing"')
+  }
+  row.integration = 'awaiting consent'
+  expect(awaitingConsent(row)).toBe(true)
+  const html = renderBuildsView(row)
+  expect(html).toContain('class="signoff landing"')
+  expect(html).toContain('>Land</button>')
+  expect(html).toContain('>Hold</button>')
+  row.status = 'paused'
+  expect(awaitingConsent(row)).toBe(false)
+  row.status = 'blocked'
+  expect(awaitingConsent(row)).toBe(false)
+  row.status = 'collecting'
+  row.landing.command = { kind: 'land', seq: 11 }
+  expect(awaitingConsent(row)).toBe(false)
+  delete row.landing.command
+  delete row.landing.decision
+  expect(awaitingConsent(row)).toBe(false)
+})

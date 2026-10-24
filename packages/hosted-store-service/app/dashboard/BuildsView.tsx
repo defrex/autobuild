@@ -1172,16 +1172,14 @@ function Transcript({ value }: { value: TranscriptPresentation }) {
   )
 }
 
-/** The projection exposes a decision only after readiness is established. */
+/** Nodes need the projected readiness state; their merge step alone is not a gate. */
 export function awaitingConsent(build: DashboardBuild): boolean {
-  const merge = (build.integrationRow?.steps ?? build.steps).find((step) => step.label === 'merge')
-  return (
-    build.status === 'running' &&
-    build.landing?.decision?.mode === 'consent' &&
-    build.landing.command?.kind !== 'land' &&
-    merge?.state === 'current' &&
-    merge.qualifier === 'waiting'
-  )
+  if (build.landing?.decision?.mode !== 'consent' || build.landing.command?.kind === 'land')
+    return false
+  if (build.integrationRow)
+    return build.status === 'collecting' && build.integration === 'awaiting consent'
+  const merge = build.steps.find((step) => step.label === 'merge')
+  return build.status === 'running' && merge?.state === 'current' && merge.qualifier === 'waiting'
 }
 
 function AnswerComposer({
