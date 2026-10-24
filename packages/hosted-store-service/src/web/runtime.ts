@@ -1,3 +1,5 @@
+import { humanAccess } from './access'
+import { createOrganizationHandler } from './organizations'
 import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
 import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
 import { createConnectionHandler } from '../connections'
@@ -28,7 +30,18 @@ export function webGateway() {
     getSession: async (headers) => webAuth().api.getSession({ headers }),
     delegate: (request) => hostedService().fetch(request),
   })
-  return gateway
+  const management = createOrganizationHandler({
+    access: humanAccess,
+    getSession: (headers) => webAuth().api.getSession({ headers }),
+  })
+  return {
+    fetch: (request: Request) => {
+      const path = new URL(request.url).pathname
+      return /^\/api\/web\/(orgs(?:\/|$)|projects\/unassigned(?:\/|$))/.test(path)
+        ? management(request)
+        : gateway!.fetch(request)
+    },
+  }
 }
 
 let mcp: ReturnType<typeof createMcpEndpoint> | undefined
@@ -65,7 +78,7 @@ export function connectionEndpoint() {
     baseURL: config.baseURL,
     browser: {
       getSession: (headers) => webAuth().api.getSession({ headers }),
-      allowedEmails: config.allowedEmails,
+      access: humanAccess,
     },
   })
 }

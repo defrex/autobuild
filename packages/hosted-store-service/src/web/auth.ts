@@ -1,21 +1,23 @@
+import { type HumanAccess, accessForEnv } from './access'
 import { APIError, betterAuth, type BetterAuthPlugin } from 'better-auth'
 import { createAuthMiddleware } from 'better-auth/api'
-import { jwt, mcp } from 'better-auth/plugins'
+import { jwt, mcp, organization } from 'better-auth/plugins'
 import { Pool } from 'pg'
 import { clientNameProblem } from './client-name-policy'
-import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
+import { normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
 /** Admission policy is deliberately exported so provider callbacks can be
  * tested without OAuth or a database. */
-export function admittedUser<T extends { email: string }>(
-  allowed: ReadonlySet<string>,
+export async function admittedUser<T extends { email: string }>(
+  access: HumanAccess,
   user: T,
-): false | { data: T } {
-  if (!isAllowedEmail(allowed, user.email)) return false
+): Promise<false | { data: T }> {
+  if (!(await access.principal(user.email))) return false
   return { data: { ...user, email: normalizeEmail(user.email) } }
 }
 
 export interface CreateWebAuthOptions {
+  access?: HumanAccess
   /** Injectable database for tests (better-auth's memoryAdapter); production
    * opens the pg Pool. */
   database?: NonNullable<Parameters<typeof betterAuth>[0]>['database']
@@ -48,6 +50,7 @@ function mcpPluginOptions(
 
 export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuthOptions) {
   const config = parseWebAuthEnv(env)
+  const access = options?.access ?? accessForEnv(env)
   const database = options?.database ?? new Pool({ connectionString: config.postgresURL, max: 5 })
   const auth = betterAuth({
     database,
@@ -66,6 +69,7 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
     },
     user: { changeEmail: { enabled: false } },
     plugins: [
+      organization({ allowUserToCreateOrganization: false }),
       // The pinned 1.4.18 MCP plugin's DCR endpoint writes
       // `authenticationScheme` but its declared oauthApplication schema
       // (dist/plugins/oidc-provider/schema.mjs) omits the field, so the
@@ -132,12 +136,27 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       },
     },
     databaseHooks: {
+      session: {
+        create: {
+          before: async (session) => {
+            const user = await (await auth.$context).internalAdapter.findUserById(session.userId)
+            if (!user || !(await access.principal(user.email))) return false
+            await (await access.store()).materialize(user.id, user.email)
+            return { data: session }
+          },
+        },
+      },
       user: {
-        create: { before: async (user) => admittedUser(config.allowedEmails, user) },
+        create: {
+          before: async (user) => admittedUser(access, user),
+          after: async (user) => {
+            await (await access.store()).materialize(user.id, user.email)
+          },
+        },
         update: {
           before: async (user) => {
             if (typeof user.email !== 'string') return false
-            return admittedUser(config.allowedEmails, user as typeof user & { email: string })
+            return admittedUser(access, user as typeof user & { email: string })
           },
         },
       },
@@ -170,6 +189,25 @@ export function authHTTPHandler(
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     const url = new URL(request.url)
+    // Decode repeatedly to reject encoded separators and nested encodings before
+    // the provider router gets any opportunity to canonicalize the path.
+    let path = url.pathname
+    try {
+      for (let i = 0; i < 8; i++) {
+        const next = decodeURIComponent(path)
+        if (next === path) break
+        path = next
+      }
+    } catch {
+      return new Response(null, { status: 400 })
+    }
+    if (
+      path
+        .replaceAll('\\', '/')
+        .split('/')
+        .some((part) => part.toLowerCase() === 'organization')
+    )
+      return new Response(null, { status: 403 })
     const discovery =
       url.pathname === '/.well-known/oauth-authorization-server' ||
       url.pathname === '/.well-known/oauth-protected-resource'

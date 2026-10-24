@@ -1577,6 +1577,15 @@ Fail-fast cancellation records facts before whole-execution teardown and
 replacement. `kernel/verify-stage-state.ts` owns occurrence/session associations,
 including escalation supersession and complete implement feedback references.
 
+Human access uses `postgres-store/src/organizations.ts` and the shared hosted
+`web/access.ts` policy. Auth schema v4 adds Better Auth organizations/member rows,
+an authoritative normalized-email grant ledger and one project-to-org assignment.
+Successful identity persistence materializes grants into member rows without
+placeholder users or invitations. Mutations and connection decisions serialize
+through the project registry singleton (after the connection row where relevant).
+Admission and project filtering read durable state on each browser request and
+MCP callback; session claims and activeOrganizationId confer no authority.
+
 ## Operator presence
 
 A standing CLI operator operates the builds the repository's dispatcher dispatches.
