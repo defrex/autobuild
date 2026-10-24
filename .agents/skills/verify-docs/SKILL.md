@@ -6,9 +6,15 @@ disable-model-invocation: true
 
 # Verify documentation drift
 
-Run `ab context`. Read the printed manifest, its materialized spec, pinned assets,
-and any guidance. Require nonempty `commitRange.base` and `commitRange.head` in
-that manifest. Use those exact revisions throughout: `git diff <base>..<head>`.
+Run `ab context`, then resolve `context_dir="${AB_CONTEXT_DIR:-.ab}"`
+(unset or empty falls back to `.ab`). Read the printed manifest, normally
+`"$context_dir/context.json"`, and its materialized inputs from that context
+directory: the spec (normally `"$context_dir/spec.md"`), pinned assets, and any
+guidance (normally `"$context_dir/guidance.json"`). Follow printed or
+manifest-allocated paths when they differ; use allocated paths verbatim,
+without adding another context prefix. Quote variable-derived paths and reuse
+or recompute `context_dir` in later shell invocations. Require nonempty
+`commitRange.base` and `commitRange.head` in that manifest. Use those exact revisions throughout: `git diff <base>..<head>`.
 Read surrounding code and docs at both supplied revisions with `git show`.
 Missing or unreadable range, revisions, or diff is a failure. Never substitute
 merge-base, a destination branch, HEAD~1, working-tree changes, or other commits.

@@ -12,8 +12,15 @@ compare the rendered site with the approved design in `design/website/`, using t
 
 ## Session shape
 
-1. Run `ab context`. Read the printed manifest and its materialized spec and
-   pinned assets using their allocated paths. Require readable `commitRange.base`
+1. Run `ab context`, then resolve `context_dir="${AB_CONTEXT_DIR:-.ab}"`
+   (unset or empty falls back to `.ab`). Read the printed manifest, normally
+   `"$context_dir/context.json"`, and its materialized inputs from that context
+   directory. Follow printed or manifest-allocated paths when they differ;
+   use allocated paths verbatim, without adding another context prefix.
+   Quote variable-derived paths and reuse or recompute `context_dir` in later
+   shell invocations.
+   Read its materialized spec (normally `"$context_dir/spec.md"`) and pinned
+   assets using their allocated paths. Require readable `commitRange.base`
    and `commitRange.head` revisions. When `nodeVerification` exists, read its
    `indexPath` and every contribution `specPath`; require the index `range` to
    agree with `commitRange` and its contribution identities, spec revisions,
@@ -22,8 +29,8 @@ compare the rendered site with the approved design in `design/website/`, using t
    full `handPushedCommits` messages, retaining current `sha` and `originalSha`.
    Missing, unreadable or inconsistent required evidence is a failure; do not
    guess paths, specs, identities or another base. Empty contribution and
-   hand-pushed lists are valid. If context materializes `.ab/guidance.json`, this
-   is an
+   hand-pushed lists are valid. If the manifest lists guidance (normally
+   `"$context_dir/guidance.json"`), this is an
    answered escalation for the retried verification: read it first and apply
    the guidance while performing the same capture and inspection below. If the
    file is absent, continue unchanged.
@@ -52,7 +59,8 @@ compare the rendered site with the approved design in `design/website/`, using t
    reference PNG **and** `design/website/README.md`, and the capture must match
    the updated reference (with the font exception below).
    For this purpose only, inspect `git diff <base>..<head>` using the build-owned
-   `commitRange.base` and `commitRange.head` from `.ab/context.json`, never HEAD~1. If context omits the range,
+   `commitRange.base` and `commitRange.head` from the manifest resolved in step 1,
+   never HEAD~1. If context omits the range,
    fail for missing review evidence; do not guess a base. Read the previous
    reference from that base when necessary to establish what changed. A blanket
    reference refresh does not authorize unrelated changes. Never use the diff
