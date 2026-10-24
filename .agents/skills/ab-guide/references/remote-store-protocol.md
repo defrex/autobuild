@@ -1345,7 +1345,10 @@ memberships require an explicit org, including for super users. Members can sele
 their own orgs; super users can select any org. Registration, assignment and
 credential insertion commit atomically. Reconnect requires current project access
 and preserves its assignment; moving projects uses organization management only.
-Unassigned active projects can be reconnected only by super users and remain
-unassigned. Browser lookup and decisions hide foreign projects as unknown
+Previously registered unassigned projects, whether active or removed, can be
+reconnected only by super users and remain unassigned. Any registry history
+distinguishes an existing project from a new one. Assigning its retained history
+to an organization requires the super-user management route after re-registration.
+Browser lookup and decisions hide foreign projects as unknown
 connections, even after resolution. Machine request/poll/cancel/status/revoke
 contracts and existing credentials are unchanged.

@@ -138,14 +138,16 @@ export class PostgresConnectionStore implements ConnectionStore {
     const access = new PostgresOrganizationStore(sql)
     if (!principal.isSuperUser() && !(await access.admitted(principal.email)))
       throw new ConnectionError(403, 'this identity is not allowed')
-    // Registry removal hides a project, but does not release its organization's
-    // ownership of the retained history. Reconnect checks that grant directly.
+    // Registry removal does not release retained history: assigned projects
+    // keep their org grant; existing unassigned projects stay super-user-only.
     const [assignment] = await sql`SELECT p.organization_id, e.email FROM project_organizations p
       LEFT JOIN organization_emails e ON e.organization_id = p.organization_id AND e.email = ${principal.email}
       WHERE p.repo = ${repo}`
     if (
       !principal.isSuperUser() &&
-      (assignment ? !assignment.email : await new PostgresProjectRegistry(sql).has(repo))
+      (assignment
+        ? !assignment.email
+        : (await sql`SELECT 1 FROM project_journal WHERE repo = ${repo} LIMIT 1`).length > 0)
     )
       throw new ConnectionError(404, 'unknown connection')
   }
@@ -169,11 +171,12 @@ export class PostgresConnectionStore implements ConnectionStore {
       const status = new Date(row.expires_at) <= now ? 'expired' : approve ? 'approved' : 'denied'
       if (status === 'approved') {
         const access = new PostgresOrganizationStore(tx as SQL)
-        const active = await new PostgresProjectRegistry(tx as SQL).has(row.repo)
+        const [previous] =
+          await tx`SELECT action FROM project_journal WHERE repo = ${row.repo} ORDER BY seq DESC LIMIT 1`
         const [assignment] =
           await tx`SELECT organization_id FROM project_organizations WHERE repo = ${row.repo}`
         let target = assignment?.organization_id as string | undefined
-        if (active || assignment) {
+        if (previous || assignment) {
           if (organizationId !== undefined && organizationId !== target)
             throw new ConnectionError(400, 'project moves require organization management')
         } else {
@@ -189,8 +192,6 @@ export class PostgresConnectionStore implements ConnectionStore {
           }
           await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!})`
         }
-        const [previous] =
-          await tx`SELECT action FROM project_journal WHERE repo = ${row.repo} ORDER BY seq DESC LIMIT 1`
         if (previous?.action !== 'added')
           await tx`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${row.repo}, 'added', ${actor}, ${now.toISOString()})`
         // A collision aborts the whole transaction, including project registration.

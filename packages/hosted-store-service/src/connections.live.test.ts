@@ -154,6 +154,57 @@ live(
           expect(await projects.has(repo)).toBe(false)
         }
       }
+      // Legacy history has no owning org, including after registry removal.
+      // A fresh member identity keeps these checks independent of rate limits.
+      const legacyMember = access.actor('legacy@example.com')
+      await organizations.addMember(root, orgB.id, legacyMember.email)
+      for (const removed of [false, true]) {
+        const repo = `https://github.com/example/legacy-${removed ? 'removed' : 'active'}`
+        await projects.add(repo, root.email)
+        if (removed) await projects.remove(repo, root.email)
+        const history =
+          await sql`SELECT seq, action, actor FROM project_journal WHERE repo = ${repo} ORDER BY seq`
+        const proposal = await start(repo)
+        email = legacyMember.email
+        expect(await response('lookup', proposal.code)).toEqual(unknownLookup)
+        for (const approve of [false, true]) {
+          for (const organizationId of [undefined, orgB.id]) {
+            expect(await response('decide', proposal.code, { approve, organizationId })).toEqual(
+              unknownDecision,
+            )
+          }
+        }
+        expect(await projects.has(repo)).toBe(!removed)
+        expect(await credentials.list(repo)).toEqual([])
+        expect(await sql`SELECT * FROM project_organizations WHERE repo = ${repo}`).toHaveLength(0)
+        expect(
+          await sql`SELECT seq, action, actor FROM project_journal WHERE repo = ${repo} ORDER BY seq`,
+        ).toEqual(history)
+        email = root.email
+        expect((await response('lookup', proposal.code)).body.connection.status).toBe('pending')
+        // Even a super user must use management to assign retained history.
+        expect(
+          (await response('decide', proposal.code, { approve: true, organizationId: orgB.id }))
+            .status,
+        ).toBe(400)
+        expect(
+          (await response('decide', proposal.code, { approve: true })).body.connection.status,
+        ).toBe('approved')
+        expect(await projects.has(repo)).toBe(true)
+        expect(await sql`SELECT * FROM project_organizations WHERE repo = ${repo}`).toHaveLength(0)
+        expect(await organizations.canAccess(root, repo)).toBe(true)
+        expect(await organizations.canAccess(legacyMember, repo)).toBe(false)
+        expect(
+          (
+            await sql`SELECT seq, action, actor FROM project_journal WHERE repo = ${repo} ORDER BY seq`
+          ).slice(0, history.length),
+        ).toEqual(history)
+        email = legacyMember.email
+        expect(await response('lookup', proposal.code)).toEqual(unknownLookup)
+        expect(await response('decide', proposal.code, { approve: true })).toEqual(unknownDecision)
+        await organizations.assign(root, orgB.id, repo)
+        expect(await organizations.canAccess(legacyMember, repo)).toBe(true)
+      }
     } finally {
       await sql.close()
       await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
