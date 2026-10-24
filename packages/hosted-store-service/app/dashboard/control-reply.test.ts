@@ -4,6 +4,7 @@ import {
   classifyAnswerReply,
   classifyControlReply,
   controlReplyText,
+  type BuildControlReply,
 } from './control-reply'
 
 const slug = 'blocked-build'
@@ -23,6 +24,29 @@ test('a same-build command is the only immediately recorded control success', ()
     classifyControlReply(slug, { kind: 'command', slug, command: 'pause', event: {} }),
   ).toEqual({ kind: 'recorded' })
 })
+
+for (const command of ['land', 'hold'] as const) {
+  test(`${command} replies with recorded landing events are recognized as success`, () => {
+    const reply = {
+      kind: 'command',
+      slug,
+      command,
+      event: {
+        build: slug,
+        seq: 12,
+        ts: '2026-10-24T12:00:00.000Z',
+        actor: { kind: 'human', user: 'operator' },
+        ...(command === 'land'
+          ? { type: 'build.land-requested', payload: { decisionSeq: 10 } }
+          : { type: 'build.hold-requested', payload: {} }),
+      },
+    } satisfies BuildControlReply
+
+    expect(classifyControlReply(slug, reply)).toEqual({ kind: 'recorded' })
+    expect(classifyControlReply('other-build', reply).kind).toBe('unexpected')
+    expect(classifyControlReply(slug, { ...reply, event: null }).kind).toBe('unexpected')
+  })
+}
 
 test('malformed, mismatched, and unrecorded replies are preserved as compact errors', () => {
   const replies = [
