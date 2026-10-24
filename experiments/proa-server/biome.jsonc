@@ -1,0 +1,7 @@
+{
+  "root": false,
+  "extends": "//",
+  "files": {
+    "includes": ["**", "!design/ansi", "!styles/input.css", "!public/styles.css"]
+  }
+}
