@@ -1,19 +1,20 @@
+import { testAccess } from '../testing/access'
 import { describe, expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { createWebAuth, admittedUser } from './auth'
 import { CLIENT_NAME_MAX_LENGTH } from './client-name-policy'
 
 describe('GitHub identity admission', () => {
-  test('accepts and normalizes an allowed current provider email', () => {
+  test('accepts and normalizes an admitted current provider email', async () => {
     expect(
-      admittedUser(new Set(['ada@example.com']), { email: ' Ada@Example.COM ', name: 'Ada' }),
+      await admittedUser(testAccess(testEnv), { email: ' Ada@Example.COM ', name: 'Ada' }),
     ).toEqual({
       data: { email: 'ada@example.com', name: 'Ada' },
     })
   })
 
-  test('refuses an identity before user or session creation', () => {
-    expect(admittedUser(new Set(['ada@example.com']), { email: 'mallory@example.com' })).toBe(false)
+  test('refuses an identity before user or session creation', async () => {
+    expect(await admittedUser(testAccess(testEnv), { email: 'mallory@example.com' })).toBe(false)
   })
 })
 
@@ -27,7 +28,7 @@ const testEnv: Record<string, string> = {
   GITHUB_CLIENT_ID: 'github-client-canary',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: 'https://github.com/owner/repo',
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
@@ -42,6 +43,7 @@ describe('advertised jwks_uri resolves (AUT-369)', () => {
   // The real instance on the memory adapter — the plugin configuration under
   // test is createWebAuth's, not a mock.
   const auth = createWebAuth(testEnv, {
+    access: testAccess(testEnv),
     database: memoryAdapter({
       user: [],
       session: [],
@@ -97,7 +99,7 @@ describe('DCR client-name policy (AUT-399)', () => {
     oauthAccessToken: [],
     oauthConsent: [],
   }
-  const auth = createWebAuth(testEnv, { database: memoryAdapter(db) })
+  const auth = createWebAuth(testEnv, { access: testAccess(testEnv), database: memoryAdapter(db) })
 
   async function registerClient(body: Record<string, unknown>): Promise<Response> {
     return await auth.handler(
@@ -209,5 +211,75 @@ describe('discovery HTTP adapter', () => {
         throw new Error('upstream')
       }, 'good')(request),
     ).rejects.toThrow('upstream')
+  })
+})
+
+describe('organization admission and raw provider boundary', () => {
+  test('raw organization APIs never reach the provider router', async () => {
+    const { authHTTPHandler } = await import('./auth')
+    let called = 0
+    const handler = authHTTPHandler(async () => {
+      called++
+      return Response.json({})
+    }, `${ORIGIN}/api/auth/jwks`)
+    for (const path of [
+      'organization/create',
+      'organization/add-member',
+      'organization/invite-member',
+      '%6frganization/create',
+      'organization%2fcreate',
+      '%256frganization/create',
+      'x/../organization/create',
+    ]) {
+      expect(
+        (await handler(new Request(`${ORIGIN}/api/auth/${path}`, { method: 'POST' }))).status,
+      ).toBe(403)
+    }
+    expect(called).toBe(0)
+  })
+  test('email grants admit before sign-in and session creation rechecks removal', async () => {
+    const { HumanAccess } = await import('./access')
+    const fixture = testAccess(testEnv)
+    const store = await fixture.store()
+    const grants = new Set(['member@example.com'])
+    const synchronized: string[] = []
+    store.admitted = async (email) => grants.has(email)
+    store.materialize = async (_id, email) => {
+      synchronized.push(email)
+    }
+    const access = new HumanAccess(async () => store, testEnv)
+    const db = {
+      user: [],
+      session: [],
+      account: [],
+      verification: [],
+      jwks: [],
+      oauthApplication: [],
+      oauthAccessToken: [],
+      oauthConsent: [],
+      organization: [],
+      member: [],
+      invitation: [],
+    }
+    const auth = createWebAuth(testEnv, { database: memoryAdapter(db), access })
+    const ctx = await auth.$context
+    const user = await ctx.internalAdapter.createUser({
+      email: ' MEMBER@Example.com ',
+      name: 'Member',
+      emailVerified: true,
+    })
+    expect(user.email).toBe('member@example.com')
+    expect(synchronized).toEqual(['member@example.com'])
+    expect(await ctx.internalAdapter.createSession(user.id)).toBeTruthy()
+    grants.clear()
+    expect(await ctx.internalAdapter.createSession(user.id)).toBeNull()
+    expect(await access.principal(user.email)).toBeNull()
+    expect(
+      await ctx.internalAdapter.createUser({
+        email: 'outsider@example.com',
+        name: 'No',
+        emailVerified: true,
+      }),
+    ).toBeNull()
   })
 })

@@ -69,7 +69,7 @@ export function devEnv(): Record<string, string> {
     BETTER_AUTH_SECRET: 'web-dev-better-auth-secret-0123456789abcdefghij',
     BETTER_AUTH_URL: WEB_ORIGIN,
     AB_WEB_AUTH_PROVIDERS: 'github',
-    AB_WEB_ALLOWED_EMAILS: IDENTITY,
+    AB_WEB_SUPER_USER_EMAILS: IDENTITY,
     AB_WEB_REPOSITORIES: Object.values(REPOSITORIES).join(','),
     GITHUB_CLIENT_ID: 'web-dev-placeholder',
     GITHUB_CLIENT_SECRET: 'web-dev-placeholder',

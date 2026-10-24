@@ -116,7 +116,7 @@ export async function checkHostedServicePackaging() {
       AB_S3_ACCESS_KEY_ID: 'unused',
       AB_S3_SECRET_ACCESS_KEY: 'unused',
       AB_WEB_AUTH_PROVIDERS: 'github',
-      AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+      AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
       AB_WEB_REPOSITORIES: 'https://github.com/owner/repo',
       NEXT_TELEMETRY_DISABLED: '1',
     }

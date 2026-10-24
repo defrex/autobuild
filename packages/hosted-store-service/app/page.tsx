@@ -1,7 +1,6 @@
-import { hostedService } from '@defrex/autobuild-hosted-store-service/web/runtime'
+import { humanAccess, validSession } from '@defrex/autobuild-hosted-store-service/web/access'
 import { selectedProject, projectLink } from './dashboard/project-selection'
 import { webAuth } from '@defrex/autobuild-hosted-store-service/web/auth'
-import { isAllowedEmail, parseWebAuthEnv } from '@defrex/autobuild-hosted-store-service/web/config'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { DashboardClient } from './dashboard/DashboardClient'
@@ -15,11 +14,10 @@ export default async function DashboardPage({
 }) {
   const requestHeaders = await headers()
   const session = await webAuth().api.getSession({ headers: requestHeaders })
-  if (!session) redirect('/sign-in')
-  const config = parseWebAuthEnv(process.env)
-  if (!isAllowedEmail(config.allowedEmails, session.user.email))
-    redirect('/sign-in?error=access_denied')
-  const repositories = (await hostedService().projects.list()).map((entry) => entry.repo)
+  if (!session || !validSession(session)) redirect('/sign-in')
+  const principal = await humanAccess.principal(session.user.email)
+  if (!principal) redirect('/sign-in?error=access_denied')
+  const repositories = await humanAccess.projects(principal)
   const query = await searchParams
   const requested = typeof query.repo === 'string' ? query.repo : undefined
   const initialSelection = selectedProject(repositories, requested)
