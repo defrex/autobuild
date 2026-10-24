@@ -222,9 +222,8 @@ product code, and the web app has a recorded design system. Any change under
   code. Use its refinement commands (`polish`, `adapt`, `harden`, `clarify`,
   `critique`, `audit`) as the task calls for them.
 - **`DESIGN.md` is the visual authority.** Extend the recorded system through
-  the tokens in `packages/hosted-store-service/app/globals.css`, the cell grid, and the named rules. Never
-  add a second face, a second size, a hairline border, a shadow, a gradient,
-  an icon set, or an emoji glyph.
+  the tokens in `packages/hosted-store-service/app/globals.css`, the typography, structural rules, and named rules in `DESIGN.md`. Never
+  add a shadow, a gradient, an icon set, or an emoji glyph.
 - **Visual-world changes are human decisions.** Replacing the recorded world,
   running a direction round, or opening a decision page (`shape` of a new
   surface, `bolder`, `overdrive`, `live`, or a redesign) needs a human at the
