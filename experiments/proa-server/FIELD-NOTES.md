@@ -157,7 +157,7 @@ exports a distinct executable before releasing the flock lock; concurrent gate
 and capture runs serialized, with distinct exports. Shared dependency artifacts
 never serve directly as the capture executable.
 
-**Unresolved acceptance criterion: cross-worktree linked reuse.** The second
+**Measured limitation: cross-worktree linked reuse.** The second
 worktree at the exact same commit, sharing the identical absolute
 CARGO_TARGET_DIR, reused ordinary Cargo dependencies (clippy 0.22s; tests 1.47s).
 But its first linked test rebuilt dependencies, taking 26.20/19.84s and reporting
@@ -173,9 +173,14 @@ rsjs_ir 0.2.0 build.rs canonically encodes RequestedRootTarget.package. Thus a
 new worktree path gets a new linked namespace despite sharing CARGO_TARGET_DIR.
 Also --offline is an invocation identity input, explaining the separate initial
 capture namespace. The source confirms the observed cold rebuild; a stable
-cache directory alone does not meet the acceptance criterion. Fixing this needs
-an explicit decision about Proa cache identity/toolchain changes or the cache
-requirement. Do not claim the gate ticket complete until resolved.
+cache directory alone does not provide linked cross-worktree reuse.
+
+Operator guidance for implement round 1 accepts partial reuse: ordinary Cargo
+dependency reuse satisfies the intent of avoiding a cold dependency graph on
+every build. Keep the shared CARGO_TARGET_DIR, pinned toolchain and linked builds;
+do not patch Proa or move builds to a fixed checkout. The measured linked rebuild
+(roughly 20–26 seconds per stage) is an accepted Proa 0.1.3 limitation to revisit
+on a later Proa upgrade.
 
 Capture implementation details: probes inspect only painted text/borders (zero
 width borders and inherited colors on textless elements are not painted).

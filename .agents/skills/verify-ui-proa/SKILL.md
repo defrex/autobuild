@@ -19,6 +19,11 @@ The kernel has selected this step. Do not inspect Git or decide applicability.
    verify-report.md. A nonzero exit, missing inventory/probes, incomplete route or
    state matrix, or missing/empty PNG is a failure. Do not skip or reinterpret it.
    Dependencies must already be provisioned locally; capture resolves offline.
+   The shared CARGO_TARGET_DIR reuses ordinary Cargo dependencies across worktrees.
+   Pinned Proa 0.1.3 hashes absolute package paths, so linked targets rebuild in
+   new worktrees (about 20–26 seconds per measured stage). Operator guidance
+   accepts partial reuse; retain linked builds and revisit on a Proa upgrade.
+   See experiments/proa-server/FIELD-NOTES.md for measurements and cause.
    Today database=none and auth=none. When data reading exists, require an explicit
    adapter seeding a dedicated loopback PostgreSQL database from the existing
    prepareHappyScenario/prepareScenario producers BEFORE starting Rust. When
