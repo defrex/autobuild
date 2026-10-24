@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureFrames } from './capture'
-import { checkRoutes, frames, palette } from './capture-cases'
+import { captureFrames, decodePng } from './capture'
+import { checkRoutes, checkFrameMatrix, frames, palette } from './capture-cases'
 import { project } from './verify'
 
 test('route inventory rejects new and unsupported route declarations', async () => {
@@ -72,3 +72,25 @@ for (const [name, injection, expected] of [
       await rm(output, { recursive: true, force: true })
     }
   }, 30000)
+
+test('missing matrix entries and missing screenshots cannot pass', () => {
+  expect(() => checkFrameMatrix(frames.slice(1))).toThrow('Incomplete frame matrix')
+  expect(() => checkFrameMatrix([...frames, frames[0]!])).toThrow('Duplicate frame')
+  for (const data of [undefined, '', Buffer.from('not an image').toString('base64')])
+    expect(() => decodePng(data)).toThrow('Missing/empty PNG')
+})
+test('failed Chromium startup cleans its profile', async () => {
+  const output = await mkdtemp(join(tmpdir(), 'proa-startup-fixture-'))
+  const previous = process.env.CHROMIUM_BIN
+  process.env.CHROMIUM_BIN = '/bin/false'
+  try {
+    await expect(captureFrames('http://127.0.0.1:1', output)).rejects.toThrow(
+      'Chromium exited before readiness',
+    )
+    await expect(readFile(join(output, 'profile/DevToolsActivePort'))).rejects.toThrow()
+  } finally {
+    if (previous === undefined) delete process.env.CHROMIUM_BIN
+    else process.env.CHROMIUM_BIN = previous
+    await rm(output, { recursive: true, force: true })
+  }
+})

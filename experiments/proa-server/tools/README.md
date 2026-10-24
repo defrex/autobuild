@@ -24,6 +24,12 @@ the OS releases the lock on process exit, including crashes. Each build exports
 its own executable under ignored root .ab/proa-build-* before releasing the lock.
 Never capture a mutable executable directly from the shared cache.
 
+Known unresolved limitation: pinned Proa 0.1.3 hashes the absolute package path
+into its linked descriptor/final namespaces. Ordinary Cargo artifacts reuse
+across worktrees; linked dependencies currently rebuild in a new worktree.
+Same-worktree reuse works. See FIELD-NOTES.md for the two-worktree measurements;
+this does not yet satisfy the ticket's cross-build cache acceptance criterion.
+
 Capture evidence is under the printed .ab/proa-frames-* directory, including
 inventory.json, verify-report.md and eight PNGs. Each run owns a server port,
 Chromium profile and exported executable. Process cleanup runs in finally and

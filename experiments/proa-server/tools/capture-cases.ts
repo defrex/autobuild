@@ -28,10 +28,26 @@ export function checkRoutes(source: string) {
     JSON.stringify(discovered) !== JSON.stringify(Object.keys(routes).sort())
   )
     throw Error('Unclassified route: extend route classification and capture cases')
-  for (const [route, kind] of Object.entries(routes))
-    if (kind === 'html' && !frames.some((f) => f.route === route))
-      throw Error(`Missing page cases: ${route}`)
+  checkFrameMatrix(frames)
 }
+export function checkFrameMatrix(cases: typeof frames) {
+  if (new Set(cases.map((f) => f.id)).size !== cases.length) throw Error('Duplicate frame id')
+  for (const [route, kind] of Object.entries(routes)) {
+    if (kind !== 'html') continue
+    for (const width of [1440, 390])
+      for (const theme of ['light', 'dark'])
+        for (const state of ['closed', 'open']) {
+          if (
+            cases.filter(
+              (f) =>
+                f.route === route && f.width === width && f.theme === theme && f.state === state,
+            ).length !== 1
+          )
+            throw Error(`Incomplete frame matrix: ${route} ${width} ${theme} ${state}`)
+        }
+  }
+}
+
 export function palette(reference: string, theme: string): string[] {
   const selector =
     theme === 'light' ? ':root, :root[data-theme="light"]' : ':root[data-theme="dark"]'
@@ -78,8 +94,8 @@ export function probe(colors: string[], state: string, theme: string) {
       continue
     if (innerWidth === 390 && (rect.left < -0.5 || rect.right > innerWidth + 0.5))
       failures.push(`Overflow: ${el.tagName}`)
-    if ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent?.trim()))
-      textNodes.push(el)
+    const paintsText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent?.trim())
+    if (paintsText) textNodes.push(el)
     for (const pseudo of [null, '::before', '::after']) {
       const s = pseudo ? getComputedStyle(el, pseudo) : style
       if (pseudo && ['none', 'normal'].includes(s.content)) continue
@@ -105,6 +121,18 @@ export function probe(colors: string[], state: string, theme: string) {
         'stroke',
       ]) {
         if (
+          (property === 'color' || property === 'text-decoration-color') &&
+          !paintsText &&
+          !pseudo
+        )
+          continue
+        if (property === 'text-decoration-color' && s.textDecorationLine === 'none') continue
+        if (
+          property.startsWith('border-') &&
+          s.getPropertyValue(property.replace('color', 'width')) === '0px'
+        )
+          continue
+        if (
           property.startsWith('border-') &&
           s.getPropertyValue(property.replace('color', 'style')) === 'none'
         )
@@ -117,6 +145,7 @@ export function probe(colors: string[], state: string, theme: string) {
           failures.push(`Forbidden ${property}: ${value}`)
       }
       if (
+        (paintsText || pseudo) &&
         !s.fontFamily.includes('Atkinson Hyperlegible Next') &&
         !s.fontFamily.includes('JetBrains Mono')
       )

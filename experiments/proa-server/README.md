@@ -65,5 +65,6 @@ the SIL Open Font License 1.1; full licenses are adjacent in `public/fonts/`.
 No application asset or font is requested from a third party.
 
 Automated Rust and visual gates are described in [tools/README.md](tools/README.md).
-They capture the actual server and reuse a shared Cargo cache across worktrees.
+They capture the actual server and share ordinary Cargo artifacts across worktrees.
+Proa linked dependencies still rebuild for a new worktree; see the field notes.
 See [FIELD-NOTES.md](FIELD-NOTES.md) for measured tooling behavior.

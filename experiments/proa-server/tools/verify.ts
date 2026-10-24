@@ -102,6 +102,7 @@ export async function build(capture = false): Promise<string> {
     ? []
     : [
         ['proa', 'fmt', '--check', '--verify', 'src'],
+        ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],
         ['cargo', 'clippy', '--locked', '--all-targets', '--', '-D', 'warnings'],
         ['cargo', 'test', '--locked'],

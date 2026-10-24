@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { build, project, root } from './verify'
-import { checkRoutes, frames, palette, probe } from './capture-cases'
+import { checkRoutes, checkFrameMatrix, frames, palette, probe } from './capture-cases'
 
 interface Reply {
   result: { value: ReturnType<typeof probe> & boolean }
@@ -76,6 +76,7 @@ export async function capture() {
 }
 
 export async function captureFrames(origin: string, output: string) {
+  checkFrameMatrix(frames)
   let browser: ReturnType<typeof Bun.spawn> | undefined
   let socket: WebSocket | undefined
   const profile = join(output, 'profile')
@@ -102,6 +103,7 @@ export async function captureFrames(origin: string, output: string) {
     )
     let debugPort = ''
     for (let i = 0; i < 200; i++) {
+      if (browser.exitCode !== null) throw Error('Chromium exited before readiness')
       try {
         debugPort = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]!
         break
@@ -150,6 +152,12 @@ export async function captureFrames(origin: string, output: string) {
         return
       }
       if (r.method === 'Fetch.requestPaused') {
+        // Chromium invents an implicit favicon request for pages with no icon.
+        // It is not an application asset; leave explicit Image requests checked.
+        if (r.params.resourceType === 'Other' && r.params.request.url === `${origin}/favicon.ico`) {
+          void send('Fetch.fulfillRequest', { requestId: r.params.requestId, responseCode: 204 })
+          return
+        }
         const local = r.params.request.url.startsWith(`${origin}/`)
         if (!local) errors.push(`External request: ${r.params.request.url}`)
         void send(local ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
@@ -193,7 +201,7 @@ export async function captureFrames(origin: string, output: string) {
         features: [{ name: 'prefers-color-scheme', value: frame.theme }],
       })
       await send('Page.addScriptToEvaluateOnNewDocument', {
-        source: `localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)});document.documentElement.dataset.theme=${JSON.stringify(frame.theme)}`,
+        source: `localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)})`,
       })
       await send('Page.navigate', { url: origin + frame.route })
       let loaded = false
@@ -243,9 +251,7 @@ export async function captureFrames(origin: string, output: string) {
         clip: { x: 0, y: 0, width: frame.width, height: result.height, scale: 1 },
       })
       const png = join(output, `${frame.id}.png`)
-      const bytes = Buffer.from(shot.data || '', 'base64')
-      if (bytes.length < 100 || bytes.subarray(1, 4).toString() !== 'PNG')
-        throw Error('Missing/empty PNG')
+      const bytes = decodePng(shot.data)
       await Bun.write(png, bytes)
       inventory.push({ ...frame, png, probe: result, fonts: [...fonts] })
     }
@@ -263,5 +269,11 @@ export async function captureFrames(origin: string, output: string) {
     process.removeListener('SIGINT', cleanup)
     await rm(profile, { recursive: true, force: true })
   }
+}
+export function decodePng(data?: string) {
+  const bytes = Buffer.from(data || '', 'base64')
+  if (bytes.length < 100 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a')
+    throw Error('Missing/empty PNG')
+  return bytes
 }
 if (import.meta.main) console.log(await capture())
