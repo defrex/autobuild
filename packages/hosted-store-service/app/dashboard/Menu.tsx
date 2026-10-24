@@ -4,9 +4,17 @@ import { THEMES } from '../theme'
 import { useTheme } from '../ThemeProvider'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
-export interface MenuItem {
+export interface MenuLink {
+  label: string
+  href: string
+}
+export interface MenuAction {
   label: string
   onSelect: () => void
+}
+export interface MenuGroup {
+  label?: string
+  items: readonly MenuLink[]
 }
 
 /**
@@ -18,12 +26,14 @@ export interface MenuItem {
  */
 export function Menu({
   label,
-  items,
+  groups,
+  actions,
   className,
   initiallyOpen = false,
 }: {
   label: ReactNode
-  items: readonly MenuItem[]
+  groups: readonly MenuGroup[]
+  actions: readonly MenuAction[]
   /** Initial disclosure state also used by offline presentation fixtures. */
   initiallyOpen?: boolean
   /** Extra class on the wrapper for placement. */
@@ -46,7 +56,7 @@ export function Menu({
   }, [open])
 
   useEffect(() => {
-    if (open) listRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    if (open) listRef.current?.querySelector<HTMLElement>('[role^=menuitem]')?.focus()
   }, [open])
 
   const close = () => {
@@ -55,8 +65,8 @@ export function Menu({
   }
 
   const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    const buttons = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    const buttons = [...(listRef.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
+    const index = buttons.indexOf(document.activeElement as HTMLElement)
     if (event.key === 'Escape' || event.key === 'Tab') {
       event.preventDefault()
       close()
@@ -91,6 +101,28 @@ export function Menu({
       </button>
       {open && (
         <div ref={listRef} className="menu-list" role="menu" id={listId} onKeyDown={onListKey}>
+          {groups.map((group, index) => (
+            <fieldset
+              key={group.label ?? 'Navigation'}
+              className="menu-group"
+              aria-label={group.label ?? 'Navigation'}
+            >
+              {index > 0 && <div className="rule" />}
+              {group.label && <div className="menu-label-heading">{group.label}</div>}
+              {group.items.map((item) => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  role="menuitem"
+                  className="word menu-item"
+                  onClick={close}
+                >
+                  {item.label}
+                </a>
+              ))}
+            </fieldset>
+          ))}
+          <div className="rule" />
           <div className="menu-label-heading">Theme</div>
           <fieldset className="theme-choices" aria-label="Theme">
             {THEMES.map((choice) => (
@@ -107,7 +139,7 @@ export function Menu({
             ))}
           </fieldset>
           <div className="rule" />
-          {items.map((item) => (
+          {actions.map((item) => (
             <button
               key={item.label}
               type="button"
@@ -118,7 +150,7 @@ export function Menu({
                 item.onSelect()
               }}
             >
-              <span className="menu-label">{item.label}</span>
+              {item.label}
             </button>
           ))}
         </div>

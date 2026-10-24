@@ -77,7 +77,10 @@ live(
       expect(await connections.lookup(missing, root.email, root)).toBeNull()
       const unknownLookup = await response('lookup', missing)
       const unknownDecision = await response('decide', missing, { approve: true })
-      expect(unknownLookup).toEqual({ status: 200, body: { connection: null } })
+      expect(unknownLookup).toEqual({
+        status: 200,
+        body: { connection: null, assignment: 'fixed', organizations: [] },
+      })
       expect(unknownDecision).toEqual({ status: 404, body: { error: 'unknown connection' } })
 
       for (const removed of [false, true]) {

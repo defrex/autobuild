@@ -574,9 +574,11 @@ and recording continuity before resuming build-related ticket writes.
 
 The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
 Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
-are deployment maintainers. Bootstrap the first organization through the
-[browser management contract](operator-api.md#organization-management-browser),
-then add members by email and assign legacy unassigned projects. Super users alone
+are deployment maintainers. Open Organizations from the account menu to create
+the first organization, then Members to add people by email and choose an owner,
+and Projects to assign legacy unassigned projects. The
+[browser management contract](operator-api.md#organization-management-browser)
+also documents the underlying HTTP routes. Super users alone
 create orgs, set or clear the single owner, and assign or move projects. Owners
 manage their org's members. Removing the last membership or super-user designation
 revokes human access on the next request without re-login; existing project
