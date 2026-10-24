@@ -1,3 +1,4 @@
+import { testAccess } from '../../../src/testing/access'
 import { describe, expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { registeredClientName, type AuthContextLike } from './client-name'
@@ -106,7 +107,7 @@ const realAuthEnv: Record<string, string> = {
   GITHUB_CLIENT_ID: 'github-client-canary',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: 'https://github.com/owner/repo',
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
@@ -130,6 +131,7 @@ describe('registeredClientName — through a real better-auth adapter', () => {
   }
 
   const auth = createWebAuth(realAuthEnv, {
+    access: testAccess(realAuthEnv),
     database: memoryAdapter({
       user: [],
       session: [],

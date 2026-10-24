@@ -42,6 +42,10 @@
     "./web/mcp": {
       "types": "./src/web/mcp.ts",
       "import": "./src/web/mcp.ts"
+    },
+    "./web/access": {
+      "types": "./src/web/access.ts",
+      "import": "./src/web/access.ts"
     }
   },
   "bin": {

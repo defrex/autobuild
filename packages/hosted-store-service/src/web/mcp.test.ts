@@ -1,3 +1,4 @@
+import { testAccess } from '../testing/access'
 import { testProjects } from '../testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
@@ -13,7 +14,7 @@ const env = {
   GITHUB_CLIENT_ID: 'client',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: 'https://github.com/owner/repo',
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
@@ -22,7 +23,7 @@ const config = {
   secret: '0123456789abcdef0123456789abcdef',
   baseURL: 'https://operator.example',
   providers: ['github' as const],
-  allowedEmails: new Set(['ada@example.com']),
+  superUserEmails: new Set(['ada@example.com']),
   repositories: ['https://github.com/owner/repo'],
   github: { clientId: 'client', clientSecret: 'github-secret-canary' },
   postgresURL: 'postgres://database-canary',
@@ -135,6 +136,13 @@ function endpoint(
   } = {},
 ) {
   return createMcpEndpoint({
+    access: testAccess(
+      {
+        ...env,
+        AB_WEB_SUPER_USER_EMAILS: [...(overrides.config ?? config).superUserEmails].join(','),
+      },
+      overrides.projects ?? testProjects(['https://github.com/owner/repo']),
+    ),
     projects: overrides.projects ?? testProjects(['https://github.com/owner/repo']),
     config: overrides.config ?? config,
     auth,
@@ -583,7 +591,7 @@ describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
       Promise.resolve({ name: 'Contract Canary Console' }),
     )
     await throughEndpoint(auth)
-    expect(lookups.length).toBe(1)
+    expect(lookups.length).toBe(2)
     expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
   })
 
@@ -604,7 +612,7 @@ describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
     }
     const { auth, lookups } = capturingAuth(() => Promise.resolve(null), { session: otherSession })
     await throughEndpoint(auth)
-    expect(lookups.length).toBe(1)
+    expect(lookups.length).toBe(2)
     expect(lookups[0]).toEqual(expectedLookup('another-canary-client'))
   })
 
@@ -737,7 +745,7 @@ test('repositories.list and tool gates query current registry for each allowed o
     let delegated = 0
     const service = endpoint(fakeAuth({ user: { ...USER, email } }), {
       projects,
-      config: { ...config, allowedEmails: new Set(['ada@example.com', 'grace@example.com']) },
+      config: { ...config, superUserEmails: new Set(['ada@example.com', 'grace@example.com']) },
       delegate: async () => {
         delegated++
         return Response.json({ ok: true })
@@ -806,4 +814,57 @@ test('tickets.get comments survive MCP tool serialization', async () => {
   )
   const decoded = (await jsonOf(response)) as { result: { content: { text: string }[] } }
   expect(JSON.parse(decoded.result.content[0]!.text)).toEqual(detail)
+})
+
+test('every generic callback and discovery rechecks admission with the same token', async () => {
+  const mutableEnv = { ...env }
+  const projects = testProjects(['https://github.com/owner/repo'])
+  const access = testAccess(mutableEnv, projects)
+  let delegated = 0
+  const endpoint = createMcpEndpoint({
+    config,
+    auth: fakeAuth(),
+    access,
+    projects,
+    storeSecret: env.AB_STORE_SECRET,
+    now: clock,
+    delegate: async () => {
+      delegated++
+      return Response.json({ ok: true })
+    },
+    entries: TOOLS.filter((entry) => ['repository.status', 'builds.list'].includes(entry.name)),
+  })
+  const call = (name: string, args: unknown = {}) =>
+    endpoint.fetch(
+      new Request('https://operator.example/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: 'Bearer mcp-access-token',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: args },
+        }),
+      }),
+    )
+  expect((await (await call('repositories.list')).json()).result.isError).not.toBe(true)
+  // Membership can retain admission after super-user removal, but it cannot
+  // retain the former super user's repository-wide authority.
+  mutableEnv.AB_WEB_SUPER_USER_EMAILS = 'replacement@example.com'
+  const store = await access.store()
+  store.admitted = async () => true
+  for (const name of ['repository.status', 'builds.list']) {
+    const result = await (await call(name, { repo: 'https://github.com/owner/repo' })).json()
+    expect(result.result.isError).toBe(true)
+  }
+  expect(delegated).toBe(0)
+  expect(
+    JSON.parse((await (await call('repositories.list')).json()).result.content[0].text),
+  ).toEqual({ repositories: [] })
+  store.admitted = async () => false
+  expect((await call('repositories.list')).status).toBe(403)
 })

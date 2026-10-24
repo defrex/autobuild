@@ -46,6 +46,10 @@
     "./request-context": {
       "types": "./src/request-context.ts",
       "import": "./src/request-context.ts"
+    },
+    "./organizations": {
+      "types": "./src/organizations.ts",
+      "import": "./src/organizations.ts"
     }
   },
   "bin": {
