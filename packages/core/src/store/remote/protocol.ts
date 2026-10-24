@@ -1,3 +1,7 @@
+import { operatorIdentitySchema, operatorPresenceSchema } from '../operator-presence'
+export const operatorPresenceBodySchema = operatorIdentitySchema
+export const operatorPresenceWireSchema = operatorPresenceSchema
+export const operatorPresenceListSchema = operatorPresenceSchema.array()
 import { compatibilityMetadataSchema } from '../../events/policy'
 /**
  * The wire protocol of the remote BuildStore (SPEC §7.2 adapter 2): JSON

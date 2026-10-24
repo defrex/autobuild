@@ -1,3 +1,4 @@
+import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { formatRuntimeIdentity } from '../events/runtime'
@@ -31,6 +32,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
+  operator: { registrations: Array<OperatorPresence & { heartbeatAgeMs: number }> }
   repo: string
   upgrades: DispatchUpgradeState
   rollbackHold?: DispatchUpgradeState['lastRollback']
@@ -114,6 +116,7 @@ export function projectRepositoryStatus(
       : {}),
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
+    operator: { registrations: [] },
     upgrades: dispatchUpgradeReducer.reduce(events),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
@@ -148,6 +151,7 @@ export function repositoryStatusFromFacts(
   const warningLines = facts.status ? forgeReadinessWarnings(facts.status) : []
   return {
     repo,
+    operator: { registrations: [] },
     upgrades: facts.upgrades,
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
@@ -207,6 +211,9 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
   return [
+    status.operator.registrations.length
+      ? `operator: present (${status.operator.registrations.length} registrations)`
+      : 'operator: absent',
     ...(status.upgrades.lastRollback
       ? [
           `runtime rollback: ${status.upgrades.lastRollback.payload.failed.version} → ${status.upgrades.lastRollback.payload.restored.version}; ${status.upgrades.lastRollback.payload.reason}`,
@@ -350,16 +357,17 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
   await withSessionlessStore(opts, async ({ store, repo }) => {
     // A fresh store has no repository row. Do not call ensureRepo: this query's
     // empty-stream defaults must remain a genuinely read-only operation.
-    const { dispatcher } = await readDispatcherLiveness(store, repo, opts.now?.())
+    const observedAt = opts.now?.() ?? new Date()
+    const { dispatcher } = await readDispatcherLiveness(store, repo, observedAt)
     const facts = (await readRepositoryFacts(store, repo)).value
     const status = repositoryStatusFromFacts(repo, facts, dispatcher)
-    const capacity = await readRepositoryCapacity(
-      store,
-      repo,
-      facts,
-      dispatcher,
-      opts.now?.() ?? new Date(),
-    )
+    status.operator.registrations = (await store.listOperatorPresence(repo))
+      .map((row) => ({
+        ...row,
+        heartbeatAgeMs: Math.max(0, observedAt.getTime() - Date.parse(row.heartbeatAt)),
+      }))
+      .filter((row) => row.heartbeatAgeMs < OPERATOR_PRESENCE_TTL_MS)
+    const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, observedAt)
     if (capacity) status.capacity = capacity
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))

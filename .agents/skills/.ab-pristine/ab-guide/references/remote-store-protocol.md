@@ -40,7 +40,7 @@ headers, or available backend.
   `[store] url` (in that precedence order, before the local default); the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
-  `X-Autobuild-Protocol-Version` with the remote protocol version (`4` in this
+  `X-Autobuild-Protocol-Version` with the remote protocol version (`5` in this
   distribution). Before authentication,
   body parsing, or resource lookup, the server validates the release-line window and known protocol identity.
   Unsupported or missing values receive `409 {"kind":"conflict","error":"…"}`;
@@ -1236,7 +1236,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"4", "supportedClientRange":{"minVersion":"0.9.0",
+  "protocolVersion":"5", "supportedClientRange":{"minVersion":"0.9.0",
   "maxVersionExclusive":"0.12.0"}}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
@@ -1337,3 +1337,20 @@ clients, retaining their decoders and the supported three-line window.
 fact: `{ identity, from, to, mapping }`, where mapping contains source ticket IDs
 and destination IDs. All migration facts survive dispatcher-run turnover.
 Conflicting identity reuse or source-qualified mappings fail replay closed.
+
+## Operator presence
+
+Protocol 5 adds `POST /repos/:repo/operator-presence` and `GET` of that collection.
+These require repository operator/admin authority; build, harvest and conversation
+credentials are rejected before presence lookup or mutation. No MCP tools are added.
+
+POST accepts a strict `{id, host, pid, startedAt}` object: ID and host are nonblank
+strings of at most 256 characters, PID a positive safe integer, and startedAt a
+valid ISO timestamp. It atomically upserts `(repo,id)`, preserving the original
+start time, updating host/PID and stamping heartbeatAt from the adapter clock.
+Heartbeat never moves backward. The response is `{repo,id,host,pid,startedAt,heartbeatAt}`.
+GET returns those records ordered by ID, only where heartbeat age is less than
+300,000ms; an unknown repository returns `[]` without creating anything. Neither
+operation appends events, claims leases or requires a repository journal. Expired
+rows can be renewed under the same ID. Multiple concurrent registrations coexist;
+this is advisory liveness, with no election, lock or singleton semantics.

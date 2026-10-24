@@ -1,3 +1,5 @@
+import type { OperatorIdentity, OperatorPresence } from './operator-presence'
+export type { OperatorIdentity, OperatorPresence } from './operator-presence'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 /**
  * The BuildStore seam (SPEC §7): the durable home of everything a build
@@ -421,6 +423,9 @@ export interface BuildStore {
   // Kept alongside, not inside, build streams: repository state is not a build.
   ensureRepo(repo: string): Promise<RepositoryRecord>
   getRepo(repo: string): Promise<RepositoryRecord | null>
+  /** Mutable advisory liveness. No event, lease or repository creation. */
+  upsertOperatorPresence(repo: string, identity: OperatorIdentity): Promise<OperatorPresence>
+  listOperatorPresence(repo: string): Promise<OperatorPresence[]>
   appendRepo<T extends RepositoryEventType>(
     repo: string,
     event: RepositoryEventWrite<T>,

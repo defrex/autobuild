@@ -1,3 +1,4 @@
+export * from './operator-presence'
 export type { StoredEvent } from '../events/compatibility'
 export { READ_CATALOG_IDENTITY } from '../events/compatibility'
 export {

@@ -111,8 +111,10 @@ setting is absent.
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
-readiness gates are satisfied, and that you will operate it from there (see
-[After filing: operate what you queued](#after-filing-operate-what-you-queued)).
+readiness gates are satisfied. Before ready filing, follow
+[After filing: check operator presence](#after-filing-check-operator-presence):
+with a live operator, say the existing operator will pick it up; without one,
+say you will operate it. The human's explicit instructions override either default.
 
 If grooming established prerequisites, follow the complete
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
@@ -226,20 +228,18 @@ files over the store's size limit), keep the external link in Evidence and say
 plainly, in the spec and to the human, that builds cannot read it, so the
 planner does not treat it as a contract.
 
-## After filing: operate what you queued
+## After filing: check operator presence
 
-Once work you specified sits in the ready state, its builds start without
-anyone watching them. By default, the agent that wrote the spec becomes their
-operator agent. You hold the context an escalation asks about — the intent, the
-alternatives the human rejected, what was ruled out of scope — and a build
-blocked on a question you could answer should not wait for a human.
+Before leaving work in the ready state, run `ab repository status --json` and
+inspect `operator.registrations`. If a live operator is present, record the
+operating context in the ticket body: intent, rejected alternatives, and why
+things were ruled out of scope. File the work, tell the human the existing
+operator will pick it up, and stop without arming a watch.
 
-So when this conversation leaves work in the ready state, say in the
-completion response that you will shepherd it, then load the `ab-operate`
-skill and follow it: arm the standing watch, reconcile status, resolve
-attention, and report each outcome until every build you queued has merged or
-otherwise ended. Shepherd what this conversation queued unless the human
-widens the scope.
+If no operator is present, say you will operate, load `ab-operate`, and follow
+its startup check and standing watch. The role covers the builds the repository's dispatcher dispatches,
+including newly dispatched builds, rather than only this conversation's tickets.
+The human's explicit instructions override either default.
 
 This is the default, not a requirement:
 

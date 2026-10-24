@@ -8,7 +8,7 @@ order: 6
 
 # Working with your operator agent
 
-Your operator agent keeps work moving through `ab` or MCP. Under your instructions it writes specs, files and grooms tickets, watches builds, answers bounded escalations, pauses or aborts work, and authorizes landing.
+Your operator agent keeps work moving through `ab` or MCP. Under your instructions it writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers bounded escalations, pauses or aborts work, and authorizes landing.
 
 - **You own** goals, scope, tradeoffs and authority, and you run the dispatcher and upgrades.
 - **The agent never** starts, stops or restarts dispatch; it reports dispatcher trouble to you.
@@ -38,10 +38,29 @@ The agent answers questions your instructions settle and escalates ambiguous goa
 ## Watch for attention
 
 ```
-bun ab watch --json
+bun ab repository status --json
+bun ab watch --operator --json
 ```
 
-`watch` monitors active builds, new builds and the repository journal.
+Before registering, inspect `operator.registrations` in repository status. If
+another live operator is present, the agent tells you and stops unless you direct
+otherwise. Filing sessions preserve intent, rejected alternatives and out-of-scope
+reasons in ticket bodies so that operator can answer escalations.
+
+`watch --operator` monitors active builds, new builds and the repository journal.
+It writes advisory mutable presence, never events or a lease. Multiple operators
+may register; presence is no lock. Unflagged watches write nothing. Repository
+status lists live registrations with host, PID, start time and heartbeat age.
+Heartbeats run every 30 seconds; presence expires five minutes after the last
+successful heartbeat, including a final best-effort heartbeat on orderly exit.
+
+Re-arm with `bun ab watch --operator --json --since <watch-cursor>` using only
+the standing watch's own cursor. This preserves one ID and original start time
+across a re-arm gap of up to five minutes. Reconcile current and newly dispatched
+builds after arming and on timeout. Keep operating after the initial work ends,
+until you end or hand off the role. `wait` does not heartbeat or carry registration
+identity: a separate unflagged diagnostic wait/watch must never replace the
+standing monitor or supply its resume cursor. MCP presence is deferred.
 
 - **Default filter:** actionable attention only, such as escalations and ready landings awaiting consent. Add `--event` globs for routine lifecycle events.
 - **Starts now:** a fresh watch ignores history, so check current status too.

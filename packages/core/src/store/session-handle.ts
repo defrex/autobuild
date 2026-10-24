@@ -103,6 +103,12 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
       return Promise.reject(new SessionScopeError(scope, 'listBuildsForRepo', repo))
     },
+    async upsertOperatorPresence(): Promise<never> {
+      throw new SessionScopeError(scope, 'upsertOperatorPresence')
+    },
+    async listOperatorPresence(): Promise<never> {
+      throw new SessionScopeError(scope, 'listOperatorPresence')
+    },
     getRepoChangePosition(repo: string): Promise<string> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoChangePosition', repo))
     },

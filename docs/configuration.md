@@ -3101,7 +3101,8 @@ configures ticket workflow and environment-only credentials, arranges
 an acceptance check through a repository-owned agent verify skill in every
 repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures and reviewing
 warnings. You then start `bun ab dispatch` and open your operator agent with
-`ab-operate` loaded to create, groom, and shepherd the first ticket.
+`ab-operate` loaded to create and groom the first ticket, then check operator presence
+before taking the role. An existing operator picks up ready work.
 
 After installation, init reports `autobuild.toml: written|skipped`, counts all
 skill outcomes, names attention-worthy local edits, and prints runtime probe

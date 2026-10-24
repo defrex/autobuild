@@ -291,6 +291,64 @@ function atT0(offsetMs: number): string {
 
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
+    test('operator presence is concurrent, renewable advisory liveness without journal writes', async () => {
+      const clock = manualClock()
+      await withStore(factory, { clock }, async (store) => {
+        const repo = 'presence-repo'
+        const identity = { id: 'a', host: 'host-a', pid: 42, startedAt: clock().toISOString() }
+        expect(await store.listOperatorPresence(repo)).toEqual([])
+        expect(await store.getRepo(repo)).toBeNull()
+        const initial = await store.upsertOperatorPresence(repo, identity)
+        expect(initial).toEqual({ ...identity, repo, heartbeatAt: clock().toISOString() })
+        expect(await store.getRepo(repo)).toBeNull()
+        expect(await store.listOperatorPresence('foreign-repo')).toEqual([])
+        await store.ensureRepo(repo)
+        await store.createBuild({ slug: 'presence-build', repo })
+        await store.claimRepoLease(repo, 'dispatcher', 900_000)
+        const repository = await store.getRepo(repo)
+        const events = await store.getRepoEvents(repo)
+        const buildEvents = await store.getEvents('presence-build')
+        clock.advance(299_999)
+        expect(await store.listOperatorPresence(repo)).toHaveLength(1)
+        clock.advance(1)
+        expect(await store.listOperatorPresence(repo)).toEqual([])
+        const [revived] = await Promise.all([
+          store.upsertOperatorPresence(repo, {
+            ...identity,
+            pid: 43,
+            startedAt: clock().toISOString(),
+          }),
+          store.upsertOperatorPresence(repo, { ...identity, id: 'b', host: 'host-b' }),
+          store.upsertOperatorPresence(repo, identity),
+        ])
+        expect(revived.startedAt).toBe(identity.startedAt)
+        expect((await store.listOperatorPresence(repo)).map((row) => row.id)).toEqual(['a', 'b'])
+        expect(await store.getRepo(repo)).toEqual(repository)
+        expect(await store.getRepoEvents(repo)).toEqual(events)
+        expect(await store.getEvents('presence-build')).toEqual(buildEvents)
+        clock.advance(300_000)
+        expect(await store.listOperatorPresence(repo)).toEqual([])
+      })
+    })
+
+    test('operator presence validates identity before mutation', async () => {
+      await withStore(factory, undefined, async (store) => {
+        const identity = { id: 'ok', host: 'host', pid: 1, startedAt: CONTRACT_T0 }
+        for (const bad of [
+          { id: '' },
+          { host: '' },
+          { pid: 0 },
+          { pid: 1.5 },
+          { startedAt: 'bad' },
+          { id: 'x'.repeat(257) },
+        ]) {
+          await expect(
+            store.upsertOperatorPresence('invalid-presence', { ...identity, ...bad }),
+          ).rejects.toThrow()
+        }
+        expect(await store.listOperatorPresence('invalid-presence')).toEqual([])
+      })
+    })
     test('concurrent repository reads and appends return exact committed prefixes', async () => {
       await withStore(factory, undefined, async (store) => {
         const repo = 'prefix-probe'
@@ -1114,6 +1172,15 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const failure = { outcome: 'failed' as const, error: 'failed' }
           await expect(scoped.finishRepoTick(repo, 'owner', failure, [])).rejects.toThrow()
           const session = await store.createSession({ repo, operator: 'operator' })
+          await expect(
+            store.scopeSession(session.id).upsertOperatorPresence(repo, {
+              id: 'op',
+              host: 'host',
+              pid: 1,
+              startedAt: CONTRACT_T0,
+            }),
+          ).rejects.toThrow()
+          await expect(store.scopeSession(session.id).listOperatorPresence(repo)).rejects.toThrow()
           await expect(
             store.scopeSession(session.id).beginRepoTick(repo, 'owner'),
           ).rejects.toThrow()
@@ -3934,6 +4001,15 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           )
           expect(() => scoped.subscribe('scope-b', {}, () => {})).toThrow(/build-scoped store/)
           await expect(scoped.listBuilds()).rejects.toThrow(/build-scoped store/)
+          await expect(
+            scoped.upsertOperatorPresence('repo', {
+              id: 'op',
+              host: 'host',
+              pid: 1,
+              startedAt: CONTRACT_T0,
+            }),
+          ).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.listOperatorPresence('repo')).rejects.toThrow(/build-scoped store/)
           await expect(scoped.listBuildsForRepo('repo')).rejects.toThrow(/build-scoped store/)
           await expect(scoped.getRepoChangePosition('repo')).rejects.toThrow(/build-scoped store/)
           await expect(scoped.createBuild(sampleBuildInput('scope-c'))).rejects.toThrow(
