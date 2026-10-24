@@ -110,3 +110,13 @@ purely decorative. No additional color literals were introduced.
   makes the initial unmodified-workspace root lint run fail.
 - Repository check:build and typecheck passed. Repository unit suite results are
   recorded in the implementation deposit alongside the other check evidence.
+
+The root suite's Pi-install-pin repository scan also traversed the ignored Rust
+target cache (24GB after cold linked tests/builds), timing out at its 5s limit.
+Its directory skip list does not include target. Moved generated target output
+under ignored .ab/proa-rust-target and reran configuration-doc.test.ts: all 30
+tests passed in 142ms. No test code was changed; observation obs_7ec32af4 records
+this integration follow-up for future Rust gates. The generated cache is not a
+project deliverable. Two other initial root-suite failures (capture timeout under
+load, fixture inheriting AB_CONTEXT_DIR from the build session) both passed their
+targeted rerun with AB_CONTEXT_DIR cleared; the latter is obs_27a18ba5.
