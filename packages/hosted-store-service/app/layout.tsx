@@ -1,14 +1,21 @@
 import type { Metadata } from 'next'
-import { JetBrains_Mono } from 'next/font/google'
+import localFont from 'next/font/local'
+import { ThemeProvider } from './ThemeProvider'
+import { THEME_BOOTSTRAP } from './theme'
 import type { ReactNode } from 'react'
 import './globals.css'
 
-/** One face and one natural-proportion size: the whole type system. */
-const mono = JetBrains_Mono({
-  subsets: ['latin', 'latin-ext'],
-  weight: ['400', '700'],
+const sans = localFont({
+  src: './fonts/AtkinsonHyperlegibleNext.ttf',
+  weight: '100 900',
+  variable: '--font-sans',
+  display: 'swap',
+})
+const mono = localFont({
+  src: './fonts/JetBrainsMono.ttf',
+  weight: '100 800',
   variable: '--font-mono',
-  display: 'optional',
+  display: 'swap',
 })
 
 export const metadata: Metadata = {
@@ -18,8 +25,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={mono.variable}>
-      <body>{children}</body>
+    <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: constant validated preference bootstrap, with no user content */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+      </head>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   )
 }
