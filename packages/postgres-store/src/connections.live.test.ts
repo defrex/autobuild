@@ -1,3 +1,4 @@
+import { PostgresOrganizationStore } from './organizations'
 import { expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { createHash } from 'node:crypto'
@@ -19,6 +20,10 @@ live(
     try {
       await migratePostgres(url.href)
       sql = new SQL(url.href)
+      const principal = { email: 'owner@example.com', isSuperUser: () => true }
+      const access = new PostgresOrganizationStore(sql)
+      const org = await access.create(principal, 'Example', 'example')
+      await access.addMember(principal, org.id, principal.email)
       let now = new Date('2026-10-15T12:00:00Z')
       let store = new PostgresConnectionStore(sql, () => now)
       const registry = new PostgresProjectRegistry(sql),
@@ -31,19 +36,21 @@ live(
         digest: createHash('sha256').update(secret).digest('hex'),
       })
       const denied = await store.start(proposal('a'))
-      await store.decide(denied.code, 'owner@example.com', false)
+      await store.decide(denied.code, 'owner@example.com', false, principal)
       expect(await registry.has(repo)).toBe(false)
       expect(await credentials.list(repo)).toEqual([])
       const expired = await store.start(proposal('b'))
       now = new Date(now.getTime() + 600001)
-      expect((await store.decide(expired.code, 'owner@example.com', true)).status).toBe('expired')
+      expect((await store.decide(expired.code, 'owner@example.com', true, principal)).status).toBe(
+        'expired',
+      )
       expect(await registry.has(repo)).toBe(false)
       const approved = await store.start(proposal('c'))
       // A newly composed instance has no private memory of the start.
       store = new PostgresConnectionStore(sql, () => now)
       const results = await Promise.all([
-        store.decide(approved.code, 'owner@example.com', true),
-        store.decide(approved.code, 'owner@example.com', true),
+        store.decide(approved.code, 'owner@example.com', true, principal),
+        store.decide(approved.code, 'owner@example.com', true, principal),
       ])
       expect(results.map((value) => value.status)).toEqual(['approved', 'approved'])
       expect((await credentials.list(repo)).length).toBe(1)
@@ -53,7 +60,9 @@ live(
       expect((await store.poll(approved.id, approved.capability)).status).toBe('approved')
       await expect(store.poll(approved.id, approved.capability)).rejects.toThrow('five seconds')
       const collision = await store.start(proposal('c'))
-      await expect(store.decide(collision.code, 'owner@example.com', true)).rejects.toThrow()
+      await expect(
+        store.decide(collision.code, 'owner@example.com', true, principal),
+      ).rejects.toThrow()
       expect((await store.lookup(collision.code, 'owner@example.com'))?.status).toBe('pending')
       expect((await credentials.list(repo)).length).toBe(1)
       await store.poll(approved.id, approved.capability, true)
@@ -61,7 +70,7 @@ live(
       expect(await registry.has(repo)).toBe(true)
       const race = await store.start(proposal('d'))
       await Promise.all([
-        store.decide(race.code, 'owner@example.com', true),
+        store.decide(race.code, 'owner@example.com', true, principal),
         store.poll(race.id, race.capability, true),
       ])
       expect(

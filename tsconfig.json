@@ -55,7 +55,12 @@
         "./packages/hosted-store-service/src/remote-tickets.ts"
       ],
       "@defrex/autobuild-hosted-dispatcher": ["./packages/hosted-dispatcher/src/index.ts"],
-      "@defrex/autobuild-hosted-dispatcher/runtime": ["./packages/hosted-dispatcher/src/runtime.ts"]
+      "@defrex/autobuild-hosted-dispatcher/runtime": [
+        "./packages/hosted-dispatcher/src/runtime.ts"
+      ],
+      "@defrex/autobuild-hosted-store-service/web/access": [
+        "./packages/hosted-store-service/src/web/access.ts"
+      ]
     },
     "allowJs": true,
     "incremental": true,

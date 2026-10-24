@@ -1,3 +1,4 @@
+import { testAccess } from './testing/access'
 import { expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import type {
@@ -15,7 +16,7 @@ const env = {
   GITHUB_CLIENT_ID: 'client',
   GITHUB_CLIENT_SECRET: 'secret',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: email,
+  AB_WEB_SUPER_USER_EMAILS: email,
   AB_POSTGRES_URL: 'postgres://unused',
 }
 const connection: ConnectionRecord = {
@@ -67,7 +68,7 @@ test('real Better Auth session gates approval; cookie, allowlist and CSRF are re
     oauthAccessToken: [],
     oauthConsent: [],
   }
-  const auth = createWebAuth(env, { database: memoryAdapter(db) })
+  const auth = createWebAuth(env, { access: testAccess(env), database: memoryAdapter(db) })
   const context = await auth.$context
   const user = await context.internalAdapter.createUser({
     email,
@@ -93,7 +94,7 @@ test('real Better Auth session gates approval; cookie, allowlist and CSRF are re
     machineAuth: () => ({ authenticate: async () => ({ kind: 'admin', user: email }) }),
     baseURL: origin,
     browser: {
-      allowedEmails: new Set([email]),
+      access: testAccess(env),
       getSession: (headers) => auth.api.getSession({ headers }),
     },
   })
