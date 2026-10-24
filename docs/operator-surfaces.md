@@ -58,6 +58,8 @@ readyState = "ready"
 The hosted web app shows registered repositories and their builds.
 
 - **Sign-in** uses the deployment's GitHub authentication and organization membership policy, independent of CLI credentials.
+- **Landing consent:** a landing awaiting consent offers **Land** and **Hold**. These record durable actions; readiness and merge gates still apply. See [Authorize landing](operating.md#authorize-landing).
+- **Appearance:** open the account menu and choose **System**, **Light** or **Dark** under **Theme**. System is the default and follows the OS preference. Your choice is saved for this browser.
 - **Secrets** (database, blob, signing, OAuth, super-user list) stay on the service, never in TOML or browser bundles.
 
 ### Local stdio MCP

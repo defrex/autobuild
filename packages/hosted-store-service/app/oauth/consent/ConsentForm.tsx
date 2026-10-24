@@ -21,7 +21,7 @@ export function ConsentForm({ consentCode }: { consentCode: string }) {
   }
   return (
     <div className="providers">
-      <button type="button" className="btn" disabled={pending} onClick={() => accept()}>
+      <button type="button" className="btn primary" disabled={pending} onClick={() => accept()}>
         <span>{pending ? 'Authorizing...' : 'Authorize client'}</span>
       </button>
     </div>

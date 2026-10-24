@@ -34,9 +34,16 @@ export function classifyControlReply(
     value.kind === 'command' &&
     value.slug === requestedSlug &&
     typeof value.command === 'string' &&
-    ['pause', 'resume', 'abort', 'discard', 'auto-merge-on', 'auto-merge-off'].includes(
-      value.command,
-    ) &&
+    [
+      'land',
+      'hold',
+      'pause',
+      'resume',
+      'abort',
+      'discard',
+      'auto-merge-on',
+      'auto-merge-off',
+    ].includes(value.command) &&
     typeof value.event === 'object' &&
     value.event !== null
   ) {

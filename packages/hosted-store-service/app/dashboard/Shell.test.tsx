@@ -38,7 +38,7 @@ test('shell omits the repository control when none are configured', () => {
 test('shell omits the repository control for one repository', () => {
   const html = renderShell(['example/repository'])
 
-  expect(html).toContain('<span>example/repository</span>')
+  expect(html).toContain('<span class="project">example/repository</span>')
   expect(html).not.toContain('class="repo"')
   expect(html).not.toContain('<select')
   expectTabless(html)
@@ -108,4 +108,24 @@ test('pending renders the clock slack state and rest does not', () => {
   const restClock = render(false).match(/<span class="clock"[^>]*>/)?.[0]
   expect(restClock).toBeDefined()
   expect(restClock).not.toContain('data-pending')
+})
+
+test('account menu presents all theme choices with selected semantics', () => {
+  const html = renderToStaticMarkup(
+    <OperatorShell
+      repo="sample/project"
+      repositories={['sample/project']}
+      identity="person@example.com"
+      onRepo={noop}
+      onSignOut={noop}
+      controls={null}
+      menuOpen
+    >
+      <p>Builds</p>
+    </OperatorShell>,
+  )
+  expect(html).toContain('aria-label="Theme"')
+  expect(html).toContain('role="menuitemradio" aria-checked="true"')
+  for (const choice of ['System', 'Light', 'Dark']) expect(html).toContain(`>${choice}</button>`)
+  expect(html).toContain('sign out')
 })
