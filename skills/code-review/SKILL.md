@@ -11,10 +11,10 @@ goes nowhere.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`, the commit range
-   (`base`/`head` in `.ab/context.json`), `.ab/implement-notes.md`, and
-   `.ab/history/` with prior rounds' findings. When present,
-   `.ab/dismissed-findings.json` lists finding ids a human explicitly dismissed.
+1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, the commit range
+   (`base`/`head` in `$AB_CONTEXT_DIR/context.json`), `$AB_CONTEXT_DIR/implement-notes.md`, and
+   `$AB_CONTEXT_DIR/history/` with prior rounds' findings. When present,
+   `$AB_CONTEXT_DIR/dismissed-findings.json` lists finding ids a human explicitly dismissed.
 2. Read the actual diff (`git diff <base>..<head>`), then the surrounding
    code. Review what changed *and* what the change touches.
 3. Judge on exactly these axes, in this order:
@@ -28,19 +28,19 @@ goes nowhere.
      author's assumption.
    - **Spec conformance** — every acceptance criterion met; nothing beyond
      the spec's scope smuggled in. A pinned `design` asset (listed under
-     `assets` in `.ab/context.json`, files under `.ab/assets/<kind>/<name>/`)
+     `assets` in `$AB_CONTEXT_DIR/context.json`, files under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`)
      is a contract on observable visual and reference outcomes, not on implementation: judge the rendered output against it wherever the code lets you
      check, and treat a divergence as a finding. A gap in the asset is not a
      reason to invent requirements.
    - **Tests** — do the new tests exercise the seams this change created or
      moved? Would they fail if the change were wrong?
    - **Fit** — matches the codebase's idioms; no needless indirection.
-4. Write `.ab/code-review.md`, then exactly one verdict:
+4. Write `$AB_CONTEXT_DIR/code-review.md`, then exactly one verdict:
 
    ```
-   ab verdict approve --notes .ab/code-review.md
-   ab verdict revise --findings .ab/findings.json --notes .ab/code-review.md
-   ab verdict escalate --reason "…" --notes .ab/code-review.md
+   ab verdict approve --notes "$AB_CONTEXT_DIR/code-review.md"
+   ab verdict revise --findings "$AB_CONTEXT_DIR/findings.json" --notes "$AB_CONTEXT_DIR/code-review.md"
+   ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/code-review.md"
    ```
 
 ## Writing findings
@@ -102,3 +102,8 @@ reason to withhold approval — record them with `ab observe` and approve.
 Escalate only genuine judgment calls a human must make (the spec itself is
 wrong, a security tradeoff outside your authority). Out-of-scope discoveries
 are `ab observe`, never findings.
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

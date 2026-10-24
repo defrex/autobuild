@@ -346,7 +346,7 @@ test('integration agent verification receives exact commit range without produce
   let verified = 0
   handlers['ab-verify-feature'] = async (cli) => {
     await cli.run(['context'])
-    const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+    const manifest = await Bun.file(join(cli.ws, cli.env.contextDir!, 'context.json')).json()
     expect(manifest.commitRange.base).toBeTruthy()
     expect(manifest.commitRange.head).toBe(await git(['rev-parse', 'HEAD'], cli.ws))
     expect(
@@ -545,7 +545,7 @@ test('agent verification failure reports the exact node cycle once without an es
   const handlers = happyHandlers()
   handlers['ab-verify-feature'] = async (cli) => {
     await cli.run(['context'])
-    const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+    const manifest = await Bun.file(join(cli.ws, cli.env.contextDir!, 'context.json')).json()
     const cycle = reduceBuild(await h.events(cli.env.build)).integration!.cycle!
     expect(manifest.commitRange).toEqual({ base: cycle.parent, head: cycle.head })
     expect(manifest.commitRange.head).toBe(await git(['rev-parse', 'HEAD'], cli.ws))
@@ -561,7 +561,9 @@ test('agent verification failure reports the exact node cycle once without an es
       expect(await Bun.file(join(cli.ws, contribution.specPath)).text()).toBe(
         `Authorize ${contribution.build}`,
       )
-      expect(manifest.materialized[contribution.specPath.slice(4)]).toBe('derived')
+      expect(
+        manifest.materialized[contribution.specPath.slice(manifest.contextDir.length + 1)],
+      ).toBe('derived')
     }
     const index = await Bun.file(join(cli.ws, provenance.indexPath)).json()
     expect(index.contributions).toEqual(provenance.contributions)

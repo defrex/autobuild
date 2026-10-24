@@ -11,15 +11,15 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md` (latest revision),
-   and `.ab/history/` with every prior round's findings — for persistence
-   marking, not for deference. When present, `.ab/dismissed-findings.json`
+1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md` (latest revision),
+   and `$AB_CONTEXT_DIR/history/` with every prior round's findings — for persistence
+   marking, not for deference. When present, `$AB_CONTEXT_DIR/dismissed-findings.json`
    lists finding ids a human explicitly dismissed.
 2. Judge the plan on exactly these axes:
    - **Spec conformance** — does executing this plan satisfy every
      acceptance criterion? Does anything in it exceed the spec's scope? A
-     pinned `design` asset (listed under `assets` in `.ab/context.json`, files
-     under `.ab/assets/<kind>/<name>/`) is a contract on observable visual and reference outcomes, not on implementation: open it and flag a plan that
+     pinned `design` asset (listed under `assets` in `$AB_CONTEXT_DIR/context.json`, files
+     under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`) is a contract on observable visual and reference outcomes, not on implementation: open it and flag a plan that
      contradicts or ignores it, as you would an unmet criterion. A gap in the
      asset is not a reason to invent requirements.
    - **Groundedness** — do the files and seams it names actually exist and
@@ -42,13 +42,13 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
      unjustified omission or addition like any other plan defect. Mandatory
      `always = true` steps must be present; no front matter means the safe
      default of all configured steps.
-3. Write your review notes to `.ab/plan-review.md`, then deliver exactly one
+3. Write your review notes to `$AB_CONTEXT_DIR/plan-review.md`, then deliver exactly one
    verdict:
 
    ```
-   ab verdict approve --notes .ab/plan-review.md
-   ab verdict revise --findings .ab/findings.json --notes .ab/plan-review.md
-   ab verdict escalate --reason "…" --notes .ab/plan-review.md
+   ab verdict approve --notes "$AB_CONTEXT_DIR/plan-review.md"
+   ab verdict revise --findings "$AB_CONTEXT_DIR/findings.json" --notes "$AB_CONTEXT_DIR/plan-review.md"
+   ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/plan-review.md"
    ```
 
 ## Writing findings
@@ -68,7 +68,7 @@ Findings are structured JSON (the CLI validates and stamps ids):
 ```
 
 - `severity`: `blocking` | `important` | `minor`, calibrated below.
-- `persists`: if a prior round's finding (see `.ab/history/`) is still
+- `persists`: if a prior round's finding (see `$AB_CONTEXT_DIR/history/`) is still
   unresolved — the same disagreement, even if reworded — list its id here.
   This is judgment only you can apply.
 
@@ -123,3 +123,8 @@ would have written it. Known immaterial defects are not a reason to withhold
 approval — record them with `ab observe` and approve. Escalate when the
 *spec* is the problem (contradictory or unbuildable); revise when the plan
 is.
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

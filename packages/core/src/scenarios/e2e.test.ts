@@ -723,9 +723,8 @@ test('a1. code review keeps its recorded cut when implementation absorbs target 
   let codeReviewContext: string | undefined
   handlers['code-review'] = async (cli) => {
     await cli.run(['context'])
-    // Capture during code review: later phase contexts intentionally replace
-    // the gitignored .ab/ tree.
-    codeReviewContext = await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')
+    // Capture the code-review manifest from its own session directory.
+    codeReviewContext = await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8')
     const notes = await writeFileIn(
       cli.ws,
       '.ab/code-review.md',
@@ -1098,7 +1097,9 @@ test('a2. reconcile replays one change onto the current base after conflict dete
   const handlers = happyHandlers()
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+    const context = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    ) as {
       conflict?: { baseSha: string }
     }
     suppliedBase = context.conflict?.baseSha
@@ -1207,7 +1208,9 @@ test.each([false, true])(
     const handlers = happyHandlers()
     handlers.reconcile = async (cli) => {
       await cli.run(['context'])
-      const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+      const context = JSON.parse(
+        await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+      ) as {
         conflict?: { baseSha: string }
       }
       suppliedBase = context.conflict?.baseSha
@@ -1348,7 +1351,9 @@ test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile
 
   handlers.implement = async (cli) => {
     await cli.run(['context'])
-    const manifest = JSON.parse(await readFile(join(cli.ws, '.ab/context.json'), 'utf8')) as {
+    const manifest = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    ) as {
       notesPath?: string
     }
     if (manifest.notesPath === undefined) throw new Error('implement context omitted notesPath')
@@ -1363,7 +1368,9 @@ test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile
 
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const manifest = JSON.parse(await readFile(join(cli.ws, '.ab/context.json'), 'utf8')) as {
+    const manifest = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    ) as {
       notesPath?: string
       conflict?: { baseSha: string }
       materialized: Record<string, 'derived' | { kind: string; rev: number }>
@@ -1372,7 +1379,7 @@ test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile
       ([, source]) => source !== 'derived' && source.kind === 'implement-notes',
     )
     if (input === undefined) throw new Error('reconcile context omitted implement notes')
-    relocatedReconcileInput = `.ab/${input[0]}`
+    relocatedReconcileInput = `${cli.env.contextDir}/${input[0]}`
     expect(relocatedReconcileInput).not.toBe('.ab/implement-notes.md')
     expect(await readFile(join(cli.ws, relocatedReconcileInput), 'utf8')).toBe(artifactNotes)
     expect(await readFile(join(cli.ws, '.ab/implement-notes.md'), 'utf8')).toBe(
@@ -1471,7 +1478,9 @@ readyState = "Ready"
   }
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+    const context = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    ) as {
       conflict?: { baseSha: string }
     }
     const baseSha = context.conflict?.baseSha
@@ -1567,7 +1576,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
   // materialized .ab/verify/ report and fixes it.
   handlers.implement = async (cli) => {
     await cli.run(['context'])
-    const routed = existsSync(join(cli.ws, '.ab', 'verify', 'unit.md'))
+    const routed = existsSync(join(cli.ws, cli.env.contextDir!, 'verify', 'unit.md'))
     if (routed) {
       roundsWithReport.push(cli.round)
       await writeFileIn(cli.ws, 'ok.marker', 'ok\n')
@@ -1725,11 +1734,11 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   const handlers = happyHandlers()
   handlers.implement = async (cli) => {
     await cli.run(['context'])
-    const guidancePath = join(cli.ws, '.ab', 'guidance.json')
+    const guidancePath = join(cli.ws, cli.env.contextDir!, 'guidance.json')
     feedbackSeen.push({
       round: cli.round,
       guidance: existsSync(guidancePath),
-      findings: existsSync(join(cli.ws, '.ab', 'findings.json')),
+      findings: existsSync(join(cli.ws, cli.env.contextDir!, 'findings.json')),
     })
     if (existsSync(guidancePath)) {
       const guidance = JSON.parse(await Bun.file(guidancePath).text()) as {
@@ -1759,7 +1768,9 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     const persists: string[] = []
     if (cli.round > 1) {
       const prior = JSON.parse(
-        await Bun.file(join(cli.ws, '.ab', 'history', `findings-r${cli.round - 1}.json`)).text(),
+        await Bun.file(
+          join(cli.ws, cli.env.contextDir!, 'history', `findings-r${cli.round - 1}.json`),
+        ).text(),
       ) as Array<{ id: string }>
       persists.push(prior[0]!.id)
     }
@@ -1967,8 +1978,8 @@ readyState = "Ready"
     await cli.run(['context'])
     if (cli.round > 1) {
       implementFeedback.push({
-        report: await readFile(join(cli.ws, '.ab', 'verify', 'e2e.md'), 'utf8'),
-        guidancePresent: existsSync(join(cli.ws, '.ab', 'guidance.json')),
+        report: await readFile(join(cli.ws, cli.env.contextDir!, 'verify', 'e2e.md'), 'utf8'),
+        guidancePresent: existsSync(join(cli.ws, cli.env.contextDir!, 'guidance.json')),
       })
     }
     await writeFileIn(cli.ws, 'rate-limit.txt', `throttle after 5 (r${cli.round})\n`)
@@ -1983,7 +1994,7 @@ readyState = "Ready"
   handlers['verify-e2e'] = async (cli) => {
     verifyRuns += 1
     await cli.run(['context'])
-    const guidancePath = join(cli.ws, '.ab', 'guidance.json')
+    const guidancePath = join(cli.ws, cli.env.contextDir!, 'guidance.json')
     if (existsSync(guidancePath)) {
       guidanceSeen.push(JSON.parse(await readFile(guidancePath, 'utf8')))
     }
@@ -2373,7 +2384,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     const context = await ab(['context'])
     expect(context).toMatchObject({ code: 0, stderr: '' })
     expect(context.stdout).toContain(`context materialized for ${slug} — plan@1`)
-    expect(await readFile(join(ws, '.ab', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
+    expect(await readFile(join(ws, '.ab/plan', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
 
     const got = await ab(['artifact', 'get', 'spec'])
     expect(got).toEqual({

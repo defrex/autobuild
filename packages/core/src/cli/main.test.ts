@@ -1734,7 +1734,7 @@ describe('runCli — context', () => {
     expect(manifest.build).toBe(BUILD)
     expect(manifest.phase).toBe('plan')
     expect(manifest.required).toEqual(['plan'])
-    expect(existsSync(join(workspace, '.ab', 'context.json'))).toBe(true)
+    expect(existsSync(join(workspace, '.ab/plan', 'context.json'))).toBe(true)
   })
 
   test('context without --json prints the human summary', async () => {
@@ -2019,11 +2019,11 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
 
     // ab context — hydrates .ab/ with the phase's inputs.
     expect(await runCli(['context'], d)).toBe(0)
-    expect(existsSync(join(workspace, '.ab', 'spec.md'))).toBe(true)
+    expect(existsSync(join(workspace, '.ab/implement', 'spec.md'))).toBe(true)
 
     // (work, commit) — .ab/ is gitignored, so notes there keep the tree clean.
     const head = await commitFile(workspace, 'limiter.ts', 'export {}\n', 'add limiter')
-    await writeFile(join(workspace, '.ab', 'implement-notes.md'), 'added the limiter\n')
+    await writeFile(join(workspace, '.ab/implement', 'implement-notes.md'), 'added the limiter\n')
 
     // ab observe — structured, mid-phase, not a terminal.
     expect(
@@ -2031,9 +2031,9 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
     ).toBe(0)
 
     // ab done — validates clean worktree, pushes the branch, emits the event.
-    expect(await runCli(['done', '--notes', join(workspace, '.ab', 'implement-notes.md')], d)).toBe(
-      0,
-    )
+    expect(
+      await runCli(['done', '--notes', join(workspace, '.ab/implement', 'implement-notes.md')], d),
+    ).toBe(0)
     expect(d.out[d.out.length - 1]).toMatch(/implement\.completed recorded \(seq \d+\)/)
 
     // The final event sequence, exactly (§8.7).

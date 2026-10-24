@@ -141,7 +141,7 @@ test('newer persisted facts survive raw reads, incremental resume, tick/status/c
     }
     expect(JSON.parse(statusLines.join('\n')).compatibility.decisiveFacts).toBe(1)
     expect(manifest.compatibility?.decisiveFacts).toBe(1)
-    expect(await Bun.file(join(workspace, '.ab/spec.md')).text()).toBe('# Approved spec')
+    expect(await Bun.file(join(workspace, '.ab/plan/spec.md')).text()).toBe('# Approved spec')
     await Promise.all([deferMixedVersion(store, 'mixed'), deferMixedVersion(store, 'mixed')])
     const attention = (await store.getEvents('mixed')).filter(
       (e) => e.type === 'build.compatibility-deferred',
