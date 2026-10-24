@@ -691,6 +691,7 @@ input.short {
     padding: 0 16px 40px;
   }
   .masthead {
+    position: relative;
     flex-wrap: wrap;
     gap: 2px 16px;
   }
@@ -742,11 +743,13 @@ input.short {
   .signoff .controls {
     width: 100%;
   }
-  .menu-list {
-    position: fixed;
-    left: 0;
-    right: 0;
-    top: 62px;
+  .masthead .menu {
+    position: static;
+  }
+  .masthead .menu-list {
+    left: -16px;
+    right: -16px;
+    top: 100%;
   }
 }
 
