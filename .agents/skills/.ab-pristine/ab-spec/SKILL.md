@@ -111,8 +111,10 @@ setting is absent.
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
-readiness gates are satisfied, and that you will operate it from there (see
-[After filing: check operator presence](#after-filing-check-operator-presence)).
+readiness gates are satisfied. Before ready filing, follow
+[After filing: check operator presence](#after-filing-check-operator-presence):
+with a live operator, say the existing operator will pick it up; without one,
+say you will operate it. The human's explicit instructions override either default.
 
 If grooming established prerequisites, follow the complete
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
