@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import { SQL } from 'bun'
+import { createHash } from 'node:crypto'
+import { PostgresCredentialStore } from './credentials'
 import { PostgresOrganizationStore, type HumanActor } from './organizations'
 import { PostgresProjectRegistry } from './projects'
 import { PostgresConnectionStore } from './connections'
@@ -274,8 +276,13 @@ live(
       await store.setOwner(superActor, a.id, null)
       expect((await store.inspect(superActor, a.id)).organization.ownerEmail).toBeNull()
       const connect = new PostgresConnectionStore(sql)
+      const secret = 'e'.repeat(64)
       const start = (digit: string, repo = 'https://github.com/example/new') =>
-        connect.start({ repo, credentialId: digit.repeat(32), digest: 'f'.repeat(64) })
+        connect.start({
+          repo,
+          credentialId: digit.repeat(32),
+          digest: createHash('sha256').update(secret).digest('hex'),
+        })
       const proposal = await start('1')
       await expect(connect.decide(proposal.code, member.email, true, member)).rejects.toThrow(
         'organization is required',
@@ -307,6 +314,22 @@ live(
       const [{ count }] =
         await sql`SELECT count(*)::int AS count FROM project_credentials WHERE revoked_at IS NULL`
       expect(count).toBe(2)
+      const credentials = new PostgresCredentialStore(sql, registry)
+      expect(
+        (await credentials.authenticate(`abp_1_${'1'.repeat(32)}_${secret}`, new Date()))?.repo,
+      ).toBe('https://github.com/example/new')
+      const rollbackRepo = 'https://github.com/example/rolled-back'
+      const collision = await start('1', rollbackRepo)
+      await expect(
+        connect.decide(collision.code, superActor.email, true, superActor, a.id),
+      ).rejects.toThrow()
+      expect(await registry.has(rollbackRepo)).toBe(false)
+      expect(
+        await sql`SELECT * FROM project_organizations WHERE repo = ${rollbackRepo}`,
+      ).toHaveLength(0)
+      expect((await connect.lookup(collision.code, superActor.email, superActor))?.status).toBe(
+        'pending',
+      )
     } finally {
       await sql.close()
       await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
