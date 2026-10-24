@@ -107,7 +107,7 @@ export function createConnectionHandler(options: {
       if (browser && typeof body.code === 'string') {
         const code = body.code.trim().toUpperCase()
         if (path.endsWith('/lookup'))
-          return respond({ connection: await store.lookup(code, actor!, principal) })
+          return respond(await store.approvalContext(code, actor!, principal!))
         if (path.endsWith('/decide') && typeof body.approve === 'boolean') {
           if (
             body.organizationId !== undefined &&
