@@ -152,7 +152,9 @@ test('canonical prereleases share stable release lines and independent protocol 
   ]) {
     expect(releaseVersion(client)).toBeDefined()
     expect(stableVersion(client)?.version).toBe(client.includes('-') ? undefined : client)
-    expect(clientIdentityError(client, '4', '1.0.0-beta.1')).toBeUndefined()
+    expect(
+      clientIdentityError(client, REMOTE_STORE_PROTOCOL_VERSION, '1.0.0-beta.1'),
+    ).toBeUndefined()
     expect(clientIdentityError(client, '3', '1.0.0-beta.1')).toContain('unsupported protocol')
     expect(classifyClient(client, supportedClientRange('1.0.0'))).toBe('supported')
   }
@@ -214,4 +216,10 @@ test('audit capability follows its introduction line independently of admission'
     expect(clientSupportsIntegrationAuditPending(version)).toBe(false)
   expect(clientIdentityError('0.13.0', '3', '0.14.0', '4')).toBeUndefined()
   expect(clientSupportsIntegrationAuditPending('0.13.0')).toBe(false)
+})
+
+test('operator presence protocol rejects peers without the new required operations', () => {
+  expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('5')
+  expect(clientIdentityError(AUTOBUILD_VERSION, '4')).toContain('unsupported protocol identity')
+  expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toBeUndefined()
 })

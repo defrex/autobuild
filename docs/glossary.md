@@ -57,4 +57,4 @@ The agent phase that resolves conflicts in a kernel-prepared replay against a fr
 
 ## Operator agent
 
-Your external agent, working outside the pipeline through the CLI or connected tools. It writes specs, files and grooms tickets, watches the dispatcher, answers escalations and manages authorized landing; you supply intent and authority.
+Your external agent, working outside the pipeline through the CLI or connected tools. It writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers escalations and manages authorized landing; you supply intent and authority.

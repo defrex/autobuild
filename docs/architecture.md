@@ -1558,3 +1558,16 @@ pending controls, landing intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
+
+## Operator presence
+
+A standing CLI operator operates the builds the repository's dispatcher dispatches.
+`ab watch --operator` upserts mutable `(repo, id)` liveness rows in each BuildStore
+adapter; a cursor carries the registration ID and original start time. Heartbeats
+run independently of watch discovery and held reads. A final best-effort renewal
+anchors orderly-exit grace; rows expire after 300,000ms. Neither registration nor
+renewal appends events, creates a repository journal or claims a lease. Reads on
+an unknown repository return an empty collection. Status loads presence separately
+from fact reduction. Build/session/phase authority cannot register; remote routes
+require repository operator authority. Concurrent advisory registrations coexist.
+Unflagged watch and `ab wait` remain read-only; MCP and dashboards do not register.

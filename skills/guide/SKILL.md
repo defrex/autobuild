@@ -188,7 +188,7 @@ Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 ## Who does what
 
 The **operator** is the role driving Autobuild through `ab` or MCP, normally
-an agent. The **operator agent** takes that role; a human may drive the same
+an agent. The **operator agent** operates the builds the repository's dispatcher dispatches, adopting new builds as they appear; a human may drive the same
 interface directly. The human is **you**, or the **maintainer**. Human actor
 identities and session ownership attribute authority to the authorizing account,
 not to the agent driving the tools.
@@ -1193,8 +1193,8 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   an acceptance check through a repository-owned agent verify skill in every
   repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures
   and reviewing warnings. The human then starts `bun ab dispatch` and opens
-  their operator agent with `ab-operate` to create, groom, and shepherd the
-  first ticket.
+  their operator agent with `ab-operate` to create and groom the first ticket,
+  checking presence before taking the role; an existing operator picks up ready work.
 - It never overwrites config once the file exists, even with `--force`; a rerun
   launches or prints a prompt that asks the agent to review and improve it.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
@@ -2071,7 +2071,7 @@ closes, its finalized document is a repository-scoped `stream:<id>` artifact,
 and `ab artifact download stream:<id>` retrieves it; the stream form is an
 operator-only read (ambient phase identity fails closed).
 
-**`ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>]
+**`ab watch [<slug>...] [--repository] [--operator] [--event <glob>]... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**
 streams matching events as they land instead of answering once. With no slug it
 follows every nonterminal build in the repository — a build created while the
@@ -2187,38 +2187,29 @@ and an appended matching event is delivered within about a second of its
 append rather than at the next tick — while `--interval` (default 5 seconds)
 still bounds the spacing between a stream's request starts, so a quiet stream
 costs roughly one request per 25 seconds and a chatty one no more than one
-request per interval. The command is read-only — it appends no
-event, takes no lease, creates no record, and starts no work — and deciding
+request per interval. Without `--operator`, the command is read-only. Neither form appends an event,
+takes a lease or starts work. Only flagged watches write advisory liveness, and deciding
 what to do about a blocker or a merge stays with the caller, not the command.
 Inside a phase, only the ambient build may be watched.
 
-Two recipes cover the common harnesses. First, a line-per-notification tool
-that re-arms periodically (Claude Code's Monitor tool expires after at most 30
-minutes): the cursor is what makes each re-arming lossless — persist the final
-`{"cursor": …}` line and pass it back through `--since` next time:
+For a standing operator loop, first check `ab repository status --json` for
+live `operator.registrations`. Report another live operator rather than registering
+unless the human directs otherwise. Arm `ab watch --operator --json` with no slugs;
+re-arm with `ab watch --operator --json --since <watch-cursor>` using only that
+standing watch's own final or record cursor. Reconcile active and newly dispatched
+builds after arming and on timeout. Keep watching after initially queued work ends.
+`ab wait` neither renews presence nor carries registration identity. Separate
+unflagged diagnostic watches and waits must not replace the monitor or its cursor.
 
-```sh
-last=$(cat .ab-watch.cursor 2>/dev/null || true)
-ab watch --json --timeout 30m ${last:+--since "$last"} \
-  | awk '/^\{"cursor":/ { cursor = $0; next } { print } \
-          END { if (cursor != "") print cursor > ".ab-watch.cursor" }'
-```
-
-Second, a plain shell loop — the same resume discipline wrapped in `while`:
-
-```sh
-while :; do
-  last=$(cat .ab-watch.cursor 2>/dev/null || true)
-  ab watch --json --timeout 30m ${last:+--since "$last"} \
-    | while IFS= read -r line; do
-        case $line in
-          '{"cursor":'* ) printf '%s\n' "$line" > .ab-watch.cursor ;;
-          * ) echo "$line" ;;  # one JSON record per matching event
-        esac
-      done
-  sleep 1
-done
-```
+`--operator` is advisory and permits multiple registrations. It rejects named
+slugs, even with `--repository`, and any ambient build or scoped session. Heartbeats
+run every 30 seconds independently of polling; orderly exits renew once more.
+Presence expires five minutes after the last successful heartbeat, without any
+unregister on exit. Reusing its flagged watch cursor preserves the registration
+ID and original start time across re-arms. Unflagged resumes remain read-only.
+Repository status lists live registrations with ID, host, PID, start, heartbeat
+and heartbeat age, or an empty list. Human status prints one operator summary.
+MCP registration and dashboard presence are deferred.
 
 **`ab wait [<slug>...] (--for <condition> | --event <glob>)... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--json] [--store <ref>]`** is the blocking
@@ -2409,7 +2400,7 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
-| `ab-operate` | outside the pipeline; model-invocable | The operator agent’s operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control landing consent and holds, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
+| `ab-operate` | outside the pipeline; model-invocable | The operator agent’s operating manual, for any agent: file and groom tickets, operate the builds the repository's dispatcher dispatches with a registered `ab watch --operator` loop, answer escalations, pause, resume, abort, control landing consent and holds, and adopt new builds until the human ends or hands off the role. MCP presence is deferred. |
 
 Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
 `ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not

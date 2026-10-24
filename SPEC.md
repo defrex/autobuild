@@ -444,7 +444,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | Term | Meaning |
 |---|---|
 | **Operator** | The role driving Autobuild through `ab` or MCP, normally an agent; a human may also drive the interface directly |
-| **Operator agent** | An agent taking the operator role, guided by `ab-operate` |
+| **Operator agent** | An external agent operating the builds the repository's dispatcher dispatches, guided by `ab-operate`; it adopts new builds while serving the role |
 | **Human (maintainer)** | The person authorizing work and making human decisions; addressed as “you” in reader-facing prose |
 | **Signal** | Raw input from the world — a Sentry issue, an observation |
 | **Proposal** | A synthesized candidate ticket sitting in Triage, awaiting grooming |
@@ -1657,6 +1657,28 @@ dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off; the query does not create that stream,
 append an event, claim a ticket, attach a runner, or start dispatcher work.
+The CLI additionally loads mutable advisory `operator.registrations`, with each
+live registration's ID, host, PID, original startedAt, heartbeatAt and heartbeatAgeMs.
+Human output includes one `operator: absent` or `operator: present (N registrations)` line.
+
+`ab watch --operator` opts into repository-wide advisory presence. Named slugs
+and ambient build/scoped sessions are usage errors. Unflagged watches remain
+read-only, including resumes of flagged cursors. Flagged watches register before
+watch initialization, renew independently every 30 seconds and attempt one final
+renewal at orderly exit. Presence expires 300,000ms after the last successful
+heartbeat and never appends a build/repository event or claims a lease. Multiple
+registrations coexist. The opaque watch cursor preserves registration ID and start
+across re-arms, including expired revival; no exit unregisters. `ab wait` does not
+renew or preserve this identity. MCP presence and dashboard display are deferred.
+
+Filing agents check CLI repository status before ready filing. With a live
+operator they put intent, rejected alternatives and out-of-scope reasons into
+ticket bodies, file, tell the human the existing operator will pick it up, and
+stop without a watch. Otherwise they load `ab-operate`. Before registering, an
+operator checks for another live operator and reports it rather than registering
+unless directed. Explicit human instructions override these defaults. The role
+covers the builds the repository's dispatcher dispatches, including new builds;
+finishing an initially queued set does not end it.
 
 Agents never receive TicketSource credentials. Only the deterministic file
 step creates/adopts approved proposals and commits ledger facts.

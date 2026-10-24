@@ -318,6 +318,13 @@ export function scopeLocalStoreToPhaseSession(
       return store.subscribe(slug, opts, onEvent)
     },
 
+    async upsertOperatorPresence(): Promise<never> {
+      return admin('upsertOperatorPresence')
+    },
+    async listOperatorPresence(repo: string) {
+      own('listOperatorPresence', 'repo', repo)
+      return store.listOperatorPresence(repo)
+    },
     async ensureRepo(_repo: string): Promise<RepositoryRecord> {
       return admin('ensureRepo')
     },
