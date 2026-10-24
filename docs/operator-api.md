@@ -389,28 +389,38 @@ no-store. No client-supplied actor or role is trusted. Raw Better Auth
 Every admitted operator can discover their own organizations. Super users see
 all organizations; their membershipRole is null where they are not members.
 Roles are `owner` and `member`; ownerEmail is null for an ownerless organization.
-Results sort by slug then ID. Discovery does not authorize roster or inspection
-access. A multi-org member uses these IDs for explicit connect selection.
+Results sort by slug then ID. Members may inspect and read rosters in their own
+organizations, including member emails. Foreign organizations return 403 before
+resource detail. A multi-org member uses these IDs for explicit connect selection.
 
 To bootstrap, sign in as a super user configured by
 `AB_WEB_SUPER_USER_EMAILS`, then POST `{name,slug}` to `/api/web/orgs`.
 The response is 201 `{organization}` in the discovery shape. Names are nonblank
 and at most 100 characters; slugs are unique lowercase kebab strings of at most
-100 characters. Creation grants no membership. No management pages are included.
+100 characters. Creation grants no membership. The account menu links every
+operator to `/members`, and super users to `/organizations` and `/projects`.
+These separate pages show acknowledged reads, refresh after writes, and confirm
+member removal and project moves inline before writing.
 
-Super users can GET `/api/web/orgs/:orgId` for `{organization,projects:[repo]}`
-and GET `/api/web/projects/unassigned` for `{projects:[repo]}`. The latter
+Super users and the organization’s members can GET `/api/web/orgs/:orgId` for
+`{organization,projects:[repo]}` with active owned projects and the caller’s actual
+membershipRole. Only super users can GET `/api/web/projects/unassigned` for `{projects:[repo]}`. The latter
 contains every active registered project without an assignment, including legacy
 registrations; removed entries are excluded. Projects sort lexically.
 
 ### Members and owner
 
-Super users and the organization's owner can GET
-`/api/web/orgs/:orgId/members` for `{members:[{email,role}]}`; POST `{email}`
-to that path returns `{member}`; DELETE `{email}` returns `{removed:true}`.
+Super users and the organization's members can GET
+`/api/web/orgs/:orgId/members` for `{members:[{email,role,name,status}]}`.
+`name` is a known persisted identity name or null; `status` is `joined` when a
+normalized-email auth identity exists, otherwise `pending`. Grants are the roster
+source; identities enrich them without duplicating rows. An existing identity
+added to another organization is joined immediately.
+Only super users and owners may POST `{email}` to that path for `{member}` or
+DELETE `{email}` for `{removed:true}`.
 Emails normalize before matching, grants work before first sign-in, and duplicate
 adds preserve the existing role. An owner cannot remove themselves. Ordinary
-members cannot inspect rosters or mutate membership.
+members can read their own rosters but cannot mutate membership.
 
 Only super users can PUT `{email:string|null}` to
 `/api/web/orgs/:orgId/owner`, returning `{organization}`. A non-null owner must
