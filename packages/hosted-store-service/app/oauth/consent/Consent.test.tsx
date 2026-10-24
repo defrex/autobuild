@@ -26,7 +26,7 @@ describe('the OAuth consent view', () => {
     expect(html).toContain('Autobuild operator')
     expect(html).toContain('card')
     // The action is the existing btn class; no new components or styles.
-    expect(html).toContain('class="btn"')
+    expect(html).toContain('class="btn primary"')
     expect(html).toContain('client-123')
     expect(html).toContain('openid profile email')
   })
@@ -84,7 +84,7 @@ describe('the OAuth consent page wrapper', () => {
     // assertion is split.)
     expect(html).toContain('Requested scopes:')
     expect(html).toContain('openid profile')
-    expect(html).toContain('class="btn"')
+    expect(html).toContain('class="btn primary"')
     expect(html).not.toContain('missing its authorization code')
   })
 

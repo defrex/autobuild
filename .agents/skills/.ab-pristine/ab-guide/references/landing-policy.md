@@ -29,7 +29,9 @@ and re-finalization until hold or completion; it approves the landing rather tha
 an immutable diff. Accepted node reparenting revokes it. Commands and receipts
 are sequence-correlated: hold acknowledgement confirms native cancellation;
 land acknowledgement does not claim gates passed. MCP/operator tools offer the
-same actions; the terminal uses `l`/`o`, and the web has no consent controls.
+same actions; the terminal uses `l`/`o`. The hosted web app offers **Land** and
+**Hold** on a landing awaiting consent. These controls record the same durable
+actions; **Land** does not mean the merge gates have passed.
 
 ## Worked configurations
 
