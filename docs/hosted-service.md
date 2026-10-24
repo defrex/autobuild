@@ -107,7 +107,7 @@ Set these server-side variables in every Vercel environment you deploy:
 - `BETTER_AUTH_URL`: the exact production HTTPS origin, with no path.
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: GitHub OAuth application credentials.
 - `AB_WEB_AUTH_PROVIDERS=github`.
-- `AB_WEB_ALLOWED_EMAILS`: comma-separated operator email allowlist.
+- `AB_WEB_SUPER_USER_EMAILS`: comma-separated super-user emails. Other operators require organization membership.
 - `AB_WEB_REPOSITORIES`: comma-separated repository origins visible to operators.
 
 Register `https://YOUR_ORIGIN/api/auth/callback/github` as the GitHub callback
@@ -291,3 +291,14 @@ unrecognized reducer version never overwrites its bytes; lower-version snapshot
 writes cannot replace higher-version rows even at a later cursor. This
 protects both upgrade directions. Readers predating this support still fail
 closed; this guarantee does not widen the advertised client window.
+
+
+The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
+Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
+are deployment maintainers. Bootstrap the first organization through the
+[browser management contract](operator-api.md#organization-management-browser),
+then add members by email and assign legacy unassigned projects. Super users alone
+create orgs, set or clear the single owner, and assign or move projects. Owners
+manage their org's members. Removing the last membership or super-user designation
+revokes human access on the next request without re-login; existing project
+credentials remain valid until revoked.

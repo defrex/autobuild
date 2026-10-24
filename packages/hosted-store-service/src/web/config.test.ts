@@ -7,7 +7,7 @@ const env = {
   GITHUB_CLIENT_ID: 'client',
   GITHUB_CLIENT_SECRET: 'github-secret',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: ' Ada@Example.com,grace@example.com,ada@example.com ',
+  AB_WEB_SUPER_USER_EMAILS: ' Ada@Example.com,grace@example.com,ada@example.com ',
   // Entries are repository identities; ssh spellings normalize to https.
   AB_WEB_REPOSITORIES: 'https://github.com/owner/one, git@github.com:owner/two.git',
   AB_POSTGRES_URL: 'postgres://secret',
@@ -16,8 +16,8 @@ const env = {
 describe('web auth configuration', () => {
   test('normalizes policy values and exposes only safe labels', () => {
     const config = parseWebAuthEnv(env)
-    expect([...config.allowedEmails]).toEqual(['ada@example.com', 'grace@example.com'])
-    expect(isAllowedEmail(config.allowedEmails, 'ADA@example.COM')).toBe(true)
+    expect([...config.superUserEmails]).toEqual(['ada@example.com', 'grace@example.com'])
+    expect(isAllowedEmail(config.superUserEmails, 'ADA@example.COM')).toBe(true)
     expect(safeWebConfig(config)).toEqual({
       providers: ['github'],
       mcpResource: 'https://operator.example/mcp',
@@ -43,7 +43,7 @@ describe('web auth configuration', () => {
     ['unknown provider', { AB_WEB_AUTH_PROVIDERS: 'github,google' }],
     ['weak secret', { BETTER_AUTH_SECRET: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
     ['URL path', { BETTER_AUTH_URL: 'https://operator.example/path' }],
-    ['blank allowlist entry', { AB_WEB_ALLOWED_EMAILS: 'ada@example.com,' }],
+    ['blank allowlist entry', { AB_WEB_SUPER_USER_EMAILS: 'ada@example.com,' }],
   ])('rejects %s', (_name, patch) => {
     expect(() => parseWebAuthEnv({ ...env, ...patch })).toThrow()
   })
@@ -60,4 +60,12 @@ describe('web session database selection', () => {
     )
     expect(() => parseWebAuthEnv(conventional)).toThrow('AB_POSTGRES_URL or DATABASE_URL')
   })
+})
+
+test('refuses the retired variable even when it is empty', () => {
+  for (const value of ['', 'ada@example.com']) {
+    expect(() => parseWebAuthEnv({ ...env, AB_WEB_ALLOWED_EMAILS: value })).toThrow(
+      'AB_WEB_SUPER_USER_EMAILS',
+    )
+  }
 })

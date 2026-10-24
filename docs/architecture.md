@@ -1558,3 +1558,13 @@ pending controls, landing intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
+
+
+Human access uses `postgres-store/src/organizations.ts` and the shared hosted
+`web/access.ts` policy. Auth schema v4 adds Better Auth organizations/member rows,
+an authoritative normalized-email grant ledger and one project-to-org assignment.
+Successful identity persistence materializes grants into member rows without
+placeholder users or invitations. Mutations and connection decisions serialize
+through the project registry singleton (after the connection row where relevant).
+Admission and project filtering read durable state on each browser request and
+MCP callback; session claims and activeOrganizationId confer no authority.
