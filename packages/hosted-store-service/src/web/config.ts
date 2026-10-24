@@ -7,7 +7,7 @@ export interface WebAuthConfig {
   secret: string
   baseURL: string
   providers: readonly WebAuthProvider[]
-  allowedEmails: ReadonlySet<string>
+  superUserEmails: ReadonlySet<string>
   github: { clientId: string; clientSecret: string }
   postgresURL: string
   secureCookies: boolean
@@ -41,6 +41,8 @@ export function isAllowedEmail(
 }
 
 export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
+  if (env.AB_WEB_ALLOWED_EMAILS !== undefined)
+    throw new Error('AB_WEB_ALLOWED_EMAILS is retired; replace it with AB_WEB_SUPER_USER_EMAILS')
   const secret = required(env, 'BETTER_AUTH_SECRET')
   if (secret.length < 32 || new Set(secret).size < 8) {
     throw new Error('BETTER_AUTH_SECRET must contain at least 32 high-entropy characters')
@@ -71,9 +73,9 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
   if (providers.some((provider) => provider !== 'github')) {
     throw new Error('AB_WEB_AUTH_PROVIDERS currently supports only "github"')
   }
-  const emails = csv(env, 'AB_WEB_ALLOWED_EMAILS').map(normalizeEmail)
+  const emails = csv(env, 'AB_WEB_SUPER_USER_EMAILS').map(normalizeEmail)
   if (emails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
-    throw new Error('AB_WEB_ALLOWED_EMAILS contains an invalid email address')
+    throw new Error('AB_WEB_SUPER_USER_EMAILS contains an invalid email address')
   }
   const rawMcpResource = env.AB_WEB_MCP_RESOURCE?.trim()
   let mcpResource = `${url.origin}/mcp`
@@ -100,7 +102,7 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
     secret,
     baseURL: url.origin,
     providers: providers as WebAuthProvider[],
-    allowedEmails: new Set(emails),
+    superUserEmails: new Set(emails),
     github: {
       clientId: required(env, 'GITHUB_CLIENT_ID'),
       clientSecret: required(env, 'GITHUB_CLIENT_SECRET'),

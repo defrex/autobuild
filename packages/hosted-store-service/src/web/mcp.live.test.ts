@@ -1,3 +1,6 @@
+import { HumanAccess } from './access'
+import { PostgresOrganizationStore } from '@defrex/autobuild-postgres-store/organizations'
+import { testAccess } from '../testing/access'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testProjects } from '../testing/projects'
@@ -50,7 +53,7 @@ const baseEnv: Record<string, string> = {
   GITHUB_CLIENT_ID: 'github-client-canary',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: REPO,
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
@@ -80,6 +83,7 @@ type App = (request: Request) => Promise<Response>
  * createWebAuth uses. */
 function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: number): WebAuth {
   return createWebAuth(env, {
+    access: testAccess(env),
     database: memoryAdapter(emptyDB()),
     ...(accessTokenExpiresIn === undefined ? {} : { accessTokenExpiresIn }),
   })
@@ -90,6 +94,7 @@ function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: number): 
 function buildApp(
   env: Record<string, string>,
   auth: WebAuth,
+  access = testAccess(env, testProjects([REPO])),
 ): {
   app: App
   backing: MemoryBuildStore
@@ -103,6 +108,7 @@ function buildApp(
     openStore: async () => backing,
   })
   const endpoint = createMcpEndpoint({
+    access,
     projects: testProjects(['https://github.com/owner/repo']),
     config,
     auth,
@@ -365,7 +371,7 @@ function toolsListRequest(token: string, id: number): Request {
 describe('hosted MCP over OAuth (memory adapter)', () => {
   const env = { ...baseEnv }
   const db = emptyDB()
-  const auth = createWebAuth(env, { database: memoryAdapter(db) })
+  const auth = createWebAuth(env, { access: testAccess(env), database: memoryAdapter(db) })
   const { app, backing } = buildApp(env, auth)
   let adaCookie = ''
   let adaTokens: OAuthTokens | undefined
@@ -560,8 +566,10 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
   })
 
   test('a non-allowlisted operator completes authorization but is refused at the resource', async () => {
+    env.AB_WEB_SUPER_USER_EMAILS += ',mallory@example.com'
     const seeded = await seedUser(auth, 'mallory@example.com', db)
     const tokens = await authorizeFlow(app, seeded.cookie)
+    env.AB_WEB_SUPER_USER_EMAILS = baseEnv.AB_WEB_SUPER_USER_EMAILS!
     const response = await app(toolsListRequest(tokens.access_token!, 4))
     expect(response.status).toBe(403)
   })
@@ -625,11 +633,18 @@ if (postgresUrl) {
       const url = scoped.toString()
       try {
         await migratePostgres(url)
-        const env = { ...baseEnv, AB_POSTGRES_URL: url }
+        const env: Record<string, string> = { ...baseEnv, AB_POSTGRES_URL: url }
         const { Pool } = await import('pg')
         const pool = new Pool({ connectionString: url, max: 2 })
-        const auth = createWebAuth(env, { database: pool })
-        const { app, backing } = buildApp(env, auth)
+        const accessSql = new SQL(url)
+        const accessStore = new PostgresOrganizationStore(accessSql)
+        const access = new HumanAccess(async () => accessStore, env)
+        const registry = new (
+          await import('@defrex/autobuild-postgres-store/projects')
+        ).PostgresProjectRegistry(accessSql)
+        await registry.add(REPO, 'fixture')
+        const auth = createWebAuth(env, { database: pool, access })
+        const { app, backing } = buildApp(env, auth, access)
         const seeded = await seedUser(auth, 'ada@example.com')
         const registeredClient = await dynamicRegister(app, await discoverMetadata(app))
         const tokens = await authorizeFlow(app, seeded.cookie, registeredClient)
@@ -700,6 +715,41 @@ if (postgresUrl) {
           expect(JSON.parse((shown.content as { text: string }[])[0]!.text).ticket.ref.id).toBe(
             'ENG-1',
           )
+          // Same OAuth token changes authority without re-login or reconstruction.
+          const root = access.actor('ada@example.com')
+          const orgA = await accessStore.create(root, 'Org A', 'org-a')
+          const orgB = await accessStore.create(root, 'Org B', 'org-b')
+          const foreignRepo = 'https://github.com/foreign/project'
+          await registry.add(foreignRepo, 'fixture')
+          await accessStore.assign(root, orgA.id, REPO)
+          await accessStore.assign(root, orgB.id, foreignRepo)
+          await accessStore.addMember(root, orgA.id, root.email)
+          env.AB_WEB_SUPER_USER_EMAILS = 'replacement@example.com'
+          const list = await mcp.callTool({ name: 'repositories.list', arguments: {} })
+          expect(JSON.parse((list.content as { text: string }[])[0]!.text)).toEqual({
+            repositories: [REPO],
+          })
+          const read = await mcp.callTool({ name: 'repository.status', arguments: { repo: REPO } })
+          expect(read.isError).toBeUndefined()
+          for (const name of ['repository.status', 'tickets.create']) {
+            const args = name === 'tickets.create' ? { title: 'Refused', body: 'Body' } : {}
+            const foreign = await mcp.callTool({ name, arguments: { repo: foreignRepo, ...args } })
+            const missing = await mcp.callTool({
+              name,
+              arguments: { repo: 'https://github.com/missing/project', ...args },
+            })
+            expect(foreign.isError).toBe(true)
+            const foreignError = JSON.parse((foreign.content as { text: string }[])[0]!.text)
+            const missingError = JSON.parse((missing.content as { text: string }[])[0]!.text)
+            // The only difference is the caller-supplied repo echoed in the envelope.
+            expect(foreignError.kind).toBe(missingError.kind)
+            expect(foreignError.error.replace(foreignRepo, '')).toBe(
+              missingError.error.replace('https://github.com/missing/project', ''),
+            )
+          }
+          const maintainer = access.actor('replacement@example.com')
+          await accessStore.removeMember(maintainer, orgA.id, root.email)
+          expect((await app(toolsListRequest(tokens.access_token!, 99))).status).toBe(403)
         } finally {
           await mcp.close()
         }
@@ -723,13 +773,14 @@ if (postgresUrl) {
         })
         expect(e2e?.redirectUrls as string).toContain('https://claude.ai/api/mcp/auth_callback')
         await sql.close()
+        await accessSql.close()
         await pool.end()
       } finally {
         const cleanup = new SQL(postgresUrl)
         await cleanup.unsafe(`DROP SCHEMA ${schema} CASCADE`)
         await cleanup.close()
       }
-      expect(AUTH_SCHEMA_VERSION).toBe(3)
+      expect(AUTH_SCHEMA_VERSION).toBe(4)
     })
   })
 }
