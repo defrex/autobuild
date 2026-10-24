@@ -122,7 +122,14 @@ export class PostgresConnectionStore implements ConnectionStore {
       throw new ConnectionError(429, 'too many code lookups; retry in a minute')
     const [row] = await this.sql`SELECT * FROM project_connections WHERE code = ${code}`
     if (!row) return null
-    if (principal) await this.checkConnection(this.sql, row.repo, principal)
+    if (principal) {
+      try {
+        await this.checkConnection(this.sql, row.repo, principal)
+      } catch (error) {
+        if (error instanceof ConnectionError && error.status === 404) return null
+        throw error
+      }
+    }
     const result = record(row)
     if (result.status === 'pending' && new Date(result.expiresAt) <= now) result.status = 'expired'
     return result
@@ -131,9 +138,14 @@ export class PostgresConnectionStore implements ConnectionStore {
     const access = new PostgresOrganizationStore(sql)
     if (!principal.isSuperUser() && !(await access.admitted(principal.email)))
       throw new ConnectionError(403, 'this identity is not allowed')
+    // Registry removal hides a project, but does not release its organization's
+    // ownership of the retained history. Reconnect checks that grant directly.
+    const [assignment] = await sql`SELECT p.organization_id, e.email FROM project_organizations p
+      LEFT JOIN organization_emails e ON e.organization_id = p.organization_id AND e.email = ${principal.email}
+      WHERE p.repo = ${repo}`
     if (
-      (await new PostgresProjectRegistry(sql).has(repo)) &&
-      !(await access.canAccess(principal, repo))
+      !principal.isSuperUser() &&
+      (assignment ? !assignment.email : await new PostgresProjectRegistry(sql).has(repo))
     )
       throw new ConnectionError(404, 'unknown connection')
   }
@@ -161,7 +173,7 @@ export class PostgresConnectionStore implements ConnectionStore {
         const [assignment] =
           await tx`SELECT organization_id FROM project_organizations WHERE repo = ${row.repo}`
         let target = assignment?.organization_id as string | undefined
-        if (active) {
+        if (active || assignment) {
           if (organizationId !== undefined && organizationId !== target)
             throw new ConnectionError(400, 'project moves require organization management')
         } else {
@@ -175,7 +187,7 @@ export class PostgresConnectionStore implements ConnectionStore {
               throw new ConnectionError(403, 'organization access required')
             target = organizationId
           }
-          await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!}) ON CONFLICT (repo) DO UPDATE SET organization_id = EXCLUDED.organization_id`
+          await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!})`
         }
         const [previous] =
           await tx`SELECT action FROM project_journal WHERE repo = ${row.repo} ORDER BY seq DESC LIMIT 1`

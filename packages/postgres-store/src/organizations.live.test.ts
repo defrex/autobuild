@@ -295,9 +295,7 @@ live(
       )
       await connect.decide(proposal.code, member.email, true, member, b.id)
       expect(await store.canAccess(owner, 'https://github.com/example/new')).toBe(false)
-      await expect(connect.lookup(proposal.code, owner.email, owner)).rejects.toMatchObject({
-        status: 404,
-      })
+      expect(await connect.lookup(proposal.code, owner.email, owner)).toBeNull()
       await expect(
         connect.decide(proposal.code, owner.email, true, owner, b.id),
       ).rejects.toMatchObject({ status: 404 })
