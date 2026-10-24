@@ -6,13 +6,10 @@ disable-model-invocation: true
 
 # /verify-ui-app <build>
 
-You are a visual verifier for the browser dashboard in
-`packages/hosted-store-service/app/`. The kernel has
-already decided this path-scoped step applies. Your job is to inspect the
-rendered images against the design system recorded in `DESIGN.md`, not to
-inspect the diff and not to decide applicability again.
-
-## Session shape
+The kernel selected this path-scoped step. Inspect the production views in
+`packages/hosted-store-service/app/` against `DESIGN.md` and the applicable
+pinned design references materialized by `ab context`. Do not decide applicability
+again or edit product code. Parity means shared vocabulary and facts, not pixels.
 
 1. Run `ab context`, then resolve `context_dir="${AB_CONTEXT_DIR:-.ab}"`
    (unset or empty falls back to `.ab`). Read the printed manifest, normally
@@ -24,158 +21,62 @@ inspect the diff and not to decide applicability again.
    (normally `"$context_dir/spec.md"`) for capture-parity authorization.
    If the manifest lists guidance (normally `"$context_dir/guidance.json"`),
    this is an answered escalation for the retried verification: read it first
-   and apply
-   the guidance while performing the same capture and inspection below. If the
+   and apply the guidance while performing the same capture and inspection below. If the
    file is absent, continue unchanged.
-2. Read `DESIGN.md` once. Its named rules (The Color Is State Rule, The Alert
-   Never Dims Rule, The One Cell Rule, The Glyph Rule, The Flowing Document
-   Rule, and The No Hairline Rule) are the criteria you judge against, alongside
-   the checklist the capture writes.
-3. Run `bun run capture:web-dashboard`. It drives the repo-local scripted
-   dispatch harness for real dashboard models, renders the web app's pure views
-   over the real stylesheet, screenshots them with a local Chromium, and writes
-   `.ab/web-dashboard-frames/verify-report.md` plus PNG and HTML scratch files.
-   It requires a Chromium-family binary (`CHROMIUM_BIN`, or `chromium` on PATH)
-   and no server, network, forge, or live agent runner. It deposits nothing
-   itself. Its deterministic evidence checks fail the command when a frame
-   omits required text; that is a failing verdict, not a retry.
-4. Run `bun tools/capture-parity.ts`. It captures the terminal and web frames
-   at the merge base and on this branch and byte-compares every PNG. A nonzero
-   exit (a differing, missing, or extra frame, or a failed capture) is a failing
-   verdict unless the build's spec expects the frames to change; when it does,
-   name each expected difference in the report. When the spec says the frames
-   must be unchanged, a differing frame is never a pass.
-   When the context manifest supplies `commitRange.base`, also run
-   `bun tools/capture-parity.ts --base <commitRange.base>` to compare against
-   the kernel-recorded start of this build's change. Record both baselines and
-   results. The default merge base can predate changes inherited by this build
-   (for example when local default-branch refs are stale). Frames identical to
-   the recorded starting revision are
-   inherited evidence, not changes requiring this build's spec to authorize
-   them. Every difference against the starting revision must still be expected
-   by the spec; a failed capture or unexplained difference still fails. This
-   supplemental comparison does not relax any visual criterion below.
-5. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
-   tool, both viewports. Judge the images themselves. The `.html` files are
-   human evidence and may help identify a frame, but they are not a basis for
-   your verdict. Confirm the signed-in control line has no surface tab words,
-   while the multi-repository frame retains its repository selector.
-   Check the handoff wide/narrow and dimmed frames: both runtimes, mode and
-   deadline wrap in flow; `(draining)` remains yellow beside lifecycle status,
-   including on the unfocused row.
-6. Append criterion-by-criterion visual observations to the generated report,
-   ticking or failing each checklist item. In its **Web dashboard visual
-   verdict** section, record pass or fail explicitly. On a guidance-assisted
-   retry, also record how the answered escalation affected the capture, the
-   interpretation of the evidence, or the verdict.
-7. If and only if every visual criterion passes, designate the reviewed frames
-   as ordinary PR attachments, then issue the passing verdict:
+2. Read `DESIGN.md`: ANSI's Two Grounds, Semantic Type, Color Is State,
+   Title First, Sign-off, Glyph, Square Rules, and Flowing Document rules apply.
+   Both grounds use the exact packaged Atkinson Hyperlegible Next and
+   JetBrains Mono fonts; host font substitution is not acceptable.
+3. Run `bun run capture:web-dashboard`. It renders offline production views
+   over deterministic dispatch models, writes `frames.json`, PNGs, HTML and
+   `verify-report.md` under `.ab/web-dashboard-frames/`. It needs local Chromium
+   (`CHROMIUM_BIN` may select it). A capture crash, omitted required fact,
+   missing browser or unreadable PNG is a failure, never a skip.
+4. Run `bun tools/capture-parity.ts`; when the manifest supplies
+   `commitRange.base`, also run with `--base <commitRange.base>`. Record both
+   baselines. The default merge base may predate inherited changes. Frames
+   identical to the recorded starting revision are inherited evidence; every
+   difference against that revision must be authorized by the spec. A failed
+   capture or unexplained difference fails, and this comparison never relaxes
+   visual criteria. Differences must be authorized by the spec. ANSI changes web
+   pixels and adds light/dark variants; terminal frames must remain identical
+   against this build's recorded starting revision. Never loosen comparison.
+5. Open **every PNG listed in frames.json**, including both grounds and both
+   widths, with the image tool. Compare applicable reference views at 1440px
+   and 390px. Check all generated checklist criteria: title and slug, current
+   teal steps, quiet timing, square ruled controls, opaque account menu with
+   Theme choices, readable sign-in and connect, complete red escalation plus
+   explanation, full-bleed phone answers and full-width primary controls,
+   amber landing consent on ground, no clipping, no fake loading facts, and
+   visible focus/pending/disabled/error states. Static captures prove
+   presentation, not hydrated theme interaction. Confirm no surface tab words
+   in the signed-in control line and retain the multi-repository selector.
+   In wide/narrow and dimmed handoff frames, both runtimes, mode and deadline
+   wrap in flow; `(draining)` remains amber even on the unfocused row.
+6. Append criterion-by-criterion observations and an explicit pass/fail to
+   `verify-report.md`. Guidance may explain evidence but cannot waive a failed
+   criterion. Record how answered guidance affected the capture, interpretation
+   or verdict. No shadows, gradients, pills, icon sets or interface emoji; fixture
+   transcript content is not an interface glyph. No status fills, nested row
+   scroller, pinned shell, optimistic state or unconfirmed destructive write.
+   Page numbers and app title remain open decisions, not grounds to invent UI.
+7. Only if every criterion passes, attach **each reviewed variant** using its
+   unique manifest id. Generate the commands from `frames.json`, never from a
+   hardcoded one-ground list. Each entry supplies `id` and `pngPath`; invoke
+   `ab artifact put web-dashboard-frame:<id>:png <pngPath> --attach` with
+   structured process arguments, awaiting and checking each command. Then run:
 
    ```
-   ab artifact put web-dashboard-frame:builds-rollback-wide:png .ab/web-dashboard-frames/builds-rollback-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-rollback-narrow:png .ab/web-dashboard-frames/builds-rollback-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-handoff-wide:png .ab/web-dashboard-frames/builds-handoff-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-handoff-narrow:png .ab/web-dashboard-frames/builds-handoff-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-handoff-dimmed:png .ab/web-dashboard-frames/builds-handoff-dimmed.png --attach
-   ab artifact put web-dashboard-frame:builds-harvest-suspended-wide:png .ab/web-dashboard-frames/builds-harvest-suspended-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-harvest-suspended-narrow:png .ab/web-dashboard-frames/builds-harvest-suspended-narrow.png --attach
-   ab artifact put web-dashboard-frame:capacity-wide:png .ab/web-dashboard-frames/capacity-wide.png --attach
-   ab artifact put web-dashboard-frame:capacity-narrow:png .ab/web-dashboard-frames/capacity-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-native-sessions-wide:png .ab/web-dashboard-frames/builds-native-sessions-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-native-sessions-narrow:png .ab/web-dashboard-frames/builds-native-sessions-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-forge-readiness-wide:png .ab/web-dashboard-frames/builds-forge-readiness-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-forge-readiness-narrow:png .ab/web-dashboard-frames/builds-forge-readiness-narrow.png --attach
-   ab artifact put web-dashboard-frame:integration-detail-wide:png .ab/web-dashboard-frames/integration-detail-wide.png --attach
-   ab artifact put web-dashboard-frame:integration-detail-narrow:png .ab/web-dashboard-frames/integration-detail-narrow.png --attach
-   ab artifact put web-dashboard-frame:integration-detail-conflict:png .ab/web-dashboard-frames/integration-detail-conflict.png --attach
-   ab artifact put web-dashboard-frame:integration-detail-failed:png .ab/web-dashboard-frames/integration-detail-failed.png --attach
-   ab artifact put web-dashboard-frame:integration-detail-ready-node:png .ab/web-dashboard-frames/integration-detail-ready-node.png --attach
-   ab artifact put web-dashboard-frame:integration-wide:png .ab/web-dashboard-frames/integration-wide.png --attach
-   ab artifact put web-dashboard-frame:integration-narrow:png .ab/web-dashboard-frames/integration-narrow.png --attach
-   ab artifact put web-dashboard-frame:integration-dimmed:png .ab/web-dashboard-frames/integration-dimmed.png --attach
-   ab artifact put web-dashboard-frame:connect-code-wide:png .ab/web-dashboard-frames/connect-code-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-approval-wide:png .ab/web-dashboard-frames/connect-approval-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-error-wide:png .ab/web-dashboard-frames/connect-error-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-approved-wide:png .ab/web-dashboard-frames/connect-approved-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-denied-wide:png .ab/web-dashboard-frames/connect-denied-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-expired-wide:png .ab/web-dashboard-frames/connect-expired-wide.png --attach
-   ab artifact put web-dashboard-frame:connect-code-narrow:png .ab/web-dashboard-frames/connect-code-narrow.png --attach
-   ab artifact put web-dashboard-frame:connect-approval-narrow:png .ab/web-dashboard-frames/connect-approval-narrow.png --attach
-   ab artifact put web-dashboard-frame:connect-error-narrow:png .ab/web-dashboard-frames/connect-error-narrow.png --attach
-   ab artifact put web-dashboard-frame:connect-approved-narrow:png .ab/web-dashboard-frames/connect-approved-narrow.png --attach
-   ab artifact put web-dashboard-frame:connect-denied-narrow:png .ab/web-dashboard-frames/connect-denied-narrow.png --attach
-   ab artifact put web-dashboard-frame:connect-expired-narrow:png .ab/web-dashboard-frames/connect-expired-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-post-reconcile-policy-wide:png .ab/web-dashboard-frames/builds-post-reconcile-policy-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-post-reconcile-policy-narrow:png .ab/web-dashboard-frames/builds-post-reconcile-policy-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-loading-wide:png .ab/web-dashboard-frames/builds-loading-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-happy-narrow:png .ab/web-dashboard-frames/builds-happy-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-empty-wide:png .ab/web-dashboard-frames/builds-empty-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-empty-narrow:png .ab/web-dashboard-frames/builds-empty-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-harvest-wide:png .ab/web-dashboard-frames/builds-harvest-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-harvest-narrow:png .ab/web-dashboard-frames/builds-harvest-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-multirepo-wide:png .ab/web-dashboard-frames/builds-multirepo-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-rest-wide:png .ab/web-dashboard-frames/builds-mixed-rest-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-hover-wide:png .ab/web-dashboard-frames/builds-mixed-hover-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-focus-wide:png .ab/web-dashboard-frames/builds-mixed-focus-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-paused-wide:png .ab/web-dashboard-frames/builds-mixed-paused-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-auto-merge-on-wide:png .ab/web-dashboard-frames/builds-auto-merge-on-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-parked-no-consent-wide:png .ab/web-dashboard-frames/builds-parked-no-consent-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-selected-narrow:png .ab/web-dashboard-frames/builds-mixed-selected-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-detail-wide:png .ab/web-dashboard-frames/builds-mixed-detail-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-answer-wide:png .ab/web-dashboard-frames/builds-mixed-answer-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-answer-narrow:png .ab/web-dashboard-frames/builds-mixed-answer-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-mixed-abort-wide:png .ab/web-dashboard-frames/builds-mixed-abort-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-longrepo-narrow:png .ab/web-dashboard-frames/builds-longrepo-narrow.png --attach
-   ab artifact put web-dashboard-frame:signin-wide:png .ab/web-dashboard-frames/signin-wide.png --attach
-   ab artifact put web-dashboard-frame:signin-error-narrow:png .ab/web-dashboard-frames/signin-error-narrow.png --attach
-   ab artifact put web-dashboard-frame:consent-named-wide:png .ab/web-dashboard-frames/consent-named-wide.png --attach
-   ab artifact put web-dashboard-frame:consent-unnamed-narrow:png .ab/web-dashboard-frames/consent-unnamed-narrow.png --attach
-   ab artifact put web-dashboard-frame:consent-missing-code-wide:png .ab/web-dashboard-frames/consent-missing-code-wide.png --attach
-   ab artifact put web-dashboard-frame:consent-route-narrow:png .ab/web-dashboard-frames/consent-route-narrow.png --attach
    ab verdict pass --notes .ab/web-dashboard-frames/verify-report.md
    ```
 
-   On any failure, designate nothing and end exactly once with:
+   On failure attach nothing and terminate exactly once with:
 
    ```
    ab verdict fail --report .ab/web-dashboard-frames/verify-report.md
    ```
 
-Rollback wide/narrow frames must name failed, restored and held runtime versions
-and commits, plus the rollback event timestamp, using the existing yellow notice.
-
-## Verdict rules
-
-- **Fail** if the capture crashes, produces no frame, any PNG cannot be opened,
-  or an image visibly clips, overlaps, loses the row grammar, introduces an
-  inner rows/detail scroller or fixed shell block, renders a footer/global
-  button row, shows a resting button fill, breaks a rule recorded in
-  `DESIGN.md`, or is otherwise incoherent. The shared 2px outline on buttons is
-  the sole component-border exception to the No Hairline Rule.
-- **Fail** when no Chromium binary is available. That is a host setup problem
-  for the operator, not a reason to skip: record the missing binary and
-  `CHROMIUM_BIN` in the report and use the failing terminal.
-- A visual difference from an earlier build is not itself a failure. There is
-  no golden-frame comparison; judge whether this capture is usable, coherent,
-  and inside the recorded system. The monospace face may differ between hosts.
-- Page numbers remain deliberately open in `DESIGN.md`; their absence or
-  presence is not a criterion. The tuned palette is canonical: judge that its
-  chroma is muted while BLOCKED/red, RUNNING/green, PAUSED/yellow, and
-  QUEUED/cyan remain distinguishable at a glance.
-- Human guidance may clarify how to perform the retry or interpret the
-  evidence, but it cannot change the visual criteria or verdict semantics,
-  authorize a pass that contradicts a visibly failed criterion, or authorize
-  editing product code from this verify phase.
-- Never run Git diff/log/status to decide whether the step applies. Never emit
-  `skip`: a nonmatching change is skipped by the kernel before this session is
-  created.
-- If the capture fails before creating the report, create the report only
-  under `.ab/web-dashboard-frames/`, record the command and error and the
-  missing evidence, then use the failing terminal above.
-- Never designate evidence from a failed visual run. Attachments are the
-  passing review record, not a capture dump.
-- Do not edit product code or fix what you find. Report it to the implementer
-  through the failing verdict.
+If capture fails before a report exists, create that report under the same
+scratch directory with the command, error and missing evidence. Never designate
+frames from a failed run. A prior build's visual differences are not themselves
+failures; the spec and recorded ANSI rules define the verdict.

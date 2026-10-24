@@ -3421,7 +3421,9 @@ Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while land acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
 through the MCP/operator build-control tools. The terminal uses `l` for land and
-`o` for hold on the selected landing. The web has no consent controls.
+`o` for hold on the selected landing. The hosted web app offers **Land** and
+**Hold** on a landing awaiting consent, with the same durable acknowledgements
+and merge gates. It does not provide a landing-policy editor.
 
 The repository auto-merge default and its fan-out are retired. Historical events
 still replay; explicit old per-build commands map to consent/hold until a new
