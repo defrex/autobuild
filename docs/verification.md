@@ -134,13 +134,14 @@ Autobuild's own chain: this repository's choices, not defaults.
 |---|---|---|---|
 | 1 | lint | check | formatting and lint; mandatory |
 | 2 | types | check | TypeScript type checking |
-| 3 | unit | check | the test suite |
-| 4 | postgres | check | live store, service and migration suites, plus hosted-service packaging; mandatory |
-| 5 | dashboard | agent | captures terminal-dashboard frames and judges them |
-| 6 | web-dashboard | agent | captures operator web-app frames and judges them against the design |
-| 7 | website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
-| 8 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
+| 3 | unit | check | the test suite, minus database-backed integration tests |
+| 4 | build | check | packs every publishable package and checks its contents, imports and bins; mandatory |
+| 5 | integration | check | database-backed store, service and migration suites, plus a packed hosted-service deploy rehearsal |
+| 6 | ui-tui | agent | captures terminal-dashboard frames and judges them |
+| 7 | ui-app | agent | captures operator web-app frames and judges them against the design |
+| 8 | ui-website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
+| 9 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
 
-Steps 5 to 8 are optional and path-scoped, run by repository skills `ab-verify-dashboard`, `verify-web-dashboard`, `verify-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`. The terminal verifier's `ab-` prefix is legacy; local skills get plain names.
+Steps 5 to 9 are optional and path-scoped. Integration covers core, the Postgres store and the hosted packages; the others run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
 
-A plan for a docs change like this page selects lint, types, unit, postgres, website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched dashboard steps aren't selected.
+A plan for a docs change like this page selects lint, types, unit, build, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.

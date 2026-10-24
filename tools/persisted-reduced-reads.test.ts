@@ -9,7 +9,7 @@ test('production current reductions use persisted reads; every exception has a l
     for await (const file of new Glob('**/*.{ts,tsx}').scan(root)) {
       if (
         /\.test\.|\/(?:__fixtures__|fixtures|generators)\//.test(`/${file}`) ||
-        /(?:^|\/)(testing|integration)\//.test(file) ||
+        /(?:^|\/)(testing|scenarios)\//.test(file) ||
         file.endsWith('/store/contract.ts')
       )
         continue

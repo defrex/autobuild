@@ -1,809 +1,288 @@
-import { testProjects } from '../testing/projects'
+/**
+ * End-to-end OAuth 2.1 + MCP over the hosted service (AUT-341): a single
+ * Fetch router composes Better Auth's handler at /api/auth/* and the /mcp
+ * endpoint delegating in-process to the real hosted service (store +
+ * operator + ticket backends). Better Auth runs on its memory adapter here;
+ * mcp.integration.test.ts runs the same flow against a migrated Postgres
+ * schema for production adapter parity.
+ *
+ * The client side is the MCP SDK's own OAuth client (client/auth.js) and
+ * StreamableHTTPClientTransport, exactly the machinery Claude web, Claude
+ * Code, and Codex bring, so contract drift on either side fails loudly.
+ */
 import { describe, expect, test } from 'bun:test'
+import { refreshAuthorization } from '@modelcontextprotocol/sdk/client/auth.js'
+import type {
+  OAuthClientInformationMixed,
+  OAuthTokens,
+} from '@modelcontextprotocol/sdk/shared/auth.js'
 import { memoryAdapter } from 'better-auth/adapters/memory'
-import { verifyToken } from '@defrex/autobuild/remote-store'
-import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator'
-import { z } from 'zod'
-import { createWebAuth, type WebAuth } from './auth'
-import { MCP_MAX_WAIT_SECONDS, createMcpEndpoint } from './mcp'
+import { TOOLS } from '@defrex/autobuild/operator'
+import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
+import {
+  authorizeFlow,
+  baseEnv,
+  buildApp,
+  buildAuth,
+  connectClient,
+  discoverMetadata,
+  discoverProtectedResource,
+  dynamicRegister,
+  emptyDB,
+  ORIGIN,
+  REDIRECT_URI,
+  REPO,
+  routerFetch,
+  seedUser,
+  toolsListRequest,
+} from '../testing/mcp-oauth'
+import { createWebAuth } from './auth'
+import { MCP_SERVER_INSTRUCTIONS } from './mcp'
 
-const env = {
-  BETTER_AUTH_SECRET: '0123456789abcdef0123456789abcdef',
-  BETTER_AUTH_URL: 'https://operator.example',
-  GITHUB_CLIENT_ID: 'client',
-  GITHUB_CLIENT_SECRET: 'github-secret-canary',
-  AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
-  AB_WEB_REPOSITORIES: 'https://github.com/owner/repo',
-  AB_POSTGRES_URL: 'postgres://database-canary',
-  AB_STORE_SECRET: 'store-secret-canary',
-}
-const config = {
-  secret: '0123456789abcdef0123456789abcdef',
-  baseURL: 'https://operator.example',
-  providers: ['github' as const],
-  allowedEmails: new Set(['ada@example.com']),
-  repositories: ['https://github.com/owner/repo'],
-  github: { clientId: 'client', clientSecret: 'github-secret-canary' },
-  postgresURL: 'postgres://database-canary',
-  secureCookies: true,
-  mcpResource: 'https://operator.example/mcp',
-}
-const now = new Date('2029-01-01T00:00:00Z')
-const clock = () => now
+describe('hosted MCP over OAuth (memory adapter)', () => {
+  const env = { ...baseEnv }
+  const db = emptyDB()
+  const auth = createWebAuth(env, { database: memoryAdapter(db) })
+  const { app, backing } = buildApp(env, auth)
+  let adaCookie = ''
+  let adaTokens: OAuthTokens | undefined
+  let registered: OAuthClientInformationMixed | undefined
 
-const TOKEN_ROW = {
-  id: 't1',
-  accessToken: 'mcp-access-token',
-  refreshToken: 'mcp-refresh-token',
-  accessTokenExpiresAt: new Date('2029-01-01T01:00:00Z'),
-  refreshTokenExpiresAt: new Date('2029-01-02T01:00:00Z'),
-  clientId: 'registered-client',
-  userId: 'u1',
-  scopes: 'openid profile email offline_access',
-  createdAt: now,
-  updatedAt: now,
-}
-const USER = { id: 'u1', email: 'Ada@Example.com', name: 'Ada', emailVerified: true }
-
-/** A stub of the Better Auth instance: only the two surfaces the endpoint
- * uses are real (the MCP token store and the typed context adapters). */
-function fakeAuth(
-  overrides: {
-    session?: unknown | null
-    user?: unknown | null
-    application?: { name?: string } | null
-  } = {},
-): WebAuth {
-  return {
-    api: {
-      getMcpSession: async () => (overrides.session === undefined ? TOKEN_ROW : overrides.session),
-    },
-    $context: Promise.resolve({
-      internalAdapter: {
-        findUserById: async () => (overrides.user === undefined ? USER : overrides.user),
-      },
-      adapter: {
-        findOne: async () =>
-          overrides.application === undefined
-            ? { id: 'a1', name: 'Claude web', clientId: 'registered-client' }
-            : overrides.application,
-      },
-    }),
-  } as unknown as WebAuth
-}
-
-/** The token clientId the capturing variant's session carries — distinct
- * from `fakeAuth`'s 'registered-client' so no assertion can pass by copying a
- * constant from the happy path of another test. */
-const CANARY_CLIENT_ID = 'contract-canary-client'
-
-/** The exact query shape operator() is contract-bound to issue against
- * better-auth's adapter: resolving the MCP client name looks the token's
- * registration up with
- * `findOne({ model: 'oauthApplication', where: [{ field: 'clientId', value }] })`
- * and reads `name` off the row (AUT-398 pinned the identical shape for the
- * consent-page helper). Asserting this shape exactly means a model rename, a
- * field rename, or a where-shape drift in operator() fails the suite instead
- * of silently degrading every client to its raw client_id. */
-const expectedLookup = (clientId: string) => ({
-  model: 'oauthApplication',
-  where: [{ field: 'clientId', value: clientId }],
-})
-
-type CapturedLookup = ReturnType<typeof expectedLookup>
-
-/** The contract-pinning counterpart of fakeAuth: its adapter.findOne records
- * each query argument it is called with into `lookups` and answers with the
- * programmed response, so tests assert the lookup itself rather than only the
- * mapped-out name (fakeAuth's findOne ignores its argument and returns a
- * canned row — exactly the unasserted pattern AUT-549 implicates). */
-function capturingAuth(
-  respond: (lookup: CapturedLookup) => Promise<{ name?: unknown } | null>,
-  overrides: { session?: unknown; user?: unknown } = {},
-): { auth: WebAuth; lookups: CapturedLookup[] } {
-  const lookups: CapturedLookup[] = []
-  const auth = {
-    api: {
-      getMcpSession: async () =>
-        overrides.session === undefined
-          ? { ...TOKEN_ROW, clientId: CANARY_CLIENT_ID }
-          : overrides.session,
-    },
-    $context: Promise.resolve({
-      internalAdapter: {
-        findUserById: async () => (overrides.user === undefined ? USER : overrides.user),
-      },
-      adapter: {
-        findOne: async (query: CapturedLookup) => {
-          lookups.push(query)
-          return respond(query)
+  test('an unauthenticated tools/list POST receives the RFC 9728 challenge', async () => {
+    const response = await app(
+      new Request(`${ORIGIN}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
         },
-      },
-    }),
-  } as unknown as WebAuth
-  return { auth, lookups }
-}
-
-function endpoint(
-  auth: WebAuth,
-  overrides: {
-    delegate?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
-    entries?: readonly ToolEntry[]
-    projects?: ReturnType<typeof testProjects>
-    config?: typeof config
-  } = {},
-) {
-  return createMcpEndpoint({
-    projects: overrides.projects ?? testProjects(['https://github.com/owner/repo']),
-    config: overrides.config ?? config,
-    auth,
-    storeSecret: env.AB_STORE_SECRET,
-    delegate:
-      overrides.delegate ??
-      (async (_input: string | URL | Request, _init?: RequestInit) => Response.json({ ok: true })),
-    now: clock,
-    ...(overrides.entries !== undefined ? { entries: overrides.entries } : {}),
-  })
-}
-
-/** A minimal MCP initialize request over JSON-RPC (the transport answers
- * statelessly, so each POST is independent). */
-function initializeRequest(token?: string): Request {
-  return new Request('https://operator.example/mcp', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-06-18',
-        capabilities: {},
-        clientInfo: { name: 'mcp-unit-test', version: '0.0.0' },
-      },
-    }),
-  })
-}
-
-async function jsonOf(response: Response): Promise<Record<string, unknown>> {
-  return (await response.json()) as Record<string, unknown>
-}
-
-describe('hosted MCP endpoint guard', () => {
-  test('a missing, unknown, or expired token receives the RFC 9728 challenge', async () => {
-    const endpoint_ = endpoint(fakeAuth({ session: null }))
-    for (const request of [
-      new Request('https://operator.example/mcp', { method: 'POST', body: '{}' }),
-      initializeRequest('unknown-token'),
-    ]) {
-      const response = await endpoint_.fetch(request)
-      expect(response.status).toBe(401)
-      expect(response.headers.get('www-authenticate')).toBe(
-        'Bearer resource_metadata="https://operator.example/.well-known/oauth-protected-resource"',
-      )
-      const body = await jsonOf(response)
-      expect(body).toMatchObject({ jsonrpc: '2.0', id: null })
-    }
-
-    const expired = endpoint(
-      fakeAuth({ session: { ...TOKEN_ROW, accessTokenExpiresAt: new Date('2028-12-31') } }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      }),
     )
-    const response = await expired.fetch(initializeRequest())
     expect(response.status).toBe(401)
-  })
-
-  test('a dropped or unresolvable operator is refused 403', async () => {
-    const dropped = endpoint(fakeAuth({ user: { ...USER, email: 'mallory@example.com' } }))
-    expect((await dropped.fetch(initializeRequest())).status).toBe(403)
-    const missing = endpoint(fakeAuth({ user: null }))
-    expect((await missing.fetch(initializeRequest())).status).toBe(403)
-  })
-
-  test('an allowlisted operator initializes; stateless GET serves SSE 200 and OPTIONS preflights', async () => {
-    const endpoint_ = endpoint(fakeAuth())
-    const initialized = await endpoint_.fetch(initializeRequest('any'))
-    expect(initialized.status).toBe(200)
-    const body = await jsonOf(initialized)
-    const result = body.result as { serverInfo?: { name?: string }; instructions?: string }
-    expect(result.serverInfo?.name).toBe('autobuild')
-    expect(result.instructions).toContain('repositories.list')
-
-    // The transport contract: GET answers an SSE stream (the SDK's standalone
-    // stream, not a 405 — stateless mode disables session validation, not
-    // server-to-client streams).
-    expect(
-      (
-        await endpoint_.fetch(
-          new Request('https://operator.example/mcp', {
-            method: 'GET',
-            headers: { accept: 'text/event-stream' },
-          }),
-        )
-      ).status,
-    ).toBe(200)
-    const preflight = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', { method: 'OPTIONS' }),
+    expect(response.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`,
     )
-    expect(preflight.status).toBe(204)
-    expect(preflight.headers.get('access-control-allow-origin')).toBe('*')
-  })
-})
-
-describe('hosted MCP endpoint tool binding', () => {
-  test('every registry entry is listed with its schema, annotations, and repositories.list', async () => {
-    const endpoint_ = endpoint(fakeAuth())
-    const list = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
-      }),
-    )
-    expect(list.status).toBe(200)
-    const { result } = (await jsonOf(list)) as { result: { tools: { name: string }[] } }
-    const names = result.tools.map((tool) => tool.name).sort()
-    expect(names).toContain('builds.list')
-    expect(names).toContain('notes.write')
-    expect(names).toContain('repositories.list')
-    expect(result.tools).toHaveLength(TOOLS.length + 1)
   })
 
-  test('a tool call mints an attributed operator token and delegates to the tools route', async () => {
-    let delegated: Request | undefined
-    const endpoint_ = endpoint(fakeAuth(), {
-      delegate: async (input, init) => {
-        delegated = new Request(input, init)
-        return Response.json({ ok: true, via: 'operator' })
-      },
-    })
-    const response = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 3,
-          method: 'tools/call',
-          params: {
-            name: 'repository.settings',
-            arguments: { repo: 'https://github.com/owner/repo', setting: 'intake', enabled: false },
-          },
-        }),
-      }),
-    )
-    expect(response.status).toBe(200)
-    expect(new URL(delegated!.url).pathname).toBe(
-      '/operator/v1/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tools/repository.settings',
-    )
-    const raw = delegated!.headers.get('authorization')!.replace(/^Bearer /, '')
-    expect(verifyToken(env.AB_STORE_SECRET, raw, new Date('2029-01-01T00:00:01Z'))).toEqual({
-      version: 1,
-      internalOperator: { user: 'ada@example.com', repo: 'https://github.com/owner/repo' },
-      via: { kind: 'mcp', client: 'Claude web' },
-      exp: Date.parse('2029-01-01T00:00:30Z'),
-    })
-    expect(await delegated!.json()).toEqual({
-      repo: 'https://github.com/owner/repo',
-      setting: 'intake',
-      enabled: false,
-    })
+  test('the full OAuth flow authorizes a dynamically registered client', async () => {
+    const seeded = await seedUser(auth, 'ada@example.com')
+    adaCookie = seeded.cookie
+    const metadata = await discoverMetadata(app)
+    await discoverProtectedResource(app)
+    registered = await dynamicRegister(app, metadata)
+    adaTokens = await authorizeFlow(app, adaCookie, registered)
+    expect(adaTokens.access_token).toBeTruthy()
   })
 
-  test('an unserved repository is refused before delegation', async () => {
-    let delegated = 0
-    const endpoint_ = endpoint(fakeAuth(), {
-      delegate: async () => {
-        delegated += 1
-        return Response.json({})
-      },
-    })
-    const response = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 4,
-          method: 'tools/call',
-          params: { name: 'builds.list', arguments: { repo: 'https://github.com/owner/other' } },
-        }),
-      }),
-    )
-    expect(response.status).toBe(200)
-    const { result } = (await jsonOf(response)) as {
-      result: { isError?: boolean; content: { text: string }[] }
-    }
-    expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ kind: 'validation' })
-    expect(delegated).toBe(0)
-  })
-
-  test('an operator failure body round-trips onto the tool result with isError', async () => {
-    const endpoint_ = endpoint(fakeAuth(), {
-      delegate: async () =>
-        Response.json(
-          { kind: 'conflict', error: 'remote store version mismatch', code: 'version' },
-          { status: 409 },
-        ),
-    })
-    const response = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 5,
-          method: 'tools/call',
-          params: {
-            name: 'builds.list',
-            arguments: { repo: 'https://github.com/owner/repo', scope: 'all' },
-          },
-        }),
-      }),
-    )
-    const { result } = (await jsonOf(response)) as {
-      result: { isError?: boolean; content: { text: string }[] }
-    }
-    expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content[0]!.text)).toEqual({
-      kind: 'conflict',
-      error: 'remote store version mismatch',
-      code: 'version',
-    })
-  })
-
-  test('the wait clamp bounds builds.events before delegation', async () => {
-    // The registry's own schema caps waitSeconds at 30 today, so the SDK's
-    // schema validation refuses anything larger before this handler runs.
-    // Simulate the future schema raise the clamp exists for: a synthetic
-    // builds.events entry whose cap exceeds the clamp.
-    const raised = TOOLS.find((entry) => entry.name === 'builds.events')!
-    const synthetic: ToolEntry = {
-      ...raised,
-      inputSchema: z.strictObject({
-        repo: z.string().min(1),
-        slug: z.string().min(1),
-        cursor: z.number().int().min(0),
-        waitSeconds: z.number().int().min(0).max(100_000).default(0),
-      }),
-    }
-    let delegated: Request | undefined
-    const endpoint_ = endpoint(fakeAuth(), {
-      entries: [synthetic],
-      delegate: async (input, init) => {
-        delegated = new Request(input, init)
-        return Response.json({ events: [] })
-      },
-    })
-    await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 6,
-          method: 'tools/call',
-          params: {
-            name: 'builds.events',
-            arguments: {
-              repo: 'https://github.com/owner/repo',
-              slug: 'demo',
-              cursor: 0,
-              waitSeconds: 10_000,
-            },
-          },
-        }),
-      }),
-    )
-    expect((await delegated!.json()).waitSeconds).toBe(MCP_MAX_WAIT_SECONDS)
-    expect(MCP_MAX_WAIT_SECONDS).toBe(240)
-  })
-
-  test('an injected extra registry entry appears in tools/list and delegates through the same closure', async () => {
-    // The no-code-change criterion: a future sandbox ticket adds entries to
-    // the registry table, and they appear here with no edit to this module.
-    const synthetic: ToolEntry = {
-      name: 'sandbox.probe' as ToolEntry['name'],
-      description: 'A hypothetical future sandbox tool.',
-      inputSchema: z.strictObject({ repo: z.string().min(1) }),
-      outputDescription: 'A probe result.',
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-      approval: 'never',
-      handler: async () => ({ probed: true }),
-    }
-    let delegated: Request | undefined
-    const endpoint_ = endpoint(fakeAuth(), {
-      entries: [...TOOLS, synthetic],
-      delegate: async (input, init) => {
-        delegated = new Request(input, init)
-        return Response.json({ probed: true })
-      },
-    })
-    const list = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} }),
-      }),
-    )
-    const { result } = (await jsonOf(list)) as { result: { tools: { name: string }[] } }
-    expect(result.tools.map((tool) => tool.name)).toContain('sandbox.probe')
-
-    const call = await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 8,
-          method: 'tools/call',
-          params: {
-            name: 'sandbox.probe',
-            arguments: { repo: 'https://github.com/owner/repo' },
-          },
-        }),
-      }),
-    )
-    expect(call.status).toBe(200)
-    expect(new URL(delegated!.url).pathname.endsWith('/tools/sandbox.probe')).toBe(true)
-  })
-
-  test('the client name falls back to the raw clientId when the registration omits it', async () => {
-    let delegated: Request | undefined
-    const endpoint_ = endpoint(fakeAuth({ application: { name: '' } }), {
-      delegate: async (input, init) => {
-        delegated = new Request(input, init)
-        return Response.json({})
-      },
-    })
-    await endpoint_.fetch(initializeRequest())
-    await endpoint_.fetch(
-      new Request('https://operator.example/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          authorization: 'Bearer any',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 9,
-          method: 'tools/call',
-          params: {
-            name: 'builds.list',
-            arguments: { repo: 'https://github.com/owner/repo', scope: 'all' },
-          },
-        }),
-      }),
-    )
-    expect(
-      verifyToken(
-        env.AB_STORE_SECRET,
-        delegated!.headers.get('authorization')!.replace(/^Bearer /, ''),
-        new Date('2029-01-01T00:00:01Z'),
-      ),
-    ).toMatchObject({ via: { kind: 'mcp', client: 'registered-client' } })
-  })
-})
-
-/** A POST tools/call whose Authorization header the endpoint resolves (the
- * transport is stateless — each POST is independent, so no initialize is
- * needed to make operator() run and issue exactly one adapter lookup). */
-function toolsCallRequest(token: string): Request {
-  return new Request('https://operator.example/mcp', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 20,
-      method: 'tools/call',
-      params: {
-        name: 'builds.list',
-        arguments: { repo: 'https://github.com/owner/repo', scope: 'all' },
-      },
-    }),
-  })
-}
-
-/** A delegate that captures the request the operator API client handed it,
- * so the minted operator token (where via.client durably lands) can be
- * verified. */
-function capturingDelegate(): {
-  delegate: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
-  delegated: () => Request
-} {
-  let captured: Request | undefined
-  return {
-    delegate: async (input, init) => {
-      captured = new Request(input, init)
-      return Response.json({})
-    },
-    delegated: () => captured!,
-  }
-}
-
-/** Drive one tools/call through the endpoint and return the delegated
- * request carrying the minted operator token. */
-async function throughEndpoint(auth: WebAuth, token = 'any'): Promise<Request> {
-  const cap = capturingDelegate()
-  const endpoint_ = endpoint(auth, { delegate: cap.delegate })
-  const response = await endpoint_.fetch(toolsCallRequest(token))
-  // A non-200 means operator() refused before minting — fail loudly here so
-  // the via assertions below report the real problem (e.g. a 401 from a
-  // mangled real-adapter seed row) instead of an undefined delegated request.
-  expect(response.status).toBe(200)
-  return cap.delegated()
-}
-
-const mintedBearer = (delegated: Request) =>
-  delegated.headers.get('authorization')!.replace(/^Bearer /, '')
-
-const VERIFIED_AT = new Date('2029-01-01T00:00:01Z')
-
-describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
-  test('issues the exact oauthApplication/clientId lookup for the token row', async () => {
-    const { auth, lookups } = capturingAuth(() =>
-      Promise.resolve({ name: 'Contract Canary Console' }),
-    )
-    await throughEndpoint(auth)
-    expect(lookups.length).toBe(1)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
-  })
-
-  test('a registered name flows through to the minted token’s via marker', async () => {
-    const { auth } = capturingAuth(() => Promise.resolve({ name: 'Contract Canary Console' }))
-    const delegated = await throughEndpoint(auth)
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: 'Contract Canary Console' },
-    })
-  })
-
-  test('looks up the clientId it was actually handed, not a constant', async () => {
-    const otherSession = {
-      ...TOKEN_ROW,
-      id: 't2',
-      accessToken: 'other-mcp-access-token',
-      clientId: 'another-canary-client',
-    }
-    const { auth, lookups } = capturingAuth(() => Promise.resolve(null), { session: otherSession })
-    await throughEndpoint(auth)
-    expect(lookups.length).toBe(1)
-    expect(lookups[0]).toEqual(expectedLookup('another-canary-client'))
-  })
-
-  test('an empty-string registered name falls back to the raw clientId, with the lookup still issued', async () => {
-    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: '' }))
-    const delegated = await throughEndpoint(auth)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
-    })
-  })
-
-  test('a missing oauthApplication row falls back to the raw clientId', async () => {
-    const { auth, lookups } = capturingAuth(() => Promise.resolve(null))
-    const delegated = await throughEndpoint(auth)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
-    })
-  })
-
-  test('a non-string name is not rendered and falls back to the raw clientId', async () => {
-    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: 42 }))
-    const delegated = await throughEndpoint(auth)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
-    })
-  })
-
-  test('a whitespace-only name renders verbatim — operator() does not trim', async () => {
-    // Pins the actual behavior: operator()’s guard is
-    // `typeof name === 'string' && name !== ''` with no .trim(), a deliberate
-    // divergence from the AUT-398 consent-page helper (which reads
-    // `client?.name?.trim()`). If a future ticket adds trimming here, this
-    // assertion changes with it, consciously.
-    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: '   ' }))
-    const delegated = await throughEndpoint(auth)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: '   ' },
-    })
-  })
-})
-
-// Drives operator() through a real better-auth instance — the actual adapter
-// factory and the memory adapter's findOne query path (field resolution
-// included) — rather than a hand-written fake. Same pattern as
-// app/oauth/consent/client-name.test.ts; the instance goes through the
-// `auth` option createMcpEndpoint already injects, so no production seam is
-// refactored in.
-describe('operator() — through a real better-auth adapter', () => {
-  const REAL_ACCESS_TOKEN = 'real-adapter-access-token'
-  const REAL_CLIENT_ID = 'real-adapter-client-id'
-  // A second registration/token pair under the same instance: the
-  // empty-string-name fallback case, without mutating the first case's rows.
-  const BLANK_ACCESS_TOKEN = 'real-adapter-blank-access-token'
-  const BLANK_CLIENT_ID = 'real-adapter-blank-client-id'
-
-  const db: Record<string, Record<string, unknown>[]> = {
-    user: [
-      {
-        id: 'u1',
-        email: 'ada@example.com',
-        name: 'Ada',
-        emailVerified: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-    session: [],
-    account: [],
-    verification: [],
-    jwks: [],
-    oauthApplication: [
-      {
-        id: 'app-1',
-        clientId: REAL_CLIENT_ID,
-        name: 'Real Adapter Console',
-        redirectUrls: 'https://app.example/callback',
-        type: 'web',
-        disabled: false,
-        createdAt: new Date(0),
-        updatedAt: new Date(0),
-      },
-      {
-        id: 'app-2',
-        clientId: BLANK_CLIENT_ID,
-        name: '',
-        redirectUrls: 'https://app.example/callback',
-        type: 'web',
-        disabled: false,
-        createdAt: new Date(0),
-        updatedAt: new Date(0),
-      },
-    ],
-    oauthAccessToken: [
-      { ...TOKEN_ROW, accessToken: REAL_ACCESS_TOKEN, clientId: REAL_CLIENT_ID },
-      {
-        ...TOKEN_ROW,
-        id: 't2',
-        accessToken: BLANK_ACCESS_TOKEN,
-        clientId: BLANK_CLIENT_ID,
-      },
-    ],
-    oauthConsent: [],
-  }
-
-  const realAuth = createWebAuth(env, { database: memoryAdapter(db) })
-
-  test('resolves the registered name through the real adapter query path', async () => {
-    const delegated = await throughEndpoint(realAuth, REAL_ACCESS_TOKEN)
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: 'Real Adapter Console' },
-    })
-  })
-
-  test('an empty-string registered name falls back to the raw clientId through the same instance', async () => {
-    const delegated = await throughEndpoint(realAuth, BLANK_ACCESS_TOKEN)
-    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
-      via: { kind: 'mcp', client: BLANK_CLIENT_ID },
-    })
-  })
-})
-
-test('repositories.list and tool gates query current registry for each allowed owner', async () => {
-  const repo = 'https://github.com/owner/repo'
-  const projects = testProjects([])
-  for (const email of ['ada@example.com', 'grace@example.com']) {
-    let delegated = 0
-    const service = endpoint(fakeAuth({ user: { ...USER, email } }), {
-      projects,
-      config: { ...config, allowedEmails: new Set(['ada@example.com', 'grace@example.com']) },
-      delegate: async () => {
-        delegated++
-        return Response.json({ ok: true })
-      },
-    })
-    const call = async (name: string, args = {}) => {
-      const response = await service.fetch(
-        new Request('https://operator.example/mcp', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json, text/event-stream',
-            authorization: 'Bearer any',
-          },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 99,
-            method: 'tools/call',
-            params: { name, arguments: args },
-          }),
-        }),
+  test('the MCP client connects, lists the live registry table, and reads a tool', async () => {
+    const mcpClient = await connectClient(app, adaTokens!, registered!)
+    try {
+      const { tools } = await mcpClient.listTools()
+      // Equality with the live registry table, plus repositories.list.
+      expect(tools).toHaveLength(TOOLS.length + 1)
+      expect(tools.map((tool) => tool.name).sort()).toEqual(
+        [...TOOLS.map((entry) => entry.name as string), 'repositories.list'].sort(),
       )
-      return (await response.json()).result
-    }
-    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
-      repositories: [],
-    })
-    await projects.add(repo, 'Ada')
-    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
-      repositories: [repo],
-    })
-    expect((await call('builds.list', { repo })).isError).toBeUndefined()
-    await projects.remove(repo, 'Ada')
-    expect((await call('builds.list', { repo })).isError).toBe(true)
-    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
-      repositories: [],
-    })
-    expect(delegated).toBe(1)
-  }
-})
+      const repositories = tools.find((tool) => tool.name === 'repositories.list')!
+      expect(repositories.annotations).toMatchObject({ readOnlyHint: true })
+      const buildsList = tools.find((tool) => tool.name === 'builds.list')!
+      expect((buildsList.inputSchema as Record<string, unknown>).type).toBe('object')
+      expect(buildsList.annotations).toMatchObject({ readOnlyHint: true })
+      // Server instructions summarize how Autobuild works and point at the
+      // repository listing.
+      expect(MCP_SERVER_INSTRUCTIONS).toContain('repositories.list')
 
-test('tickets.get comments survive MCP tool serialization', async () => {
-  const comments = [
-    { body: '  ☃\r\n\r\nnotice\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
-  ]
-  const detail = { ticket: { comments }, blockers: [], build: null }
-  const endpoint_ = endpoint(fakeAuth(), { delegate: async () => Response.json(detail) })
-  const response = await endpoint_.fetch(
-    new Request('https://operator.example/mcp', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        authorization: 'Bearer any',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: {
-          name: 'tickets.get',
-          arguments: { repo: 'https://github.com/owner/repo', id: 'AUT-1' },
-        },
+      const listing = await mcpClient.callTool({ name: 'repositories.list', arguments: {} })
+      expect((listing.content as { text: string }[])[0]!.text).toBe(
+        JSON.stringify({ repositories: [REPO] }),
+      )
+
+      const reads = await mcpClient.callTool({
+        name: 'builds.list',
+        arguments: { repo: REPO, scope: 'all' },
+      })
+      expect(reads.isError).toBeUndefined()
+      expect(JSON.parse((reads.content as { text: string }[])[0]!.text)).toEqual([])
+    } finally {
+      await mcpClient.close()
+    }
+  })
+
+  test('MCP ticket tools retain external-source refusal instead of returning an empty queue', async () => {
+    const client = await connectClient(app, adaTokens!, registered!)
+    try {
+      await backing.ensureRepo(REPO)
+      for (const source of ['linear', 'file']) {
+        const { verify, finalize, ...root } = parseConfig(
+          `[tickets]\nsource = "${source}"\n${source === 'linear' ? 'teamKey = "ENG"\n' : ''}readyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []`,
+        )
+        const artifact = await backing.putRepoArtifact(REPO, {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            ...root,
+            verify: { steps: verify.steps },
+            finalize: { steps: finalize.steps },
+          }),
+        })
+        await backing.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: `ticket-${source}`,
+            pid: 1,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        })
+        const result = await client.callTool({ name: 'tickets.list', arguments: { repo: REPO } })
+        expect(result.isError).toBe(true)
+        expect((result.content as { text: string }[])[0]!.text).toContain(source)
+      }
+    } finally {
+      await client.close()
+    }
+  })
+
+  test('a mutating tool call stamps the operator and the via marker onto the event', async () => {
+    const mcpClient = await connectClient(app, adaTokens!, registered!)
+    try {
+      const result = await mcpClient.callTool({
+        name: 'repository.settings',
+        arguments: { repo: REPO, setting: 'intake', enabled: false },
+      })
+      expect(result.isError).toBeUndefined()
+      const body = JSON.parse((result.content as { text: string }[])[0]!.text) as {
+        enabled: boolean
+      }
+      expect(body.enabled).toBe(false)
+    } finally {
+      await mcpClient.close()
+    }
+    // The durable event names the signed-in operator and the MCP client that
+    // executed the call — the minted token's via survived the operator
+    // server's registry execution.
+    const event = (await backing.getRepoEvents(REPO)).at(-1)
+    expect(event?.type).toBe('dispatcher.intake-set')
+    expect(event?.actor).toEqual({
+      kind: 'human',
+      user: 'ada@example.com',
+      via: { kind: 'mcp', client: 'e2e-mcp-client' },
+    })
+  })
+
+  test('notes round-trip with the deposit metadata naming the user and via', async () => {
+    const mcpClient = await connectClient(app, adaTokens!, registered!)
+    try {
+      const write = await mcpClient.callTool({
+        name: 'notes.write',
+        arguments: { repo: REPO, document: 'round 1 notes' },
+      })
+      expect(write.isError).toBeUndefined()
+      const read = await mcpClient.callTool({ name: 'notes.read', arguments: { repo: REPO } })
+      const body = JSON.parse((read.content as { text: string }[])[0]!.text) as {
+        document: string
+        metadata: { user: string; via: { kind: string; client: string } }
+      }
+      expect(body.document).toBe('round 1 notes')
+      expect(body.metadata).toEqual({
+        user: 'ada@example.com',
+        via: { kind: 'mcp', client: 'e2e-mcp-client' },
+      })
+    } finally {
+      await mcpClient.close()
+    }
+  })
+
+  test('a tool call naming an unserved repository is refused', async () => {
+    const mcpClient = await connectClient(app, adaTokens!, registered!)
+    try {
+      const result = await mcpClient.callTool({
+        name: 'builds.list',
+        arguments: { repo: 'https://github.com/owner/other', scope: 'all' },
+      })
+      expect(result.isError).toBe(true)
+      expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+        kind: 'validation',
+      })
+    } finally {
+      await mcpClient.close()
+    }
+  })
+
+  test('refresh works after access-token expiry', async () => {
+    // A dedicated instance with a 1-second access token: waiting out the
+    // production hour would be absurd in a test.
+    const shortAuth = buildAuth({ ...baseEnv }, 1)
+    const short = buildApp({ ...baseEnv }, shortAuth)
+    const seeded = await seedUser(shortAuth, 'ada@example.com')
+    const metadata = await discoverMetadata(short.app)
+    const client = await dynamicRegister(short.app, metadata)
+    const tokens = await authorizeFlow(short.app, seeded.cookie, client)
+    expect(tokens.expires_in).toBe(1)
+    await Bun.sleep(1200)
+
+    const expired = await short.app(toolsListRequest(tokens.access_token!, 2))
+    expect(expired.status).toBe(401)
+
+    const refreshed = await refreshAuthorization(ORIGIN, {
+      metadata,
+      clientInformation: client,
+      refreshToken: tokens.refresh_token!,
+      fetchFn: routerFetch(short.app),
+    })
+    expect(refreshed.access_token).toBeTruthy()
+    const works = await short.app(toolsListRequest(refreshed.access_token!, 3))
+    expect(works.status).toBe(200)
+  })
+
+  test('a non-allowlisted operator completes authorization but is refused at the resource', async () => {
+    const seeded = await seedUser(auth, 'mallory@example.com', db)
+    const tokens = await authorizeFlow(app, seeded.cookie)
+    const response = await app(toolsListRequest(tokens.access_token!, 4))
+    expect(response.status).toBe(403)
+  })
+
+  test('a violating client_name is rejected at the real DCR route (AUT-399)', async () => {
+    // The hook lives in createWebAuth's plugin list, but this proves the
+    // real /api/auth/mcp/register route — the one the SDK and discovery
+    // document drive — surfaces the policy as a 400 with the RFC 7591
+    // error shape the endpoint itself uses for other metadata problems.
+    const response = await app(
+      new Request(`${ORIGIN}/api/auth/mcp/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          client_name: 'acme\u0000console',
+          redirect_uris: [REDIRECT_URI],
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          token_endpoint_auth_method: 'none',
+        }),
       }),
-    }),
-  )
-  const decoded = (await jsonOf(response)) as { result: { content: { text: string }[] } }
-  expect(JSON.parse(decoded.result.content[0]!.text)).toEqual(detail)
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'invalid_client_metadata' })
+  })
+
+  test('DCR persists the authenticationScheme the plugin writes', async () => {
+    // The pinned 1.4.18 MCP plugin's DCR writes `authenticationScheme` but
+    // its declared oauthApplication schema omits it; the file-local plugin
+    // declaration in createWebAuth restores it through the adapter factory.
+    // The registered client used token_endpoint_auth_method 'none'.
+    const row = db.oauthApplication?.find((candidate) => candidate.name === 'e2e-mcp-client')
+    expect(row?.authenticationScheme).toBe('none')
+    // Pin the DCR-carried fields the memory adapter persists, so the
+    // postgres parity block below can assert the two adapters' visible
+    // behavior matches without reaching across describe scopes. (Optional
+    // fields left undefined — icon, userId here — are omitted by the
+    // memory adapter but read back as NULL on Postgres, so only the
+    // defined DCR-carried values are pinned.)
+    expect(row).toMatchObject({
+      name: 'e2e-mcp-client',
+      type: 'public',
+      authenticationScheme: 'none',
+    })
+    expect(row?.redirectUrls).toContain('https://claude.ai/api/mcp/auth_callback')
+  })
 })

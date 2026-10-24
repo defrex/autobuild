@@ -16,7 +16,7 @@ import {
 } from './dispatch-process'
 import { DISPATCHER } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { GIT_ID, git } from '../integration/harness'
+import { GIT_ID, git } from '../scenarios/harness'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 

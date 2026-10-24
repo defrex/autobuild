@@ -15,7 +15,7 @@ import ConnectionPage from '../../hosted-store-service/app/connect/page'
  * verifiable surface is the presentation layer: real pipeline → real
  * projection → real React views → real stylesheet → pixels. The deterministic
  * half (evidence strings the frames must and must not contain) fails here; the
- * visual half is judged by the `verify-web-dashboard` skill from the PNGs.
+ * visual half is judged by the `verify-ui-app` skill from the PNGs.
  *
  * The app tree lives in `packages/hosted-store-service/app` (AUT-409). This
  * tooling lives in its own workspace package

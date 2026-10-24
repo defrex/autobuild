@@ -454,7 +454,9 @@ describe('isScannedTestFile', () => {
   test('accepts *.test.ts and *.test.tsx under packages/<pkg>/src, including *.live.test.ts', () => {
     expect(isScannedTestFile('packages/core/src/a.test.ts', PACKAGES)).toBe(true)
     expect(isScannedTestFile('packages/core/src/a.test.tsx', PACKAGES)).toBe(true)
-    expect(isScannedTestFile('packages/postgres-store/src/store.live.test.ts', PACKAGES)).toBe(true)
+    expect(
+      isScannedTestFile('packages/postgres-store/src/store.integration.test.ts', PACKAGES),
+    ).toBe(true)
   })
 
   test('rejects production files, non-src paths, and files outside packages/', () => {

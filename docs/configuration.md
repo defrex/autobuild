@@ -1234,7 +1234,7 @@ and configured agent-runtime credentials available, run:
 AB_RUN_VERCEL_SANDBOX_LIVE=1 \
 AB_VERCEL_SANDBOX_LIVE_REPO=/absolute/path/to/consumer \
 AB_STORE=https://store.example AB_TOKEN=… \
-bun test packages/core/src/integration/vercel-sandbox.live.test.ts
+bun test packages/core/src/scenarios/vercel-sandbox.live.test.ts
 ```
 
 The suite first runs `ab init` readiness validation through the production
@@ -1256,7 +1256,7 @@ or attempt an interactive login. The same API-key-only rule applies to Codex,
 Claude Code, and plugin runtimes.
 
 The opt-in live lifecycle suite is
-`packages/core/src/integration/vercel-sandbox.live.test.ts`. Set
+`packages/core/src/scenarios/vercel-sandbox.live.test.ts`. Set
 `AB_RUN_VERCEL_SANDBOX_LIVE=1`, `AB_VERCEL_SANDBOX_LIVE_REPO` to an independent
 checkout with a ready file ticket and this provider configuration, plus the
 hosted Store, Vercel, runtime, and GitHub credentials above. Its readiness case

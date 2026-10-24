@@ -36,7 +36,7 @@ describe('hosted-dispatcher package manifest', () => {
   })
 
   test('peers on hosted-store-service >=0.9.0, the first version exporting ./operator-api', () => {
-    // dispatcher.integration.test.ts imports
+    // dispatcher.scenario.test.ts imports
     // @defrex/autobuild-hosted-store-service/operator-api (and app/dashboard
     // imports it too). The subpath first ships in hosted-store-service 0.9.0 —
     // the published 0.8.0 does not export it — so a lower floor would let a

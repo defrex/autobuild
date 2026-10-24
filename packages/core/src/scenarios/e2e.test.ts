@@ -5,7 +5,7 @@ import { reconcileHead } from '../kernel/reconcile-head'
  * §12 outer loop, §15.7 janitor): the whole system composed — Dispatcher →
  * real git worktree → real BuildRunner → scripted agents driving the REAL
  * `ab` CLI over one shared store → FakeForge journal → janitor epilogue.
- * See src/integration/harness.ts for what is real vs journaled-fake.
+ * See src/scenarios/harness.ts for what is real vs journaled-fake.
  *
  * Sequences are asserted as exact type lists (session brackets included);
  * payloads are spot-checked at every rule boundary.

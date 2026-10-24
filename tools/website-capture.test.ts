@@ -354,14 +354,14 @@ window.__websiteCapture = { sequence: { duration: 100, async seek(timeMs, {still
 
 test('website applicability includes all website inputs and capture tooling', async () => {
   const config = await Bun.file(join(import.meta.dir, '..', 'autobuild.toml')).text()
-  const paths = (Bun.TOML.parse(config) as { verify: { website: { paths: string[] } } }).verify
-    .website.paths
+  const paths = (Bun.TOML.parse(config) as { verify: { 'ui-website': { paths: string[] } } })
+    .verify['ui-website'].paths
   for (const path of [
     'packages/website/**',
     'docs/**',
     'design/website/**',
     'tools/website-capture*',
-    '.agents/skills/verify-website/SKILL.md',
+    '.agents/skills/verify-ui-website/SKILL.md',
   ])
     expect(paths).toContain(path)
 })

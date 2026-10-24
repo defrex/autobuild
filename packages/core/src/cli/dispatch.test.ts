@@ -9,7 +9,7 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
  * source selection, and the in-process fire-and-forget `launchRunner` that a
  * `--once` pass must drain before exiting. The Dispatcher + BuildRunner +
  * real-CLI pipeline itself is proven exhaustively by the integration harness
- * (src/integration/*.test.ts); this drives abDispatch over that same machinery
+ * (src/scenarios/*.test.ts); this drives abDispatch over that same machinery
  * (real git worktrees, scripted agents on the REAL `ab` CLI) but with fakes
  * injected through the `wire` seam, and asserts a Ready ticket reaches PR-open
  * in one pass.
@@ -94,7 +94,7 @@ import {
   happyHandlers,
   type Cli,
   type SkillHandlers,
-} from '../integration/harness'
+} from '../scenarios/harness'
 
 // The injected wire supplies a FakeTicketSource and ignores adapter details,
 // but `[tickets]` is still required to name the mandatory ready state. This

@@ -1,10 +1,10 @@
 ---
-name: verify-web-dashboard
-description: Agent-verify step - inspect the operator web app's rendered frames as colour images. Invoked by the build-runner for verify:web-dashboard; takes only the build slug. Repository-local, not a shipped ab-* skill.
+name: verify-ui-app
+description: Agent-verify step - inspect the operator web app's rendered frames as colour images. Invoked by the build-runner for verify:ui-app; takes only the build slug. Repository-local, not a shipped ab-* skill.
 disable-model-invocation: true
 ---
 
-# /verify-web-dashboard <build>
+# /verify-ui-app <build>
 
 You are a visual verifier for the browser dashboard in
 `packages/hosted-store-service/app/`. The kernel has

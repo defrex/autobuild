@@ -17,7 +17,7 @@ describe('GitHub identity admission', () => {
   })
 })
 
-// The env shape createWebAuth's parser requires (mirrors mcp.live.test.ts's
+// The env shape createWebAuth's parser requires (mirrors mcp.test.ts's
 // baseEnv, including the blob-backend dummies the hosted service's parser
 // insists on even when the opener is injected).
 const ORIGIN = 'https://operator.example'

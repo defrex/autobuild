@@ -294,7 +294,7 @@ describe('matchesPackedPattern', () => {
     ).toBe(false)
     expect(
       matchesPackedPattern(
-        'packages/core/src/integration/harness.ts',
+        'packages/core/src/scenarios/harness.ts',
         'packages/core/src/cli/testkit.ts',
       ),
     ).toBe(false)
