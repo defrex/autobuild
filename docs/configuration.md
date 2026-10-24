@@ -1704,18 +1704,31 @@ base-resolution failure is an infrastructure failure, never a permissive skip.
 
 ### Pass, fail, and skip
 
-A passing check or agent advances to the next step. An agent failure requires
-`ab verdict fail --report <file>`; the exact report is routed back to implement,
-and the failure consumes the verify retry budget in
-`policy.maxVerifyAttempts`. Check failures similarly retain command output as
-the implementation feedback.
+A passing check or agent satisfies its member of the current stage. The next
+stage starts only after every member has passed or been skipped; finalize
+starts after the last stage is satisfied.
+
+By default, a failure lets the stage's other members finish before routing the
+build to implement once with every failed member's report. Later stages do not
+run. An agent failure requires `ab verdict fail --report <file>`; check failures
+retain command output as implementation feedback. A failed cycle consumes one
+unit of the `policy.maxVerifyAttempts` retry budget, regardless of how many
+members failed.
+
+If a member configured with `failFast = true` fails, unfinished siblings are
+cancelled instead. Members that already reached an outcome keep it. Cancelled
+members are listed as not run, with their cancellation cause, in implement's
+context; cancellation does not satisfy a verification gate. See
+[verification outcomes](verification.md#steps-and-outcomes) for cancellation,
+escalation and recovery details.
 
 An agent may instead use `ab verdict skip --reason <text>` when the configured
 judgment genuinely does not apply. The trimmed reason must be nonblank, and no
 failure report is required. Plan and path exclusions are kernel-authored skips
-with deterministic reasons. Every skip satisfies that one step and advances,
-but remains distinct from a pass, does not mask another step's failure, and
-does not consume the failure retry budget.
+with deterministic reasons. Every skip satisfies only that member of the stage
+and remains distinct from a pass. It does not mask another member's failure or
+consume the failure retry budget; advancement still requires the whole stage
+to pass or skip.
 
 ## `[finalize]` and `[finalize.<step>]`
 
