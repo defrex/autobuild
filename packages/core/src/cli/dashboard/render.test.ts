@@ -2259,8 +2259,9 @@ describe('formatDuration', () => {
     expect(formatDuration(60_000)).toBe('1m00s')
     expect(formatDuration(252_000)).toBe('4m12s')
     expect(formatDuration(3_599_000)).toBe('59m59s')
-    expect(formatDuration(3_600_000)).toBe('1h00m')
-    expect(formatDuration(3_840_000)).toBe('1h04m')
+    expect(formatDuration(3_600_000)).toBe('1h00m00s')
+    expect(formatDuration(3_847_999)).toBe('1h04m07s')
+    expect(formatDuration(43_389_000)).toBe('12h03m09s')
     expect(formatDuration(-5)).toBe('0s') // never negative
   })
 })
@@ -2271,6 +2272,53 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
 
   const withStep = (over: Partial<PipelineStep> & { label: string }): DashboardBuild =>
     build({ pr: undefined, steps: [{ state: 'current', ...over }] })
+
+  test('cumulative hour-long steps tick in compact and detail views without events', () => {
+    const b = withStep({
+      label: 'implement',
+      count: 3,
+      timing: { accumulatedMs: 3_840_000, runningSince: 1_000_000 },
+    })
+    const early = progressOf(b, 1_009_000)
+    const late = progressOf(b, 1_010_000)
+    expect(early).toContain('implement(1h04m09s/3)')
+    expect(late).toContain('implement(1h04m10s/3)')
+    expect(early.length).toBe(late.length)
+    for (const [now, expected] of [
+      [1_009_000, '1h04m09s'],
+      [1_010_000, '1h04m10s'],
+    ] as const) {
+      const detail = rd(
+        { ...model([b]), view: { kind: 'detail', slug: b.slug, scroll: 0 } },
+        { color: false, width: 120, now },
+      ).join('\n')
+      expect(detail).toContain(`round 3, ${expected}`)
+    }
+  })
+
+  test('long paused, blocked and finished steps stay frozen in both registers', () => {
+    for (const status of ['paused', 'blocked', 'running'] as const) {
+      const b = build({
+        status,
+        pr: undefined,
+        steps: [
+          {
+            label: 'implement',
+            state: status === 'running' ? 'done' : 'current',
+            count: 2,
+            qualifier: 'waiting',
+            timing: { accumulatedMs: 3_847_000 },
+          },
+        ],
+      })
+      expect(progressOf(b, 1)).toContain('implement(waiting, 1h04m07s/2)')
+      expect(progressOf(b, 1)).toBe(progressOf(b, 9_000_000))
+      const detail = { ...model([b]), view: { kind: 'detail' as const, slug: b.slug, scroll: 0 } }
+      const early = rd(detail, { color: false, width: 120, now: 1 }).join('\n')
+      expect(early).toContain('waiting, round 2, 1h04m07s')
+      expect(early).toBe(rd(detail, { color: false, width: 120, now: 9_000_000 }).join('\n'))
+    }
+  })
 
   test('a running step advances as now moves forward (AC 8)', () => {
     const b = withStep({
