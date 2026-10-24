@@ -1,3 +1,10 @@
+import {
+  operatorIdentitySchema,
+  operatorPresenceSchema,
+  OPERATOR_PRESENCE_TTL_MS,
+  type OperatorIdentity,
+  type OperatorPresence,
+} from '@defrex/autobuild/store-adapter'
 import { READ_CATALOG_IDENTITY } from '@defrex/autobuild/store-adapter'
 import {
   repositoryRead,
@@ -1042,6 +1049,44 @@ export class PostgresBuildStore implements BuildStore {
       await q`INSERT INTO repo_streams (repo, created_at, updated_at)
         VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO NOTHING`
       return this.repoRecord(await this.lockRepo(q, repo))
+    })
+  }
+
+  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+    if (!repo) throw new Error('repo is required')
+    const identity = operatorIdentitySchema.parse(input)
+    return this.run(async (q) => {
+      const rows = await q`INSERT INTO operator_presence (repo,id,host,pid,started_at,heartbeat_at)
+        VALUES (${repo},${identity.id},${identity.host},${identity.pid},${identity.startedAt},${this.now()})
+        ON CONFLICT (repo,id) DO UPDATE SET host=EXCLUDED.host,pid=EXCLUDED.pid,
+        heartbeat_at=GREATEST(operator_presence.heartbeat_at,EXCLUDED.heartbeat_at)
+        RETURNING repo,id,host,pid,started_at,heartbeat_at`
+      const row = rows[0]!
+      return operatorPresenceSchema.parse({
+        repo: row.repo,
+        id: row.id,
+        host: row.host,
+        pid: row.pid,
+        startedAt: iso(row.started_at),
+        heartbeatAt: iso(row.heartbeat_at),
+      })
+    })
+  }
+
+  async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
+    return this.run(async (q) => {
+      const rows = await q`SELECT * FROM operator_presence WHERE repo=${repo}
+        AND heartbeat_at>${new Date(this.clock().getTime() - OPERATOR_PRESENCE_TTL_MS).toISOString()} ORDER BY id`
+      return rows.map((row) =>
+        operatorPresenceSchema.parse({
+          repo: row.repo,
+          id: row.id,
+          host: row.host,
+          pid: row.pid,
+          startedAt: iso(row.started_at),
+          heartbeatAt: iso(row.heartbeat_at),
+        }),
+      )
     })
   }
 

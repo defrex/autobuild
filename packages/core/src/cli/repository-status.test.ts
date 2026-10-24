@@ -54,7 +54,7 @@ describe('ab repository status', () => {
             return target.getRepoStateEvents(...args)
           }
         }
-        if (property === 'getRepo' || property === 'close') {
+        if (property === 'getRepo' || property === 'close' || property === 'listOperatorPresence') {
           const value = Reflect.get(target, property, target) as (...args: unknown[]) => unknown
           return value.bind(target)
         }
@@ -83,6 +83,7 @@ describe('ab repository status', () => {
         latestRun: null,
         latestStoppedRun: null,
       },
+      operator: { registrations: [] },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],
@@ -116,6 +117,7 @@ describe('ab repository status', () => {
           latestRun: null,
           latestStoppedRun: null,
         },
+        operator: { registrations: [] },
         sandboxes: [],
         upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
         publications: [],
@@ -127,6 +129,7 @@ describe('ab repository status', () => {
   test('human output labels the repository and every dispatcher setting', () => {
     const status = projectRepositoryStatus(REPO, [])
     expect(renderRepositoryStatus(status)).toEqual([
+      'operator: absent',
       'forge requests: unavailable',
       `repository: ${REPO}`,
       'dispatcher: absent — no dispatcher holds the repository',
@@ -552,7 +555,7 @@ test('repository status renders available outcome categories on failed tick tele
   )
   const { getRepositoryStatus } = await import('../operator/query')
   const status = await getRepositoryStatus(store, REPO, new Date())
-  expect(renderRepositoryStatus(status)[0]).toBe(
+  expect(renderRepositoryStatus(status)[1]).toBe(
     'forge requests: 5; REST primary 1; REST 304 2; GraphQL 1 (5 unattributed)',
   )
 })
@@ -594,4 +597,35 @@ test('human and JSON repository status expose the held runtime and legacy unreco
   const json = options(store, { now: clock, json: true })
   await abRepositoryStatus(json)
   expect(JSON.parse(json.output.join('\n')).dispatcher.holder.runtime).toEqual(runtime)
+})
+
+test('operator status reports live registrations, ages and exactly one human line', async () => {
+  let instant = Date.parse('2026-10-24T12:00:00.000Z')
+  const now = () => new Date(instant)
+  const store = new MemoryBuildStore({ clock: now })
+  const identity = { id: 'a', host: 'one', pid: 10, startedAt: now().toISOString() }
+  await store.upsertOperatorPresence(REPO, identity)
+  instant += 1000
+  await store.upsertOperatorPresence(REPO, { ...identity, id: 'b', host: 'two', pid: 20 })
+  const opts = options(store, { json: true, now })
+  await abRepositoryStatus(opts)
+  const projection = JSON.parse(opts.output.join('\n'))
+  expect(
+    projection.operator.registrations.map((row: { heartbeatAgeMs: number }) => row.heartbeatAgeMs),
+  ).toEqual([1000, 0])
+  expect(renderRepositoryStatus(projection).filter((line) => line.startsWith('operator:'))).toEqual(
+    ['operator: present (2 registrations)'],
+  )
+  instant += 299_000
+  const expired = options(store, { json: true, now })
+  await abRepositoryStatus(expired)
+  expect(
+    JSON.parse(expired.output.join('\n')).operator.registrations.map(
+      (row: { id: string }) => row.id,
+    ),
+  ).toEqual(['b'])
+  instant += 1000
+  const absent = options(store, { now })
+  await abRepositoryStatus(absent)
+  expect(absent.output.filter((line) => line.startsWith('operator:'))).toEqual(['operator: absent'])
 })

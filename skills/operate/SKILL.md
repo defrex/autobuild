@@ -5,13 +5,13 @@ description: Orchestrate a repository's builds - file and groom tickets, watch b
 
 # Operating the repository
 
-The operator agent is whichever agent is pointed at a repository to file tickets, watch builds, unblock them, answer
-human questions, and drive work to merge. Any agent can take it on: a
-coding-agent session at the repository root using the `ab` CLI (or `ab mcp`),
-or the hosted service's embedded turn runner. There is no initialization
-step — deciding to orchestrate is enough. By default, the agent that
-specified and queued work (the `ab-spec` and `ab-tickets` skills) takes the
-role for that work as soon as it is ready, unless the human opts out.
+The operator agent operates the builds the repository's dispatcher dispatches:
+files and grooms tickets, watches builds, answers escalations and drives authorized
+work to merge. Any external agent can take the role through the CLI or MCP.
+Filing sessions check presence before taking the role; with a live operator,
+they leave operating context in the ticket and stop. Explicit human instructions
+always override that default. Presence is advisory, permits concurrent operators,
+and grants no exclusive authority. MCP presence registration is deferred.
 
 The operator agent is not a build phase: it never runs pipeline steps, never
 edits the repository, and never touches a build's checkout. Its reach is the
@@ -80,9 +80,16 @@ working directory, and actual version when you start orchestrating.
 Every `ab …` example in this skill means this resolved invocation, run from
 the same resolved working directory.
 
+### Check presence before registering
+
+Run `ab repository status --json` and inspect `operator.registrations`. If another
+live operator is present, tell the human and do not become a second operator
+unless directed. Otherwise arm a repository-wide `ab watch --operator --json`.
+A flagged watch writes only mutable liveness, never events or a lease.
+
 ### Watch for attention events
 
-`ab watch --json` is the standing monitor. Keep its default filter: every
+`ab watch --operator --json` is the standing monitor. Keep its default filter: every
 record calls for action. It reports failed node verification, build escalations, persistent janitor failures and merge decisions,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
@@ -92,7 +99,12 @@ on that retry stays silent. Source grace and cooldown-driven failures do not
 start the tick-failure clock. Routine outcomes and self-healing failures stay silent.
 
 Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
-line. Resume with `--since <cursor>`. Named watches end when all named builds
+line. Re-arm only with `ab watch --operator --json --since <watch-cursor>`,
+using this standing watch's own cursor. Presence survives a re-arm gap of up to
+five minutes after its last heartbeat. `ab wait` neither heartbeats nor carries
+registration identity. A separate unflagged diagnostic watch or wait must never
+replace the standing monitor or supply its resume cursor.
+Named diagnostic watches end when all named builds
 are terminal; add `--repository` for repository attention. With no slugs all
 active builds and repository attention are included. Reconcile status after
 arming because historical build attention is silently baselined.
@@ -156,44 +168,28 @@ resuming it suppresses repeated loss reports for that run. Inspect repository
 status to diagnose the condition and report dispatcher trouble to the human.
 Neither a loss observation nor a later retry authorizes dispatcher intervention.
 
-### Keep watching until the work is done
+### Keep going and adopt newly dispatched builds
 
-Checking once is not shepherding. When you take responsibility for builds:
+Operate the builds the repository's dispatcher dispatches, including new builds
+that appear after you arm. Finishing the initially queued set is no reason to stop.
 
-1. Record the set you are shepherding (`ab builds --all --json`, or the slugs
-   you were given).
-2. Arm the default standing watch and keep its cursor:
-   `ab watch --json --since <cursor>` (or named slugs with `--repository`) (omit `--since` the first
-   time). Events are delivered exactly once, so a build that already finished
-   is never replayed. Do not loop on `ab wait --for terminal|attention|…`:
-   state conditions are satisfied at once by any build already in that state,
-   even with `--since`, so a finished build would be returned again and the
-   loop would spin on it. If you use `ab wait`, use only `--event <glob>`
-   conditions (satisfied by new events only), never `--for`.
-3. Reconcile current state right after the first watch is armed, and again
-   whenever a watch ends without records: a watch baselines each build at its
-   current position and does not emit what already happened, so a build that
-   merged, or an escalation already open, before registration would otherwise
-   never reach you. Run `ab build status <slug> --json` for every slug in the
-   set, and `ab repository status --json` for source health, initially and after
-   every timeout or legacy-cursor attachment. Reading status after arming leaves no gap — anything earlier shows in
-   the status, anything later arrives as an event. Treat a terminal status
-   (merged, closed, aborted) as that build's outcome, and an open escalation
-   or merge decision as attention to handle now.
-4. When a watch returns records, react: read the record, inspect the build,
-   resolve attention using the shared rules; for a repository record inspect repository status and act
-   on its condition without assuming a build slug. Then re-arm from the last cursor. Keep your own
-   outcome table from status reconciliation after named-watch exit and bounded
-   watch timeouts. Default watches do not emit routine merge/completion records. A timeout (exit 3, or a watch
-   that ends with only a `{"cursor": …}` line) is not completion — reconcile
-   as in step 3, then re-arm from that cursor.
-5. Stop only when every build in the set has an outcome in your table.
-   `pr.conflicted` is not terminal — reconcile follows. An open escalation
-   (`blocked`) needs a response, not patience. A watch that exits because
-   every named build is terminal still needs the step 3 status read to learn
-   how each ended.
-6. Report each outcome to the human, and file or move tickets when the
-   outcome makes that obviously right.
+1. Check presence as above, then arm `ab watch --operator --json` with no slugs.
+   Retain its own cursor and re-arm with
+   `ab watch --operator --json --since <watch-cursor>`.
+2. Right after arming and after each timeout, run `ab builds --all --json`, adopt
+   newly dispatched builds, inspect active builds with `ab build status <slug> --json`,
+   and reconcile `ab repository status --json`. Historical attention is baselined
+   by a fresh watch, so status reconciliation closes the attachment gap.
+3. Handle each attention record using the shared rules. Repository records have
+   no build slug: inspect repository status. Re-arm from the standing watch's
+   latest cursor, including its trailing cursor after a timeout or count exit.
+4. Report each merged, closed or aborted outcome and file or move tickets when
+   warranted. A conflict or escalation requires action. Keep the standing watch
+   alive and keep discovering work until the human ends or hands off the role.
+
+Use `ab wait` and named unflagged watches only as separate diagnostics. They
+cannot replace the registered monitor or its cursor. In MCP, use the existing
+registry monitoring tools; operator presence is not exposed there.
 
 ### Inspect
 
@@ -473,8 +469,8 @@ refreshing the facts. Open children keep a node collecting. When integration
 verification fails, file a repair child targeting that node and let it land
 before retrying the node cycle.
 
-Watch for decisions and conflicts with `ab watch --json`; save its opaque cursor
-and resume with `ab watch --since <cursor> --json`. Default attention includes
+Watch for decisions and conflicts with `ab watch --operator --json`; save its opaque cursor
+and resume with `ab watch --operator --since <watch-cursor> --json`. Default attention includes
 failed node verification (`integration.verification-failed`), node landings, node item conflicts, conflicted leaf replays and derived
 `build.consent-ready` observations, including already-ready landings on first
 repository-wide discovery. Readiness is identified by its durable

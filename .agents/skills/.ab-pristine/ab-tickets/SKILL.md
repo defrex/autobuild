@@ -169,12 +169,14 @@ bounces.
 **Don't hand-move anything out of `doing/`** — a build owns it. If you need to
 stop a build, that's `ab` (or a human), not `mv`.
 
-When a conversation queues work by moving it into `ready/` (or the configured
-ready state of any source), the agent that queued it becomes its operator agent by
-default, as the `ab-spec` skill describes under "After filing": load the
-`ab-operate` skill and shepherd those builds to completion unless the human
-says they will operate them, hands them to another agent, or the session
-cannot keep a long-running watch.
+Before moving work into `ready/` (or any source's configured ready state),
+check `ab repository status --json` for live `operator.registrations`. If an
+operator is present, preserve intent, rejected alternatives and out-of-scope
+reasons in the ticket body, file, tell the human the existing operator will
+pick it up, and stop without a watch. Otherwise load `ab-operate` and take the
+role for the builds the repository's dispatcher dispatches. Explicit human
+instructions override these defaults; non-ready filing needs no watch. See
+[After filing](../ab-spec/SKILL.md#after-filing-check-operator-presence).
 
 ## Icebox
 

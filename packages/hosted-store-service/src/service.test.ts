@@ -198,6 +198,7 @@ describe('hosted store service', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
+      operator: { registrations: [] },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],
@@ -331,6 +332,32 @@ describe('hosted store service', () => {
       })
     }
     expect(opens).toBe(0)
+  })
+
+  test('operator presence collection is classified without requiring a journal', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+      issueDispatcherCredential: async () => 'abp_1_fixture',
+      openProjectRegistry: async () => testProjects([repo]),
+      env,
+      clock,
+      openStore: async () => backing,
+    })
+    const path = `http://hosted.test/repos/${encodeURIComponent(repo)}/operator-presence`
+    const read = await service.fetch(new Request(path, { headers: machineHeaders }))
+    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual([])
+    const response = await service.fetch(
+      new Request(path, {
+        method: 'POST',
+        headers: machineHeaders,
+        body: JSON.stringify({ id: 'one', host: 'host', pid: 1, startedAt: clock().toISOString() }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(await backing.listOperatorPresence(repo)).toHaveLength(1)
+    expect(await backing.getRepo(repo)).toBeNull()
   })
 
   test('GET /repos/{repo}/state-events classifies as a store route and reaches the repo gate', async () => {

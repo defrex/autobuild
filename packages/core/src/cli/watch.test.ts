@@ -2835,3 +2835,303 @@ test('runtime rollback is default repository attention and cursor replay deliver
   await abWatch({ ...third.base, since: JSON.parse(second.out.at(-1)!).cursor, timeout: '1' })
   expect(third.out.slice(0, -1)).toEqual([])
 })
+
+describe('advisory operator watches', () => {
+  test('rejects named and ambient operator watches before opening the store', async () => {
+    for (const overrides of [
+      { slugs: ['build'] },
+      { slugs: ['build'], repository: true },
+      ...['AB_BUILD', 'AB_SESSION', 'AB_PHASE', 'AB_HARVEST', 'AB_REPO'].map((key) => ({
+        env: { [key]: 'scope' },
+      })),
+    ]) {
+      const h = harness(makeStore(), { operator: true, ...overrides })
+      await expect(abWatch(h.base)).rejects.toThrow()
+      expect(h.openCount()).toBe(0)
+    }
+  })
+
+  test('exit heartbeat anchors the full re-arm grace and preserves identity through expiry', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const h = harness(store, {
+      operator: true,
+      timeout: '29s',
+      now: clock,
+      operatorIdentity: { host: 'host-a', pid: 10, newId: () => 'one' },
+      delay: async () => {
+        clock.advance(29_000)
+      },
+    })
+    await abWatch(h.base)
+    const first = (await store.listOperatorPresence(REPO))[0]!
+    expect(first.heartbeatAt).toBe(clock().toISOString())
+    const cursor = JSON.parse(h.out.at(-1)!).cursor as string
+    expect(decodeCursor(cursor, { store: decodeCursorStore(cursor), repo: REPO }).operator).toEqual(
+      { id: 'one', startedAt: first.startedAt },
+    )
+    clock.advance(299_999)
+    expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+    clock.advance(1)
+    expect(await store.listOperatorPresence(REPO)).toEqual([])
+    const resumed = harness(store, {
+      operator: true,
+      since: cursor,
+      now: clock,
+      signal: alreadyAborted(),
+      operatorIdentity: {
+        host: 'host-b',
+        pid: 20,
+        newId: () => {
+          throw new Error('must reuse ID')
+        },
+      },
+    })
+    await abWatch(resumed.base)
+    expect(await store.listOperatorPresence(REPO)).toEqual([
+      { ...first, host: 'host-b', pid: 20, heartbeatAt: clock().toISOString() },
+    ])
+    clock.advance(300_000)
+    expect(await store.listOperatorPresence(REPO)).toEqual([])
+  })
+
+  test('legacy cursors create identities only when flagged; unflagged resumes write nothing', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const h = harness(store, { operator: true, signal: alreadyAborted(), now: clock })
+    await abWatch(h.base)
+    const cursor = JSON.parse(h.out.at(-1)!).cursor as string
+    const original = await store.listOperatorPresence(REPO)
+    clock.advance(1_000)
+    const unflagged = harness(store, { since: cursor, signal: alreadyAborted(), now: clock })
+    store.upsertOperatorPresence = async () => {
+      throw new Error('unflagged write')
+    }
+    await abWatch(unflagged.base)
+    expect(await store.listOperatorPresence(REPO)).toEqual(original)
+    expect(await store.getRepo(REPO)).toBeNull()
+  })
+
+  test('foreign and malformed cursor rejection precedes registration', async () => {
+    const store = makeStore()
+    let writes = 0
+    store.upsertOperatorPresence = async () => {
+      writes++
+      throw new Error('unexpected write')
+    }
+    for (const since of [
+      'bad',
+      encodeCursor({ v: 1, store: 'foreign', repo: REPO, streams: {} }),
+    ]) {
+      await expect(abWatch(harness(store, { operator: true, since }).base)).rejects.toThrow(
+        '--since',
+      )
+    }
+    expect(writes).toBe(0)
+  })
+
+  test('heartbeats continue during held initialization, retry failures once per streak, and join on exit', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    let releaseRead!: () => void
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    store.listBuildsForRepo = async () => {
+      await held
+      return []
+    }
+    let releaseBeat!: () => void
+    let delayEntered!: () => void
+    let entered = new Promise<void>((resolve) => {
+      delayEntered = resolve
+    })
+    const heartbeatDelay: NonNullable<AbWatchOpts['heartbeatDelay']> = async (_ms, signal) => {
+      delayEntered()
+      await new Promise<void>((resolve) => {
+        releaseBeat = resolve
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    }
+    let writes = 0
+    const upsert = store.upsertOperatorPresence.bind(store)
+    store.upsertOperatorPresence = async (...args) => {
+      writes++
+      if (writes === 2 || writes === 3) throw new Error('offline')
+      return upsert(...args)
+    }
+    const h = harness(store, {
+      operator: true,
+      now: clock,
+      interval: '1h',
+      timeout: '1s',
+      heartbeatDelay,
+      delay: async () => {
+        clock.advance(1_000)
+      },
+    })
+    const running = abWatch(h.base)
+    await entered
+    for (let i = 0; i < 3; i++) {
+      entered = new Promise<void>((resolve) => {
+        delayEntered = resolve
+      })
+      clock.advance(30_000)
+      releaseBeat()
+      await entered
+    }
+    expect(writes).toBe(4)
+    expect(h.err.filter((line) => line.includes('operator heartbeat failed'))).toHaveLength(1)
+    expect((await store.listOperatorPresence(REPO))[0]!.heartbeatAt).toBe(clock().toISOString())
+    releaseRead()
+    await running
+    expect(writes).toBe(5)
+  })
+
+  test('failed initial registration never attempts a final renewal', async () => {
+    const store = makeStore()
+    let writes = 0
+    store.upsertOperatorPresence = async () => {
+      writes++
+      throw new Error('initial presence unavailable')
+    }
+    await expect(abWatch(harness(store, { operator: true }).base)).rejects.toThrow(
+      'initial presence unavailable',
+    )
+    expect(writes).toBe(1)
+  })
+
+  test.each(['count', 'abort', 'error'] as const)(
+    'final renewal on %s preserves the primary outcome when cleanup fails',
+    async (mode) => {
+      const store = makeStore()
+      await seedRunningBuild(store, 'presence')
+      const h = harness(store, {
+        operator: true,
+        ...(mode === 'abort' ? { signal: alreadyAborted() } : {}),
+        ...(mode === 'count' ? { count: 1 } : {}),
+        onTick: async () => {
+          if (mode === 'error') throw new Error('primary error')
+          await appendEscalation(store, 'presence')
+        },
+      })
+      let writes = 0
+      const upsert = store.upsertOperatorPresence.bind(store)
+      store.upsertOperatorPresence = async (...args) => {
+        if (++writes > 1) throw new Error('cleanup failure')
+        return upsert(...args)
+      }
+      if (mode === 'error') await expect(abWatch(h.base)).rejects.toThrow('primary error')
+      else await abWatch(h.base)
+      expect(writes).toBe(2)
+      expect(h.err.some((line) => line.includes('final operator heartbeat failed'))).toBe(true)
+      if (mode === 'count') {
+        for (const line of h.out) {
+          const record = JSON.parse(line)
+          expect(
+            decodeCursor(record.cursor, { store: decodeCursorStore(record.cursor), repo: REPO })
+              .operator?.id,
+          ).toBeTruthy()
+        }
+      }
+    },
+  )
+})
+
+function decodeCursorStore(cursor: string): string {
+  return JSON.parse(Buffer.from(cursor.slice(3), 'base64url').toString()).store as string
+}
+
+test('operator flag routes through the CLI and scope failures use stderr exit 1', async () => {
+  const store = makeStore()
+  const out: string[] = []
+  const err: string[] = []
+  let opens = 0
+  const deps = {
+    workspacePath: REPO,
+    processEnv: {},
+    exec: fakeExec,
+    signal: alreadyAborted(),
+    stdout: (line: string) => out.push(line),
+    stderr: (line: string) => err.push(line),
+    openStore: () => {
+      opens++
+      return store
+    },
+  }
+  expect(await runCli(['watch', '--operator', '--json'], deps)).toBe(0)
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+  for (const args of [
+    ['watch', 'named', '--operator'],
+    ['watch', 'named', '--repository', '--operator'],
+  ]) {
+    expect(await runCli(args, deps)).toBe(1)
+  }
+  expect(opens).toBe(1)
+  expect(err).toHaveLength(2)
+  expect(err.every((line) => line.includes('--operator requires a repository-wide watch'))).toBe(
+    true,
+  )
+})
+
+test('operator heartbeat runs while remote event reads are held with a large interval', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await seedRunningBuild(store, 'held')
+  let heldRead!: () => void
+  const readStarted = new Promise<void>((resolve) => {
+    heldRead = resolve
+  })
+  const getEvents = store.getEvents.bind(store)
+  store.getEvents = async (slug, since, opts) => {
+    if (!opts?.waitSeconds) return getEvents(slug, since, opts)
+    heldRead()
+    await new Promise<void>((resolve) => {
+      if (opts.signal?.aborted) resolve()
+      else opts.signal?.addEventListener('abort', () => resolve(), { once: true })
+    })
+    return []
+  }
+  let tick!: () => void
+  let ready!: () => void
+  let armed = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+  const signal = new AbortController()
+  const h = harness(store, {
+    operator: true,
+    storeRef: 'https://remote.test',
+    now: clock,
+    interval: '1h',
+    timeout: '1h',
+    signal: signal.signal,
+    heartbeatDelay: async (_ms, abort) => {
+      ready()
+      await new Promise<void>((resolve) => {
+        tick = resolve
+        if (abort?.aborted) resolve()
+        else abort?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    },
+    delay: async (_ms, abort) => {
+      await new Promise<void>((resolve) => {
+        if (abort?.aborted) resolve()
+        else abort?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    },
+  })
+  const running = abWatch(h.base)
+  await readStarted
+  await armed
+  armed = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+  clock.advance(30_000)
+  tick()
+  await armed
+  expect((await store.listOperatorPresence(REPO))[0]!.heartbeatAt).toBe(clock().toISOString())
+  signal.abort()
+  await running
+  expect(h.err).toEqual([])
+})

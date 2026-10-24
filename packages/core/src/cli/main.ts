@@ -929,6 +929,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         rest,
         {
           repository: 'boolean',
+          operator: 'boolean',
           event: 'multi',
           since: 'value',
           timeout: 'value',
@@ -962,6 +963,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stderr,
         slugs: parsed.positionals,
         repository: parsed.flags.has('repository'),
+        operator: parsed.flags.has('operator'),
         events: multiFlag(parsed, 'event'),
         since: stringFlag(parsed, 'since'),
         timeout: stringFlag(parsed, 'timeout'),
