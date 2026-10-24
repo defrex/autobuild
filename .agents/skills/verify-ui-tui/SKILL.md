@@ -63,6 +63,8 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:verify-stages-wide:text .ab/dashboard-frames/verify-stages-wide.txt --attach
+   ab artifact put dashboard-frame:verify-stages-wide:png .ab/dashboard-frames/verify-stages-wide.png --attach
    ab artifact put dashboard-frame:rollback-wide:text .ab/dashboard-frames/rollback-wide.txt --attach
    ab artifact put dashboard-frame:rollback-wide:png .ab/dashboard-frames/rollback-wide.png --attach
    ab artifact put dashboard-frame:rollback-narrow:text .ab/dashboard-frames/rollback-narrow.txt --attach

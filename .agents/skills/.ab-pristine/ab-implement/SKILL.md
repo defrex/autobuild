@@ -17,13 +17,16 @@ Guidance is an external operator answer, from the operator agent or a human.
 1. Run `ab context`. Read the manifest path printed by the command (normally
    `$AB_CONTEXT_DIR/context.json`); its `materialized` entries are the actual directory-relative input paths
    and may be relocated when a legacy repository tracks a conventional path.
-   You get the approved spec and plan, your own prior-round notes, every verify report
-   deposited so far under `$AB_CONTEXT_DIR/verify/`, and this round's feedback when the
-   round has any — at most one of `$AB_CONTEXT_DIR/findings.json` (code-review findings), a
-   failed verify step's report in `$AB_CONTEXT_DIR/verify/`, or `$AB_CONTEXT_DIR/guidance.json` (an
-   operator's answer to the escalation that blocked this build). The manifest's
-   `feedback` field names which one this round is, and is absent when the round
-   carries none.
+   You get the approved spec and plan, your own prior-round notes, and every
+   deposited verify report under `$AB_CONTEXT_DIR/verify/`. The manifest's
+   `feedback` field names this round's immediate feedback: `findings` resolves
+   `$AB_CONTEXT_DIR/findings.json`, `verify` names the first failed report, and
+   `guidance` resolves `$AB_CONTEXT_DIR/guidance.json`. It is absent when there
+   is no immediate feedback. A `verifyStageFailure` receipt additionally lists
+   every failed report and cancelled/not-run member; it remains available on
+   guidance rounds. Read its `verifyReports` paths and `cancelledVerify` entries.
+   Cancellation feedback belongs only to that receipt; a later round without a
+   receipt carries no cancellation list.
    When the manifest lists `assets`, they are the build's pinned ticket assets
    under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.
@@ -63,8 +66,11 @@ Guidance is an external operator answer, from the operator agent or a human.
   exactly one kind, named by `$AB_CONTEXT_DIR/context.json`'s `feedback` field:
   `findings` → resolve every finding in `$AB_CONTEXT_DIR/findings.json`; findings you
   dodge come back marked as persisting, and a chain that stays persistent
-  goes to a human. `verify` → get the named step's report in `$AB_CONTEXT_DIR/verify/`
-  to pass. `guidance` → `$AB_CONTEXT_DIR/guidance.json` carries an operator's reply
+  goes to a human. `verify` → address every failed report listed in the manifest's
+  `verifyReports` (or the historical single report) under `$AB_CONTEXT_DIR/verify/`.
+  `cancelledVerify` lists unfinished steps as not run with their fail-fast cause;
+  cancellation is never a pass. A stage receipt can remain available alongside
+  guidance, which retains immediate feedback precedence. `guidance` → `$AB_CONTEXT_DIR/guidance.json` carries an operator's reply
   to the escalation that blocked this build. The escalation may have come
   from you, from the reviewer, from the kernel's code-loop stall or policy
   guards, or from the verify-attempt policy guard after a failed report.
@@ -72,9 +78,10 @@ Guidance is an external operator answer, from the operator agent or a human.
   authoritative for the round and act on it in the code. The spec remains
   the contract this phase is measured against — if honoring the answer means
   breaking the spec, escalate rather than quietly picking one. A guidance
-  round comes with no `$AB_CONTEXT_DIR/findings.json` and no routed verify step; the
-  answer is the entirety of your feedback. If `feedback` is absent
-  entirely, the round has none: build the plan.
+  round carries no `$AB_CONTEXT_DIR/findings.json`; its immediate feedback is
+  the answer. A referenced failed-stage receipt still provides reports and
+  cancelled/not-run members alongside that guidance. If `feedback` is absent,
+  build the plan and read any receipt listed by the manifest.
 - **Keep `.ab/` out of every commit.** Never stage or commit it, even with
   `git add -f`. It is disposable phase scratch, not part of the build
   deliverable.

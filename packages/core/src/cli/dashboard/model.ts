@@ -133,6 +133,7 @@ export interface PipelineStep {
    * `waiting` annotates merge. Rendered inside the `(…)` note, so outcome
    * distinctions never rely on color alone. */
   qualifier?:
+    | 'cancelled'
     | 'failed'
     | 'skipped'
     | 'waiting'
@@ -450,6 +451,7 @@ export function autoMergeConsentReason(slug: string): string {
 interface StepExtra {
   producedOutput?: boolean
   qualifier?:
+    | 'cancelled'
     | 'failed'
     | 'skipped'
     | 'waiting'
@@ -865,7 +867,10 @@ export function projectBuildFromFacts(
 
   for (const s of pipeline.verify.steps) {
     const phase = verifyPhase(s)
-    const current = at(phase)
+    const current =
+      (
+        state.verify.running ?? (state.verify.currentStep ? [state.verify.currentStep] : [])
+      ).includes(s) && activePhase !== undefined
     const stepResults = cycle.filter((r) => r.step === s)
     // The attempt COUNT comes from `currentPhase.attempt` for the running step
     // — the attempt ACTUALLY running (`verify.started` populates it directly),
@@ -888,12 +893,20 @@ export function projectBuildFromFacts(
     steps.push(
       step(phase, !cycleFailed && verifySatisfied(s), current, {
         producedOutput: stepResults.length > 0,
-        qualifier: stepResults.some((r) => r.outcome === 'fail')
-          ? 'failed'
-          : stepResults.some((r) => r.outcome === 'skipped')
-            ? 'skipped'
-            : undefined,
-        reason: stepResults.find((r) => r.skipCause === 'post-reconcile-policy')?.reason,
+        qualifier: Object.values(state.verifyStage.cancellations).some(
+          (c) => c.seq > cycleSince && c.step === s,
+        )
+          ? 'cancelled'
+          : stepResults.some((r) => r.outcome === 'fail')
+            ? 'failed'
+            : stepResults.some((r) => r.outcome === 'skipped')
+              ? 'skipped'
+              : undefined,
+        reason:
+          Object.values(state.verifyStage.cancellations)
+            .filter((c) => c.seq > cycleSince && c.step === s)
+            .map((c) => `not run: cancelled by verify:${c.cause.step}`)
+            .at(-1) ?? stepResults.find((r) => r.skipCause === 'post-reconcile-policy')?.reason,
         count,
         timing: timingFor(intervals, phase, cycleSince, frozenNow),
       }),

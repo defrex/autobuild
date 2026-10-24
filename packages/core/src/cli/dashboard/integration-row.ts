@@ -11,6 +11,32 @@ import type { BuildRecord } from '../../store/types'
 import type { DashboardBuild, PipelineStep } from './model'
 import { nodeLandingPolicyDisplay } from './landing-display'
 
+/** Repair prompts share the engine's settled-stage barrier and exact cycle evidence. */
+export function integrationRepairSteps(state: BuildState): string[] {
+  const cycle = state.integration?.cycle
+  if (!cycle || !integrationCurrent(state)) return []
+  const pinned = JSON.parse(cycle.config).verify
+  if (Array.isArray(pinned.stages)) {
+    const receipt = state.verifyStage.failures.find(
+      (failure) =>
+        failure.cycle === cycle.seq &&
+        failure.restackId === cycle.id &&
+        failure.headSha === cycle.head &&
+        failure.baseSha === cycle.parent,
+    )
+    return receipt?.failed.map((failure) => failure.step) ?? []
+  }
+  const first = state.verify.results.find(
+    (result) =>
+      result.seq > cycle.seq &&
+      result.restackId === cycle.id &&
+      result.headSha === cycle.head &&
+      result.baseSha === cycle.parent &&
+      result.outcome === 'fail',
+  )
+  return first ? [first.step] : []
+}
+
 /** Shared list progress and five integration steps. */
 export interface IntegrationRow {
   parentDistance?: string
@@ -55,7 +81,7 @@ export function projectIntegrationRow(
             expected.includes(r.step),
         )
       : []
-  const failure = receipts.find((r) => r.outcome === 'fail')
+  const failed = integrationRepairSteps(state)
   const passed = new Set(
     receipts.filter((r) => r.outcome === 'pass' || r.outcome === 'skipped').map((r) => r.step),
   ).size
@@ -79,10 +105,10 @@ export function projectIntegrationRow(
           tone: 'red',
           text: `restack onto ${destination} conflicted — open the detail view for files`,
         }
-      : failure
+      : failed.length
         ? {
             tone: 'red',
-            text: `${failure.step} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`,
+            text: `${failed.join(', ')} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`,
           }
         : ready && mode === 'consent' && state.landing?.command?.kind !== 'land'
           ? {
@@ -112,7 +138,11 @@ export function projectIntegrationRow(
         'verify',
         verified,
         current && !verified,
-        failure ? 'failed' : current && !verified ? `${passed}/${expected.length}` : undefined,
+        failed.length
+          ? 'failed'
+          : current && !verified
+            ? `${passed}/${expected.length}`
+            : undefined,
       ),
       step('land', !!state.integration?.landing, ready, mode),
     ],

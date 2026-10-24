@@ -95,6 +95,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'integration-wide',
     'integration-narrow',
     'post-reconcile-policy',
+    'verify-stages-wide',
     'headline-happy-wide',
     'website-hero',
     'mixed-wide',
@@ -210,6 +211,13 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('suspended cause pause')
       expect(frame.text).toContain('fresh session: workspace-not-local-git-worktree')
       expect(frame.text).toContain('resumed cause pause continued from s_interrupted')
+    } else if (frame.id === 'verify-stages-wide') {
+      expect(
+        frame.model.builds[0]!.steps.filter((step) => step.state === 'current').map(
+          (step) => step.label,
+        ),
+      ).toEqual(['verify:unit', 'verify:integration'])
+      expect(frame.text).toContain('not run: cancelled by verify:unit')
     } else if (frame.id.startsWith('session-')) {
       expect(frame.text).toContain('Session  complete-dashboard-evidence')
       if (frame.id === 'session-live') {
