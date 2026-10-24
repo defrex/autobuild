@@ -158,12 +158,13 @@ export function attemptExec(target: SQL, plans: PlanInvalidations, retry = false
       if (mark === '') return target(strings, ...values)
       // Copy the template array and mark the last raw part. A plain array
       // copy drops the non-enumerable `raw` property — without it Bun treats
-      // the array as a query *value*, not a template — so re-attach it,
+      // the array as a query *value*, not a template — so re-attach it as a
+      // non-enumerable property, as Bun requires,
       // pointing at the marked copy itself (comment-only changes make cooked
       // and raw identical).
       const parts: string[] = [...strings]
       parts[parts.length - 1] += mark
-      Object.assign(parts, { raw: parts })
+      Object.defineProperty(parts, 'raw', { value: parts })
       return target(parts as unknown as TemplateStringsArray, ...values)
     })
   }) as unknown as Exec
