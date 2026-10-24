@@ -4,10 +4,17 @@ import { THEMES } from '../theme'
 import { useTheme } from '../ThemeProvider'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
-export interface MenuItem {
+export interface MenuLink {
   label: string
-  onSelect?: () => void
-  href?: string
+  href: string
+}
+export interface MenuAction {
+  label: string
+  onSelect: () => void
+}
+export interface MenuGroup {
+  label?: string
+  items: readonly MenuLink[]
 }
 
 /**
@@ -19,12 +26,14 @@ export interface MenuItem {
  */
 export function Menu({
   label,
-  items,
+  groups,
+  actions,
   className,
   initiallyOpen = false,
 }: {
   label: ReactNode
-  items: readonly MenuItem[]
+  groups: readonly MenuGroup[]
+  actions: readonly MenuAction[]
   /** Initial disclosure state also used by offline presentation fixtures. */
   initiallyOpen?: boolean
   /** Extra class on the wrapper for placement. */
@@ -92,10 +101,15 @@ export function Menu({
       </button>
       {open && (
         <div ref={listRef} className="menu-list" role="menu" id={listId} onKeyDown={onListKey}>
-          {items
-            .filter((item) => item.href)
-            .map((item) =>
-              item.href ? (
+          {groups.map((group, index) => (
+            <fieldset
+              key={group.label ?? 'Navigation'}
+              className="menu-group"
+              aria-label={group.label ?? 'Navigation'}
+            >
+              {index > 0 && <div className="rule" />}
+              {group.label && <div className="menu-label-heading">{group.label}</div>}
+              {group.items.map((item) => (
                 <a
                   key={item.label}
                   href={item.href}
@@ -105,21 +119,9 @@ export function Menu({
                 >
                   {item.label}
                 </a>
-              ) : (
-                <button
-                  key={item.label}
-                  type="button"
-                  role="menuitem"
-                  className="word menu-item"
-                  onClick={() => {
-                    close()
-                    item.onSelect?.()
-                  }}
-                >
-                  {item.label}
-                </button>
-              ),
-            )}
+              ))}
+            </fieldset>
+          ))}
           <div className="rule" />
           <div className="menu-label-heading">Theme</div>
           <fieldset className="theme-choices" aria-label="Theme">
@@ -137,34 +139,20 @@ export function Menu({
             ))}
           </fieldset>
           <div className="rule" />
-          {items
-            .filter((item) => !item.href)
-            .map((item) =>
-              item.href ? (
-                <a
-                  key={item.label}
-                  href={item.href}
-                  role="menuitem"
-                  className="word menu-item"
-                  onClick={close}
-                >
-                  {item.label}
-                </a>
-              ) : (
-                <button
-                  key={item.label}
-                  type="button"
-                  role="menuitem"
-                  className="word menu-item"
-                  onClick={() => {
-                    close()
-                    item.onSelect?.()
-                  }}
-                >
-                  {item.label}
-                </button>
-              ),
-            )}
+          {actions.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className="word menu-item"
+              onClick={() => {
+                close()
+                item.onSelect()
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
     </span>

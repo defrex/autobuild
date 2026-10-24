@@ -115,7 +115,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       id: `builds-menu-${size}`,
       width: size === 'wide' ? 1440 : 390,
       height: 2200,
-      requires: ['Theme', 'System', 'Light', 'Dark', 'sign out'],
+      requires: ['Theme', 'System', 'Light', 'Dark', 'Sign out'],
     },
     {
       id: `builds-titles-${size}`,

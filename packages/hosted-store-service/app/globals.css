@@ -859,6 +859,9 @@ input.short {
   font: inherit;
   max-width: 100%;
 }
+.access-page select {
+  width: auto;
+}
 .access-page input[type="email"] {
   font-family: var(--mono);
 }
@@ -973,4 +976,11 @@ input.short {
 .connection-organizations input[type="radio"] {
   width: auto;
   margin: 0;
+}
+
+.menu-group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }

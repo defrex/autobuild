@@ -16,17 +16,28 @@ export function AccountMenu({
       className="account"
       initiallyOpen={menuOpen}
       label={<span className="identity">{identity}</span>}
-      items={[
-        { label: 'Builds', href: '/' },
-        { label: 'Members', href: '/members' },
+      groups={[
+        {
+          items: [
+            { label: 'Builds', href: '/' },
+            { label: 'Members', href: '/members' },
+          ],
+        },
         ...(isSuperUser
           ? [
-              { label: 'Organizations', href: '/organizations' },
-              { label: 'Projects', href: '/projects' },
+              {
+                label: 'Super user',
+                items: [
+                  { label: 'Organizations', href: '/organizations' },
+                  { label: 'Projects', href: '/projects' },
+                ],
+              },
             ]
           : []),
+      ]}
+      actions={[
         {
-          label: 'sign out',
+          label: 'Sign out',
           onSelect:
             onSignOut ??
             (() => {
