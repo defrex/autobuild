@@ -464,3 +464,12 @@ role, since product calls stay with the human. The intake figure's central
 node, its description and `reference.html` now say "operator agent". Copy
 reserves "operator" for the agent role and says "you" for the human. The
 four landing references were refreshed from this capture.
+
+## Masthead without Changelog (2026-10-24)
+
+Maintainer decision (2026-10-23): the shared site header links Home, Docs and
+GitHub only; the Changelog link is removed. `reference-desktop.png` and
+`reference-desktop-remote.png` were refreshed from `bun run capture:website`;
+the masthead is the only difference (391 pixels). The phone references are
+byte-identical to the capture and were not changed. `reference.html` never
+carried a Changelog link.
