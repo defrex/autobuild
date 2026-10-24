@@ -1,3 +1,4 @@
+import { testAccess } from '../testing/access'
 import { testProjects } from '../testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { verifyToken } from '@defrex/autobuild/remote-store'
@@ -10,7 +11,7 @@ const env = {
   GITHUB_CLIENT_ID: 'client',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: 'git@github.com:owner/repo.git',
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: storeSecret,
@@ -24,6 +25,7 @@ describe('web operator gateway', () => {
   test('scopes routes and replaces caller credentials with attributed short-lived authority', async () => {
     let delegated: Request | undefined
     const gateway = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       now: () => new Date('2029-01-01T00:00:00Z'),
@@ -68,6 +70,7 @@ describe('web operator gateway', () => {
     }
     const request = (url: string, init?: RequestInit) => new Request(url, init)
     const signedOut = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: async () => null,
@@ -83,9 +86,13 @@ describe('web operator gateway', () => {
       ).status,
     ).toBe(401)
     const removed = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
-      getSession: async () => ({ user: { email: 'other@example.com' } }),
+      getSession: async () => ({
+        user: { email: 'other@example.com' },
+        session: { expiresAt: '2030-01-01' },
+      }),
       delegate,
     })
     expect(
@@ -98,6 +105,7 @@ describe('web operator gateway', () => {
       ).status,
     ).toBe(403)
     const gateway = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
@@ -130,6 +138,7 @@ describe('web operator gateway', () => {
 
   test('refuses every former browser ticket route without delegation', async () => {
     const gateway = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
@@ -180,6 +189,7 @@ describe('web operator gateway', () => {
 
   test('valid write routes still require application/json', async () => {
     const gateway = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
@@ -208,6 +218,7 @@ describe('web operator gateway', () => {
   test('preserves artifact bytes without exposing configured canaries', async () => {
     const bytes = Uint8Array.from([0, 255, 17])
     const gateway = createWebGateway({
+      access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
@@ -230,9 +241,13 @@ test('all allowed owners see live additions and removals; registry failures fail
   let calls = 0
   let email = 'ada@example.com'
   const gateway = createWebGateway({
-    env: { ...env, AB_WEB_ALLOWED_EMAILS: 'ada@example.com,grace@example.com' },
+    access: testAccess(
+      { ...env, AB_WEB_SUPER_USER_EMAILS: 'ada@example.com,grace@example.com' },
+      projects,
+    ),
+    env: { ...env, AB_WEB_SUPER_USER_EMAILS: 'ada@example.com,grace@example.com' },
     projects,
-    getSession: async () => ({ user: { email } }),
+    getSession: async () => ({ user: { email }, session: { expiresAt: '2030-01-01' } }),
     delegate: async () => {
       calls++
       return Response.json({ ok: true })

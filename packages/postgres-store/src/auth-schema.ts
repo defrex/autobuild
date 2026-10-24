@@ -1,6 +1,6 @@
 import type { SQL } from 'bun'
 
-/** Better Auth 1.4.18 core + MCP/OIDC/JWT plugin PostgreSQL schema. Changes to
+/** Better Auth 1.4.18 core + organization/MCP/OIDC/JWT PostgreSQL schema. Changes to
  * the pinned auth package must deliberately update this marker and DDL.
  *
  * v3 notes the plugin's declared-schema drift: the pinned 1.4.18 MCP plugin's
@@ -13,7 +13,7 @@ import type { SQL } from 'bun'
  * row with no `authenticationScheme`. The field declaration in
  * hosted-store-service's createWebAuth restores it; this column persists it.
  * Patching the plugin upstream is out of scope. */
-export const AUTH_SCHEMA_VERSION = 3
+export const AUTH_SCHEMA_VERSION = 4
 
 /** The frozen v1 DDL, kept verbatim so a deployed v1 marker's checksum can be
  * recognized and upgraded in place (see migratePostgres). */
@@ -103,7 +103,7 @@ export const AUTH_SCHEMA_V2_CHECKSUM = new Bun.CryptoHasher('sha256')
  * would invent scheme values for existing clients. The column rides last so
  * fresh databases assert identically to v2 databases upgraded by the guarded
  * ALTER in migratePostgres (the streams.creation_seq precedent). */
-export const AUTH_SCHEMA_DDL = `
+export const AUTH_SCHEMA_V3_DDL = `
 ${AUTH_SCHEMA_V1_DDL}
 CREATE TABLE IF NOT EXISTS jwks (
   id text PRIMARY KEY, "publicKey" text NOT NULL, "privateKey" text NOT NULL,
@@ -137,6 +137,44 @@ CREATE TABLE IF NOT EXISTS "oauthConsent" (
   "consentGiven" boolean NOT NULL
 );
 CREATE INDEX IF NOT EXISTS oauthConsent_user_id_idx ON "oauthConsent" ("userId");`.trim()
+
+export const AUTH_SCHEMA_V3_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(AUTH_SCHEMA_V3_DDL)
+  .digest('hex')
+
+/** v4 adds organization plugin records, email grants and project assignments.
+ * The email ledger is authoritative; member rows mirror persisted identities.
+ * Organization/team/invitation HTTP management remains disabled in the service. */
+export const AUTH_SCHEMA_DDL = `
+${AUTH_SCHEMA_V3_DDL}
+ALTER TABLE session ADD COLUMN IF NOT EXISTS "activeOrganizationId" text;
+CREATE TABLE IF NOT EXISTS organization (
+  id text PRIMARY KEY, name text NOT NULL, slug text NOT NULL UNIQUE,
+  logo text, "createdAt" timestamp NOT NULL, metadata text
+);
+CREATE TABLE IF NOT EXISTS member (
+  id text PRIMARY KEY, "organizationId" text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  "userId" text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  role text NOT NULL DEFAULT 'member', "createdAt" timestamp NOT NULL,
+  UNIQUE ("organizationId", "userId")
+);
+CREATE TABLE IF NOT EXISTS invitation (
+  id text PRIMARY KEY, "organizationId" text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  email text NOT NULL, role text, status text NOT NULL DEFAULT 'pending',
+  "expiresAt" timestamp NOT NULL, "createdAt" timestamp NOT NULL,
+  "inviterId" text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS organization_emails (
+  organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  email text NOT NULL CHECK (email = lower(btrim(email)) AND email <> ''),
+  role text NOT NULL CHECK (role IN ('member', 'owner')),
+  PRIMARY KEY (organization_id, email)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS organization_single_owner ON organization_emails (organization_id) WHERE role = 'owner';
+CREATE INDEX IF NOT EXISTS organization_email_lookup ON organization_emails (email);
+CREATE TABLE IF NOT EXISTS project_organizations (
+  repo text PRIMARY KEY, organization_id text NOT NULL REFERENCES organization(id)
+);`.trim()
 
 export const AUTH_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(AUTH_SCHEMA_DDL)
@@ -182,9 +220,23 @@ export async function assertAuthSchema(sql: SQL): Promise<void> {
     SELECT table_name, column_name FROM information_schema.columns
     WHERE table_schema = current_schema()
       AND table_name = ANY(ARRAY['user', 'session', 'account', 'verification', 'jwks',
-        'oauthApplication', 'oauthAccessToken', 'oauthConsent'])
+        'oauthApplication', 'oauthAccessToken', 'oauthConsent', 'organization', 'member', 'invitation', 'organization_emails', 'project_organizations'])
     ORDER BY table_name, ordinal_position`
   const expected = {
+    organization: ['id', 'name', 'slug', 'logo', 'createdAt', 'metadata'],
+    member: ['id', 'organizationId', 'userId', 'role', 'createdAt'],
+    invitation: [
+      'id',
+      'organizationId',
+      'email',
+      'role',
+      'status',
+      'expiresAt',
+      'createdAt',
+      'inviterId',
+    ],
+    organization_emails: ['organization_id', 'email', 'role'],
+    project_organizations: ['repo', 'organization_id'],
     account: [
       'id',
       'accountId',
@@ -240,6 +292,7 @@ export async function assertAuthSchema(sql: SQL): Promise<void> {
       'ipAddress',
       'userAgent',
       'userId',
+      'activeOrganizationId',
     ],
     user: ['id', 'name', 'email', 'emailVerified', 'image', 'createdAt', 'updatedAt'],
     verification: ['id', 'identifier', 'value', 'expiresAt', 'createdAt', 'updatedAt'],

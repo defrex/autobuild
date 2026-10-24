@@ -219,8 +219,7 @@ progress and unattempted builds. Unexpected failures are `500 internal`.
 
 The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`.
 That route is not a second public bearer-token API: it requires a current
-Better Auth HTTP-only cookie, rechecks the deployment email and repository
-allowlists, rejects cross-origin JSON controls, and delegates only the dashboard,
+Better Auth HTTP-only cookie, rechecks the deployment current organization membership and project registration, rejects cross-origin JSON controls, and delegates only the dashboard,
 build, settings, and harvest operator suffixes listed above. It replaces caller-supplied authorization/version
 headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
@@ -375,3 +374,60 @@ repository attention. `dispatcher.rollback-hold-cleared` records a different
 successfully resolved target. The rollback hold survives store compatibility
 changes, resolution errors and upgrade opt-out; a new operator-launch lineage
 ignores old holds. Preflight failure suppression above remains separate.
+
+
+## Organization management (browser)
+
+These same-origin cookie-session routes are the management contract. Mutations
+require the exact `BETTER_AUTH_URL` Origin and `application/json`, accept at most
+8192 characters of JSON, and reject unsupported fields. Responses are private,
+no-store. No client-supplied actor or role is trusted. Raw Better Auth
+`/api/auth/organization/*` routes are disabled, including invitations.
+
+### Discovery and bootstrap
+
+`GET /api/web/orgs` returns
+`{isSuperUser,organizations:[{id,name,slug,ownerEmail,membershipRole}]}`.
+Every admitted operator can discover their own organizations. Super users see
+all organizations; their membershipRole is null where they are not members.
+Roles are `owner` and `member`; ownerEmail is null for an ownerless organization.
+Results sort by slug then ID. Discovery does not authorize roster or inspection
+access. A multi-org member uses these IDs for explicit connect selection.
+
+To bootstrap, sign in as a super user configured by
+`AB_WEB_SUPER_USER_EMAILS`, then POST `{name,slug}` to `/api/web/orgs`.
+The response is 201 `{organization}` in the discovery shape. Names are nonblank
+and at most 100 characters; slugs are unique lowercase kebab strings of at most
+100 characters. Creation grants no membership. No management pages are included.
+
+Super users can GET `/api/web/orgs/:orgId` for `{organization,projects:[repo]}`
+and GET `/api/web/projects/unassigned` for `{projects:[repo]}`. The latter
+contains every active registered project without an assignment, including legacy
+registrations; removed entries are excluded. Projects sort lexically.
+
+### Members and owner
+
+Super users and the organization's owner can GET
+`/api/web/orgs/:orgId/members` for `{members:[{email,role}]}`; POST `{email}`
+to that path returns `{member}`; DELETE `{email}` returns `{removed:true}`.
+Emails normalize before matching, grants work before first sign-in, and duplicate
+adds preserve the existing role. An owner cannot remove themselves. Ordinary
+members cannot inspect rosters or mutate membership.
+
+Only super users can PUT `{email:string|null}` to
+`/api/web/orgs/:orgId/owner`, returning `{organization}`. A non-null owner must
+already be a member. Transfer demotes the previous owner; null clears ownership.
+Removing an owner as a super user also clears ownership. An org can have no owner.
+
+### Project assignment and errors
+
+Only super users can PUT `{repo}` to `/api/web/orgs/:orgId/projects`, returning
+`{repo,organizationId}`. The repo must be actively registered. This atomically
+assigns or moves it. Registry removal retains assignment and history, but hides
+the inactive project; re-registration restores that assignment.
+
+Status codes are 401 for absent, malformed or expired sessions; 403 for admission
+or role refusal; 400 for invalid inputs; 404 for missing resources after role
+checks; 409 for duplicate slugs; and sanitized 503 for store outages. Foreign
+projects return the same unknown-repository result as absent projects. Machine
+credentials and the hosted-store administration CLI keep their existing behavior.

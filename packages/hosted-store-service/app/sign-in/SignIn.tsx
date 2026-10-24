@@ -47,7 +47,7 @@ export function SignIn({
           <p>Use an identity allowed by this deployment's operator.</p>
           {error && (
             <p className="alert notice" role="alert">
-              Access was refused. Ask the deployment operator to check the allowlist.
+              Access was refused. Ask the deployment operator to check your access.
             </p>
           )}
           <div className="providers">

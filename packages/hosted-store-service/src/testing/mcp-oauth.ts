@@ -1,4 +1,6 @@
 /** Shared OAuth + MCP fixtures for the hosted MCP endpoint tests. */
+import { testAccess } from './access'
+import type { HumanAccess } from '../web/access'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testProjects } from './projects'
 import { expect } from 'bun:test'
@@ -33,7 +35,7 @@ export const baseEnv: Record<string, string> = {
   GITHUB_CLIENT_ID: 'github-client-canary',
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
-  AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
+  AB_WEB_SUPER_USER_EMAILS: 'ada@example.com',
   AB_WEB_REPOSITORIES: REPO,
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
@@ -63,6 +65,7 @@ export type App = (request: Request) => Promise<Response>
  * createWebAuth uses. */
 export function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: number): WebAuth {
   return createWebAuth(env, {
+    access: testAccess(env),
     database: memoryAdapter(emptyDB()),
     ...(accessTokenExpiresIn === undefined ? {} : { accessTokenExpiresIn }),
   })
@@ -73,6 +76,7 @@ export function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: nu
 export function buildApp(
   env: Record<string, string>,
   auth: WebAuth,
+  access: HumanAccess = testAccess(env, testProjects([REPO])),
 ): {
   app: App
   backing: MemoryBuildStore
@@ -86,6 +90,7 @@ export function buildApp(
     openStore: async () => backing,
   })
   const endpoint = createMcpEndpoint({
+    access,
     projects: testProjects(['https://github.com/owner/repo']),
     config,
     auth,
