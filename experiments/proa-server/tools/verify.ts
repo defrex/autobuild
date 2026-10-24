@@ -101,6 +101,7 @@ export async function build(capture = false): Promise<string> {
   const commands = capture
     ? []
     : [
+        ['bun', 'test', 'tools'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],

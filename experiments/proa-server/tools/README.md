@@ -13,6 +13,10 @@ Prerequisites are the experiment README's pinned Rust 1.99.1 and Proa 0.1.3,
 Bun, Linux flock, and local Chromium (`CHROMIUM_BIN`, default /usr/bin/chromium).
 Capture uses offline dependency resolution; provision Cargo dependencies with the
 Rust gate first. No network service, credentials, forge or live runner is needed.
+The proa-rust gate runs `bun test tools` from the experiment directory before
+Rust checks, so negative capture fixtures, route coverage and pipeline regressions
+are enforced for every applicable build. Capture-build mode only exports the
+server; it does not recursively run the tooling tests.
 The real server serves the worktree's local assets. Do not run against a .env
 containing production settings.
 
