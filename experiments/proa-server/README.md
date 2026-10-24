@@ -64,6 +64,6 @@ variable TrueType files cover Atkinson Hyperlegible Next 200–800 and JetBrains
 the SIL Open Font License 1.1; full licenses are adjacent in `public/fonts/`.
 No application asset or font is requested from a third party.
 
-Capture automation and pipeline gates belong to the sibling verify-gates ticket;
-this project deliberately adds neither. See [FIELD-NOTES.md](FIELD-NOTES.md) for
-research results, manual evidence and tooling limitations.
+Automated Rust and visual gates are described in [tools/README.md](tools/README.md).
+They capture the actual server and reuse a shared Cargo cache across worktrees.
+See [FIELD-NOTES.md](FIELD-NOTES.md) for measured tooling behavior.
