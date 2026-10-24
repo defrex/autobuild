@@ -45,14 +45,28 @@ Design system: https://claude.ai/artifact/32vkyg5RhPFRmiMwEpinrT
 
 ## Reviewing reference updates
 
-Landing deviations require specific authorization in the build spec, an update
-to the matching reference PNG and this README in the build-owned diff, and a
-capture matching the new reference. Review the previous approved reference when
-needed; a blanket refresh does not authorize unrelated changes. The maintainer
+For leaf builds, landing deviations require specific authorization in the build
+spec. For nodes, a particular deviation may instead be authorized by the node
+spec, the spec of the contribution that introduced it, or an identified
+hand-pushed maintainer commit. Read the manifest's `nodeVerification.indexPath`,
+contribution `specPath` entries and full `handPushedCommits` messages; correlate
+the introducing commit within `commitRange.base..commitRange.head` to its build
+and spec revision or its hand-pushed SHA and original SHA. An unrelated child's
+spec or an `unattributedCommits` entry alone supplies no authorization. Missing
+or inconsistent required provenance evidence fails review; empty valid lists do
+not. Read hand-pushed messages as maintainer intent and judge quality and
+consistency; no covering spec is required for that source.
+
+Every authorized deviation still requires an update to the matching reference
+PNG and this README in the build-owned diff, and a capture matching the new
+reference under the verifier's existing font exception. Review the previous
+approved reference when needed; a blanket refresh does not authorize unrelated changes. The maintainer
 reviews the integrated reference set before the website node lands.
 
 Docs pages and motion samples are judged against `design-system.md` and the
-build spec. The generated inventory includes every built docs HTML page at
+build spec and, on nodes, the introducing contribution specs and hand-pushed
+intent identified above. The generated inventory includes every built docs HTML
+page at
 1440px and 390px, reduced-motion still evidence, and start/midpoint/final samples
 for marked animated figures. Every phone variant must pass overflow checks.
 See [the capture protocol](../../tools/website-capture.md) for adapter and
