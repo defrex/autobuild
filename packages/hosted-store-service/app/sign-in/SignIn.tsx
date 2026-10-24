@@ -55,7 +55,7 @@ export function SignIn({
               <button
                 key={provider}
                 type="button"
-                className="btn"
+                className="btn primary"
                 disabled={pending}
                 onClick={() => signIn(provider)}
               >

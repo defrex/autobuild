@@ -1,5 +1,7 @@
 'use client'
 
+import { THEMES } from '../theme'
+import { useTheme } from '../ThemeProvider'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
 export interface MenuItem {
@@ -9,8 +11,8 @@ export interface MenuItem {
 
 /**
  * The system's one drop-down: a ghost-word trigger carrying the select's `▾`
- * glyph, and a list of ghost words in the reverse-video well beneath it. It is
- * opaque, square, and one row per item; there is no other layered surface.
+ * glyph, an outlined opaque panel, and browser-local theme choices.
+ * The panel is square and uses the page ground.
  * Escape, an outside pointer, or choosing an item closes it and focus returns
  * to the trigger.
  */
@@ -18,13 +20,17 @@ export function Menu({
   label,
   items,
   className,
+  initiallyOpen = false,
 }: {
   label: ReactNode
   items: readonly MenuItem[]
-  /** Extra class on the wrapper so a placement can pin or shrink it. */
+  /** Initial disclosure state also used by offline presentation fixtures. */
+  initiallyOpen?: boolean
+  /** Extra class on the wrapper for placement. */
   className?: string
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(initiallyOpen)
+  const { theme, choose } = useTheme()
   const rootRef = useRef<HTMLSpanElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -85,6 +91,22 @@ export function Menu({
       </button>
       {open && (
         <div ref={listRef} className="menu-list" role="menu" id={listId} onKeyDown={onListKey}>
+          <div className="menu-label-heading">Theme</div>
+          <fieldset className="theme-choices" aria-label="Theme">
+            {THEMES.map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                role="menuitemradio"
+                aria-checked={theme === choice}
+                className="word"
+                onClick={() => choose(choice)}
+              >
+                {choice.charAt(0).toUpperCase() + choice.slice(1)}
+              </button>
+            ))}
+          </fieldset>
+          <div className="rule" />
           {items.map((item) => (
             <button
               key={item.label}
@@ -92,7 +114,7 @@ export function Menu({
               role="menuitem"
               className="word menu-item"
               onClick={() => {
-                setOpen(false)
+                close()
                 item.onSelect()
               }}
             >

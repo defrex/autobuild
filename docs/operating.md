@@ -102,7 +102,7 @@ Every surface reads the same durable state; [Operator surfaces](operator-surface
 | Surface | Progress, escalations, pause/resume | Landing consent and hold |
 |---|---|---|
 | Terminal dashboard (`bun ab dispatch`) | Yes | Keys `l` (land) and `o` (hold) |
-| Hosted web app | Yes, plus sessions and transcripts | No |
+| Hosted web app | Yes, plus sessions and transcripts | Land/Hold on a landing awaiting consent |
 | CLI and MCP operator tools | Yes | Yes |
 
 ## An example session

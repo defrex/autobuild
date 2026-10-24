@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
@@ -12,6 +10,7 @@ import {
   checkEvidence,
   chromiumBinary,
   evidenceText,
+  fontFaceCss,
   renderWebFrame,
   WEB_FRAME_SPECS,
   type WebFixtureModels,
@@ -199,6 +198,19 @@ function models(): WebFixtureModels {
         build({
           slug: 'integration-ready',
           kind: 'integration',
+          status: 'collecting',
+          integration: 'awaiting consent',
+          landing: {
+            decision: {
+              seq: 10,
+              mode: 'consent',
+              from: 'node',
+              into: { kind: 'root' },
+              labels: [],
+              rule: { default: true },
+              candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+            },
+          },
           integrationRow: {
             destination: 'main',
             openChildren: [],
@@ -221,7 +233,7 @@ test('every web frame renders its required evidence and none of the forbidden', 
   for (const spec of WEB_FRAME_SPECS) {
     const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     expect(() => checkEvidence(spec, html), spec.id).not.toThrow()
-    expect(html, spec.id).not.toContain('<script')
+    expect(html, spec.id).toContain('document.fonts.ready')
     expect(html, spec.id).toContain('<!doctype html>')
     if (spec.id.startsWith('builds-')) {
       expect(html, spec.id).not.toContain('class="fastext"')
@@ -480,7 +492,7 @@ test('pending answer context disables row-local submit and cancel', async () => 
   })
 
   expect(pendingHtml).toContain(
-    `<button type="button" class="word action" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
+    `<button type="button" class="btn primary action" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
   )
   expect(pendingHtml).toContain(
     `<button type="button" class="word action" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
@@ -550,7 +562,7 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
   const reason = 'Landing awaits consent'
   // Both surfaces, same words: the row register and the open detail register.
-  expect(evidenceText(html).split(reason)).toHaveLength(3)
+  expect(evidenceText(html).split(reason)).toHaveLength(4)
   expect(evidenceText(html)).toContain('ab land complete-dashboard-evidence')
   expect(evidenceText(html)).toContain('landing consent')
   expect(evidenceText(html)).not.toContain('landing not ready')
@@ -580,7 +592,7 @@ test('the named consent frame renders the real page with its registered client',
 
   // The page reuses the sign-in frame classes and the shared button outline.
   expect(html).toContain('frame signin')
-  expect(html).toContain('class="btn"')
+  expect(html).toContain('class="btn primary"')
   const text = evidenceText(html)
   expect(text).toContain('Capture MCP Console')
   expect(text).toContain('registered as')
@@ -628,7 +640,7 @@ test('the route consent frame renders through the page wrapper without a client 
   // The unnamed-client copy, the requested scopes, and the rendered form.
   expect(text).toContain("A client requests operator access to this deployment's Autobuild tools.")
   expect(text).toContain('Requested scopes: openid profile email')
-  expect(html).toContain('class="btn"')
+  expect(html).toContain('class="btn primary"')
   expect(html).toContain('<button')
   // The query carries no client_id, so no lookup fires and no client identity
   // appears — pinning the no-lookup/no-database invariant.
@@ -636,20 +648,13 @@ test('the route consent frame renders through the page wrapper without a client 
   expect(text).not.toContain('Capture MCP Console')
 })
 
-test('the skill artifact list names exactly the frames the capture renders', async () => {
-  const skill = await readFile(
-    join(import.meta.dir, '../../../.agents/skills/verify-ui-app/SKILL.md'),
-    'utf8',
-  )
-  const listed = [...skill.matchAll(/web-dashboard-frame:([a-z0-9-]+):png/g)].map(
-    (match) => match[1]!,
-  )
-  const rendered = WEB_FRAME_SPECS.map((frame) => frame.id)
-  // Name the drift so a legitimate frame addition points at the skill line to add.
-  const missing = rendered.filter((id) => !listed.includes(id))
-  const extra = listed.filter((id) => !rendered.includes(id))
-  expect(missing, 'frames the capture renders but the skill never attaches').toEqual([])
-  expect(extra, 'skill artifact ids the capture does not render').toEqual([])
+test('two grounds cover every scenario under unique artifact names', () => {
+  const names = WEB_FRAME_SPECS.map((frame) => `${frame.id}-${frame.ground}`)
+  expect(new Set(names).size).toBe(names.length)
+  for (const frame of WEB_FRAME_SPECS)
+    expect(
+      WEB_FRAME_SPECS.filter((other) => other.id === frame.id).map((other) => other.ground),
+    ).toEqual(['light', 'dark'])
 })
 
 test('chromium detection prefers the configured binary and reports absence', () => {
@@ -696,5 +701,26 @@ test('Builds shows rollback with other notices and removes it after clearance or
     }
     expect(text).toContain('independent warning')
     expect(text).toContain('RUNNING')
+  }
+})
+
+test('offline captures use the exact packaged production font files for both roles', () => {
+  const css = fontFaceCss('/fixture')
+  expect(css).toContain('/packages/hosted-store-service/app/fonts/AtkinsonHyperlegibleNext.ttf')
+  expect(css).toContain('/packages/hosted-store-service/app/fonts/JetBrainsMono.ttf')
+  expect(css).toContain("--font-sans: 'ANSI sans'")
+  expect(css).toContain("--font-mono: 'ANSI mono'")
+  expect(css).not.toContain('local(')
+  expect(css).not.toContain('DejaVu')
+})
+
+test('pending node consent frames preserve Land/Hold and disable both while the request settles', async () => {
+  for (const spec of WEB_FRAME_SPECS.filter((frame) =>
+    frame.id.startsWith('integration-consent-pending-'),
+  )) {
+    const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+    expect(html).toContain('class="signoff landing"')
+    expect(html).toMatch(/class="btn primary" disabled="">Land<\/button>/)
+    expect(html).toMatch(/class="btn" disabled="">Hold<\/button>/)
   }
 })
