@@ -1,355 +1,485 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-08T19:46:49.281Z",
-  "title": "Design System: Autobuild operator",
+  "generatedAt": "2026-10-24T17:31:17.825978+00:00",
+  "title": "Design System: Autobuild ANSI",
   "extensions": {
     "colorMeta": {
-      "ground": {
+      "light-ground": {
         "role": "neutral",
-        "displayName": "Ground",
-        "canonical": "oklch(0.0% 0.000 0.0)",
+        "displayName": "Light ground",
         "tonalRamp": [
-          "oklch(15.0% 0.000 0.0)",
-          "oklch(26.0% 0.000 0.0)",
-          "oklch(38.0% 0.000 0.0)",
-          "oklch(50.0% 0.000 0.0)",
-          "oklch(62.0% 0.000 0.0)",
-          "oklch(74.0% 0.000 0.0)",
-          "oklch(85.0% 0.000 0.0)",
-          "oklch(95.0% 0.000 0.0)"
+          "oklch(15% 0.0013 286.38)",
+          "oklch(26% 0.0013 286.38)",
+          "oklch(38% 0.0013 286.38)",
+          "oklch(49% 0.0013 286.38)",
+          "oklch(61% 0.0013 286.38)",
+          "oklch(72% 0.0013 286.38)",
+          "oklch(84% 0.0013 286.38)",
+          "oklch(95% 0.0013 286.38)"
         ]
       },
-      "ink": {
+      "light-ink": {
         "role": "neutral",
-        "displayName": "Ink",
-        "canonical": "oklch(92.5% 0.000 0.0)",
+        "displayName": "Light ink",
         "tonalRamp": [
-          "oklch(15.0% 0.000 0.0)",
-          "oklch(26.0% 0.000 0.0)",
-          "oklch(38.0% 0.000 0.0)",
-          "oklch(50.0% 0.000 0.0)",
-          "oklch(62.0% 0.000 0.0)",
-          "oklch(74.0% 0.000 0.0)",
-          "oklch(85.0% 0.000 0.0)",
-          "oklch(95.0% 0.000 0.0)"
+          "oklch(15% 0.0143 266.95)",
+          "oklch(26% 0.0143 266.95)",
+          "oklch(38% 0.0143 266.95)",
+          "oklch(49% 0.0143 266.95)",
+          "oklch(61% 0.0143 266.95)",
+          "oklch(72% 0.0143 266.95)",
+          "oklch(84% 0.0143 266.95)",
+          "oklch(95% 0.0143 266.95)"
         ]
       },
-      "title-yellow": {
+      "light-slack": {
+        "role": "neutral",
+        "displayName": "Light slack",
+        "tonalRamp": [
+          "oklch(15% 0.0205 264.37)",
+          "oklch(26% 0.0205 264.37)",
+          "oklch(38% 0.0205 264.37)",
+          "oklch(49% 0.0205 264.37)",
+          "oklch(61% 0.0205 264.37)",
+          "oklch(72% 0.0205 264.37)",
+          "oklch(84% 0.0205 264.37)",
+          "oklch(95% 0.0205 264.37)"
+        ]
+      },
+      "light-rule": {
+        "role": "neutral",
+        "displayName": "Light rule",
+        "tonalRamp": [
+          "oklch(15% 0.0088 264.52)",
+          "oklch(26% 0.0088 264.52)",
+          "oklch(38% 0.0088 264.52)",
+          "oklch(49% 0.0088 264.52)",
+          "oklch(61% 0.0088 264.52)",
+          "oklch(72% 0.0088 264.52)",
+          "oklch(84% 0.0088 264.52)",
+          "oklch(95% 0.0088 264.52)"
+        ]
+      },
+      "light-well": {
+        "role": "neutral",
+        "displayName": "Light well",
+        "tonalRamp": [
+          "oklch(15% 0.0029 264.54)",
+          "oklch(26% 0.0029 264.54)",
+          "oklch(38% 0.0029 264.54)",
+          "oklch(49% 0.0029 264.54)",
+          "oklch(61% 0.0029 264.54)",
+          "oklch(72% 0.0029 264.54)",
+          "oklch(84% 0.0029 264.54)",
+          "oklch(95% 0.0029 264.54)"
+        ]
+      },
+      "light-blue": {
         "role": "primary",
-        "displayName": "Title Yellow",
-        "canonical": "oklch(82.3% 0.141 102.2)",
+        "displayName": "Light blue",
         "tonalRamp": [
-          "oklch(15.0% 0.141 102.2)",
-          "oklch(26.0% 0.141 102.2)",
-          "oklch(38.0% 0.141 102.2)",
-          "oklch(50.0% 0.141 102.2)",
-          "oklch(62.0% 0.141 102.2)",
-          "oklch(74.0% 0.141 102.2)",
-          "oklch(85.0% 0.141 102.2)",
-          "oklch(95.0% 0.141 102.2)"
+          "oklch(15% 0.2228 264.66)",
+          "oklch(26% 0.2228 264.66)",
+          "oklch(38% 0.2228 264.66)",
+          "oklch(49% 0.2228 264.66)",
+          "oklch(61% 0.2228 264.66)",
+          "oklch(72% 0.2228 264.66)",
+          "oklch(84% 0.2228 264.66)",
+          "oklch(95% 0.2228 264.66)"
         ]
       },
-      "live-cyan": {
+      "light-green": {
         "role": "primary",
-        "displayName": "Live Cyan",
-        "canonical": "oklch(72.4% 0.092 195.3)",
+        "displayName": "Light green",
         "tonalRamp": [
-          "oklch(15.0% 0.092 195.3)",
-          "oklch(26.0% 0.092 195.3)",
-          "oklch(38.0% 0.092 195.3)",
-          "oklch(50.0% 0.092 195.3)",
-          "oklch(62.0% 0.092 195.3)",
-          "oklch(74.0% 0.092 195.3)",
-          "oklch(85.0% 0.092 195.3)",
-          "oklch(95.0% 0.092 195.3)"
+          "oklch(15% 0.1580 146.39)",
+          "oklch(26% 0.1580 146.39)",
+          "oklch(38% 0.1580 146.39)",
+          "oklch(49% 0.1580 146.39)",
+          "oklch(61% 0.1580 146.39)",
+          "oklch(72% 0.1580 146.39)",
+          "oklch(84% 0.1580 146.39)",
+          "oklch(95% 0.1580 146.39)"
         ]
       },
-      "ok-green": {
+      "light-amber": {
         "role": "primary",
-        "displayName": "OK Green",
-        "canonical": "oklch(71.0% 0.140 144.7)",
+        "displayName": "Light amber",
         "tonalRamp": [
-          "oklch(15.0% 0.140 144.7)",
-          "oklch(26.0% 0.140 144.7)",
-          "oklch(38.0% 0.140 144.7)",
-          "oklch(50.0% 0.140 144.7)",
-          "oklch(62.0% 0.140 144.7)",
-          "oklch(74.0% 0.140 144.7)",
-          "oklch(85.0% 0.140 144.7)",
-          "oklch(95.0% 0.140 144.7)"
+          "oklch(15% 0.1399 55.46)",
+          "oklch(26% 0.1399 55.46)",
+          "oklch(38% 0.1399 55.46)",
+          "oklch(49% 0.1399 55.46)",
+          "oklch(61% 0.1399 55.46)",
+          "oklch(72% 0.1399 55.46)",
+          "oklch(84% 0.1399 55.46)",
+          "oklch(95% 0.1399 55.46)"
         ]
       },
-      "alert-red": {
+      "light-teal": {
         "role": "primary",
-        "displayName": "Alert Red",
-        "canonical": "oklch(65.2% 0.142 21.8)",
+        "displayName": "Light teal",
         "tonalRamp": [
-          "oklch(15.0% 0.142 21.8)",
-          "oklch(26.0% 0.142 21.8)",
-          "oklch(38.0% 0.142 21.8)",
-          "oklch(50.0% 0.142 21.8)",
-          "oklch(62.0% 0.142 21.8)",
-          "oklch(74.0% 0.142 21.8)",
-          "oklch(85.0% 0.142 21.8)",
-          "oklch(95.0% 0.142 21.8)"
+          "oklch(15% 0.0930 205.44)",
+          "oklch(26% 0.0930 205.44)",
+          "oklch(38% 0.0930 205.44)",
+          "oklch(49% 0.0930 205.44)",
+          "oklch(61% 0.0930 205.44)",
+          "oklch(72% 0.0930 205.44)",
+          "oklch(84% 0.0930 205.44)",
+          "oklch(95% 0.0930 205.44)"
         ]
       },
-      "slack": {
-        "role": "neutral",
-        "displayName": "Slack",
-        "canonical": "oklch(62.7% 0.000 0.0)",
+      "light-red": {
+        "role": "primary",
+        "displayName": "Light red",
         "tonalRamp": [
-          "oklch(15.0% 0.000 0.0)",
-          "oklch(26.0% 0.000 0.0)",
-          "oklch(38.0% 0.000 0.0)",
-          "oklch(50.0% 0.000 0.0)",
-          "oklch(62.0% 0.000 0.0)",
-          "oklch(74.0% 0.000 0.0)",
-          "oklch(85.0% 0.000 0.0)",
-          "oklch(95.0% 0.000 0.0)"
+          "oklch(15% 0.2026 24.62)",
+          "oklch(26% 0.2026 24.62)",
+          "oklch(38% 0.2026 24.62)",
+          "oklch(49% 0.2026 24.62)",
+          "oklch(61% 0.2026 24.62)",
+          "oklch(72% 0.2026 24.62)",
+          "oklch(84% 0.2026 24.62)",
+          "oklch(95% 0.2026 24.62)"
         ]
       },
-      "rule": {
+      "light-red-wash": {
         "role": "neutral",
-        "displayName": "Rule",
-        "canonical": "oklch(28.1% 0.000 0.0)",
+        "displayName": "Light red wash",
         "tonalRamp": [
-          "oklch(15.0% 0.000 0.0)",
-          "oklch(26.0% 0.000 0.0)",
-          "oklch(38.0% 0.000 0.0)",
-          "oklch(50.0% 0.000 0.0)",
-          "oklch(62.0% 0.000 0.0)",
-          "oklch(74.0% 0.000 0.0)",
-          "oklch(85.0% 0.000 0.0)",
-          "oklch(95.0% 0.000 0.0)"
+          "oklch(15% 0.0130 23.19)",
+          "oklch(26% 0.0130 23.19)",
+          "oklch(38% 0.0130 23.19)",
+          "oklch(49% 0.0130 23.19)",
+          "oklch(61% 0.0130 23.19)",
+          "oklch(72% 0.0130 23.19)",
+          "oklch(84% 0.0130 23.19)",
+          "oklch(95% 0.0130 23.19)"
         ]
       },
-      "well": {
+      "light-select": {
         "role": "neutral",
-        "displayName": "Well",
-        "canonical": "oklch(19.1% 0.000 0.0)",
+        "displayName": "Light select",
         "tonalRamp": [
-          "oklch(15.0% 0.000 0.0)",
-          "oklch(26.0% 0.000 0.0)",
-          "oklch(38.0% 0.000 0.0)",
-          "oklch(50.0% 0.000 0.0)",
-          "oklch(62.0% 0.000 0.0)",
-          "oklch(74.0% 0.000 0.0)",
-          "oklch(85.0% 0.000 0.0)",
-          "oklch(95.0% 0.000 0.0)"
+          "oklch(15% 0.0489 270.01)",
+          "oklch(26% 0.0489 270.01)",
+          "oklch(38% 0.0489 270.01)",
+          "oklch(49% 0.0489 270.01)",
+          "oklch(61% 0.0489 270.01)",
+          "oklch(72% 0.0489 270.01)",
+          "oklch(84% 0.0489 270.01)",
+          "oklch(95% 0.0489 270.01)"
+        ]
+      },
+      "dark-ground": {
+        "role": "neutral",
+        "displayName": "Dark ground",
+        "tonalRamp": [
+          "oklch(15% 0.0147 272.42)",
+          "oklch(26% 0.0147 272.42)",
+          "oklch(38% 0.0147 272.42)",
+          "oklch(49% 0.0147 272.42)",
+          "oklch(61% 0.0147 272.42)",
+          "oklch(72% 0.0147 272.42)",
+          "oklch(84% 0.0147 272.42)",
+          "oklch(95% 0.0147 272.42)"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark ink",
+        "tonalRamp": [
+          "oklch(15% 0.0088 264.52)",
+          "oklch(26% 0.0088 264.52)",
+          "oklch(38% 0.0088 264.52)",
+          "oklch(49% 0.0088 264.52)",
+          "oklch(61% 0.0088 264.52)",
+          "oklch(72% 0.0088 264.52)",
+          "oklch(84% 0.0088 264.52)",
+          "oklch(95% 0.0088 264.52)"
+        ]
+      },
+      "dark-slack": {
+        "role": "neutral",
+        "displayName": "Dark slack",
+        "tonalRamp": [
+          "oklch(15% 0.0193 264.43)",
+          "oklch(26% 0.0193 264.43)",
+          "oklch(38% 0.0193 264.43)",
+          "oklch(49% 0.0193 264.43)",
+          "oklch(61% 0.0193 264.43)",
+          "oklch(72% 0.0193 264.43)",
+          "oklch(84% 0.0193 264.43)",
+          "oklch(95% 0.0193 264.43)"
+        ]
+      },
+      "dark-rule": {
+        "role": "neutral",
+        "displayName": "Dark rule",
+        "tonalRamp": [
+          "oklch(15% 0.0210 269.37)",
+          "oklch(26% 0.0210 269.37)",
+          "oklch(38% 0.0210 269.37)",
+          "oklch(49% 0.0210 269.37)",
+          "oklch(61% 0.0210 269.37)",
+          "oklch(72% 0.0210 269.37)",
+          "oklch(84% 0.0210 269.37)",
+          "oklch(95% 0.0210 269.37)"
+        ]
+      },
+      "dark-well": {
+        "role": "neutral",
+        "displayName": "Dark well",
+        "tonalRamp": [
+          "oklch(15% 0.0182 270.47)",
+          "oklch(26% 0.0182 270.47)",
+          "oklch(38% 0.0182 270.47)",
+          "oklch(49% 0.0182 270.47)",
+          "oklch(61% 0.0182 270.47)",
+          "oklch(72% 0.0182 270.47)",
+          "oklch(84% 0.0182 270.47)",
+          "oklch(95% 0.0182 270.47)"
+        ]
+      },
+      "dark-blue": {
+        "role": "primary",
+        "displayName": "Dark blue",
+        "tonalRamp": [
+          "oklch(15% 0.1199 268.00)",
+          "oklch(26% 0.1199 268.00)",
+          "oklch(38% 0.1199 268.00)",
+          "oklch(49% 0.1199 268.00)",
+          "oklch(61% 0.1199 268.00)",
+          "oklch(72% 0.1199 268.00)",
+          "oklch(84% 0.1199 268.00)",
+          "oklch(95% 0.1199 268.00)"
+        ]
+      },
+      "dark-green": {
+        "role": "primary",
+        "displayName": "Dark green",
+        "tonalRamp": [
+          "oklch(15% 0.1446 135.83)",
+          "oklch(26% 0.1446 135.83)",
+          "oklch(38% 0.1446 135.83)",
+          "oklch(49% 0.1446 135.83)",
+          "oklch(61% 0.1446 135.83)",
+          "oklch(72% 0.1446 135.83)",
+          "oklch(84% 0.1446 135.83)",
+          "oklch(95% 0.1446 135.83)"
+        ]
+      },
+      "dark-amber": {
+        "role": "primary",
+        "displayName": "Dark amber",
+        "tonalRamp": [
+          "oklch(15% 0.1271 73.48)",
+          "oklch(26% 0.1271 73.48)",
+          "oklch(38% 0.1271 73.48)",
+          "oklch(49% 0.1271 73.48)",
+          "oklch(61% 0.1271 73.48)",
+          "oklch(72% 0.1271 73.48)",
+          "oklch(84% 0.1271 73.48)",
+          "oklch(95% 0.1271 73.48)"
+        ]
+      },
+      "dark-teal": {
+        "role": "primary",
+        "displayName": "Dark teal",
+        "tonalRamp": [
+          "oklch(15% 0.1017 195.21)",
+          "oklch(26% 0.1017 195.21)",
+          "oklch(38% 0.1017 195.21)",
+          "oklch(49% 0.1017 195.21)",
+          "oklch(61% 0.1017 195.21)",
+          "oklch(72% 0.1017 195.21)",
+          "oklch(84% 0.1017 195.21)",
+          "oklch(95% 0.1017 195.21)"
+        ]
+      },
+      "dark-red": {
+        "role": "primary",
+        "displayName": "Dark red",
+        "tonalRamp": [
+          "oklch(15% 0.1495 21.57)",
+          "oklch(26% 0.1495 21.57)",
+          "oklch(38% 0.1495 21.57)",
+          "oklch(49% 0.1495 21.57)",
+          "oklch(61% 0.1495 21.57)",
+          "oklch(72% 0.1495 21.57)",
+          "oklch(84% 0.1495 21.57)",
+          "oklch(95% 0.1495 21.57)"
+        ]
+      },
+      "dark-red-wash": {
+        "role": "neutral",
+        "displayName": "Dark red wash",
+        "tonalRamp": [
+          "oklch(15% 0.0310 12.91)",
+          "oklch(26% 0.0310 12.91)",
+          "oklch(38% 0.0310 12.91)",
+          "oklch(49% 0.0310 12.91)",
+          "oklch(61% 0.0310 12.91)",
+          "oklch(72% 0.0310 12.91)",
+          "oklch(84% 0.0310 12.91)",
+          "oklch(95% 0.0310 12.91)"
+        ]
+      },
+      "dark-select": {
+        "role": "neutral",
+        "displayName": "Dark select",
+        "tonalRamp": [
+          "oklch(15% 0.0785 268.90)",
+          "oklch(26% 0.0785 268.90)",
+          "oklch(38% 0.0785 268.90)",
+          "oklch(49% 0.0785 268.90)",
+          "oklch(61% 0.0785 268.90)",
+          "oklch(72% 0.0785 268.90)",
+          "oklch(84% 0.0785 268.90)",
+          "oklch(95% 0.0785 268.90)"
         ]
       }
     },
     "typographyMeta": {
-      "display": {
-        "displayName": "Display (one row)",
-        "purpose": "The masthead only: repository title and sign-in title. Bold at the same natural-proportion size as body over one row."
-      },
       "body": {
-        "displayName": "Body",
-        "purpose": "Everything else. One size per viewport; the cell is 14/20, 15/22 at 720px, 16/24 at 1280px."
+        "displayName": "Human language",
+        "purpose": "Titles, captions and explanatory prose."
       },
-      "label": {
-        "displayName": "Label (bold)",
-        "purpose": "Slugs, STATUS words, section headings, ON/OFF, current steps, and action labels. Weight is the only emphasis."
+      "machine": {
+        "displayName": "Machine values",
+        "purpose": "Exact identifiers, steps, codes and durations."
       }
     },
     "shadows": [],
-    "motion": [
-      {
-        "name": "tt-flash",
-        "value": "180ms steps(1, end) 1; background: currentColor; color: var(--ground)",
-        "purpose": "The only motion: a single reverse-video flash on a state word that changed after mount. Removed under prefers-reduced-motion."
-      }
-    ],
+    "motion": [],
     "breakpoints": [
       {
-        "name": "cell-14-20",
-        "value": "0px"
+        "name": "phone",
+        "value": "719px"
       },
       {
-        "name": "cell-15-22",
-        "value": "720px"
-      },
-      {
-        "name": "cell-16-24",
+        "name": "wide",
         "value": "1280px"
       }
-    ],
-    "cell": {
-      "fontSizes": [
-        "14px",
-        "15px",
-        "16px"
-      ],
-      "lineHeights": [
-        "20px",
-        "22px",
-        "24px"
-      ],
-      "unit": "All widths in ch, all heights in multiples of --row (= --lh)."
-    },
-    "glyphs": {
-      "done": "[x]",
-      "current": "[>]",
-      "provisional": "[~]",
-      "pending": "[ ]",
-      "selectedLane": "> (bold)",
-      "hoverPreviewLane": "> (regular)",
-      "message": "!",
-      "select": "▾",
-      "rule": "─",
-      "menu": "▾"
-    },
-    "tokenSource": "packages/hosted-store-service/app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well, shared --button-border, step and status maps); packages/hosted-store-service/app/layout.tsx (--font-mono)."
+    ]
   },
   "components": [
     {
-      "name": "Masthead",
-      "kind": "custom",
-      "refersTo": "masthead-title",
-      "description": "One-row natural-proportion header: repository in title yellow and the account menu trigger (identity in slack with the select's ▾) pinned right. It carries no status word.",
-      "html": "<div class=\"ds-tt\"><header class=\"ds-masthead\"><h1 class=\"ds-masthead-copy ds-title\"><span>org/repository</span></h1><span class=\"ds-menu ds-account\"><button class=\"ds-word ds-menu-trigger\" aria-haspopup=\"menu\" aria-expanded=\"false\"><span class=\"ds-identity\">operator@example.com</span> <span class=\"ds-menu-glyph\">▾</span></button></span></header></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) 1fr minmax(0, max-content); column-gap: 2ch; align-items: start; height: var(--row, 22px); } .ds-masthead-copy { display: block; margin: 0; height: var(--row, 22px); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-masthead-copy > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; } .ds-title { color: var(--title, #d7c84f); } .ds-clock { grid-column: 4; color: var(--ink, #e6e6e6); } .ds-account { grid-column: 3; justify-self: end; } .ds-menu { position: relative; display: inline-block; min-width: 0; max-width: 100%; height: var(--row, 22px); } .ds-menu-trigger { display: inline-flex; max-width: 100%; column-gap: 1ch; align-items: baseline; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; } .ds-identity { color: var(--slack, #888888); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-menu-glyph { color: var(--slack, #888888); }"
-    },
-    {
-      "name": "Operator control line",
-      "kind": "nav",
-      "refersTo": "word",
-      "description": "One named control line: optional repository selector, dispatcher facts, paused-only repository warning, setting toggles (one natural space before each ON/OFF word), pause all and resume all ghost words, then the poll clock pinned right in ink (slack while a poll is pending). Whole items wrap; below 720px the clock is hidden.",
-      "html": "<div class=\"ds-tt\"><nav class=\"ds-navline\" aria-label=\"Operator controls\"><label class=\"ds-repo\"><span class=\"ds-slack\">repo </span><span class=\"ds-selectwrap\"><select><option>org/repository</option><option>org/alternate</option></select></span></label><span class=\"ds-control-item ds-fact-item\">queue 0 <span class=\"ds-sep\">|</span></span><span class=\"ds-control-item ds-fact-item\">active 2/6 <span class=\"ds-sep\">|</span></span><span class=\"ds-control-item ds-fact-item\">observations 3/5 <span class=\"ds-sep\">|</span></span><span class=\"ds-control-item\">repository <b class=\"ds-off\">PAUSED</b></span><button class=\"ds-word ds-control-item\">intake <b class=\"ds-on\">ON</b></button><button class=\"ds-word ds-control-item\">auto merge <b class=\"ds-off\">OFF</b></button><button class=\"ds-word ds-control-item\">harvest <b class=\"ds-on\">ON</b></button><span class=\"ds-spacer\"></span><span class=\"ds-clock\">12:10:00</span></nav></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 2ch; min-height: var(--row, 22px); } .ds-repo { display: inline-flex; flex: 0 1 auto; min-width: 0; white-space: nowrap; } .ds-repo select { width: 100%; min-width: 0; min-height: var(--row, 22px); padding: 0 3ch 0 1ch; appearance: none; background: var(--well, #141414); color: var(--ink, #e6e6e6); border: 0; border-radius: 0; font: inherit; } .ds-selectwrap { position: relative; display: inline-block; min-width: 0; max-width: min(42ch, 100%); } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-control-item { display: inline-flex; flex: 0 0 auto; column-gap: 2ch; white-space: nowrap; } .ds-fact-item { column-gap: 1ch; margin-right: -1ch; } .ds-sep, .ds-identity, .ds-slack { color: var(--slack, #888888); } .ds-spacer { flex: 1 1 auto; } .ds-identity { display: inline-flex; flex: 0 0 auto; column-gap: 2ch; white-space: nowrap; } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; color: inherit; white-space: nowrap; } .ds-on { color: var(--ok, #65b868); } .ds-off { color: var(--warn, #d7c84f); } @media (max-width: 719px) { .ds-sep, .ds-spacer { display: none; } .ds-identity { flex-basis: 100%; justify-content: flex-end; } } .ds-navline .ds-clock { flex: 0 0 auto; color: var(--ink, #e6e6e6); white-space: nowrap; }"
-    },
-    {
-      "name": "Word control",
+      "name": "Outlined button",
       "kind": "button",
-      "refersTo": "word",
-      "description": "A borderless, transparent secondary action with explicit hover, focus-visible, active, and disabled states; row variants use uppercase action vocabulary in reserved in-grid space. Hover turns cyan and draws a one-pixel stroke under the whole label, gaps included, at a text underline's offset.",
-      "html": "<div class=\"ds-tt\"><span class=\"ds-dispatch\">queue 0 <span class=\"ds-sep\">|</span> active 4/4 <button class=\"ds-word\">intake <b class=\"ds-on\">ON</b></button> <button class=\"ds-word\">auto merge <b class=\"ds-off\">OFF</b></button> <button class=\"ds-word\" disabled>harvest <b class=\"ds-on\">ON</b></button></span></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer; white-space: nowrap; } .ds-word:hover:not(:disabled) { color: var(--live, #55b8b8); text-decoration: none; box-shadow: inset 0 -1px 0 currentColor; text-underline-offset: 0.15em; } .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-word:active:not(:disabled) { background: var(--ink, #e6e6e6); color: var(--ground, #000); text-decoration: none; } .ds-word:active:not(:disabled) .ds-on, .ds-word:active:not(:disabled) .ds-off { color: inherit; } .ds-word:disabled { background: transparent; color: var(--slack, #888888); cursor: not-allowed; } .ds-on { color: var(--ok, #65b868); font-weight: 700; } .ds-off { color: var(--warn, #d7c84f); font-weight: 700; }"
+      "description": "Square action; teal hover and visible keyboard focus.",
+      "html": "<button class=\"ds-button\">Continue</button>",
+      "css": ".ds-button{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:1.5px solid var(--ink,#1a1d24);border-radius:0;padding:3px 12px;font-weight:600;background:var(--ground,#fbfbfc);color:var(--ink,#1a1d24);}.ds-button:hover{border-color:var(--teal,#007f8a);color:var(--teal,#007f8a);}.ds-button:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}",
+      "refersTo": "button"
     },
     {
       "name": "Primary button",
       "kind": "button",
-      "refersTo": "btn",
-      "description": "Transparent default action with one shared 2px ink outline; cyan hover, ink reverse-video active, slack disabled, and an offset cyan keyboard-focus ring.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-controls\"><button class=\"ds-btn\">Answer escalation</button><button class=\"ds-btn\" disabled>Answer escalation</button><button class=\"ds-word\">close detail</button></div></div>",
-      "css": ".ds-tt { --button-border: 2px; font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-controls { display: flex; flex-wrap: wrap; column-gap: 2ch; row-gap: var(--row, 22px); align-items: baseline; } .ds-btn { display: inline-flex; box-sizing: border-box; align-items: center; height: var(--row, 22px); font: inherit; border: var(--button-border) solid currentColor; border-radius: 0; margin: 0; padding: 0 1ch; background: transparent; color: var(--ink, #e6e6e6); font-weight: 700; white-space: nowrap; cursor: pointer; } .ds-btn:hover:not(:disabled) { background: transparent; color: var(--live, #55b8b8); } .ds-btn:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-btn:active:not(:disabled) { background: var(--ink, #e6e6e6); border-color: var(--ink, #e6e6e6); color: var(--ground, #000); } .ds-btn:disabled { background: transparent; color: var(--slack, #888888); cursor: not-allowed; }"
+      "description": "Square action; teal hover and visible keyboard focus.",
+      "html": "<button class=\"ds-primary\">Continue</button>",
+      "css": ".ds-primary{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:1.5px solid var(--ink,#1a1d24);border-radius:0;padding:3px 12px;font-weight:600;background:var(--ink,#1a1d24);color:var(--ground,#fbfbfc);}.ds-primary:hover{border-color:var(--teal,#007f8a);background:var(--teal,#007f8a);}.ds-primary:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}",
+      "refersTo": "button"
     },
     {
-      "name": "Field",
+      "name": "Word action",
+      "kind": "button",
+      "description": "Text action without a filled container.",
+      "html": "<button class=\"ds-word\">Answer</button>",
+      "css": ".ds-word{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:0;padding:0;background:transparent;color:var(--ink,#1a1d24);text-decoration:underline;text-decoration-color:var(--rule,#dfe2e8);text-underline-offset:.25em}.ds-word:hover{color:var(--teal,#007f8a)}.ds-word:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}"
+    },
+    {
+      "name": "Text field",
       "kind": "input",
-      "refersTo": "field",
-      "description": "Slack label above a reverse-video well; no stroke, square, and one row minimum.",
-      "html": "<div class=\"ds-tt\"><label class=\"ds-field\"><span>resolution</span><span class=\"ds-selectwrap\"><select><option>Guidance</option><option>Retry</option><option>Dismiss</option></select></span></label><label class=\"ds-field ds-gap\"><span>message</span><textarea placeholder=\"answer the blocker\"></textarea></label></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-field { display: grid; max-width: 80ch; } .ds-gap { margin-top: var(--row, 22px); } .ds-field > span:first-child { color: var(--slack, #888888); } .ds-field select, .ds-field textarea { font: inherit; color: var(--ink, #e6e6e6); background: var(--well, #141414); border: 0; border-radius: 0; margin: 0; width: 100%; min-height: var(--row, 22px); padding: 0 1ch; caret-color: var(--live, #55b8b8); } .ds-field textarea { min-height: calc(var(--row, 22px) * 4); resize: vertical; } .ds-field textarea::placeholder { color: var(--slack, #888888); } .ds-field select { appearance: none; padding-right: 3ch; } .ds-selectwrap { position: relative; display: inline-block; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-field select:focus-visible, .ds-field textarea:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
+      "description": "Sans label and mono entered values.",
+      "html": "<label class=\"ds-field\">Guidance<input placeholder=\"Optional guidance\"></label>",
+      "css": ".ds-field{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;display:grid;gap:4px;color:var(--slack,#5f6571)}.ds-field input{font-family:var(--mono,\"JetBrains Mono\",monospace);font-size:.93em;border:1.5px solid var(--rule,#dfe2e8);border-radius:0;background:var(--well,#f5f6f8);color:var(--ink,#1a1d24);padding:4px 10px}.ds-field input:focus{border-color:var(--teal,#007f8a)}.ds-field input:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}",
+      "refersTo": "field"
     },
     {
-      "name": "Menu",
+      "name": "Control navigation",
+      "kind": "nav",
+      "description": "Wrapping facts and controls on a structural rule.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Operator controls\"><span>active <b>2/4</b></span><span>intake <b>on</b></span></nav>",
+      "css": ".ds-nav{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;display:flex;flex-wrap:wrap;gap:4px 20px;padding:10px 0;border-bottom:1px solid var(--rule,#dfe2e8);color:var(--ink,#1a1d24)}.ds-nav b{font-family:var(--mono,\"JetBrains Mono\",monospace)}"
+    },
+    {
+      "name": "Escalation sign-off",
       "kind": "custom",
-      "refersTo": "word",
-      "description": "The one drop-down: a ghost-word trigger (identity in slack, then the select's slack ▾ one cell apart) that opens an opaque well block on the next row, right-aligned, inset a quarter row above and below and 1ch at the sides, holding one ghost word per row and no stroke, shadow, or translucency. Hover and the open state turn the trigger cyan and nothing in the menu inverts to reverse video; Escape, an outside pointer, or choosing an item closes it and returns focus to the trigger; Arrow keys move between items.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-menu-stage\"><span class=\"ds-menu\"><button class=\"ds-word ds-menu-trigger\" aria-haspopup=\"menu\" aria-expanded=\"true\"><span class=\"ds-identity\">operator@example.com</span> <span class=\"ds-menu-glyph\">▾</span></button><div class=\"ds-menu-list\" role=\"menu\"><button class=\"ds-word ds-menu-item\" role=\"menuitem\">sign out</button></div></span></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch calc(var(--row, 22px) * 3); } .ds-menu-stage { display: flex; justify-content: flex-end; } .ds-menu { position: relative; display: inline-block; height: var(--row, 22px); } .ds-word { font: inherit; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; white-space: nowrap; } .ds-menu-trigger { display: inline-flex; column-gap: 1ch; align-items: baseline; } .ds-menu-trigger[aria-expanded=\"true\"] .ds-identity, .ds-menu-trigger[aria-expanded=\"true\"] .ds-menu-glyph { color: var(--live, #55b8b8); } .ds-identity { color: var(--slack, #888888); } .ds-menu-glyph { color: var(--slack, #888888); } .ds-menu-list { position: absolute; top: var(--row, 22px); right: 0; display: grid; min-width: 100%; padding: calc(var(--row, 22px) / 4) 0; background: var(--well, #141414); } .ds-menu-item { height: var(--row, 22px); padding: 0 1ch; text-align: right; } .ds-menu-item:hover { color: var(--live, #55b8b8); box-shadow: inset 0 -1px 0 currentColor; }"
+      "description": "A question and factual help, reserved for human decisions.",
+      "html": "<section class=\"ds-signoff\"><p>Which behavior should this build use?</p><small>This build stopped to ask a person. Answering resumes it.</small></section>",
+      "css": ".ds-signoff{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:1.5px solid var(--red,#d32b33);background:var(--red-wash,#fef2f1);padding:14px 16px 16px}.ds-signoff p{margin:0;color:var(--red,#d32b33);font-weight:600}.ds-signoff small{color:var(--slack,#5f6571);font-size:.93em}"
     },
     {
-      "name": "Build row",
-      "kind": "card",
-      "refersTo": "status",
-      "description": "Lane, interactive ticket id and bold slug, an always-visible direct auto-merge state control, right-pinned tokens and STATUS, then pipeline and message previews; the row carries no other controls. Lifecycle and destructive actions (ABORT plus PAUSE, CANCEL PAUSE, RESUME, or DISCARD) live in the detail's Actions section, so acting on a build is open, then act; Harvest shows its run action as a bold word among its tokens. The title is the accessible detail toggle and a pointer click anywhere on the row surface outside a control, link, field, or the unfolded detail toggles detail the same way. Answering is exclusive: it swaps the Actions section to SUBMIT and CANCEL and disables that row's title and auto-merge controls until cancel or successful submit; abort confirmation swaps it to CONFIRM ABORT and CANCEL. While a build's detail is open the other rows dim except for full-color STATUS words, yellow (held) and (draining) annotations, and red alert lines; selection is released whenever it carries nothing. Integration list rows say integration into the destination, landed out of total, nonzero building and queued counts, and verified when current evidence passes. Unknown membership says children unknown; a known empty node says no children yet. The five list steps are spec, open, collect, verify, land, with verification progress or failure and the landing policy mode. Shared red conflict/failure alerts and yellow consent alerts keep full color while dimmed. Details retain their existing pipeline; the web has no progress graphic. Handoff notices above the rows name both runtimes, mode and deadline in the yellow notice register; a yellow (draining) token accompanies lifecycle status until durable settlement and remains full color during detail focus.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-row\" data-selected=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><button class=\"ds-rowhead\" aria-label=\"Open details for plan-blocked-dashboard\" aria-expanded=\"false\"><span class=\"ds-ticket\">CAP-PLAN</span><span class=\"ds-slug\">plan-blocked-dashboard</span></button><span class=\"ds-tokens\"><button class=\"ds-word ds-am\" aria-label=\"Auto merge off for plan-blocked-dashboard\" aria-pressed=\"false\">auto merge <b>off</b></button><span class=\"ds-pr\">PR open</span></span><span class=\"ds-status\" data-status=\"blocked\">BLOCKED</span></div><ol class=\"ds-steps\"><li data-state=\"current\">[&gt;] plan(3s)</li><li data-state=\"pending\">[ ] plan-review</li><li data-state=\"pending\">[ ] implement</li><li data-state=\"pending\">[ ] code-review</li><li data-state=\"pending\">[ ] verify:unit</li><li data-state=\"pending\">[ ] finalize</li><li data-state=\"pending\">[ ] merge(waiting)</li></ol><div class=\"ds-message\" data-tone=\"alert\"><p>! The plan needs a decision the spec does not make.</p><p>&nbsp;&nbsp;... 4 more rows - Enter details</p></div><div class=\"ds-row-controls\"><button class=\"ds-word\" aria-label=\"ABORT plan-blocked-dashboard\">ABORT</button><button class=\"ds-word\" aria-label=\"RESUME plan-blocked-dashboard\">RESUME</button></div></div><div class=\"ds-row\" data-hovered=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><button class=\"ds-rowhead\" aria-label=\"Open details for hover-preview-dashboard\"><span class=\"ds-ticket\">CAP-NEXT</span><span class=\"ds-slug\">hover-preview-dashboard</span></button><span class=\"ds-tokens\"><button class=\"ds-word ds-am\">auto merge <b>enabled</b></button></span><span class=\"ds-status\" data-status=\"queued\">QUEUED</span></div></div><div class=\"ds-rule\"></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #55b8b8); } .ds-row[data-hovered] .ds-lane { color: var(--lane-preview, #55b8b8); font-weight: 400; } .ds-row[data-selected] .ds-lane { color: var(--live, #55b8b8); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #e6e6e6); } .ds-rowhead:hover { color: var(--live, #55b8b8); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-am { color: var(--warn, #d7c84f); } .ds-am b { font-weight: 700; } .ds-pr { color: var(--live, #55b8b8); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #d96868); } .ds-status[data-status=\"running\"] { color: var(--ok, #65b868); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #55b8b8); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #d7c84f); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #65b868); } .ds-steps li[data-state=\"current\"] { color: var(--live, #55b8b8); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #d7c84f); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #888888); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #d96868); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #292929); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; } .ds-row-controls { display: grid; grid-template-columns: repeat(2, max-content); column-gap: 2ch; height: var(--row, 22px); padding-left: 2ch; } .ds-row-controls .ds-word { font: inherit; color: var(--ink, #e6e6e6); background: transparent; border: 0; padding: 0; white-space: nowrap; } .ds-row-controls .ds-word:hover { color: var(--live, #55b8b8); text-decoration: underline; } .ds-row-controls .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
-    },
-    {
-      "name": "Loading rows",
+      "name": "Landing consent",
       "kind": "custom",
-      "refersTo": "well-block",
-      "description": "Neutral placeholders inside the operator control landmark reserve its loaded wrapping footprint; five static four-row build placeholders follow, with no separate dispatcher row. Geometry is decorative and one hidden polite message announces loading.",
-      "html": "<div class=\"ds-tt\"><nav class=\"ds-navline\" aria-label=\"Operator controls\"><span class=\"ds-loading-controls\" aria-hidden=\"true\"><span></span><span></span><span></span><span></span><span></span><span></span></span><span class=\"ds-spacer\"></span><span class=\"ds-identity\">operator@example.com <button class=\"ds-word\">sign out</button></span></nav><p class=\"ds-sr\" aria-live=\"polite\">Loading builds.</p><div class=\"ds-skeletons\" aria-hidden=\"true\"><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; column-gap: 2ch; min-height: var(--row, 22px); } .ds-loading-controls { display: contents; } .ds-loading-controls span, .ds-skeleton-row span { display: block; flex: 0 0 auto; height: var(--row, 22px); background: var(--well, #141414); } .ds-loading-controls span:nth-child(1) { width: 7ch; } .ds-loading-controls span:nth-child(2) { width: 10ch; } .ds-loading-controls span:nth-child(3) { width: 16ch; } .ds-loading-controls span:nth-child(4) { width: 9ch; } .ds-loading-controls span:nth-child(5) { width: 13ch; } .ds-loading-controls span:nth-child(6) { width: 10ch; } .ds-spacer { flex: 1 1 auto; } .ds-identity { display: inline-flex; flex: 0 0 auto; column-gap: 2ch; white-space: nowrap; color: var(--slack, #888888); } .ds-word { font: inherit; color: inherit; background: transparent; border: 0; } .ds-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; } .ds-skeletons { margin-top: var(--row, 22px); } .ds-skeleton-row { display: grid; grid-template-columns: 2ch minmax(0, 1fr) 12ch; grid-template-rows: repeat(3, var(--row, 22px)); height: calc(var(--row, 22px) * 4); } .ds-skeleton-identity { grid-column: 2; width: min(34ch, 70%); } .ds-skeleton-state { grid-column: 3; justify-self: end; width: 10ch; } .ds-skeleton-row .ds-skeleton-steps { grid-row: 3; grid-column: 2 / 4; width: min(62ch, 80%); background: var(--rule, #292929); } @media (max-width: 719px) { .ds-spacer { display: none; } .ds-identity { flex-basis: 100%; justify-content: flex-end; } }"
+      "description": "Amber stays on ground to preserve contrast.",
+      "html": "<section class=\"ds-consent\">Landing is waiting for your consent.</section>",
+      "css": ".ds-consent{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:1.5px solid var(--amber,#b35c00);background:var(--ground,#fbfbfc);color:var(--amber,#b35c00);padding:14px 16px 16px}"
     }
   ],
   "narrative": {
-    "northStar": "Teletext Dispatch",
-    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each tempered teletext hue has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the masthead is only a title: every status lives in the content beneath it, where the STATUS column, the `!` lines, and the toggle words say what needs a human. The story is glance, find the red word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no decorative hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from the shared outline on buttons, from reverse video for pressed states, and from box-drawing rules.",
+    "northStar": "ANSI",
+    "overview": "ANSI keeps the terminal\u2019s functional color and precise machine values while giving people readable titles and plain-language help. The visual register is calm, direct and practical: glance, find the state that needs attention, act on one row, leave.\n\nBoth grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app, not the terminal dashboard or marketing website.",
     "keyCharacteristics": [
-      "Black ground, dark only; softened ink; four muted teletext hues, each retaining its established job.",
-      "One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.",
-      "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
-      "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
-      "Words act: default controls are ink outlines, row and secondary controls are ghost words, and active states use reverse video.",
-      "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.",
-      "Blocked RESUME unfolds a focused optional-guidance answer step beneath the selected row; empty submission retries, and the exclusive row register names only SUBMIT and CANCEL until cancel or successful submit restores ordinary controls.",
-      "Build titles toggle detail directly; an always-visible, state-named auto-merge ghost word toggles only that build setting.",
-      "Every build reserves a one-row in-flow action register beneath pipeline and message previews; Harvest keeps its one-row run-action register. Both reveal for selection, keyboard focus, or fine-pointer hover without layout shift.",
-      "One operator control landmark carries repository choice, dispatcher facts and toggles, then the account group; running repositories have no repository token."
+      "Two calm grounds with state-specific inks.",
+      "Human language in sans; machine values in mono.",
+      "Title-led ruled rows and inline decisions.",
+      "Square controls and document flow."
     ],
     "rules": [
       {
+        "name": "The Two Grounds Rule",
+        "body": "Light and dark are equal supported grounds. Use the matching palette as a whole; never transplant an ink from the other ground.",
+        "section": "colors"
+      },
+      {
         "name": "The Color Is State Rule",
-        "body": "A saturated color appears only where it encodes the state it is assigned to. Yellow warns or titles, cyan is current, green is done, and red is blocked or failed. Integration collection uses green for landed and verified, cyan for building, and slack for queued; words carry each state too. Never use a primary for emphasis, decoration, or brand.",
+        "body": "Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. Status and step words carry meaning alongside color.",
         "section": "colors"
       },
       {
-        "name": "The Alert Never Dims Rule",
-        "body": "Focus by dimming lowers ink, cyan, green, yellow, and step colors of unfocused rows to slack; STATUS words, the yellow `(held)` and `(draining)` annotations, red alert lines, and yellow integration consent alerts keep full color because they remain decision-relevant. A blocked row is never dimmed away.",
-        "section": "colors"
-      },
-      {
-        "name": "The Role Token Rule",
-        "body": "Components read role tokens (`--ink`, `--live`, `--ok`, `--warn`, `--alert`, `--slack`, `--well`) and the step and status maps, never the `--tt-*` primaries directly. The palette tunes in one place.",
-        "section": "colors"
-      },
-      {
-        "name": "The One Cell Rule",
-        "body": "The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size, and no element scales one axis independently. Emphasis is weight or role color, never size; the masthead's bold display register occupies exactly one row.",
+        "name": "The Semantic Type Rule",
+        "body": "Use Atkinson Hyperlegible Next for titles, captions, questions and explanatory prose. Use JetBrains Mono for ticket ids, slugs, steps, durations, repository identities, codes and other machine values.",
         "section": "typography"
       },
       {
         "name": "The Glyph Rule",
-        "body": "Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select or menu, `─` for rules. No icon font, no SVG icon set, no emoji in the interface.",
+        "body": "Retain the textual step marks [x], [>], [~], [ ] and their accessible state names. Existing text controls may use menu or close glyphs; never introduce an icon set or emoji.",
         "section": "typography"
       },
       {
-        "name": "The Flowing Document Rule",
-        "body": "The browser document is the sole scroll container. Masthead, operator controls, rows, and inline detail stay in ordinary flow at natural height; no block is pinned and no nested element scrolls rows or detail.",
+        "name": "The Title First Rule",
+        "body": "The readable ticket title is the primary row text; use the slug when no title exists. Keep identity, status, slug and steps visible without opening detail.",
         "section": "layout"
       },
       {
-        "name": "The Flat Grid Rule",
-        "body": "Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well; that is the full vocabulary.",
-        "section": "elevation"
+        "name": "The Flowing Document Rule",
+        "body": "The browser document owns scrolling. Masthead, controls, build rows and inline details remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.",
+        "section": "layout"
       },
       {
-        "name": "The No Hairline Rule",
-        "body": "The shared 2px button outline is the sole component-border exception. No other component draws a border: separation is a row of `─`, a change of fill, or a row of empty space. The offset 2px focus outline remains the keyboard-accessibility indicator.",
+        "name": "The Square Rules Rule",
+        "body": "Use square corners, one-pixel structural rules and thin outlined controls. No shadows, gradients, rounded pills or filled status badges.",
         "section": "shapes"
+      },
+      {
+        "name": "The Sign-off Rule",
+        "body": "Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; landing consent uses amber on the plain ground, never on the well.",
+        "section": "components"
       }
     ],
     "dos": [
-      "Do size everything in cells: widths in `ch`, heights in multiples of `--row`, 2ch indents, 1ch between glyph tokens.",
-      "Do keep every shell block in ordinary document flow and let only the browser document scroll.",
-      "Do read role tokens and the step and status maps; the `--tt-*` primaries are set once in `:root` and never referenced by a component.",
-      "Do keep the masthead to the title and the account menu; status lives in the rows, the STATUS column, and the control line.",
-      "Do rest buttons transparently on the ground; use reverse video only for a button's pressed state and the flash.",
-      "Do keep STATUS words, yellow `(held)` and `(draining)` annotations, and red alert lines at full color when dimming the frame around an open detail.",
-      "Do carry state in a word and a color together; screen-reader text names the step state the glyph shows.",
-      "Do use a red `!` line for both the blocked-build answer step and destructive confirmation, and make destructive intent a second step.",
-      "Do reserve each row control register beneath pipeline and message previews in flow, limit it to two lifecycle/destructive actions, reveal it with visibility for selection, focus-within, or fine-pointer hover, and qualify accessible names by build slug or Harvest run.",
-      "Do keep dispatcher facts, toggles, and account actions in one named control line; show repository PAUSED only when paused."
+      "Do choose the palette for the active ground and preserve text contrast of at least 4.5:1.",
+      "Do explain what an escalation means and what answering does.",
+      "Do keep state words and step marks beside their color.",
+      "Do keep destructive confirmation inline and show acknowledged durable state."
     ],
     "donts": [
-      "Don't introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.",
-      "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Separate non-controls with a `─` rule, a fill change, or an empty row.",
-      "Don't round a corner.",
-      "Don't use a saturated color for anything but its assigned state.",
-      "Don't dim a red line, a STATUS word, or a yellow `(held)` or `(draining)` annotation, or put a status word in the masthead.",
-      "Don't add motion beyond the 180ms state-word flash, and never animate under reduced motion.",
-      "Don't use icon fonts, SVG icon sets, or emoji glyphs in the interface; the glyph set is `[x] [>] [~] [ ]`, `>`, `!`, `▾`, `─`, `×`.",
-      "Don't build a sidebar, metric cards, a pill-status table, a drawer, or a modal; detail unfolds in place under its row.",
-      "Don't put controls between a build title and its progress, reserve hover-revealed registers in rows, or duplicate detail and auto-merge actions among the action words.",
-      "Don't invent page numbers (P100, P200); they are deliberately undecided.",
-      "Don't render a light theme; the ground is black and `color-scheme` is dark."
+      "Don\u2019t place amber text on the inset well or red wash; use the plain ground.",
+      "Don\u2019t add shadows, gradients, pills, icon sets or emoji.",
+      "Don\u2019t replace inline detail with a drawer or modal.",
+      "Don\u2019t invent page numbers or decide a new app title; both remain human decisions."
     ]
   }
 }

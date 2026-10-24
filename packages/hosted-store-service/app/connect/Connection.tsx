@@ -35,11 +35,12 @@ export function ConnectionView({
           <h2 id="connect-title">Connect project</h2>
           {connection ? (
             <>
-              <p>
-                Repository: <strong>{connection.repo}</strong>
+              <p className="connection-code">
+                <span className="sr-only">Connection code: </span>
+                <code>{connection.code}</code>
               </p>
               <p>
-                Connection code: <code>{connection.code}</code>
+                Repository: <strong className="project">{connection.repo}</strong>
               </p>
               {connection.status === 'pending' ? (
                 <>
@@ -53,7 +54,7 @@ export function ConnectionView({
                   </p>
                   <div className="providers">
                     <button
-                      className="btn"
+                      className="btn primary"
                       type="button"
                       disabled={pending}
                       onClick={() => onDecision?.(true)}
