@@ -110,19 +110,20 @@ describe('attemptExec', () => {
       exec`SELECT * FROM builds WHERE slug = ${'x'}`
     await statement(attemptExec(conn, plans).exec)
     expect(calls).toHaveLength(1)
-    plans.invalidate(statementKey(calls[0]!.strings))
+    const marker = plans.invalidate(statementKey(calls[0]!.strings))
 
     // The next execution skips the poisoned plan: same values, marked text.
     await statement(attemptExec(conn, plans).exec)
     expect(calls).toHaveLength(2)
-    const strings = calls[1]?.strings
-    expect(strings).toBeDefined()
-    // The raw property survives the copy — without it Bun treats the array
-    // as a query value instead of a template.
-    expect(strings?.raw).toBeDefined()
-    expect(strings?.raw?.[strings.raw.length - 1]).toMatch(/^ \/\*ab-plan-retry-s\d+-\d+\*\/$/)
-    expect(strings?.[strings.length - 1]).toBe(strings?.raw?.[strings.length - 1])
-    expect(strings?.[0]).toBe('SELECT * FROM builds WHERE slug = ')
+    const strings = calls[1]!.strings
+    expect(Array.isArray(strings)).toBe(true)
+    const descriptor = Object.getOwnPropertyDescriptor(strings, 'raw')
+    expect(descriptor).toBeDefined()
+    expect(descriptor!.enumerable).toBe(false)
+    expect(strings.raw).toBe(strings)
+    expect(strings[strings.length - 1]).toBe(marker)
+    expect(strings.raw[strings.raw.length - 1]).toBe(marker)
+    expect(strings[0]).toBe('SELECT * FROM builds WHERE slug = ')
     expect(calls[1]?.values).toEqual(['x'])
   })
 
@@ -204,6 +205,16 @@ describe('attemptExec', () => {
     await retry.exec`SELECT * FROM sessions`
 
     expect(calls).toHaveLength(3)
+    for (const { strings } of calls) {
+      expect(Array.isArray(strings)).toBe(true)
+      const descriptor = Object.getOwnPropertyDescriptor(strings, 'raw')
+      expect(descriptor).toBeDefined()
+      expect(descriptor!.enumerable).toBe(false)
+      expect(strings.raw).toBe(strings)
+      const key = statementKey(strings).replace(/ \/\*ab-plan-retry-s\d+-\d+\*\/$/, '')
+      expect(strings[strings.length - 1]).toBe(key + plans.markerFor(key))
+      expect(strings.raw[strings.raw.length - 1]).toBe(strings[strings.length - 1])
+    }
     // No memoized marker is reused — each was minted before the migration
     // that triggered this retry, so its plan is poisoned too; fresh
     // variants are minted and memoized instead.

@@ -61,44 +61,48 @@ if (testUrl) {
 
         await addColumn(database.url, 'builds', 'plan_probe')
 
-        // The warmed plan now fails 0A000 on every execution (Bun never
-        // rebuilds it); only the store's marker retry recovers, so success
-        // here is the proof the retry ran and re-prepared the statement.
+        // Bun can re-prepare a direct read natively; if it surfaces the
+        // plan-change error, the store's marker retry repairs it instead.
         expect(await store.getBuild('plan-probe')).toEqual(warmed)
-        // A second migration poisons the fresh plan too; it recovers again.
+        // A second migration poisons the recovered plan too.
         await addColumn(database.url, 'builds', 'plan_probe_2')
         expect(await store.getBuild('plan-probe')).toEqual(warmed)
 
-        // The retry prepared its marked statement on that very connection
-        // (the pool has one connection, so anything prepared is on it).
-        const markedCount = async (): Promise<number> => {
+        const buildRead =
+          /^SELECT \* FROM builds WHERE slug = \$1\s*(?:\/\*ab-plan-retry-s\d+-\d+\*\/)?\s*$/
+        const preparedCounts = async () => {
           const prepared: { statement: unknown }[] =
             await sql`SELECT statement FROM pg_prepared_statements`
-          return prepared
-            .map((row) => String(row.statement))
-            .filter((text) => text.includes('ab-plan-retry')).length
+          const texts = prepared.map((row) => String(row.statement))
+          return {
+            marked: texts.filter((text) => text.includes('ab-plan-retry')).length,
+            buildReads: texts.filter((text) => buildRead.test(text)).length,
+          }
         }
         const prepared: { statement: unknown }[] =
           await sql`SELECT statement FROM pg_prepared_statements`
-        const marked = prepared
+        const reads = prepared
           .map((row) => String(row.statement))
-          .find((text) => text.includes('ab-plan-retry'))
-        expect(marked).toBeDefined()
-        // The fresh plan's result type includes the added column: executing
-        // the marked statement text directly returns it.
-        const row = (await sql.unsafe(marked!, marked!.includes('$1') ? ['plan-probe'] : []))[0] as
+          .filter((text) => buildRead.test(text))
+        expect(reads.length).toBeGreaterThan(0)
+        // Prefer the latest marked variant when store recovery was needed;
+        // otherwise inspect the original statement repaired by Bun.
+        const recovered =
+          reads
+            .filter((text) => text.includes('ab-plan-retry'))
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+            .at(-1) ?? reads[0]!
+        const row = (await sql.unsafe(recovered, ['plan-probe']))[0] as
           | Record<string, unknown>
           | undefined
         expect(row).toBeDefined()
         expect(Object.keys(row ?? {})).toContain('plan_probe')
+        expect(Object.keys(row ?? {})).toContain('plan_probe_2')
 
-        // Healing is memoized, not per-operation: once a statement text has
-        // recovered, later executions skip the poisoned plan entirely — no
-        // further failed round trips and no further prepared statements.
-        // (Growth per call would be the unbounded-leak failure mode.)
-        const healed = await markedCount()
+        // Once recovered, request volume must not grow the prepared set.
+        const healed = await preparedCounts()
         for (let i = 0; i < 25; i++) expect(await store.getBuild('plan-probe')).toEqual(warmed)
-        expect(await markedCount()).toBe(healed)
+        expect(await preparedCounts()).toEqual(healed)
       } finally {
         await store.close()
         await database.cleanup()
