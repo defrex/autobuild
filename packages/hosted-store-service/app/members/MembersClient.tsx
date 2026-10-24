@@ -1,7 +1,8 @@
 'use client'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { request, snapshot, orgPath, membersLink, type Discovery } from '../access/api'
 import { useAccess } from '../access/useAccess'
+import { confirmedTarget, type Confirmation } from '../access/state'
 import { MembersView } from './MembersView'
 export function MembersClient({
   identity,
@@ -14,7 +15,7 @@ export function MembersClient({
 }) {
   const [requested, setRequested] = useState(initialOrg)
   const [email, setEmail] = useState('')
-  const [confirmation, setConfirmation] = useState<string>()
+  const [confirmation, setConfirmation] = useState<Confirmation>()
   const load = useCallback(
     async (signal: AbortSignal) => {
       const discovery = await request<Discovery>('orgs', 'GET', undefined, signal)
@@ -26,6 +27,15 @@ export function MembersClient({
   )
   const state = useAccess(load)
   const selected = state.data?.selected
+  const context = selected?.organization.id
+  const activeConfirmation = selected?.members.some(
+    (member) => member.email === confirmation?.target,
+  )
+    ? confirmedTarget(confirmation, context)
+    : undefined
+  useEffect(() => {
+    if (confirmation && !activeConfirmation) setConfirmation(undefined)
+  }, [confirmation, activeConfirmation])
   async function write(suffix: string, method: string, body: unknown) {
     if (!selected) return
     if (await state.write(`${orgPath(selected.organization.id)}/${suffix}`, method, body)) {
@@ -43,7 +53,7 @@ export function MembersClient({
       error={state.error}
       forbidden={state.forbidden}
       email={email}
-      confirmation={confirmation}
+      confirmation={activeConfirmation}
       onRefresh={() => {
         setConfirmation(undefined)
         state.reload()
@@ -55,9 +65,13 @@ export function MembersClient({
         window.history.replaceState(null, '', membersLink(id))
       }}
       onAdd={() => void write('members', 'POST', { email })}
-      onRemove={setConfirmation}
+      onRemove={(target) => {
+        if (context) setConfirmation({ context, target })
+      }}
       onCancel={() => setConfirmation(undefined)}
-      onConfirm={() => void write('members', 'DELETE', { email: confirmation })}
+      onConfirm={() => {
+        if (activeConfirmation) void write('members', 'DELETE', { email: activeConfirmation })
+      }}
       onOwner={(value) => void write('owner', 'PUT', { email: value || null })}
     />
   )

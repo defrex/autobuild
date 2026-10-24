@@ -38,3 +38,15 @@ export function mutationGate() {
     }
   }
 }
+
+export interface Confirmation {
+  context: string
+  target: string
+}
+/** A destructive confirmation belongs to the exact acknowledged grant context. */
+export function confirmedTarget(
+  confirmation: Confirmation | undefined,
+  context: string | undefined,
+): string | undefined {
+  return confirmation?.context === context ? confirmation?.target : undefined
+}

@@ -83,3 +83,12 @@ test('organization slug is deterministic, bounded, and rejects missing letters/n
   expect(organizationSlug('A'.repeat(110))).toHaveLength(100)
   expect(() => organizationSlug('---')).toThrow('letters or numbers')
 })
+
+test('destructive confirmations cannot cross organization or source-grant changes', async () => {
+  const { confirmedTarget } = await import('./state')
+  const confirmation = { context: 'source-org', target: 'project-or-member' }
+  expect(confirmedTarget(confirmation, 'source-org')).toBe('project-or-member')
+  expect(confirmedTarget(confirmation, 'other-org')).toBeUndefined()
+  expect(confirmedTarget(confirmation, undefined)).toBeUndefined()
+  expect(confirmedTarget(undefined, 'source-org')).toBeUndefined()
+})

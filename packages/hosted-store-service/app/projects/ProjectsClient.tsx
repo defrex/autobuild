@@ -1,7 +1,8 @@
 'use client'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { request, snapshots, orgPath, type Discovery } from '../access/api'
 import { useAccess } from '../access/useAccess'
+import { confirmedTarget, type Confirmation } from '../access/state'
 import { ProjectsView } from './ProjectsView'
 export function ProjectsClient({
   identity,
@@ -10,7 +11,7 @@ export function ProjectsClient({
   identity: string
   isSuperUser: boolean
 }) {
-  const [confirmation, setConfirmation] = useState<string>()
+  const [confirmation, setConfirmation] = useState<Confirmation>()
   const [destinations, setDestinations] = useState<Record<string, string>>({})
   const load = useCallback(async (signal: AbortSignal) => {
     const discovery = await request<Discovery>('orgs', 'GET', undefined, signal)
@@ -21,6 +22,12 @@ export function ProjectsClient({
     return { snapshots: assigned, unassigned: waiting.projects }
   }, [])
   const state = useAccess(load)
+  const sourceOf = (repo: string | undefined) =>
+    state.data?.snapshots.find((s) => repo && s.projects.includes(repo))?.organization.id
+  const activeConfirmation = confirmedTarget(confirmation, sourceOf(confirmation?.target))
+  useEffect(() => {
+    if (confirmation && !activeConfirmation) setConfirmation(undefined)
+  }, [confirmation, activeConfirmation])
   async function assign(repo: string) {
     const source = state.data?.snapshots.find((s) => s.projects.includes(repo))?.organization.id
     const options = state.data?.snapshots.filter((s) => s.organization.id !== source) ?? []
@@ -39,12 +46,17 @@ export function ProjectsClient({
       pending={state.pending}
       error={state.error}
       forbidden={state.forbidden}
-      confirmation={confirmation}
+      confirmation={activeConfirmation}
       destinations={destinations}
       onDestination={(repo, id) => setDestinations((prev) => ({ ...prev, [repo]: id }))}
       onAssign={(repo) => void assign(repo)}
-      onMove={setConfirmation}
-      onConfirm={(repo) => void assign(repo)}
+      onMove={(target) => {
+        const context = sourceOf(target)
+        if (context) setConfirmation({ context, target })
+      }}
+      onConfirm={(repo) => {
+        if (activeConfirmation === repo) void assign(repo)
+      }}
       onCancel={() => setConfirmation(undefined)}
       onRefresh={() => {
         setConfirmation(undefined)
