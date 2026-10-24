@@ -1,3 +1,4 @@
+import { terminalGuardReducer } from './terminal-guard'
 import { leafTransaction, leafRestackLog } from './generators/leaf-restack-log'
 /**
  * Reducer seam tests (SPEC §15.5), fixture-driven off the walkthroughs in
@@ -2234,4 +2235,75 @@ test('node polling checkpoints replay incrementally without becoming activity', 
   expect(state.nodePolling).toEqual({ ...checkpoint.payload, checkedAt: checkpoint.ts })
   expect(state.pollingActivity?.['node.poll-checked']).toBeUndefined()
   expect(reduceBuild([]).nodePolling).toBeUndefined()
+})
+
+test('cancelled verifier escalations and raced answers stay historical, including late raises', () => {
+  const owner = { kind: 'agent' as const, role: 'verify', session: 's_cancelled' }
+  const start = [
+    ...prelude(),
+    ev('verify.started', { step: 'review', attempt: 1 }),
+    ev('session.started', {
+      session: 's_cancelled',
+      role: 'review',
+      runner: 'test',
+      phase: 'verify:review',
+      round: 1,
+    }),
+    ev(
+      'escalation.raised',
+      { id: 'held', phase: 'verify:review', source: 'agent', question: 'question' },
+      owner,
+    ),
+  ]
+  expect(reduceBuild(toLog(start)).openEscalations.map((e) => e.id)).toEqual(['held'])
+  const cancelled = [
+    ...start,
+    ev('verify.cancelled', { step: 'review', attempt: 1, cause: { step: 'types' } }),
+  ]
+  for (const suffix of [
+    [],
+    [ev('escalation.answered', { id: 'held', answer: 'stop', resolution: 'abort' })],
+    [
+      ev(
+        'escalation.raised',
+        { id: 'late', phase: 'verify:review', source: 'agent', question: 'late' },
+        owner,
+      ),
+    ],
+  ]) {
+    const state = reduceBuild(toLog([...cancelled, ...suffix]))
+    expect(state.openEscalations).toEqual([])
+    expect(state.answeredEscalations).toEqual([])
+    expect(state.pendingCommands).toEqual([])
+    expect(state.verifyStage.superseded[0]!.cancellation.cause.step).toBe('types')
+  }
+})
+
+test('cancellation fences the verifier terminal before and after session end', () => {
+  const writes = [
+    ...prelude(),
+    ev('verify.started', { step: 'e2e', attempt: 1 }),
+    ev('session.started', {
+      session: 's_fenced',
+      role: 'e2e',
+      runner: 'test',
+      phase: 'verify:e2e',
+      round: 1,
+    }),
+    ev('verify.cancelled', { step: 'e2e', attempt: 1, cause: { step: 'types' } }),
+  ]
+  const guard = terminalGuardReducer({ phase: 'verify:e2e', round: 1, session: 's_fenced' })
+  expect(guard.reduce(toLog(writes)).diagnostic).toContain('cancelled by verify:types')
+  expect(
+    guard.reduce(
+      toLog([
+        ...writes,
+        ev('session.ended', {
+          session: 's_fenced',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'new', resumedFromSeq: 1 },
+        }),
+      ]),
+    ).diagnostic,
+  ).toContain('cancelled')
 })

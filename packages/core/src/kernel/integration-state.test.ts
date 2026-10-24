@@ -196,3 +196,32 @@ test('a node spec revision immediately withdraws passed-cycle landing readiness 
   expect(landingReady(state, indexLog([]).restack)).toBe(false)
   expect(landPreconditions(state, indexLog([]).restack)).toBe(false)
 })
+
+test('integration stages hold failure attention until every exact-cycle member settles', () => {
+  const grouped = { ...config, verify: { ...config.verify, stages: [['unit', 'agent']] } }
+  const state = prepared()
+  state.integration!.cycle!.config = integrationConfig(grouped)
+  const result = {
+    seq: 3,
+    step: 'unit',
+    attempt: 1,
+    outcome: 'fail' as const,
+    restackId: 'cycle',
+    headSha: 'head',
+    baseSha: 'parent',
+  }
+  state.verify.results.push(result)
+  const log = { ...indexLog([]), verifyCompleted: [result], maxVerifyAttemptEver: 1 }
+  const next = decideNextFromFacts(state, log, grouped)
+  expect(next.kind).toBe('run-verify-stage')
+  if (next.kind === 'run-verify-stage') expect(next.members.map((m) => m.step)).toEqual(['agent'])
+  const settled = { ...result, seq: 4, step: 'agent', outcome: 'pass' as const }
+  state.verify.results.push(settled)
+  expect(
+    decideNextFromFacts(state, { ...log, verifyCompleted: [result, settled] }, grouped).kind,
+  ).toBe('record-verify-stage-failure')
+  const foreign = { ...settled, restackId: 'foreign' }
+  expect(
+    decideNextFromFacts(state, { ...log, verifyCompleted: [result, foreign] }, grouped).kind,
+  ).toBe('run-verify-stage')
+})
