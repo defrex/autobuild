@@ -235,7 +235,9 @@ describe('layered CLI help catalog', () => {
         'permits only the ambient build',
       ],
       watch: [
-        'ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>] [--timeout <duration>] [--interval <duration>] [--count <n>] [--json] [--store <ref>]',
+        '--operator registers advisory presence',
+        'Only flagged watches write liveness',
+        'ab watch [<slug>...] [--repository] [--operator] [--event <glob>]... [--since <cursor>] [--timeout <duration>] [--interval <duration>] [--count <n>] [--json] [--store <ref>]',
         '--repository',
         '--event <glob>',
         '--since <cursor>',
