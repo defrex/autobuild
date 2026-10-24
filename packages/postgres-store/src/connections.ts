@@ -1,3 +1,4 @@
+import { lockAccess, PostgresOrganizationStore, type HumanActor } from './organizations'
 import { insertPreparedCredential } from './credentials'
 import { SQL } from 'bun'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -23,8 +24,14 @@ export interface ConnectionRecord extends ConnectionOutcome {
 export interface ConnectionStore {
   start(proposal: ConnectionProposal): Promise<ConnectionRecord & { capability: string }>
   poll(id: string, capability: string, cancel?: boolean): Promise<ConnectionOutcome>
-  lookup(code: string, actor: string): Promise<ConnectionRecord | null>
-  decide(code: string, actor: string, approve: boolean): Promise<ConnectionRecord>
+  lookup(code: string, actor: string, principal?: HumanActor): Promise<ConnectionRecord | null>
+  decide(
+    code: string,
+    actor: string,
+    approve: boolean,
+    principal?: HumanActor,
+    organizationId?: string,
+  ): Promise<ConnectionRecord>
 }
 function record(row: Record<string, unknown>): ConnectionRecord {
   return {
@@ -98,7 +105,11 @@ export class PostgresConnectionStore implements ConnectionStore {
       return { ...record(row), status }
     }) as Promise<ConnectionOutcome>
   }
-  async lookup(code: string, actor: string): Promise<ConnectionRecord | null> {
+  async lookup(
+    code: string,
+    actor: string,
+    principal?: HumanActor,
+  ): Promise<ConnectionRecord | null> {
     if (!actor || actor.length > 320 || !/^[A-F0-9]{10}$/.test(code))
       throw new ConnectionError(400, 'enter the ten-character connection code')
     const now = this.now()
@@ -111,23 +122,76 @@ export class PostgresConnectionStore implements ConnectionStore {
       throw new ConnectionError(429, 'too many code lookups; retry in a minute')
     const [row] = await this.sql`SELECT * FROM project_connections WHERE code = ${code}`
     if (!row) return null
+    if (principal) {
+      try {
+        await this.checkConnection(this.sql, row.repo, principal)
+      } catch (error) {
+        if (error instanceof ConnectionError && error.status === 404) return null
+        throw error
+      }
+    }
     const result = record(row)
     if (result.status === 'pending' && new Date(result.expiresAt) <= now) result.status = 'expired'
     return result
   }
-  async decide(code: string, actor: string, approve: boolean): Promise<ConnectionRecord> {
-    if (!(await this.lookup(code, actor))) throw new ConnectionError(404, 'unknown connection')
+  private async checkConnection(sql: SQL, repo: string, principal: HumanActor) {
+    const access = new PostgresOrganizationStore(sql)
+    if (!principal.isSuperUser() && !(await access.admitted(principal.email)))
+      throw new ConnectionError(403, 'this identity is not allowed')
+    // Registry removal does not release retained history: assigned projects
+    // keep their org grant; existing unassigned projects stay super-user-only.
+    const [assignment] = await sql`SELECT p.organization_id, e.email FROM project_organizations p
+      LEFT JOIN organization_emails e ON e.organization_id = p.organization_id AND e.email = ${principal.email}
+      WHERE p.repo = ${repo}`
+    if (
+      !principal.isSuperUser() &&
+      (assignment
+        ? !assignment.email
+        : (await sql`SELECT 1 FROM project_journal WHERE repo = ${repo} LIMIT 1`).length > 0)
+    )
+      throw new ConnectionError(404, 'unknown connection')
+  }
+  async decide(
+    code: string,
+    actor: string,
+    approve: boolean,
+    principal?: HumanActor,
+    organizationId?: string,
+  ): Promise<ConnectionRecord> {
+    if (!principal || principal.email !== actor)
+      throw new ConnectionError(403, 'browser principal required')
+    if (!(await this.lookup(code, actor, principal)))
+      throw new ConnectionError(404, 'unknown connection')
     return this.sql.begin(async (tx) => {
       const [row] = await tx`SELECT * FROM project_connections WHERE code = ${code} FOR UPDATE`
       const now = this.now()
+      await lockAccess(tx as SQL)
+      await this.checkConnection(tx as SQL, row.repo, principal)
       if (row.status !== 'pending') return record(row)
       const status = new Date(row.expires_at) <= now ? 'expired' : approve ? 'approved' : 'denied'
       if (status === 'approved') {
-        // Same lock order as registry mutations, with the request locked first.
-        await tx`INSERT INTO project_registry_state (singleton, legacy_imported) VALUES (true, false) ON CONFLICT DO NOTHING`
-        await tx`SELECT singleton FROM project_registry_state WHERE singleton = true FOR UPDATE`
+        const access = new PostgresOrganizationStore(tx as SQL)
         const [previous] =
           await tx`SELECT action FROM project_journal WHERE repo = ${row.repo} ORDER BY seq DESC LIMIT 1`
+        const [assignment] =
+          await tx`SELECT organization_id FROM project_organizations WHERE repo = ${row.repo}`
+        let target = assignment?.organization_id as string | undefined
+        if (previous || assignment) {
+          if (organizationId !== undefined && organizationId !== target)
+            throw new ConnectionError(400, 'project moves require organization management')
+        } else {
+          const organizations = await access.organizations(principal)
+          if (organizationId === undefined) {
+            const memberships = organizations.filter((org) => org.membershipRole !== null)
+            if (memberships.length !== 1) throw new ConnectionError(400, 'organization is required')
+            target = memberships[0]!.id
+          } else {
+            if (!organizations.some((org) => org.id === organizationId))
+              throw new ConnectionError(403, 'organization access required')
+            target = organizationId
+          }
+          await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!})`
+        }
         if (previous?.action !== 'added')
           await tx`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${row.repo}, 'added', ${actor}, ${now.toISOString()})`
         // A collision aborts the whole transaction, including project registration.

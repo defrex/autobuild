@@ -12,6 +12,7 @@ import {
   AUTH_SCHEMA_DDL,
   AUTH_SCHEMA_V1_CHECKSUM,
   AUTH_SCHEMA_V2_CHECKSUM,
+  AUTH_SCHEMA_V3_CHECKSUM,
   AUTH_SCHEMA_VERSION,
   assertAuthSchema,
 } from './auth-schema'
@@ -1857,7 +1858,10 @@ export async function migratePostgres(
             SET version = ${AUTH_SCHEMA_VERSION}, checksum = ${AUTH_SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
-        } else if (authVersion === 2 && authMarker.checksum === AUTH_SCHEMA_V2_CHECKSUM) {
+        } else if (
+          (authVersion === 2 && authMarker.checksum === AUTH_SCHEMA_V2_CHECKSUM) ||
+          (authVersion === 3 && authMarker.checksum === AUTH_SCHEMA_V3_CHECKSUM)
+        ) {
           // v2 → v3: the guarded ALTER above added the column to the
           // pre-existing oauthApplication table; promote the marker in this
           // transaction.

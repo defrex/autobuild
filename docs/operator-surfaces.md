@@ -55,8 +55,8 @@ readyState = "ready"
 
 The hosted web app shows registered repositories and their builds.
 
-- **Sign-in** uses the deployment's GitHub authentication and email allowlist, independent of CLI credentials.
-- **Secrets** (database, blob, signing, OAuth, allowlist) stay on the service, never in TOML or browser bundles.
+- **Sign-in** uses the deployment's GitHub authentication and organization membership policy, independent of CLI credentials.
+- **Secrets** (database, blob, signing, OAuth, super-user list) stay on the service, never in TOML or browser bundles.
 
 ### Local stdio MCP
 
@@ -75,7 +75,7 @@ bun ab mcp
 
 A remote agent connects its MCP client to `https://builds.example.com/mcp` over Streamable HTTP.
 
-- **Authentication:** OAuth with discovery, dynamic registration, PKCE and rotating refresh tokens, authorized through the deployment's sign-in and allowlist. `AB_TOKEN` doesn't substitute.
+- **Authentication:** OAuth with discovery, dynamic registration, PKCE and rotating refresh tokens, authorized through the deployment's sign-in and organization membership. `AB_TOKEN` doesn't substitute.
 - **Every call** rechecks access and repository scope.
 - **Writes** record the authorizing identity and MCP client.
 
