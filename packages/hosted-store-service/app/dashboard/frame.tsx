@@ -13,7 +13,7 @@ export const GLYPH: Record<StepState, string> = {
 }
 
 /**
- * Elapsed duration in the terminal's format: `38s`, `4m12s`, `1h04m`.
+ * Elapsed duration in the terminal's format: `38s`, `4m12s`, `1h04m07s`.
  * Smaller units zero-pad when a larger unit precedes, so the field width is
  * stable as it ticks.
  */
@@ -22,7 +22,7 @@ export function durationText(ms: number): string {
   if (totalSec < 60) return `${totalSec}s`
   const totalMin = Math.floor(totalSec / 60)
   if (totalMin < 60) return `${totalMin}m${String(totalSec % 60).padStart(2, '0')}s`
-  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m`
+  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m${String(totalSec % 60).padStart(2, '0')}s`
 }
 
 /** The parenthesised note after a step label, in row or detail register. */
