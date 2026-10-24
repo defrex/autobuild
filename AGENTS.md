@@ -199,8 +199,8 @@ and verification of this tooling must not restart the live dispatcher.
 
 ## Development conventions
 
-- Keep tests colocated as `*.test.ts`; integration scenarios are in `packages/core/src/integration/`.
-- Run `bun run check`, `bun test`, and `bun typecheck` before finishing changes.
+- Keep tests colocated as `*.test.ts`. Unit tests never need a database; a test that does is an integration test named `*.integration.test.ts`, run by `bun run test:integration` with `AB_POSTGRES_TEST_URL` set and skipped by `bun run test`. In-memory end-to-end scenarios are in `packages/core/src/scenarios/`.
+- Run `bun run check`, `bun run check:build`, `bun run test`, and `bun typecheck` before finishing changes.
 - Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `packages/core/src/store/contract.ts`.
 - Validate every event write and derive status through `packages/core/src/kernel/reducer.ts`; events record facts, never derived state.
 - Keep phase behavior centralized in `packages/core/src/kernel/phases.ts` and deterministic transitions in `packages/core/src/kernel/engine.ts`.
@@ -234,9 +234,9 @@ product code, and the web app has a recorded design system. Any change under
 - **Prove it with pixels.** `bun run capture:web-dashboard` renders the real
   views over the scripted dispatch models and screenshots them with a local
   Chromium into `.ab/web-dashboard-frames/`; open every PNG before finishing.
-  The `web-dashboard` verify step runs the same capture through the
-  repository-local `verify-web-dashboard` skill for any build that touches
-  `packages/hosted-store-service/app/**`. The terminal dashboard keeps its own `dashboard` step and
+  The `ui-app` verify step runs the same capture through the
+  repository-local `verify-ui-app` skill for any build that touches
+  `packages/hosted-store-service/app/**`. The terminal dashboard keeps its own `ui-tui` step and
   `readme-headline` check.
 - **Parity is the vocabulary, not the pixels.** A change to what a row says
   belongs in the shared projection under `packages/core/src/cli/dashboard/`,

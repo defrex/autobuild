@@ -41,7 +41,7 @@ import {
   readyTicket,
   type E2eHarness,
   type SkillHandlers,
-} from '../packages/core/src/integration/harness'
+} from '../packages/core/src/scenarios/harness'
 
 export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 

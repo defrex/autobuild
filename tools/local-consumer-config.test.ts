@@ -49,46 +49,52 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
     typecheck: 'bun run typecheck',
     test: 'bun run test',
   })
-  const testPostgres = config.commands['test-postgres']
-  expect(testPostgres).toContain('AB_POSTGRES_TEST_URL')
-  expect(testPostgres).toContain('bun tools/hosted-service-packaging.ts')
-  expect(testPostgres).toContain('packages/postgres-store/src/store.live.test.ts')
-  expect(testPostgres).toContain('packages/postgres-store/src/migrate.test.ts')
+  expect(config.commands.build).toBe('bun run check:build')
+  const testIntegration = config.commands['test-integration']
+  expect(testIntegration).toContain('AB_POSTGRES_TEST_URL')
+  expect(testIntegration).toContain('bun run test:integration')
   expect(config.verify.steps).toEqual([
     'lint',
     'types',
     'unit',
-    'postgres',
-    'dashboard',
-    'web-dashboard',
-    'website',
+    'build',
+    'integration',
+    'ui-tui',
+    'ui-app',
+    'ui-website',
     'docs',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
-  expect(config.verify.stepConfigs.postgres).toEqual({
+  expect(config.verify.stepConfigs.build).toEqual({
     kind: 'check',
-    command: 'test-postgres',
+    command: 'build',
     always: true,
   })
-  expect(config.verify.stepConfigs.dashboard).toMatchObject({
+  expect(config.verify.stepConfigs.integration).toMatchObject({
+    kind: 'check',
+    command: 'test-integration',
+    paths: expect.arrayContaining(['packages/core/src/**', 'packages/postgres-store/**']),
+  })
+  expect(config.verify.stepConfigs.integration?.always).toBeUndefined()
+  expect(config.verify.stepConfigs['ui-tui']).toMatchObject({
     kind: 'agent',
-    skill: 'ab-verify-dashboard',
+    skill: 'verify-ui-tui',
     paths: expect.arrayContaining(['packages/core/src/cli/dashboard/**']),
   })
-  expect(config.verify.stepConfigs['web-dashboard']).toMatchObject({
+  expect(config.verify.stepConfigs['ui-app']).toMatchObject({
     kind: 'agent',
-    skill: 'verify-web-dashboard',
+    skill: 'verify-ui-app',
     paths: expect.arrayContaining(['packages/hosted-store-service/app/**']),
   })
-  expect(config.verify.stepConfigs.website).toEqual({
+  expect(config.verify.stepConfigs['ui-website']).toEqual({
     kind: 'agent',
-    skill: 'verify-website',
+    skill: 'verify-ui-website',
     paths: [
       'packages/website/**',
       'docs/**',
       'design/website/**',
       'tools/website-capture*',
-      '.agents/skills/verify-website/SKILL.md',
+      '.agents/skills/verify-ui-website/SKILL.md',
     ],
   })
   expect(config.finalize.steps).toEqual(['changelog'])
@@ -106,11 +112,11 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
   expect(config.tickets.teamKey).toBeUndefined()
 })
 
-test('the website step covers site source, design references and evidence tooling', async () => {
+test('the ui-website step covers site source, design references and evidence tooling', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
-  const step = config.verify.stepConfigs.website
-  if (!step || !('paths' in step) || !step.paths) throw new Error('website step has no paths')
-  const rule = { kind: 'paths' as const, step: 'website', paths: step.paths }
+  const step = config.verify.stepConfigs['ui-website']
+  if (!step || !('paths' in step) || !step.paths) throw new Error('ui-website step has no paths')
+  const rule = { kind: 'paths' as const, step: 'ui-website', paths: step.paths }
   for (const path of [
     'packages/website/src/page.ts',
     'docs/overview.md',
@@ -120,7 +126,7 @@ test('the website step covers site source, design references and evidence toolin
     'tools/website-capture.ts',
     'tools/website-capture.test.ts',
     'tools/website-capture.md',
-    '.agents/skills/verify-website/SKILL.md',
+    '.agents/skills/verify-ui-website/SKILL.md',
   ]) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
   }
@@ -129,13 +135,13 @@ test('the website step covers site source, design references and evidence toolin
   }
 })
 
-test('verify-website is an unprefixed repo-local skill with a Claude symlink', async () => {
-  const link = join(REPO_ROOT, '.claude/skills/verify-website')
+test('verify-ui-website is an unprefixed repo-local skill with a Claude symlink', async () => {
+  const link = join(REPO_ROOT, '.claude/skills/verify-ui-website')
   expect(await realpath(link)).toBe(
-    await realpath(join(REPO_ROOT, '.agents/skills/verify-website')),
+    await realpath(join(REPO_ROOT, '.agents/skills/verify-ui-website')),
   )
   const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
-  expect(skill).toMatch(/^name: verify-website$/m)
+  expect(skill).toMatch(/^name: verify-ui-website$/m)
 })
 
 test('docs gate covers product surfaces and excludes repository configuration', async () => {

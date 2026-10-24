@@ -419,8 +419,8 @@ if (testUrl) {
     // the validation or ceiling error — not unknown-stream. The remote server
     // deliberately runs the opposite order (SPEC §7.6); that side is pinned
     // in core's remote.test.ts. Both orders must write nothing. Runs only
-    // where AB_POSTGRES_TEST_URL is set — the unit verify step does not
-    // exercise it; the order here is otherwise fixed by the SPEC §7.6 text.
+    // in the integration step, with AB_POSTGRES_TEST_URL set — unit tests do
+    // not exercise it; the order here is otherwise fixed by the SPEC §7.6 text.
     test('append rejection precedence: an invalid or oversized batch on an unknown stream rejects before any lookup and writes nothing', async () => {
       const database = await isolatedDatabase()
       const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())

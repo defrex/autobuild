@@ -1,10 +1,10 @@
 ---
-name: ab-verify-dashboard
-description: Agent-verify step - inspect deterministic simulated dispatch-dashboard frames as colour images. Invoked by the build-runner for verify:dashboard; takes only the build slug.
+name: verify-ui-tui
+description: Agent-verify step - inspect deterministic simulated dispatch-dashboard frames as colour images. Invoked by the build-runner for verify:ui-tui; takes only the build slug. Repository-local, not a shipped ab-* skill.
 disable-model-invocation: true
 ---
 
-# /ab-verify-dashboard <build>
+# /verify-ui-tui <build>
 
 You are a visual verifier. The kernel has already decided this path-scoped step
 applies. Your job is to inspect the simulated terminal images, not to inspect

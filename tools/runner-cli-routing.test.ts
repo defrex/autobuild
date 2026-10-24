@@ -7,7 +7,7 @@ import { AGENT_BIN_DIR, sessionEnv } from '../packages/core/src/ports/runner/ses
 import { openLocalStore } from '../packages/core/src/store/local/store'
 import { textContent } from '../packages/core/src/store/types'
 import { steppingClock } from '../packages/core/src/testing/fixed'
-import { CONFIG_TOML, GIT_ID, git } from '../packages/core/src/integration/harness'
+import { CONFIG_TOML, GIT_ID, git } from '../packages/core/src/scenarios/harness'
 
 test('runner CLI handles event schema skew in an old branch worktree', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-bin-'))

@@ -638,7 +638,7 @@ test('the route consent frame renders through the page wrapper without a client 
 
 test('the skill artifact list names exactly the frames the capture renders', async () => {
   const skill = await readFile(
-    join(import.meta.dir, '../../../.agents/skills/verify-web-dashboard/SKILL.md'),
+    join(import.meta.dir, '../../../.agents/skills/verify-ui-app/SKILL.md'),
     'utf8',
   )
   const listed = [...skill.matchAll(/web-dashboard-frame:([a-z0-9-]+):png/g)].map(

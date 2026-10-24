@@ -19,13 +19,15 @@ setup = "bun install"
 lint = "bun run check"
 typecheck = "bun run typecheck"
 test = "bun run test"
-test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun test packages/postgres-store/src/connections.live.test.ts packages/postgres-store/src/store.live.test.ts packages/postgres-store/src/plan-invalidation.live.test.ts packages/postgres-store/src/migrate.test.ts packages/postgres-store/src/schema-guard.test.ts packages/postgres-store/src/tickets.live.test.ts packages/hosted-store-service/src/service.live.test.ts packages/hosted-store-service/src/web/mcp.live.test.ts && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun tools/hosted-service-packaging.ts"
+build = "bun run check:build"
+# Integration tests need a real PostgreSQL; local builds use the host's own.
+test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun run test:integration"
 
 # The configured universe and order of verification. A plan may deselect
 # optional steps in its opening `verifySteps` front matter; a plan without that
 # metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard", "website", "docs"]
+steps = ["lint", "types", "unit", "build", "integration", "ui-tui", "ui-app", "ui-website", "docs"]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
@@ -40,17 +42,27 @@ command = "typecheck"
 kind = "check"
 command = "test"
 
-[verify.postgres]
+# Unit tests never need a database. Packaging is its own gate: every
+# publishable package must pack, resolve its imports, and keep its bins.
+[verify.build]
 kind = "check"
-command = "test-postgres"
+command = "build"
 always = true
+
+# Integration tests need a database: the *.integration.test.ts suites plus a
+# packed hosted-service deploy rehearsal. The hosted packages build on most of
+# core, so core changes run it too; docs, skills and site-only builds skip it.
+[verify.integration]
+kind = "check"
+command = "test-integration"
+paths = ["packages/core/src/**", "packages/postgres-store/**", "packages/hosted-store-service/**", "packages/hosted-dispatcher/**", "templates/hosted-service/**", "tools/hosted-service-packaging.ts", "scripts/postgres-live.sh", "package.json", "bun.lock"]
 
 # Visual evidence for dashboard-touching builds. The kernel decides
 # applicability from the build-owned diff; the skill never inspects Git or skips.
-[verify.dashboard]
+[verify.ui-tui]
 kind = "agent"
-skill = "ab-verify-dashboard"
-paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.ts", "tools/dashboard-capture.ts", "tools/capture-parity.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
+skill = "verify-ui-tui"
+paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.ts", "tools/dashboard-capture.ts", "tools/capture-parity.ts", ".agents/skills/verify-ui-tui/SKILL.md"]
 
 # Visual evidence for the operator web app in the hosted store service
 # package. Same shape as the terminal step: the kernel decides applicability
@@ -58,18 +70,18 @@ paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.t
 # DESIGN.md and attaches them on a pass. The operator read path and the shared
 # dashboard projection feed these frames, so they gate it too; the skill also
 # runs tools/capture-parity.ts to prove unchanged frames byte for byte.
-[verify.web-dashboard]
+[verify.ui-app]
 kind = "agent"
-skill = "verify-web-dashboard"
-paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture/src/**", "packages/core/src/operator/**", "packages/core/src/cli/dashboard/**", "tools/capture-parity.ts", ".agents/skills/verify-web-dashboard/SKILL.md", "DESIGN.md"]
+skill = "verify-ui-app"
+paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture/src/**", "packages/core/src/operator/**", "packages/core/src/cli/dashboard/**", "tools/capture-parity.ts", ".agents/skills/verify-ui-app/SKILL.md", "DESIGN.md"]
 
 # The marketing site gets the same treatment: the repository-local skill
 # renders it at desktop and phone widths, judges the frames against the
 # reference screenshots in design/website/, and attaches them on a pass.
-[verify.website]
+[verify.ui-website]
 kind = "agent"
-skill = "verify-website"
-paths = ["packages/website/**", "docs/**", "design/website/**", "tools/website-capture*", ".agents/skills/verify-website/SKILL.md"]
+skill = "verify-ui-website"
+paths = ["packages/website/**", "docs/**", "design/website/**", "tools/website-capture*", ".agents/skills/verify-ui-website/SKILL.md"]
 
 # Semantic documentation coverage for this repository's product surfaces.
 [verify.docs]

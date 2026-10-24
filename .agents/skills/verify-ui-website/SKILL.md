@@ -1,10 +1,10 @@
 ---
-name: verify-website
-description: Agent-verify step - inspect the marketing site's rendered frames against the approved reference screenshots. Invoked by the build-runner for verify:website; takes only the build slug. Repository-local, not a shipped ab-* skill.
+name: verify-ui-website
+description: Agent-verify step - inspect the marketing site's rendered frames against the approved reference screenshots. Invoked by the build-runner for verify:ui-website; takes only the build slug. Repository-local, not a shipped ab-* skill.
 disable-model-invocation: true
 ---
 
-# /verify-website <build>
+# /verify-ui-website <build>
 
 You are a visual verifier for the marketing site in `packages/website/`. The
 kernel has already decided this path-scoped step applies. Your job is to

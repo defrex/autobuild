@@ -73,7 +73,7 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  * - AUT-506 — the same ruling extended once more: the test-only `src/cli/testkit.ts` helper
  *   (its sole consumers are the colocated `*.test.ts` files the pack already denies; no
  *   exports target and no packed source imports it) is excluded by a per-file negation, while
- *   `src/integration/harness.ts` deliberately ships: it is a runtime dependency of the packed
+ *   `src/scenarios/harness.ts` deliberately ships: it is a runtime dependency of the packed
  *   `./testing` surface (`src/testing/index.ts` re-exports the harness that out-of-tree packages'
  *   tests build against), the same load-bearing shape as `src/testing/fixed.ts` under AUT-503.
  * - AUT-513 — the same ruling extended once more: the remaining four dead-weight files
@@ -184,7 +184,7 @@ const POSTGRES_STORE_RULING =
   'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
   'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. By AUT-500 the src/testing/ tree is also ' +
   'test-only dev surface (its helpers are consumed only by the live suites, e.g. ' +
-  'src/store.live.test.ts spawning src/testing/concurrent-worker.ts) and is excluded from the tarball by the !src/testing/** ' +
+  'src/store.integration.test.ts spawning src/testing/concurrent-worker.ts) and is excluded from the tarball by the !src/testing/** ' +
   'negation. The allowlist pins the publishable surface by manifest ' +
   'rather than by directory layout: a future top-level file in packages/postgres-store (a ' +
   'scratch script, a live-test fixture, a dotenv file, an editor artifact) must not ride into ' +
@@ -216,7 +216,7 @@ const ROOT_RULING =
   "index.ts is the ./testing exports target that out-of-tree packages' tests build against. By AUT-506 the " +
   'test-only src/cli/testkit.ts helper (its sole consumers are the colocated *.test.ts files the pack already ' +
   'denies; no exports target and no packed source imports it) is excluded by a per-file negation, while ' +
-  'src/integration/harness.ts deliberately ships: it is a runtime dependency of the packed ./testing surface ' +
+  'src/scenarios/harness.ts deliberately ships: it is a runtime dependency of the packed ./testing surface ' +
   "(src/testing/index.ts re-exports the harness that out-of-tree packages' tests build against), the same " +
   'load-bearing shape as src/testing/fixed.ts under AUT-503. By AUT-513 the remaining four dead-weight files ' +
   'src/cli/store-opening.contract.ts (a shared bun:test contract suite), src/ports/runner/live-contract-fixture.ts (a live-suite fixture), ' +
