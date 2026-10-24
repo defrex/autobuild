@@ -36,18 +36,24 @@ exception. Build-time accessibility checks stayed enabled and passed.
    replacement or hand-written HTTP server. The README documents this run command.
 2. **Generated assets and root lint.** The starter writes public/styles.css and
    starter.css. The generated output is ignored, starter.css is removed, and
-   styles/input.css contains only Tailwind imports/source directives. Authored
+   styles/input.css contains only standard CSS imports. Authored
    styles live in ansi.css. The local inherited Biome config excludes only the
    immutable design tree, Tailwind entrypoint and generated output. The reference
    remains byte-identical after formatting. This is integration configuration,
    not a confirmed Proa defect.
-3. **Render link consistency.** Editing a Rust file during an initial linked
+3. **Staged formatter.** The root staged-file formatter invokes Biome through
+   stdin even for the locally excluded Tailwind entrypoint. An explicit Tailwind
+   @source directive failed that parser. Removed the unnecessary directive;
+   Tailwind automatic source detection and the imported authored styles suffice.
+   The normal commit hook and rebuilt stylesheet then passed, without bypassing
+   hooks or changing root rules.
+4. **Render link consistency.** Editing a Rust file during an initial linked
    test caused RSJS0001, reporting the changed source rather than combining stale
    descriptors. Retrying after edits stopped passed. This was expected protection,
    not a defect. Cold linked test targets compiled separate descriptor/final
    dependency trees and were substantially slower than cargo test; warm release
    export reused 278/279 descriptor and 279/279 final artifacts.
-4. **Security headers.** The blank scaffold adds no CSP header blocking the
+5. **Security headers.** The blank scaffold adds no CSP header blocking the
    same-origin external scripts. No security-header adjustment or inline-script
    exception was required. The theme initializer runs before the stylesheet.
 
