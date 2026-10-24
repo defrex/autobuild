@@ -74,17 +74,18 @@ export function allocateScratchPath(
   desired: string,
   tracked: ReadonlySet<string>,
   allocated: Set<string>,
+  prefix = PHASE_SCRATCH_PREFIX,
 ): string {
   const unavailable = new Set([...tracked, ...allocated])
-  const conventional = `${PHASE_SCRATCH_PREFIX}${desired}`
+  const conventional = `${prefix}${desired}`
   if (!collides(conventional, unavailable)) {
     allocated.add(conventional)
     return desired
   }
   for (let index = 1; ; index += 1) {
     const candidate = `generated/${index}/${desired}`
-    if (!collides(`${PHASE_SCRATCH_PREFIX}${candidate}`, unavailable)) {
-      allocated.add(`${PHASE_SCRATCH_PREFIX}${candidate}`)
+    if (!collides(`${prefix}${candidate}`, unavailable)) {
+      allocated.add(`${prefix}${candidate}`)
       return candidate
     }
   }

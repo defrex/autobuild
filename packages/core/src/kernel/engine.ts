@@ -307,7 +307,7 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
       ? undefined
       : { findings: loop.latestRevise.findings.map((f) => f.id) }
   // A failure without a report has nothing to materialize (§8.3 routes the
-  // report into .ab/verify/); the run-phase decision still fires without it.
+  // report into $AB_CONTEXT_DIR/verify/); the run-phase decision still fires without it.
   const verifyFeedback = (): Feedback | undefined =>
     pendingFail?.report === undefined
       ? undefined

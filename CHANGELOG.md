@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Build sessions now hydrate inputs under `.ab/<phase>/` (or `.ab/verify-<step>/`
+and `.ab/finalize-<step>/`). Repository-authored skills must replace hardcoded
+hydrated `.ab/<file>` paths with `$AB_CONTEXT_DIR/<file>`. Custom output scratch
+may still live elsewhere under `.ab/`.
+
 ## v1.0.1 — 2026-10-24
 
 This release fixes a compatibility problem between the PostgreSQL store and Bun 1.4.4. When the store retried statements after a cached-plan failure, Bun 1.4.4 rejected them with an `ERR_INVALID_ARG_VALUE` error, and those retries now succeed.

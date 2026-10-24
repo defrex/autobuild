@@ -1,3 +1,4 @@
+import { resolveContextDirectory } from '../context-directory'
 import {
   collectNodeVerificationProvenance,
   type NodeVerificationIndex,
@@ -9,11 +10,10 @@ import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
  * gitignored `.ab/` scratch dir. Everything derives from
  * `PHASE_SPECS[phase].inputs` — the table drives, so the CLI, the manifest,
  * and the engine all validate against the same data (no per-phase switch
- * sprawl). Scoping is deliberate: what a phase *can't* see is part of its
- * design (the planner never sees code-review rounds; the reviewer sees prior
- * findings but not the producer's session).
+ * sprawl). Each manifest selects the current phase's inputs. Sibling phase
+ * directories remain readable; scratch separation is not filesystem isolation.
  *
- * Disposable `.ab/` content is wiped and recreated on every run — stale
+ * Disposable session-directory content is wiped and recreated on every run — stale
  * context is worse than no context — while legacy tracked entries are restored
  * byte-for-byte from the index. Git's local exclude keeps generated scratch
  * ignored without mutating the repository's own `.gitignore`.
@@ -62,7 +62,7 @@ export interface ContextDeps {
   ids?: IdSource
 }
 
-/** Paths are relative to `.ab/`, forward-slash separated. */
+/** Paths are relative to the session directory, forward-slash separated. */
 export type MaterializedEntry = ArtifactRef | 'derived'
 
 /**
@@ -83,11 +83,13 @@ export interface ContextManifest {
    */
   required: string[]
   allowedTerminals: TerminalCommand[]
+  /** Workspace-relative directory for this session. */
+  contextDir: string
   /** Workspace-relative path where this manifest was written. */
   manifestPath: string
   /** Safe workspace-relative producer notes path (implement/reconcile only). */
   notesPath?: string
-  /** relPath (under .ab/) → source artifact ref, or 'derived'. */
+  /** relPath (under the session directory) → source artifact ref, or 'derived'. */
   materialized: Record<string, MaterializedEntry>
   /** The ticket assets this build froze (SPEC §6.3), each written to `path`
    * (relative to the workspace). Omitted when the build pinned none. */
@@ -141,7 +143,7 @@ function currentFeedback(events: CurrentBuildFacts, phase: Phase, round: number)
   return explicit ?? (phase === 'plan' ? (events.planFeedback[String(round)] ?? null) : null)
 }
 
-/** Empty and recreate `.ab/`; callers restore any tracked legacy entries. */
+/** Empty and recreate the session directory; callers restore any tracked legacy entries. */
 async function wipeAbDir(abDir: string): Promise<void> {
   await rm(abDir, { recursive: true, force: true })
   await mkdir(abDir, { recursive: true })
@@ -161,7 +163,7 @@ function dismissedIds(state: BuildState, events: CurrentBuildFacts): string[] {
 
 /**
  * Materialize the phase's `.ab/` tree and return the manifest (also written
- * as `.ab/context.json`).
+ * as `$AB_CONTEXT_DIR/context.json`).
  */
 export async function buildContext(deps: ContextDeps): Promise<ContextManifest> {
   const { store, env, workspacePath } = deps
@@ -196,18 +198,29 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // Preserve legacy tracked scratch exactly while replacing disposable files.
   // Some adapter contract fixtures intentionally use a non-Git workspace;
   // context hydration still works there, while publication remains Git-only.
-  const abDir = join(workspacePath, '.ab')
+  const contextDir = resolveContextDirectory(phase, env.contextDir)
+  const abDir = join(workspacePath, contextDir)
   const gitWorkspace =
     deps.exec !== undefined &&
     (await deps.exec(['git', 'rev-parse', '--is-inside-work-tree'], { cwd: workspacePath }))
       .exitCode === 0
   const tracked = gitWorkspace ? await trackedScratchPaths(deps.exec!, workspacePath) : []
+  if (tracked.some((path) => contextDir === path || contextDir.startsWith(`${path}/`))) {
+    throw new Error(
+      `Tracked content blocks context directory ${contextDir}; move that content before retrying`,
+    )
+  }
   await wipeAbDir(abDir)
   if (gitWorkspace) {
-    await restoreTrackedScratch(deps.exec!, workspacePath, tracked)
+    await restoreTrackedScratch(
+      deps.exec!,
+      workspacePath,
+      tracked.filter((path) => path.startsWith(`${contextDir}/`)),
+    )
     await ensureScratchExcluded(deps.exec!, workspacePath)
   }
-  if (!tracked.includes('.ab/.gitignore')) await writeFile(join(abDir, '.gitignore'), '*\n')
+  if (!tracked.includes('.ab/.gitignore'))
+    await writeFile(join(workspacePath, '.ab', '.gitignore'), '*\n')
 
   const trackedSet = new Set(tracked)
   const allocated = new Set<string>()
@@ -215,13 +228,15 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   const locate = (desired: string): string => {
     const prior = locations.get(desired)
     if (prior !== undefined) return prior
-    const path = allocateScratchPath(desired, trackedSet, allocated)
+    const path = allocateScratchPath(desired, trackedSet, allocated, `${contextDir}/`)
     locations.set(desired, path)
     return path
   }
   const manifestRelPath = locate('context.json')
   const notesRelPath =
     phase === 'implement' || phase === 'reconcile' ? locate(`${phase}-notes.md`) : undefined
+  if (notesRelPath !== undefined)
+    await mkdir(dirname(join(abDir, notesRelPath)), { recursive: true })
   const materialized: Record<string, MaterializedEntry> = {}
 
   async function writeDerived(desiredPath: string, content: string): Promise<string> {
@@ -230,7 +245,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, content)
     materialized[relPath] = 'derived'
-    return `.ab/${relPath}`
+    return `${contextDir}/${relPath}`
   }
 
   /** Latest rev when `rev` omitted; silently skips absent kinds — the tree is
@@ -266,8 +281,9 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     round,
     required: requiredKinds(spec, phase),
     allowedTerminals: allowedTerminals(phase),
-    manifestPath: `.ab/${manifestRelPath}`,
-    ...(notesRelPath !== undefined ? { notesPath: `.ab/${notesRelPath}` } : {}),
+    contextDir,
+    manifestPath: `${contextDir}/${manifestRelPath}`,
+    ...(notesRelPath !== undefined ? { notesPath: `${contextDir}/${notesRelPath}` } : {}),
     materialized,
   }
 
@@ -324,7 +340,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
         revision: pinned.revision,
         layout: pinned.layout,
         size: pinned.size,
-        path: `.ab/${relPath}`,
+        path: `${contextDir}/${relPath}`,
       })
     }
   }
@@ -565,6 +581,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // table in §16.1, so there is nothing to materialize yet — the input stays
   // in the table for when config grows one.
 
+  await mkdir(dirname(join(abDir, manifestRelPath)), { recursive: true })
   await writeFile(join(abDir, manifestRelPath), `${JSON.stringify(manifest, null, 2)}\n`)
 
   // Legacy tracked scratch is repository debt, not content Autobuild rewrites.

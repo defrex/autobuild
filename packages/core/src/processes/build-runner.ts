@@ -1,3 +1,4 @@
+import { contextDirectory } from '../context-directory'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import type { RuntimeIdentity } from '../events/runtime'
 import { relaunchTarget } from './execution-relaunch'
@@ -276,7 +277,7 @@ interface SessionSpec {
   /** Set for producer core phases — §10 session memory applies. */
   producerPhase?: CorePhase
   /** Rendered into the continue message; the CLI context (`ab context`) is
-   * the real carrier — the message just names the .ab/ inputs. */
+   * the real carrier — the message just names the session directory inputs. */
   feedback?: Feedback
   /** phase.failed count for this phase+round at decision time (D5). */
   priorFailures: number
@@ -606,11 +607,12 @@ function roundMatches(event: AbEvent, round: number): boolean {
 
 /**
  * The producer's round-N+1 prompt (§10): assembled deterministically from
- * the feedback, naming the .ab/ inputs `ab context` materializes (§8.3) —
+ * the feedback, naming the session directory inputs `ab context` materializes (§8.3) —
  * the message is a pointer, the CLI context is the real carrier.
  */
 function continueMessage(spec: SessionSpec): string {
-  const refresh = 'run `ab context` to refresh .ab/, then finish with your terminal command'
+  const refresh =
+    'run `ab context` to refresh $AB_CONTEXT_DIR/, then finish with your terminal command'
   const { feedback } = spec
   if (feedback === undefined) {
     return `Continue ${spec.phase} (round ${spec.round}): ${refresh}.`
@@ -618,19 +620,19 @@ function continueMessage(spec: SessionSpec): string {
   if ('findings' in feedback) {
     return (
       `Revise ${spec.phase} (round ${spec.round}): address findings ` +
-      `${feedback.findings.join(', ')} — materialized in .ab/findings.json; ${refresh}.`
+      `${feedback.findings.join(', ')} — materialized in $AB_CONTEXT_DIR/findings.json; ${refresh}.`
     )
   }
   if ('verify' in feedback) {
     return (
       `verify:${feedback.verify.step} failed — its report ` +
       `(${feedback.verify.report.kind}@${feedback.verify.report.rev}) is in ` +
-      `.ab/verify/; fix in ${spec.phase} round ${spec.round}, ${refresh}.`
+      `$AB_CONTEXT_DIR/verify/; fix in ${spec.phase} round ${spec.round}, ${refresh}.`
     )
   }
   return (
     `Human guidance on escalation ${feedback.guidance.escalation} (authoritative, ` +
-    `§15.6-B): ${feedback.guidance.answer} — inputs in .ab/; ${refresh}.`
+    `§15.6-B): ${feedback.guidance.answer} — inputs in $AB_CONTEXT_DIR/; ${refresh}.`
   )
 }
 
@@ -2359,7 +2361,7 @@ export class BuildRunner {
             workspacePath,
             ...(target.model !== undefined ? { model: target.model } : {}),
             ...(target.args !== undefined ? { args: target.args } : {}),
-            env: await this.sessionEnvFor('finalize@1', session),
+            env: await this.sessionEnvFor('finalize@1', session, step),
             signal,
             ...(stream !== undefined ? { stream } : {}),
           }),
@@ -2507,7 +2509,7 @@ export class BuildRunner {
           workspacePath,
           ...(model !== undefined ? { model } : {}),
           ...(args !== undefined ? { args } : {}),
-          env: await this.sessionEnvFor('finalize@1', session),
+          env: await this.sessionEnvFor('finalize@1', session, step),
           signal,
           ...(stream !== undefined ? { stream } : {}),
         }),
@@ -3437,7 +3439,7 @@ export class BuildRunner {
       async (signal, onNativeSession) => {
         if (live !== undefined) {
           // §10: the producer continues its session; the feedback message
-          // points at the .ab/ inputs — `ab context` is the real carrier. The
+          // points at the session directory inputs — `ab context` is the real carrier. The
           // turn re-issues ambient auth (D8) for the NEW bracket — AB_PHASE at
           // this round, AB_SESSION = this bracket's id — so the CLI's terminal
           // lands on the continued round instead of being rejected as round
@@ -3814,7 +3816,11 @@ export class BuildRunner {
 
   /** D8 ambient auth: sessionEnv may override AB_STORE (remote stores) and
    * add AB_TOKEN, but never the per-session identity keys. */
-  private async sessionEnvFor(abPhase: string, session: string): Promise<Record<string, string>> {
+  private async sessionEnvFor(
+    abPhase: string,
+    session: string,
+    finalizeStep?: string,
+  ): Promise<Record<string, string>> {
     const parent = this.deps.sessionEnv
     const token =
       parent?.AB_STORE && /^https?:/i.test(parent.AB_STORE)
@@ -3830,6 +3836,7 @@ export class BuildRunner {
       ...(token ? { AB_TOKEN: token } : {}),
       AB_BUILD: this.deps.slug,
       AB_PHASE: abPhase,
+      AB_CONTEXT_DIR: contextDirectory(abPhase, finalizeStep),
       AB_SESSION: session,
     }
   }

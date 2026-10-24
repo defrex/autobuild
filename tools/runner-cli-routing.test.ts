@@ -136,9 +136,9 @@ try {
     const context = await ab(['context'])
     expect(context).toMatchObject({ code: 0, stderr: '' })
     expect(context.stdout).toContain(`context materialized for ${slug} — plan@1`)
-    expect(await readFile(join(ws, '.ab', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
+    expect(await readFile(join(ws, '.ab/plan', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
 
-    expect(JSON.parse(await readFile(join(ws, '.ab/context.json'), 'utf8'))).toMatchObject({
+    expect(JSON.parse(await readFile(join(ws, '.ab/plan/context.json'), 'utf8'))).toMatchObject({
       build: slug,
       phase: 'plan',
       round: 1,
