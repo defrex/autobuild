@@ -1,0 +1,348 @@
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/static/fonts/atkinson.ttf") format("truetype");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/static/fonts/jetbrains.ttf") format("truetype");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * ANSI: the terminal's colors are the only signals, on a calm light or dark
+ * ground. Reference page for the Autobuild web app; every value here is a
+ * proposal for the build to carry into app/globals.css as tokens.
+ */
+:root {
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --fs: 15px;
+  --lh: 1.5;
+  --gap: 24px;
+  --measure: 72ch;
+  --frame: 1180px;
+  --idcol: 6.5rem;
+}
+/* Light ground: deep inks so each hue survives daylight. */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ground: #fbfbfc;
+  --ink: #1a1d24;
+  --slack: #5f6571;
+  --rule: #dfe2e8;
+  --well: #f5f6f8;
+  --blue: #2557e6;
+  --green: #10862f;
+  --amber: #b35c00;
+  --teal: #007f8a;
+  --red: #d32b33;
+  --red-wash: #fef2f1;
+  --select: #c9d5f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #101219;
+    --ink: #dcdfe5;
+    --slack: #858b97;
+    --rule: #262a35;
+    --well: #181b24;
+    --blue: #86a3f2;
+    --green: #8fcf6e;
+    --amber: #e8aa52;
+    --teal: #52c3c3;
+    --red: #f07777;
+    --red-wash: #2a1719;
+    --select: #2c3a66;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #101219;
+  --ink: #dcdfe5;
+  --slack: #858b97;
+  --rule: #262a35;
+  --well: #181b24;
+  --blue: #86a3f2;
+  --green: #8fcf6e;
+  --amber: #e8aa52;
+  --teal: #52c3c3;
+  --red: #f07777;
+  --red-wash: #2a1719;
+  --select: #2c3a66;
+}
+@media (min-width: 1280px) {
+  :root {
+    --fs: 16px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  background: var(--ground);
+}
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 var(--fs) / var(--lh) var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+::selection {
+  background: var(--select);
+  color: var(--ink);
+}
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+.m {
+  font-family: var(--mono);
+  font-size: 0.93em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings:
+    "calt" 0,
+    "liga" 0;
+}
+.slack {
+  color: var(--slack);
+}
+.blue {
+  color: var(--blue);
+}
+.green {
+  color: var(--green);
+}
+.amber {
+  color: var(--amber);
+}
+.teal {
+  color: var(--teal);
+}
+.red {
+  color: var(--red);
+}
+.b {
+  font-weight: 700;
+}
+
+/* Frame */
+.frame {
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0 24px 64px;
+}
+.mast {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 16px 0 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.word {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.project {
+  font-family: var(--mono);
+  font-size: 0.93em;
+}
+.mast .spacer {
+  flex: 1;
+}
+
+/* Text controls: words, never pills. */
+.ctl {
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 0.25em;
+  text-decoration-thickness: 1px;
+}
+.ctl:hover {
+  color: var(--teal);
+  text-decoration-color: currentColor;
+}
+.ctl.slack {
+  color: var(--slack);
+}
+.ctl.slack:hover {
+  color: var(--teal);
+}
+.ctl.danger {
+  color: var(--red);
+}
+.btn {
+  display: inline-block;
+  cursor: pointer;
+  background: none;
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 0;
+  padding: 3px 12px;
+  font-weight: 600;
+}
+.btn:hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.btn:active {
+  background: var(--ink);
+  color: var(--ground);
+}
+.btn.primary {
+  background: var(--ink);
+  color: var(--ground);
+}
+.btn.primary:hover {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: var(--ground);
+}
+.btn.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn.danger.primary {
+  background: var(--red);
+  color: var(--ground);
+}
+.field {
+  background: var(--well);
+  border: 1.5px solid var(--rule);
+  border-radius: 0;
+  padding: 4px 10px;
+  min-width: 0;
+}
+.field:focus {
+  border-color: var(--teal);
+  outline: none;
+}
+.field::placeholder {
+  color: var(--slack);
+}
+
+/* Account menu */
+.menu {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+}
+.menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 2;
+  min-width: 280px;
+  background: var(--ground);
+  border: 1.5px solid var(--ink);
+  padding: 10px 0;
+}
+.menu-panel a,
+.menu-panel .row {
+  display: block;
+  padding: 5px 16px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.menu-panel a:hover {
+  color: var(--teal);
+}
+.menu-panel .sep {
+  border-top: 1px solid var(--rule);
+  margin: 8px 0;
+}
+.menu-panel .label {
+  color: var(--slack);
+  font-size: 0.93em;
+  padding: 2px 16px;
+}
+.seg {
+  display: flex;
+  gap: 14px;
+  padding: 4px 16px;
+}
+.seg [aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+.su {
+  color: var(--slack);
+  font-size: 0.85em;
+  font-family: var(--mono);
+}
+
+[hidden] {
+  display: none;
+}
+.page {
+  max-width: var(--measure);
+  padding-top: 28px;
+}
+h1 {
+  font-size: 1.6em;
+  line-height: 1.2;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+}
+.empty {
+  border-top: 1px solid var(--rule);
+  margin-top: 20px;
+  padding-top: 20px;
+}
+.empty p {
+  margin: 0 0 8px;
+}
+.menu-panel {
+  width: 280px;
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+}
+html {
+  accent-color: var(--teal);
+  scrollbar-color: var(--slack) var(--ground);
+}
+@media (max-width: 719px) {
+  :root {
+    --fs: 15px;
+  }
+  .frame {
+    padding: 0 16px 40px;
+  }
+  .mast {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .menu-panel {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 76px;
+    width: auto;
+  }
+}
