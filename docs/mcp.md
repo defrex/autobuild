@@ -37,10 +37,10 @@ Auth instance is the **authorization server**. An unauthenticated request to
    registered `client_name` becomes the `via` marker recorded on writes.
 4. Runs the authorization-code flow with PKCE through `GET /api/auth/mcp/authorize`.
    A signed-out person is redirected to the deployment's sign-in page (the
-   existing GitHub sign-in and email allowlist); the flow resumes after
-   sign-in. A person outside the allowlist cannot complete the flow — and the
-   resource re-checks the allowlist on every tool call, so a person dropped
-   from the list has their live tokens refused immediately (`403`).
+   existing GitHub sign-in and organization membership policy); the flow resumes after
+   sign-in. Only super users and organization members are admitted. The resource
+   rechecks admission and project access on every tool callback, so removed
+   members lose authority with existing tokens (`403`).
 5. Exchanges the code at `/api/auth/mcp/token`; access tokens are short-lived
    and refresh tokens rotate. Consent renders only when the client sends
    `prompt=consent` (the plugin's designed behavior); clients that omit it
@@ -108,13 +108,14 @@ the standard surface the endpoint serves.
   function. Must be an absolute http(s) URL (https in production).
 - `BETTER_AUTH_URL`: the public origin — the authorization-server issuer and
   the default MCP resource's base.
-- `AB_WEB_ALLOWED_EMAILS`: the operator allowlist. Sign-in admission and every
-  MCP tool call are checked against it.
+- `AB_WEB_SUPER_USER_EMAILS`: the super-user email list. Other operators need organization membership;
+  admission and repository access are rechecked on every tool callback.
 - `AB_WEB_REPOSITORIES` (deprecated): optional once-per-database registry
   bootstrap, never an ongoing allowlist. `repositories.list` queries current
   active registrations on every call, and every tool checks current membership.
 
-Every allowlisted user sees every registered project. Database-authorized
+Super users see every registered project; other users see only active projects
+assigned to their organizations. Database-authorized
 owners use the [project commands](setup.md#connected-projects) to add or remove
 projects without redeploying. Removal hides retained data until re-registration;
 registry failures never authorize a call.

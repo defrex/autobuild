@@ -1337,3 +1337,18 @@ clients, retaining their decoders and the supported three-line window.
 fact: `{ identity, from, to, mapping }`, where mapping contains source ticket IDs
 and destination IDs. All migration facts survive dispatcher-run turnover.
 Conflicting identity reuse or source-qualified mappings fail replay closed.
+
+
+Browser connection approval accepts optional `organizationId` in the decide JSON.
+A new project defaults to the approver's only actual membership; zero or multiple
+memberships require an explicit org, including for super users. Members can select
+their own orgs; super users can select any org. Registration, assignment and
+credential insertion commit atomically. Reconnect requires current project access
+and preserves its assignment; moving projects uses organization management only.
+Previously registered unassigned projects, whether active or removed, can be
+reconnected only by super users and remain unassigned. Any registry history
+distinguishes an existing project from a new one. Assigning its retained history
+to an organization requires the super-user management route after re-registration.
+Browser lookup and decisions hide foreign projects as unknown
+connections, even after resolution. Machine request/poll/cancel/status/revoke
+contracts and existing credentials are unchanged.

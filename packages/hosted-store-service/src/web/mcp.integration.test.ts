@@ -3,6 +3,9 @@
  * Postgres schema: production adapter parity for the auth schema DDL end to
  * end. Needs AB_POSTGRES_TEST_URL.
  */
+import { HumanAccess } from './access'
+import { PostgresOrganizationStore } from '@defrex/autobuild-postgres-store/organizations'
+import { PostgresProjectRegistry } from '@defrex/autobuild-postgres-store/projects'
 import { describe, expect, test } from 'bun:test'
 import { AUTH_SCHEMA_VERSION, migratePostgres } from '@defrex/autobuild-postgres-store'
 import { TOOLS } from '@defrex/autobuild/operator'
@@ -38,8 +41,11 @@ if (postgresUrl) {
         const env = { ...baseEnv, AB_POSTGRES_URL: url }
         const { Pool } = await import('pg')
         const pool = new Pool({ connectionString: url, max: 2 })
-        const auth = createWebAuth(env, { database: pool })
-        const { app, backing } = buildApp(env, auth)
+        const accessSql = new SQL(url)
+        const access = new HumanAccess(async () => new PostgresOrganizationStore(accessSql), env)
+        await new PostgresProjectRegistry(accessSql).add(REPO, 'fixture')
+        const auth = createWebAuth(env, { database: pool, access })
+        const { app, backing } = buildApp(env, auth, access)
         const seeded = await seedUser(auth, 'ada@example.com')
         const registeredClient = await dynamicRegister(app, await discoverMetadata(app))
         const tokens = await authorizeFlow(app, seeded.cookie, registeredClient)
@@ -133,13 +139,14 @@ if (postgresUrl) {
         })
         expect(e2e?.redirectUrls as string).toContain('https://claude.ai/api/mcp/auth_callback')
         await sql.close()
+        await accessSql.close()
         await pool.end()
       } finally {
         const cleanup = new SQL(postgresUrl)
         await cleanup.unsafe(`DROP SCHEMA ${schema} CASCADE`)
         await cleanup.close()
       }
-      expect(AUTH_SCHEMA_VERSION).toBe(3)
+      expect(AUTH_SCHEMA_VERSION).toBe(4)
     })
   })
 }

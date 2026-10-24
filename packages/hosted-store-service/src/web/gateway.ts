@@ -1,3 +1,4 @@
+import { type HumanAccess, accessForEnv, validSession } from './access'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import {
   AUTOBUILD_VERSION,
@@ -6,13 +7,14 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
-import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
+import { normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
 export interface GatewaySession {
   user: { email: string }
   session?: { expiresAt?: Date | string }
 }
 export interface WebGatewayOptions {
+  access?: HumanAccess
   projects: ProjectRegistryReader
   env?: WebEnv
   getSession: (headers: Headers) => Promise<GatewaySession | null>
@@ -62,20 +64,26 @@ export function createWebGateway(options: WebGatewayOptions): {
   const config = parseWebAuthEnv(env)
   const storeSecret = env.AB_STORE_SECRET?.trim()
   if (!storeSecret) throw new Error('AB_STORE_SECRET is required and must be nonblank')
+  const access = options.access ?? accessForEnv(env)
   const now = options.now ?? (() => new Date())
   return {
     async fetch(request) {
       const respond = (response: Response) => secured(response)
       const session = await options.getSession(request.headers)
-      if (!session) return respond(failure(401, 'auth', 'sign in required'))
-      const expiry = session.session?.expiresAt
-      if (expiry !== undefined && new Date(expiry).getTime() <= now().getTime()) {
-        return respond(failure(401, 'auth', 'session expired'))
+      if (!validSession(session, now())) return respond(failure(401, 'auth', 'sign in required'))
+      const email = normalizeEmail(session!.user.email)
+      let principal: Awaited<ReturnType<HumanAccess['principal']>>
+      try {
+        principal = await access.principal(email)
+      } catch {
+        return respond(
+          Response.json(
+            { kind: 'internal', error: 'access service is unavailable' },
+            { status: 503 },
+          ),
+        )
       }
-      const email = normalizeEmail(session.user.email)
-      if (!isAllowedEmail(config.allowedEmails, email)) {
-        return respond(failure(403, 'auth', 'this identity is not allowed'))
-      }
+      if (!principal) return respond(failure(403, 'auth', 'this identity is not allowed'))
 
       const incoming = new URL(request.url)
       let parts: string[]
@@ -89,7 +97,7 @@ export function createWebGateway(options: WebGatewayOptions): {
       const repo = parts[1]
       const suffix = parts.slice(2)
       try {
-        if (!(await options.projects.has(repo)))
+        if (!(await options.projects.has(repo)) || !(await access.canAccess(principal, repo)))
           return respond(failure(404, 'not-found', 'unknown repository'))
       } catch {
         return respond(
