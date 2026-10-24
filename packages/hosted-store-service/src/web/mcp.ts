@@ -1,3 +1,4 @@
+import { type HumanAccess, humanAccess } from './access'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 /**
  * The hosted MCP endpoint (AUT-341): the agent tool registry served over
@@ -38,7 +39,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { OperatorApiClient, OperatorApiError } from '../operator-client'
 import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator'
 import { AUTOBUILD_VERSION, mintToken } from '@defrex/autobuild/remote-store'
-import { isAllowedEmail, normalizeEmail } from './config'
+import { normalizeEmail } from './config'
 import type { WebAuth } from './auth'
 import type { WebAuthConfig } from './config'
 
@@ -68,6 +69,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
 ].join(' ')
 
 export interface McpEndpointOptions {
+  access?: HumanAccess
   projects: ProjectRegistryReader
   /** The parsed web auth config (baseURL, mcpResource). */
   config: WebAuthConfig
@@ -119,6 +121,7 @@ interface McpOperator {
 export function createMcpEndpoint(options: McpEndpointOptions): {
   fetch(request: Request): Promise<Response>
 } {
+  const access = options.access ?? humanAccess
   const config = options.config
   const now = options.now ?? (() => new Date())
   const entries = options.entries ?? TOOLS
@@ -130,12 +133,15 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
   async function operator(request: Request): Promise<McpOperator | Response> {
     const session = await options.auth.api.getMcpSession({ headers: request.headers })
     if (!session) return unauthorized(config)
-    if (new Date(session.accessTokenExpiresAt).getTime() <= now().getTime()) {
+    if (
+      !Number.isFinite(new Date(session.accessTokenExpiresAt).getTime()) ||
+      new Date(session.accessTokenExpiresAt).getTime() <= now().getTime()
+    ) {
       return unauthorized(config)
     }
     const context = await options.auth.$context
     const user = await context.internalAdapter.findUserById(session.userId)
-    if (!user || !isAllowedEmail(config.allowedEmails, user.email)) {
+    if (!user || !(await access.principal(user.email))) {
       return refused(403, 'this identity is not allowed')
     }
     const application = await context.adapter.findOne({
@@ -163,7 +169,19 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
         })
       }
 
-      const resolved = await operator(request)
+      let resolved: McpOperator | Response
+      try {
+        resolved = await operator(request)
+      } catch {
+        return Response.json(
+          {
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'access service is unavailable' },
+            id: null,
+          },
+          { status: 503 },
+        )
+      }
       if (resolved instanceof Response) return resolved
 
       const server = new McpServer(
@@ -184,8 +202,17 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
           // the wait clamp, delegation, and failure mapping are identical.
           async (args: unknown) => {
             try {
+              const current = await operator(request)
+              if (current instanceof Response)
+                throw new OperatorApiError(403, 'auth', 'this identity is not allowed')
+              const principal = await access.principal(current.email)
+              if (!principal) throw new Error('access refused')
               const parsed = (args ?? {}) as { repo?: unknown }
-              if (typeof parsed.repo !== 'string' || !(await options.projects.has(parsed.repo))) {
+              if (
+                typeof parsed.repo !== 'string' ||
+                !(await options.projects.has(parsed.repo)) ||
+                !(await access.canAccess(principal, parsed.repo))
+              ) {
                 return {
                   content: [
                     {
@@ -209,8 +236,8 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
               }
               const token = mintToken(options.storeSecret, {
                 version: 1,
-                internalOperator: { user: resolved.email, repo: parsed.repo },
-                via: { kind: 'mcp', client: resolved.client },
+                internalOperator: { user: current.email, repo: parsed.repo },
+                via: { kind: 'mcp', client: current.client },
                 exp: now().getTime() + 30_000,
               })
               const client = new OperatorApiClient({
@@ -251,7 +278,11 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
         },
         async () => {
           try {
-            const repositories = (await options.projects.list()).map((entry) => entry.repo)
+            const current = await operator(request)
+            if (current instanceof Response) throw new Error('access refused')
+            const principal = await access.principal(current.email)
+            if (!principal) throw new Error('access refused')
+            const repositories = await access.projects(principal)
             return { content: [{ type: 'text' as const, text: JSON.stringify({ repositories }) }] }
           } catch {
             return {
