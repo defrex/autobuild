@@ -103,7 +103,7 @@ See [answering blocked builds](operating.md#answer-and-pause). Preserve event lo
 **Cause.** Registration, allowed-user access, project credentials and dispatcher selection are separate gates.
 
 - **Registration.** Check the active PostgreSQL project registry; build or ticket data doesn't register a project.
-- **Access.** Every allowlisted user sees all active entries; verify sign-in separately from credentials.
+- **Access.** Super users see all active entries; members see only their organizations’ projects; verify sign-in separately from credentials.
 - **Administration.** With deployment database credentials, an administrator runs `ab-hosted-store projects list`, `projects add` or `projects remove`. Mutations require `--user IDENTITY` for attribution; project tokens can't administer registrations.
 - **Dispatcher selection.** `AB_DISPATCHER_REPOSITORIES` in the hosted dispatch environment selects projects: unset selects every active registration; an explicit ordered list is intersected with current registrations.
 - **Dashboard fallback.** With no selection, the dashboard shows the first registered origin.

@@ -3,7 +3,9 @@ import type { CredentialStore } from '@defrex/autobuild-postgres-store/credentia
 import type { MachineAuth } from './machine-auth'
 import { MachineAuthError } from './machine-auth'
 import type { GatewaySession } from './web/gateway'
-import { isAllowedEmail, normalizeEmail } from './web/config'
+import { normalizeEmail } from './web/config'
+import { type HumanAccess, validSession } from './web/access'
+import { AccessError, type HumanActor } from '@defrex/autobuild-postgres-store/organizations'
 
 export function createConnectionHandler(options: {
   store: () => Promise<ConnectionStore>
@@ -12,7 +14,7 @@ export function createConnectionHandler(options: {
   baseURL: string
   browser?: {
     getSession: (headers: Headers) => Promise<GatewaySession | null>
-    allowedEmails: ReadonlySet<string>
+    access: HumanAccess
   }
   now?: () => Date
 }) {
@@ -55,23 +57,18 @@ export function createConnectionHandler(options: {
         return respond({ error: 'application/json required' }, 400)
       const browser = path.startsWith('/connect/v1/browser/')
       let actor: string | undefined
+      let principal: HumanActor | undefined
       if (browser) {
         if (!options.browser)
           return respond({ error: 'approval requires the web-enabled service origin' }, 503)
         if (request.headers.get('origin') !== new URL(options.baseURL).origin)
           return respond({ error: 'cross-origin approval refused' }, 403)
         const session = await options.browser.getSession(request.headers)
-        const expiry = session?.session?.expiresAt
-        if (
-          !session ||
-          (expiry !== undefined &&
-            (!Number.isFinite(new Date(expiry).getTime()) ||
-              new Date(expiry) <= (options.now ?? (() => new Date()))()))
-        )
+        if (!validSession(session, (options.now ?? (() => new Date()))()))
           return respond({ error: 'sign in required' }, 401)
-        actor = normalizeEmail(session.user.email)
-        if (!isAllowedEmail(options.browser.allowedEmails, actor))
-          return respond({ error: 'this identity is not allowed' }, 403)
+        actor = normalizeEmail(session!.user.email)
+        principal = (await options.browser.access.principal(actor)) ?? undefined
+        if (!principal) return respond({ error: 'this identity is not allowed' }, 403)
       }
       const text = await request.text()
       if (text.length > 8192) return respond({ error: 'request too large' }, 413)
@@ -110,13 +107,31 @@ export function createConnectionHandler(options: {
       if (browser && typeof body.code === 'string') {
         const code = body.code.trim().toUpperCase()
         if (path.endsWith('/lookup'))
-          return respond({ connection: await store.lookup(code, actor!) })
-        if (path.endsWith('/decide') && typeof body.approve === 'boolean')
-          return respond({ connection: await store.decide(code, actor!, body.approve) })
+          return respond({ connection: await store.lookup(code, actor!, principal) })
+        if (path.endsWith('/decide') && typeof body.approve === 'boolean') {
+          if (
+            body.organizationId !== undefined &&
+            (typeof body.organizationId !== 'string' || !body.organizationId)
+          )
+            return respond({ error: 'invalid organizationId' }, 400)
+          return respond({
+            connection: await store.decide(
+              code,
+              actor!,
+              body.approve,
+              principal,
+              body.organizationId as string | undefined,
+            ),
+          })
+        }
       }
       return respond({ error: 'unknown connection route' }, 404)
     } catch (error) {
-      if (error instanceof ConnectionError || error instanceof MachineAuthError)
+      if (
+        error instanceof AccessError ||
+        error instanceof ConnectionError ||
+        error instanceof MachineAuthError
+      )
         return respond({ error: error.message }, error.status)
       return respond({ error: 'connection service is unavailable; retry' }, 503)
     }
