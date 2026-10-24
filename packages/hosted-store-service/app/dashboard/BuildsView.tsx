@@ -71,8 +71,9 @@ interface RowClickTarget {
 export function isRowSurfaceClick(target: RowClickTarget | null, selectedText = ''): boolean {
   if (selectedText.length > 0) return false
   return (
-    target?.closest('button, a[href], input, select, textarea, label, .detail, .answer-step') ==
-    null
+    target?.closest(
+      'button, a[href], input, select, textarea, label, .detail, .answer-step, .signoff',
+    ) == null
   )
 }
 
@@ -287,6 +288,20 @@ export function BuildsView(props: BuildsViewProps) {
         ))}
         {model.builds.length === 0 && !model.harvest && <li className="slack">no active builds</li>}
       </ol>
+      <section className="legend" aria-label="Step marks">
+        <span>
+          <code className="ok">[x]</code> done
+        </span>
+        <span>
+          <code className="live">[&gt;]</code> happening now
+        </span>
+        <span>
+          <code className="warn">[~]</code> in progress or retried
+        </span>
+        <span>
+          <code>[ ]</code> not started
+        </span>
+      </section>
     </DashboardSurface>
   )
 }
@@ -552,35 +567,41 @@ function BuildRow({
           onClick={() => onRowToggleDetail(row.slug)}
         >
           <span className="ticket">{row.ticketId ?? ''}</span>
-          <span className="slug">{row.slug}</span>
+          <span className="build-title">{row.collectionIdentity?.title || row.slug}</span>
         </button>
-        <span className="tokens">
-          {row.pr && (
-            <a
-              className="pr"
-              data-pr={row.pr.state}
-              href={row.pr.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              PR {row.pr.state}
-            </a>
-          )}
-          {held && <span className="warn held">(held)</span>}
-          {row.draining && <span className="warn draining">(draining)</span>}
-          {row.alsoPaused && <span className="warn">(paused)</span>}
-        </span>
         <span className="status" data-status={row.status}>
           <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
         </span>
       </div>
+      <div className="build-meta">
+        <span className="slug">{row.slug}</span>
+        {!row.integrationRow && row.target && (
+          <>
+            {' '}
+            · {row.kind ?? 'work'} · target <span className="machine">{row.target}</span>
+            {row.integration ? ` · ${row.integration}` : ''}
+          </>
+        )}
+        {
+          <span className="tokens">
+            {row.pr && (
+              <a
+                className="pr"
+                data-pr={row.pr.state}
+                href={row.pr.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                PR {row.pr.state}
+              </a>
+            )}
+            {held && <span className="warn held">(held)</span>}
+            {row.draining && <span className="warn draining">(draining)</span>}
+            {row.alsoPaused && <span className="warn">(paused)</span>}
+          </span>
+        }
+      </div>
       {!row.integrationRow && ceiling && <p className="sub">{ceiling}</p>}
-      {!row.integrationRow && row.target && (
-        <div>
-          {row.kind ?? 'work'} · target {row.target}
-          {row.integration ? ` · ${row.integration}` : ''}
-        </div>
-      )}
       {row.integrationRow ? (
         <>
           <p className="sub integration-progress">
@@ -629,10 +650,69 @@ function BuildRow({
       {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
       )}
-      {!row.integrationRow &&
-        row.blockers.map((blocker) => (
-          <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
-        ))}
+      {row.blockers.length > 0 && (
+        <section className="signoff" aria-label={`Escalation for ${row.slug}`}>
+          {row.blockers.map((blocker) => (
+            <p className="q" key={blocker}>
+              ! {blocker}
+            </p>
+          ))}
+          <p className="why">
+            The build stopped to ask a person. Your answer resumes it from where it paused.
+          </p>
+          {answering && (
+            <>
+              <BlockedAnswerStep
+                blocker={row.blockers[0] ?? ''}
+                input={answerStep.input}
+                pending={answerPending}
+                onInput={onAnswerStepInput}
+                onSubmit={onSubmitAnswerStep}
+                onCancel={onCancelAnswerStep}
+              />
+              <div
+                className="controls actions"
+                role="toolbar"
+                aria-label={`Controls for ${row.slug}`}
+                onKeyDown={(event) => handleRowControlKey(event, onCancelAnswerStep)}
+              >
+                <button
+                  type="button"
+                  className="btn primary action"
+                  disabled={pending !== undefined || answerPending}
+                  aria-label={`SUBMIT answer for ${row.slug}`}
+                  onClick={onSubmitAnswerStep}
+                >
+                  SUBMIT
+                </button>
+                <button
+                  type="button"
+                  className="word action"
+                  disabled={pending !== undefined || answerPending}
+                  aria-label={`CANCEL answer for ${row.slug}`}
+                  onClick={onCancelAnswerStep}
+                >
+                  CANCEL
+                </button>
+              </div>
+            </>
+          )}
+          {!answering && (
+            <AnswerComposer
+              build={row}
+              busy={pending !== undefined || answerPending}
+              onAnswer={onAnswer}
+            />
+          )}
+        </section>
+      )}
+      {awaitingConsent(row) && (
+        <LandingSignoff
+          slug={row.slug}
+          pending={pending !== undefined}
+          onControl={onRowBuildControl}
+        />
+      )}
       {open && (
         <BuildDetail
           id={detailId}
@@ -642,14 +722,10 @@ function BuildRow({
           transcript={transcript}
           confirmingAbort={confirmingAbort}
           answerStep={answering ? answerStep : undefined}
-          answerPending={answerPending}
           onRowBuildControl={onRowBuildControl}
           onRowRequestAbort={onRowRequestAbort}
           onCancelAbort={onCancelAbort}
-          onAnswerStepInput={onAnswerStepInput}
-          onSubmitAnswerStep={onSubmitAnswerStep}
           onCancelAnswerStep={onCancelAnswerStep}
-          onAnswer={onAnswer}
           onTranscript={onTranscript}
           onClose={() => onRowToggleDetail(row.slug)}
         />
@@ -692,10 +768,7 @@ function BlockedAnswerStep({
         }
       }}
     >
-      <p className="alert answer-blocker" role="status">
-        <span aria-hidden>! </span>
-        {blocker}
-      </p>
+      <span className="sr-only">{blocker}</span>
       <label className="field">
         <span>optional guidance (empty retries)</span>
         <input
@@ -722,14 +795,10 @@ function BuildDetail({
   transcript,
   confirmingAbort,
   answerStep,
-  answerPending,
   onRowBuildControl,
   onRowRequestAbort,
   onCancelAbort,
-  onAnswerStepInput,
-  onSubmitAnswerStep,
   onCancelAnswerStep,
-  onAnswer,
   onTranscript,
   onClose,
 }: {
@@ -740,43 +809,18 @@ function BuildDetail({
   transcript?: TranscriptPresentation
   confirmingAbort: boolean
   answerStep?: BuildsViewProps['answerStep']
-  answerPending: boolean
   onRowBuildControl: BuildsViewProps['onRowBuildControl']
   onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
   onCancelAbort: BuildsViewProps['onCancelAbort']
-  onAnswerStepInput: BuildsViewProps['onAnswerStepInput']
-  onSubmitAnswerStep: BuildsViewProps['onSubmitAnswerStep']
   onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
-  onAnswer: BuildsViewProps['onAnswer']
   onTranscript: BuildsViewProps['onTranscript']
   onClose: () => void
 }) {
   const answering = answerStep !== undefined
   const abortConfirmationId = `abort-confirmation-${encodeURIComponent(build.slug)}`
-  const [resolution, setResolution] = useState<AnswerChoice>('guidance')
-  const [text, setText] = useState('')
-  const [ceiling, setCeiling] = useState(1)
   const busy = pending !== undefined
   const ceilingText = reviewCeilingText(build)
   const sessions = build.sessions ?? []
-
-  const submit = () => {
-    const body: OperatorAnswerRequest =
-      resolution === 'guidance'
-        ? { resolution, text }
-        : resolution === 'retry'
-          ? { resolution }
-          : resolution === 'dismiss'
-            ? { resolution, ...(text ? { text } : {}) }
-            : resolution === 'review-round-ceiling'
-              ? { resolution, ceiling, ...(text ? { text } : {}) }
-              : {
-                  resolution: 'revise-spec',
-                  origin: resolution === 'revise-spec-ticket' ? 'ticket' : 'body',
-                  body: text,
-                }
-    onAnswer(build.slug, body)
-  }
 
   return (
     <article
@@ -839,91 +883,62 @@ function BuildDetail({
             <span aria-hidden>! </span>abort {build.slug}? Enter confirms, Esc cancels
           </p>
         )}
-        {answerStep && (
-          <BlockedAnswerStep
-            blocker={build.blockers[0] ?? `Answer required for ${build.slug}.`}
-            input={answerStep.input}
-            pending={answerPending}
-            onInput={onAnswerStepInput}
-            onSubmit={onSubmitAnswerStep}
-            onCancel={onCancelAnswerStep}
-          />
+        {!answering && (
+          <div
+            className="controls actions"
+            role="toolbar"
+            aria-label={`Controls for ${build.slug}`}
+            aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
+            onKeyDown={(event) =>
+              handleRowControlKey(
+                event,
+                answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
+              )
+            }
+          >
+            {answering ? null : confirmingAbort ? (
+              <>
+                <button
+                  type="button"
+                  className="word action"
+                  disabled={busy}
+                  aria-label={`CONFIRM ABORT ${build.slug}`}
+                  onClick={() => onRowBuildControl(build.slug, 'abort')}
+                >
+                  CONFIRM ABORT
+                </button>
+                <button
+                  type="button"
+                  className="word action"
+                  disabled={busy}
+                  aria-label={`CANCEL abort ${build.slug}`}
+                  onClick={onCancelAbort}
+                >
+                  CANCEL
+                </button>
+              </>
+            ) : (
+              buildRowActions(build).map((control) => (
+                <button
+                  type="button"
+                  className="word action"
+                  key={control.action}
+                  disabled={busy}
+                  aria-label={`${control.label} ${build.slug}`}
+                  onClick={() => {
+                    if (control.action === 'request-abort') onRowRequestAbort(build.slug)
+                    else onRowBuildControl(build.slug, control.action)
+                  }}
+                >
+                  {control.label}
+                </button>
+              ))
+            )}
+            {buildRowActions(build).length === 0 && !answering && !confirmingAbort && (
+              <span className="slack">no actions available</span>
+            )}
+          </div>
         )}
-        <div
-          className="controls actions"
-          role="toolbar"
-          aria-label={`Controls for ${build.slug}`}
-          aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
-          onKeyDown={(event) =>
-            handleRowControlKey(
-              event,
-              answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
-            )
-          }
-        >
-          {answering ? (
-            <>
-              <button
-                type="button"
-                className="word action"
-                disabled={busy || answerPending}
-                aria-label={`SUBMIT answer for ${build.slug}`}
-                onClick={onSubmitAnswerStep}
-              >
-                SUBMIT
-              </button>
-              <button
-                type="button"
-                className="word action"
-                disabled={busy || answerPending}
-                aria-label={`CANCEL answer for ${build.slug}`}
-                onClick={onCancelAnswerStep}
-              >
-                CANCEL
-              </button>
-            </>
-          ) : confirmingAbort ? (
-            <>
-              <button
-                type="button"
-                className="word action"
-                disabled={busy}
-                aria-label={`CONFIRM ABORT ${build.slug}`}
-                onClick={() => onRowBuildControl(build.slug, 'abort')}
-              >
-                CONFIRM ABORT
-              </button>
-              <button
-                type="button"
-                className="word action"
-                disabled={busy}
-                aria-label={`CANCEL abort ${build.slug}`}
-                onClick={onCancelAbort}
-              >
-                CANCEL
-              </button>
-            </>
-          ) : (
-            buildRowActions(build).map((control) => (
-              <button
-                type="button"
-                className="word action"
-                key={control.action}
-                disabled={busy}
-                aria-label={`${control.label} ${build.slug}`}
-                onClick={() => {
-                  if (control.action === 'request-abort') onRowRequestAbort(build.slug)
-                  else onRowBuildControl(build.slug, control.action)
-                }}
-              >
-                {control.label}
-              </button>
-            ))
-          )}
-          {buildRowActions(build).length === 0 && !answering && !confirmingAbort && (
-            <span className="slack">no actions available</span>
-          )}
-        </div>
       </section>
 
       {build.integrationDetail &&
@@ -1066,71 +1081,6 @@ function BuildDetail({
         </section>
       )}
 
-      {build.blockers.length > 0 && (
-        <section className="section">
-          <h3>Unresolved blockers</h3>
-          {build.blockers.map((blocker) => (
-            <pre className="block alert" key={blocker}>
-              ! {blocker}
-            </pre>
-          ))}
-          <form
-            className="composer"
-            onSubmit={(event) => {
-              event.preventDefault()
-              submit()
-            }}
-          >
-            <label className="field">
-              <span>resolution</span>
-              <span className="selectwrap">
-                <select
-                  value={resolution}
-                  onChange={(event) => setResolution(event.target.value as AnswerChoice)}
-                >
-                  <option value="guidance">Guidance</option>
-                  <option value="retry">Retry</option>
-                  <option value="dismiss">Dismiss</option>
-                  <option value="review-round-ceiling">Review ceiling</option>
-                  <option value="revise-spec">Supply revised spec</option>
-                  <option value="revise-spec-ticket">Use amended ticket body</option>
-                </select>
-              </span>
-            </label>
-            {resolution === 'review-round-ceiling' && (
-              <label className="field">
-                <span>ceiling</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={ceiling}
-                  onChange={(event) => setCeiling(event.target.valueAsNumber)}
-                />
-              </label>
-            )}
-            {resolution !== 'retry' && (
-              <label className="field">
-                <span>
-                  {resolution === 'revise-spec' || resolution === 'revise-spec-ticket'
-                    ? 'revised body'
-                    : 'message'}
-                </span>
-                <textarea value={text} onChange={(event) => setText(event.target.value)} />
-              </label>
-            )}
-            <div className="controls">
-              <button
-                type="submit"
-                className="btn"
-                disabled={busy || (resolution === 'guidance' && !text.trim())}
-              >
-                Answer escalation
-              </button>
-            </div>
-          </form>
-        </section>
-      )}
-
       <section className="section">
         <h3>Sessions</h3>
         {sessions.length > 0 ? (
@@ -1218,6 +1168,147 @@ function Transcript({ value }: { value: TranscriptPresentation }) {
           )}
         </article>
       ))}
+    </section>
+  )
+}
+
+/** The projection exposes a decision only after readiness is established. */
+export function awaitingConsent(build: DashboardBuild): boolean {
+  const merge = (build.integrationRow?.steps ?? build.steps).find((step) => step.label === 'merge')
+  return (
+    build.status === 'running' &&
+    build.landing?.decision?.mode === 'consent' &&
+    build.landing.command?.kind !== 'land' &&
+    merge?.state === 'current' &&
+    merge.qualifier === 'waiting'
+  )
+}
+
+function AnswerComposer({
+  build,
+  busy,
+  onAnswer,
+}: {
+  build: DashboardBuild
+  busy: boolean
+  onAnswer: BuildsViewProps['onAnswer']
+}) {
+  const [resolution, setResolution] = useState<AnswerChoice>('guidance')
+  const [text, setText] = useState('')
+  const [ceiling, setCeiling] = useState(1)
+
+  const submit = () => {
+    const body: OperatorAnswerRequest =
+      resolution === 'guidance'
+        ? { resolution, text }
+        : resolution === 'retry'
+          ? { resolution }
+          : resolution === 'dismiss'
+            ? { resolution, ...(text ? { text } : {}) }
+            : resolution === 'review-round-ceiling'
+              ? { resolution, ceiling, ...(text ? { text } : {}) }
+              : {
+                  resolution: 'revise-spec',
+                  origin: resolution === 'revise-spec-ticket' ? 'ticket' : 'body',
+                  body: text,
+                }
+    onAnswer(build.slug, body)
+  }
+
+  return (
+    <form
+      className="composer"
+      onSubmit={(event) => {
+        event.preventDefault()
+        submit()
+      }}
+    >
+      <label className="field">
+        <span>resolution</span>
+        <span className="selectwrap">
+          <select
+            disabled={busy}
+            value={resolution}
+            onChange={(event) => setResolution(event.target.value as AnswerChoice)}
+          >
+            <option value="guidance">Guidance</option>
+            <option value="retry">Retry</option>
+            <option value="dismiss">Dismiss</option>
+            <option value="review-round-ceiling">Review ceiling</option>
+            <option value="revise-spec">Supply revised spec</option>
+            <option value="revise-spec-ticket">Use amended ticket body</option>
+          </select>
+        </span>
+      </label>
+      {resolution === 'review-round-ceiling' && (
+        <label className="field">
+          <span>ceiling</span>
+          <input
+            disabled={busy}
+            type="number"
+            min="1"
+            value={ceiling}
+            onChange={(event) => setCeiling(event.target.valueAsNumber)}
+          />
+        </label>
+      )}
+      {resolution !== 'retry' && (
+        <label className="field">
+          <span>
+            {resolution === 'revise-spec' || resolution === 'revise-spec-ticket'
+              ? 'revised body'
+              : 'message'}
+          </span>
+          <textarea
+            disabled={busy}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </label>
+      )}
+      <div className="controls">
+        <button
+          type="submit"
+          className="btn primary"
+          disabled={busy || (resolution === 'guidance' && !text.trim())}
+        >
+          Answer escalation
+        </button>
+      </div>
+    </form>
+  )
+}
+
+export function LandingSignoff({
+  slug,
+  pending,
+  onControl,
+}: {
+  slug: string
+  pending: boolean
+  onControl: BuildsViewProps['onRowBuildControl']
+}) {
+  return (
+    <section className="signoff landing" aria-label={`Landing consent for ${slug}`}>
+      <p>Landing awaits consent. Land releases this build; Hold keeps it waiting.</p>
+      <div className="controls">
+        <button
+          type="button"
+          className="btn primary"
+          disabled={pending}
+          onClick={() => onControl(slug, 'land')}
+        >
+          Land
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={pending}
+          onClick={() => onControl(slug, 'hold')}
+        >
+          Hold
+        </button>
+      </div>
     </section>
   )
 }

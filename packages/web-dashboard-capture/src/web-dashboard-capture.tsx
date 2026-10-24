@@ -24,6 +24,7 @@ import ConnectionPage from '../../hosted-store-service/app/connect/page'
  * root pins; the terminal capture tool (`tools/dashboard-capture.ts`, which
  * imports no react) remains at the repository root.
  */
+import { FONT_FILES } from '../../hosted-store-service/app/fonts'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -66,6 +67,7 @@ const FIXTURE_SCOPE = 'openid profile email'
 
 export interface WebFrameSpec {
   id: string
+  ground?: 'light' | 'dark'
   width: number
   height: number
   /** Text the rendered frame must contain; a miss fails the capture. */
@@ -83,7 +85,21 @@ export interface WebFrameSpec {
 }
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
-export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+const SCENARIOS: readonly WebFrameSpec[] = [
+  ...['wide', 'narrow'].flatMap((size) => [
+    {
+      id: `builds-menu-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 2200,
+      requires: ['Theme', 'System', 'Light', 'Dark', 'sign out'],
+    },
+    {
+      id: `builds-titles-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 2200,
+      requires: ['Let designers preview the pricing page before it ships'],
+    },
+  ]),
   ...['wide', 'narrow'].map((size) => ({
     id: `builds-rollback-${size}`,
     width: size === 'narrow' ? 390 : 1440,
@@ -374,9 +390,9 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'repository PAUSED',
       '(held)',
       'QUEUED',
-      'more rows - Enter details',
+      'The build stopped to ask a person.',
       'Pipeline',
-      'Unresolved blockers',
+      'The build stopped to ask a person.',
       'Answer escalation',
       'Sessions',
       'Transcript',
@@ -388,7 +404,13 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-detail-narrow',
     width: 390,
     height: 2600,
-    requires: ['BLOCKED', '(held)', 'Unresolved blockers', 'Answer escalation', 'ABORT'],
+    requires: [
+      'BLOCKED',
+      '(held)',
+      'The build stopped to ask a person.',
+      'Answer escalation',
+      'ABORT',
+    ],
   },
   {
     id: 'builds-mixed-answer-wide',
@@ -399,7 +421,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'optional guidance (empty retries)',
       'SUBMIT',
       'CANCEL',
-      'Unresolved blockers',
+      'The build stopped to ask a person.',
       'Answer escalation',
     ],
   },
@@ -497,6 +519,11 @@ export interface WebFixtureModels {
   mixed: DashboardModel
 }
 
+export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = SCENARIOS.flatMap((spec) =>
+  (['light', 'dark'] as const).map((ground) => ({ ...spec, ground })),
+)
+export const frameName = (spec: WebFrameSpec) => `${spec.id}-${spec.ground ?? 'light'}`
+
 export interface RenderAssets {
   /** The contents of the app's globals.css. */
   css: string
@@ -524,6 +551,7 @@ function shell(
     repo?: string
     repositories?: readonly string[]
     error?: string
+    menuOpen?: boolean
   } = {},
 ) {
   const repo = opts.repo ?? FIXTURE_REPO
@@ -534,6 +562,7 @@ function shell(
       identity={FIXTURE_IDENTITY}
       clock={opts.model ? FIXTURE_CLOCK : undefined}
       error={opts.error}
+      menuOpen={opts.menuOpen}
       onRepo={noop}
       onSignOut={noop}
       controls={
@@ -704,6 +733,26 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     )
   }
   switch (spec.id) {
+    case 'builds-menu-wide':
+    case 'builds-menu-narrow':
+      return shell(builds(models.happy), { model: models.happy, menuOpen: true })
+    case 'builds-titles-wide':
+    case 'builds-titles-narrow': {
+      const model = {
+        ...models.happy,
+        builds: models.happy.builds.map((row, index) => ({
+          ...row,
+          collectionIdentity: {
+            repo: FIXTURE_REPO,
+            ...row.collectionIdentity,
+            status: row.collectionIdentity?.status ?? 'running',
+            title:
+              index === 0 ? 'Let designers preview the pricing page before it ships' : undefined,
+          },
+        })),
+      }
+      return shell(builds(model), { model })
+    }
     case 'builds-forge-readiness-wide':
     case 'builds-forge-readiness-narrow': {
       const model = models.forgeReadiness ?? models.mixed
@@ -958,7 +1007,7 @@ export async function renderWebFrame(
   const markup = renderToStaticMarkup(await frameNode(spec, models))
   return [
     '<!doctype html>',
-    '<html lang="en">',
+    `<html lang="en" data-theme="${spec.ground ?? 'light'}">`,
     '<head>',
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -967,7 +1016,7 @@ export async function renderWebFrame(
     `<style>${assets.css}</style>`,
     `<style data-capture-state>${captureStateCss(spec)}</style>`,
     '</head>',
-    `<body>${markup}</body>`,
+    `<body>${markup}<script>document.fonts.ready.then(() => document.documentElement.dataset.fontsReady = "true")</script></body>`,
     '</html>',
   ].join('\n')
 }
@@ -975,6 +1024,7 @@ export async function renderWebFrame(
 /** The visible text of a rendered frame, entities decoded, whitespace collapsed. */
 export function evidenceText(html: string): string {
   return html
+    .replace(/<span class="note">([^<]*)<\/span>/g, '$1')
     .replace(/<style[\s\S]*?<\/style>/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&gt;/g, '>')
@@ -1029,21 +1079,12 @@ export function checkEvidence(spec: WebFrameSpec, html: string): void {
  * compared to golden pixels, so the face may differ between hosts.
  */
 export function fontFaceCss(repoRoot = REPO_ROOT): string {
-  const ttf = (file: string) =>
-    pathToFileURL(join(repoRoot, 'node_modules', 'dejavu-fonts-ttf', 'ttf', file)).href
-  return [
-    '@font-face {',
-    "  font-family: 'Capture Mono';",
-    '  font-weight: 400;',
-    `  src: local('JetBrains Mono'), local('JetBrainsMono-Regular'), local('JetBrainsMono Nerd Font'), local('JetBrainsMonoNF-Regular'), url('${ttf('DejaVuSansMono.ttf')}');`,
-    '}',
-    '@font-face {',
-    "  font-family: 'Capture Mono';",
-    '  font-weight: 700;',
-    `  src: local('JetBrains Mono Bold'), local('JetBrainsMono-Bold'), local('JetBrainsMono Nerd Font Bold'), local('JetBrainsMonoNF-Bold'), url('${ttf('DejaVuSansMono-Bold.ttf')}');`,
-    '}',
-    ":root { --font-mono: 'Capture Mono'; }",
-  ].join('\n')
+  return `${Object.entries(FONT_FILES)
+    .map(
+      ([role, file]) =>
+        `@font-face { font-family: 'ANSI ${role}'; font-weight: ${role === 'sans' ? '100 900' : '100 800'}; src: url('${pathToFileURL(join(repoRoot, 'packages/hosted-store-service/app/fonts', file)).href}'); }`,
+    )
+    .join('\n')}\n:root { --font-mono: 'ANSI mono'; --font-sans: 'ANSI sans'; }`
 }
 
 /**
@@ -1151,6 +1192,7 @@ export interface WebDashboardFrame {
   id: string
   width: number
   height: number
+  ground?: 'light' | 'dark'
   htmlPath: string
   pngPath: string
 }
@@ -1221,36 +1263,18 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '',
     ...frames.map(
       (frame) =>
-        `- \`${relative(outputDir, frame.pngPath)}\` (${frame.width}×${frame.height}), source \`${relative(outputDir, frame.htmlPath)}\``,
+        `- \`${relative(outputDir, frame.pngPath)}\` (${frame.ground}, ${frame.width}×${frame.height}), source \`${relative(outputDir, frame.htmlPath)}\``,
     ),
     '',
     '## Visual criteria',
     '',
-    '- [ ] Every PNG opens, is non-empty, and shows a black ground. On short states, empty black below the last row is the natural end of the document, not a reserved footer slot.',
-    '- [ ] Compare loading, empty, and loaded Builds at both widths, then sign-in: the masthead is exactly one cell row high with identical coordinates in every state, followed by the control line and content at the recorded one-row rhythm.',
-    '- [ ] Control line: one line beneath the masthead carries the conditional repository selector, queue/active/observation facts, intake/harvest toggles with one natural space before each ON/OFF word, `pause all` and `resume all` (slack when unavailable), and the clock pinned right. No signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` alone shows the `repo` selector.',
-    '- [ ] At 390px the control line wraps only between complete items and hides the clock; the masthead keeps the identity menu trigger at the right, ellipsized alongside the title; no control-line item clips, overlaps, or collapses into a menu.',
-    '- [ ] Loading frames put neutral control placeholders inside that same control landmark and show five static neutral build-row placeholders at the normal four-row rhythm, with no dispatcher-shaped row among them, digits, status words, synthetic values, footer, or animation. The old polling sentence is absent.',
-    '- [ ] The browser document is the sole scroll container: tall Builds and open detail extend document height and move masthead, controls, rows, and detail together; no shell block is fixed or pinned and no inner rows/detail scroller clips content.',
-    '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left with no status word beside it on any frame, and the identity menu trigger with its `▾` is at the right edge; the poll clock sits at the right end of the control line on wide frames and is absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes and the identity trigger stays on the row.',
-    '- [ ] Repository state: no frame shows `repository RUNNING`. Running repositories omit the token; paused mixed frames show `repository PAUSED` in yellow, alongside toggle words with bold ON in green or OFF in yellow.',
-    '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
-    '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, build or Harvest RUNNING/green, repository PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
-    '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
-    '- [ ] Row controls: no build row carries lifecycle or destructive words; rows are headline, pipeline, and previews only. Compare `builds-mixed-rest-wide.png`, `builds-mixed-hover-wide.png`, and `builds-mixed-focus-wide.png`: coordinates are identical, the hover frame turns the hovered identity cyan, and no ABORT, RESUME, AUTO MERGE, DETAILS, or CLOSE word appears outside an open detail.',
-    '- [ ] Hover and focus frames: the selected lane is bold, a different fine-pointer preview lane is regular weight, and the focus frame visibly outlines the title. No 390px frame carries a preview marker.',
-    '- [ ] `builds-mixed-selected-narrow.png` shows the open detail with its Actions section (ABORT and RESUME) directly under the kv line, unclipped at 390px.',
-    '- [ ] Direct controls name the build and expanded state. Obsolete auto-merge mutation controls are absent; consent is managed through CLI/operator tools.',
-    '- [ ] `builds-parked-no-consent-wide.png` shows merge(waiting) and Landing awaits consent in both row and detail.',
-    '- [ ] `builds-mixed-paused-wide.png` shows the paused build open with ABORT / RESUME under its Actions heading; no control or state token clips or overlaps at either viewport.',
-    '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row with no rule above it and one dim rule below, carrying Actions, Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
-    "- [ ] Answer frames: the open detail's Actions section shows a red `!` blocker line, a focused one-row optional-guidance field, then only `SUBMIT` and `CANCEL`; no `RESUME`, `ABORT`, auto-merge, or detail accessible names for that row. Empty submission is identified as retry; the narrow frame remains unclipped. The full answer composer stays further down the detail.",
-    '- [ ] Abort frame (after leaving answer mode with CANCEL): the Actions section shows a red `! abort <slug>? Enter confirms, Esc cancels` line and `CONFIRM ABORT` / `CANCEL` ghost controls, with no answer field and no ordinary action words.',
-    '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
-    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
-    '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds a red `!` notice beneath the heading and nothing in the masthead.',
-    '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes. `consent-named-wide.png` shows the bold registered client name with the raw client id beside it and the requested scopes; `consent-unnamed-narrow.png` falls back to the raw client id alone; `consent-missing-code-wide.png` shows the missing-authorization-code notice with no form and no button; `consent-route-narrow.png` is rendered through the route page wrapper and shows the unnamed-client copy, the requested scopes, and one ink-outline `Authorize client` primary button with no notice.',
-    '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
+    '- [ ] Every PNG opens, is non-empty, and shows its named ANSI ground. On short states, empty ground below the last row is the natural end of the document.',
+    '- [ ] Compare every light/dark variant to ANSI and the applicable pinned reference. Both grounds use the packaged Atkinson Hyperlegible Next and JetBrains Mono fonts.',
+    '- [ ] Title-first rows retain ticket, slug, status, all facts and steps. Current teal, done green, provisional amber, pending slack; timing is quiet.',
+    '- [ ] Escalations show the complete red question, explanation, one answer composer, and full-bleed phone treatment with full-width primary answer.',
+    '- [ ] Landing consent is amber on ground with Land/Hold. No optimistic success or unconfirmed abort.',
+    '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
+    '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',
     '## Web dashboard visual verdict',
     '',
@@ -1291,14 +1315,22 @@ export async function captureWebDashboardFrames(
     for (const spec of WEB_FRAME_SPECS) {
       const html = await renderWebFrame(spec, models, assets)
       checkEvidence(spec, html)
-      const htmlPath = join(outputDir, `${spec.id}.html`)
-      const pngPath = join(outputDir, `${spec.id}.png`)
+      const htmlPath = join(outputDir, `${frameName(spec)}.html`)
+      const pngPath = join(outputDir, `${frameName(spec)}.png`)
       await writeFile(htmlPath, html)
       // Chromium can leave profile child processes alive briefly after its CLI exits.
       // Isolating each frame prevents a later capture from attaching to stale paint state.
-      await screenshot(chromium, htmlPath, pngPath, spec, join(userDataDir, spec.id))
-      frames.push({ id: spec.id, width: spec.width, height: spec.height, htmlPath, pngPath })
+      await screenshot(chromium, htmlPath, pngPath, spec, join(userDataDir, frameName(spec)))
+      frames.push({
+        id: frameName(spec),
+        ground: spec.ground,
+        width: spec.width,
+        height: spec.height,
+        htmlPath,
+        pngPath,
+      })
     }
+    await writeFile(join(outputDir, 'frames.json'), JSON.stringify(frames, null, 2))
     const reportPath = join(outputDir, 'verify-report.md')
     await writeFile(reportPath, report(frames, chromium, outputDir))
     return { outputDir, reportPath, chromium, frames }

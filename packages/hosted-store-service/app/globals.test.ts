@@ -1,47 +1,6 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-
-const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
-const designDocument = readFileSync(new URL('../../../DESIGN.md', import.meta.url), 'utf8')
-const buildsView = readFileSync(new URL('./dashboard/BuildsView.tsx', import.meta.url), 'utf8')
-const dashboardFrame = readFileSync(new URL('./dashboard/frame.tsx', import.meta.url), 'utf8')
-const signIn = readFileSync(new URL('./sign-in/SignIn.tsx', import.meta.url), 'utf8')
-const designSidecar = JSON.parse(
-  readFileSync(new URL('../../../.impeccable/design.json', import.meta.url), 'utf8'),
-) as {
-  extensions: { glyphs: Record<string, string>; tokenSource: string }
-  components: Array<{ name: string; description: string; css: string }>
-  narrative: {
-    keyCharacteristics: string[]
-    rules: Array<{ name: string; body: string }>
-    dos: string[]
-    donts: string[]
-  }
-}
-const rootMatch = stylesheet.match(/:root\s*\{([\s\S]*?)\n\}/)
-
-if (!rootMatch?.[1]) throw new Error('app/globals.css must define an initial :root block')
-
-const root = rootMatch[1]!
-const afterRoot = stylesheet.slice((rootMatch.index ?? 0) + rootMatch[0].length)
-
-const canonicalTokens = {
-  '--tt-black': '#000000',
-  '--tt-white': '#e6e6e6',
-  '--tt-yellow': '#d7c84f',
-  '--tt-cyan': '#55b8b8',
-  '--tt-green': '#65b868',
-  '--tt-red': '#d96868',
-  '--tt-magenta': '#ff00ff',
-  '--tt-dim': '#888888',
-  '--tt-rule': '#292929',
-  '--tt-well': '#141414',
-} as const
-
-function declaration(name: string): string | undefined {
-  return root.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1]?.trim()
-}
-
+const css = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
 function relativeLuminance(hex: string): number {
   if (!/^#[\da-f]{6}$/i.test(hex)) throw new Error(`invalid sRGB color: ${hex}`)
   const linearChannel = (channel: string) => {
@@ -60,210 +19,89 @@ function contrast(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
-function designRule(name: string): string {
-  const marker = `**${name}.**`
-  const start = designDocument.indexOf(marker)
-  if (start === -1 || (start > 0 && designDocument[start - 1] !== '\n')) return ''
-
-  const end = designDocument.indexOf('\n\n', start)
-  return designDocument.slice(start, end === -1 ? designDocument.length : end)
-}
-
-function sidecarRule(name: string): string {
-  return designSidecar.narrative.rules.find((rule) => rule.name === name)?.body ?? ''
-}
-
-test('the initial root owns the canonical browser palette', () => {
-  for (const [token, value] of Object.entries(canonicalTokens)) {
-    expect(declaration(token), token).toBe(value)
+const palettes = [
+  {
+    ground: '#fbfbfc',
+    ink: '#1a1d24',
+    slack: '#5f6571',
+    rule: '#dfe2e8',
+    well: '#f5f6f8',
+    blue: '#2557e6',
+    green: '#10862f',
+    amber: '#b35c00',
+    teal: '#007f8a',
+    red: '#d32b33',
+    'red-wash': '#fef2f1',
+    select: '#c9d5f7',
+  },
+  {
+    ground: '#101219',
+    ink: '#dcdfe5',
+    slack: '#858b97',
+    rule: '#262a35',
+    well: '#181b24',
+    blue: '#86a3f2',
+    green: '#8fcf6e',
+    amber: '#e8aa52',
+    teal: '#52c3c3',
+    red: '#f07777',
+    'red-wash': '#2a1719',
+    select: '#2c3a66',
+  },
+]
+for (const [index, p] of palettes.entries()) {
+  test(`ground ${index} owns the exact ANSI palette`, () => {
+    for (const [key, value] of Object.entries(p)) expect(css).toContain(`--${key}: ${value};`)
+  })
+  for (const role of ['ink', 'slack', 'blue', 'green', 'amber', 'teal', 'red'] as const) {
+    test(`${index}: ${role} on ground meets 4.5`, () =>
+      expect(contrast(p[role], p.ground)).toBeGreaterThanOrEqual(4.5))
   }
-  expect(declaration('--nav-fill')).toBeUndefined()
-  expect(declaration('--nav-ink')).toBeUndefined()
-})
-
-const ground = canonicalTokens['--tt-black']
-const textOnGround = [
-  ['ink on ground', canonicalTokens['--tt-white'], ground],
-  ['title and warn yellow on ground', canonicalTokens['--tt-yellow'], ground],
-  ['current and live cyan on ground', canonicalTokens['--tt-cyan'], ground],
-  ['done and running green on ground', canonicalTokens['--tt-green'], ground],
-  ['blocked and failed red on ground', canonicalTokens['--tt-red'], ground],
-  ['slack on ground', canonicalTokens['--tt-dim'], ground],
-] as const
-
-const groundOnFill = [
-  ['ground on active ink button fill', ground, canonicalTokens['--tt-white']],
-] as const
-
-for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill]) {
-  test(`${pair} meets the text contrast floor`, () => {
-    expect(contrast(foreground, background), pair).toBeGreaterThanOrEqual(4.5)
+  for (const surface of ['well', 'red-wash'] as const) {
+    for (const role of ['ink', 'slack', 'red'] as const)
+      test(`${index}: ${role} on ${surface} meets 4.5`, () =>
+        expect(contrast(p[role], p[surface])).toBeGreaterThanOrEqual(4.5))
+  }
+  test(`${index}: filled primary and hover text meet 4.5`, () => {
+    expect(contrast(p.ground, p.ink)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(p.ground, p.teal)).toBeGreaterThanOrEqual(4.5)
   })
 }
-
-test('ink outline meets the non-text contrast floor against ground', () => {
-  expect(contrast(canonicalTokens['--tt-white'], ground)).toBeGreaterThanOrEqual(3)
-})
-
-test('slack text on the well meets the text contrast floor', () => {
-  expect(
-    contrast(canonicalTokens['--tt-dim'], canonicalTokens['--tt-well']),
-  ).toBeGreaterThanOrEqual(4.5)
-})
-
-test('component CSS contains no literal colors outside the initial root', () => {
-  expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
-})
-
-test('outline and ghost controls expose the complete state contract', () => {
-  expect(declaration('--button-border')).toBe('2px')
-  expect(stylesheet).toMatch(
-    /\.btn\s*\{[\s\S]*?height:\s*var\(--row\);[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*var\(--button-border\) solid currentColor;/,
+test('ANSI keeps square ruled controls, semantic type, and document flow', () => {
+  expect(css).toContain('Atkinson Hyperlegible Next')
+  expect(css).toContain('JetBrains Mono')
+  expect(css).not.toMatch(
+    /box-shadow|linear-gradient|radial-gradient|100d?vh|overflow: auto|tt-flash/,
   )
-  expect(stylesheet).toMatch(/\.btn:hover:not\(:disabled\)/)
-  expect(stylesheet).toMatch(/\.btn:active:not\(:disabled\)/)
-  expect(stylesheet).toMatch(/\.btn:disabled/)
-  expect(stylesheet).toMatch(/:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--live\)/)
-
-  expect(stylesheet).toMatch(/\.word\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*0;/)
-  expect(stylesheet).toMatch(/\.word:hover:not\(:disabled\)/)
-  expect(stylesheet).toMatch(/\.word:active:not\(:disabled\)/)
-  expect(stylesheet).toMatch(/\.word:disabled/)
+  expect(css).toContain('border-bottom: 1px solid var(--rule)')
+  expect(css).toContain('background: var(--ground)')
+  expect(css).toContain('prefers-color-scheme: dark')
+  expect(css).toContain(':root[data-theme="dark"]')
+  expect(css).toContain(':root:not([data-theme="light"])')
 })
 
-test('the unified control line wraps whole items and pins the clock right', () => {
-  expect(stylesheet).toMatch(
-    /\.control-item\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
-  )
-  expect(stylesheet).toMatch(/\.navline \.clock\s*\{[\s\S]*?flex:\s*0 0 auto;/)
-  expect(stylesheet).toMatch(
-    /@media \(max-width: 719px\)[\s\S]*?\.navline \.clock\s*\{\s*display:\s*none;/,
-  )
-  expect(stylesheet).not.toMatch(/\.navline \.identity/)
-  expect(stylesheet).not.toMatch(/\.masthead \.clock/)
-  expect(stylesheet).not.toContain('.dispatch')
-  expect(stylesheet).not.toContain('.skeleton-dispatch')
-  expect(dashboardFrame).not.toContain('skeleton-dispatch')
-})
-
-test('the masthead carries the account menu as the one opaque drop-down', () => {
-  expect(stylesheet).toMatch(/\.masthead \.account\s*\{[\s\S]*?grid-column:\s*3;/)
-  expect(stylesheet).not.toContain('.imperative')
-  expect(stylesheet).toMatch(
-    /\.menu-list\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?background:\s*var\(--well\);/,
-  )
-  expect(stylesheet).not.toMatch(/\.menu-list\s*\{[^}]*(?:border|box-shadow|opacity|backdrop)/)
-  expect(stylesheet).toMatch(/\.menu-item\s*\{[\s\S]*?height:\s*var\(--row\);/)
-})
-
-test('retired footer presentation is absent from app and design artifacts', () => {
-  for (const source of [stylesheet, buildsView, dashboardFrame, designDocument]) {
-    expect(source).not.toMatch(/fastext/i)
-  }
-  expect(designSidecar.extensions.tokenSource).not.toMatch(/fastext|--ft-/i)
-  expect(designSidecar.components.some(({ name }) => /fastext/i.test(name))).toBe(false)
-  expect(designSidecar.narrative.rules.some(({ name }) => /fastext/i.test(name))).toBe(false)
-})
-
-test('sign-in uses the primary outline', () => {
-  expect(signIn).toContain('className="btn"')
-  expect(signIn).not.toContain('className="ft"')
-  expect(signIn).not.toContain('data-slot=')
-  expect(stylesheet).toMatch(/\.providers \.btn\s*\{\s*padding:\s*0 2ch;/)
-})
-
-test('held queued builds keep their canonical yellow warning while rows dim', () => {
-  expect(buildsView).toContain('<span className="warn held">(held)</span>')
-  expect(buildsView).toContain('<span className="warn draining">(draining)</span>')
-  expect(stylesheet).toMatch(
-    /\.tokens \.held,\s*\.tokens \.draining\s*\{\s*color:\s*var\(--title\);\s*\}/,
-  )
-
-  const documentedException =
-    'STATUS words, the yellow `(held)` and `(draining)` annotations, red alert lines, and yellow integration consent alerts'
-  expect(designRule('The Alert Never Dims Rule')).toContain(documentedException)
-  expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
-})
-
-test('flat-grid documentation forbids translucent surfaces', () => {
-  for (const source of [designRule('The Flat Grid Rule'), sidecarRule('The Flat Grid Rule')]) {
-    expect(source).toContain('no surface, fill, panel, or overlay is translucent')
-  }
-  expect(designSidecar.narrative.donts).toContain(
-    "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Separate non-controls with a `─` rule, a fill change, or an empty row.",
-  )
-})
-
-test('lifecycle actions live in detail and no row reserves a control register', () => {
-  expect(stylesheet).not.toContain('.row-controls')
-  expect(stylesheet).not.toContain('.row-control')
-  expect(buildsView).not.toContain('row-controls')
-  expect(stylesheet).toMatch(/\.actions \.action\s*\{\s*color:\s*var\(--ink\);/)
-  expect(stylesheet).toMatch(/\.control-item\.toggle\s*\{\s*column-gap:\s*1ch;/)
-  expect(designDocument).toContain('Actions section')
-  expect(designDocument).toContain('the repository Harvest gate remains global')
-  expect(designSidecar.components.find(({ name }) => name === 'Build row')?.description).toContain(
-    'Actions section',
-  )
-})
-
-test('the shell and design contract use browser-owned document flow', () => {
-  expect(stylesheet).not.toMatch(/height:\s*100d?vh|scrollbar-gutter|overscroll-behavior/)
-  expect(stylesheet).not.toContain('.surface-scroll')
-  expect(stylesheet).toMatch(
-    /\.transcript pre,\s*\.detail pre\.block\s*\{(?![\s\S]*?max-height)(?![\s\S]*?overflow:\s*auto)[\s\S]*?\}/,
-  )
-  expect(dashboardFrame).not.toContain('surface-scroll')
-  expect(buildsView).not.toContain('footer=')
-  for (const source of [
-    designRule('The Flowing Document Rule'),
-    sidecarRule('The Flowing Document Rule'),
+test('ANSI named rules and both palettes stay recorded with the built system', () => {
+  const design = readFileSync(new URL('../../../DESIGN.md', import.meta.url), 'utf8')
+  const sidecar = JSON.parse(
+    readFileSync(new URL('../../../.impeccable/design.json', import.meta.url), 'utf8'),
+  ) as { schemaVersion: number; narrative: { rules: { name: string; body: string }[] } }
+  expect(sidecar.schemaVersion).toBe(2)
+  for (const name of [
+    'Two Grounds',
+    'Semantic Type',
+    'Color Is State',
+    'Title First',
+    'Sign-off',
+    'Glyph',
+    'Square Rules',
+    'Flowing Document',
   ]) {
-    expect(source).toContain('browser document is the sole scroll container')
-    expect(source).toContain('no block is pinned')
-    expect(source).toContain('no nested element scrolls rows or detail')
+    const fullName = `The ${name} Rule`
+    const rule = sidecar.narrative.rules.find((entry) => entry.name === fullName)
+    expect(rule, fullName).toBeDefined()
+    expect(design).toContain(`**${fullName}.** ${rule!.body}`)
   }
-  expect(designDocument).not.toContain('The Fixed Frame Rule')
-})
-
-test('design sidecar preserves the fine-pointer lane contract', () => {
-  expect(designSidecar.extensions.glyphs.selectedLane).toBe('> (bold)')
-  expect(designSidecar.extensions.glyphs.hoverPreviewLane).toBe('> (regular)')
-  expect(designSidecar.extensions.tokenSource).toContain('--lane-preview')
-  expect(designSidecar.narrative.keyCharacteristics).toContain(
-    'Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.',
-  )
-  expect(designSidecar.narrative.rules.find(({ name }) => name === 'The Glyph Rule')?.body).toBe(
-    'Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select or menu, `─` for rules. No icon font, no SVG icon set, no emoji in the interface.',
-  )
-})
-
-test('design sidecar previews use valid canonical fallback colors', () => {
-  const previewCss = designSidecar.components.map(({ css }) => css).join('\n')
-  const hexLiterals = previewCss.match(/#[\da-f]+/gi) ?? []
-
-  expect(hexLiterals.length).toBeGreaterThan(0)
-  for (const literal of hexLiterals) {
-    expect(literal, `invalid sidecar preview color ${literal}`).toMatch(
-      /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i,
-    )
-  }
-
-  for (const canonical of [
-    '#e6e6e6',
-    '#d7c84f',
-    '#55b8b8',
-    '#65b868',
-    '#d96868',
-    '#888888',
-    '#292929',
-    '#141414',
-  ]) {
-    expect(previewCss, `missing sidecar preview fallback ${canonical}`).toContain(canonical)
-  }
-})
-
-test('integration failure and consent alerts preserve full color above subline and dimming rules', () => {
-  expect(stylesheet).toMatch(/\.integration-alert\.alert\s*\{\s*color:\s*var\(--alert\);\s*\}/)
-  expect(stylesheet).toMatch(/\.integration-alert\.warn\s*\{\s*color:\s*var\(--title\);\s*\}/)
+  for (const palette of palettes)
+    for (const color of Object.values(palette)) expect(design).toContain(color)
+  expect(design).not.toMatch(/Teletext|No Hairline|One Cell|dark only/)
 })

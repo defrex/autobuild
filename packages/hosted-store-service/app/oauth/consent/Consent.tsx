@@ -72,7 +72,11 @@ export async function Consent({
           ) : (
             <p>A client requests operator access to this deployment's Autobuild tools.</p>
           )}
-          {query.scope && <p>Requested scopes: {query.scope}</p>}
+          {query.scope && (
+            <p>
+              Requested scopes: <code>{query.scope}</code>
+            </p>
+          )}
           {query.consent_code ? (
             <ConsentForm consentCode={query.consent_code} />
           ) : (
