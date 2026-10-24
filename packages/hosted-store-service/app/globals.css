@@ -802,3 +802,175 @@ input.short {
   letter-spacing: 0.12em;
   font-weight: 700;
 }
+
+/* Organization reading pages extend the flowing document and square rules. */
+.access-frame .masthead {
+  justify-content: initial;
+  gap: 16px;
+}
+.access-page {
+  max-width: 78ch;
+  padding-top: 24px;
+}
+.access-organizations,
+.access-projects {
+  max-width: 100ch;
+}
+.access-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+}
+.access-page h1 {
+  font-size: 1.6em;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+.access-page h2 {
+  font-size: 1.1em;
+  margin: 36px 0 10px;
+}
+.access-lede {
+  margin: 6px 0 24px;
+  max-width: var(--measure);
+}
+.access-org,
+.access-actions,
+.access-add {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.access-add {
+  margin-top: 6px;
+}
+.access-add input {
+  flex: 1;
+  min-width: 0;
+}
+.access-page input,
+.access-page select {
+  background: var(--well);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 4px 10px;
+  font: inherit;
+  max-width: 100%;
+}
+.access-page input[type="email"] {
+  font-family: var(--mono);
+}
+.access-help {
+  font-size: 0.93em;
+  margin: 6px 0 0;
+}
+.access-row {
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: 16px;
+  align-items: start;
+  padding: 10px 0;
+  overflow-wrap: anywhere;
+}
+.access-rows {
+  border-bottom: 1px solid var(--rule);
+}
+.member-row {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr) 6rem 4rem;
+}
+.organization-row {
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 2fr) 6rem 6rem;
+}
+.project-row {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+}
+.project-row .access-actions {
+  grid-column: 2 / -1;
+  justify-content: end;
+}
+.access-action {
+  text-align: right;
+}
+.access-confirm {
+  background: var(--red-wash);
+  color: var(--red);
+  padding: 12px;
+  margin: 0 -12px;
+  border-bottom: 1px solid var(--red);
+  overflow-wrap: anywhere;
+}
+.access-confirm p {
+  margin: 0 0 12px;
+}
+.access-confirm .danger {
+  color: var(--ground);
+  background: var(--red);
+  border-color: var(--red);
+}
+.access-owner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 24px;
+}
+.access-empty {
+  margin-top: 36px;
+  max-width: var(--measure);
+}
+.machine {
+  font-family: var(--mono);
+  font-size: 0.93em;
+}
+@media (max-width: 720px) {
+  .access-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+  .access-row > :first-child {
+    grid-column: 1 / -1;
+  }
+  .member-row > :nth-child(2) {
+    grid-column: 1;
+  }
+  .member-row > :nth-child(3) {
+    grid-column: 1;
+  }
+  .member-row .access-action {
+    grid-column: 2;
+    grid-row: 2 / 4;
+  }
+  .project-row .access-actions {
+    grid-column: 1 / -1;
+    justify-content: start;
+  }
+  .access-add {
+    align-items: stretch;
+  }
+  .access-add input {
+    flex-basis: 100%;
+  }
+  .access-owner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+.connection-organizations {
+  border: 0;
+  padding: 0;
+  margin: 24px 0;
+}
+.connection-organizations legend {
+  font-weight: 600;
+}
+.connection-organizations label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+.connection-organizations input[type="radio"] {
+  width: auto;
+  margin: 0;
+}

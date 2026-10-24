@@ -129,3 +129,23 @@ test('account menu presents all theme choices with selected semantics', () => {
   for (const choice of ['System', 'Light', 'Dark']) expect(html).toContain(`>${choice}</button>`)
   expect(html).toContain('sign out')
 })
+
+test('account links show Members to every operator and management only to super users', () => {
+  const common = {
+    repo: '',
+    repositories: [],
+    identity: 'member@example.com',
+    menuOpen: true,
+    onRepo: () => {},
+    onSignOut: () => {},
+    controls: null,
+    children: null,
+  }
+  const member = renderToStaticMarkup(<OperatorShell {...common} />)
+  expect(member).toContain('href="/members"')
+  expect(member).not.toContain('href="/organizations"')
+  expect(member).not.toContain('href="/projects"')
+  const root = renderToStaticMarkup(<OperatorShell {...common} isSuperUser />)
+  expect(root).toContain('href="/organizations"')
+  expect(root).toContain('href="/projects"')
+})

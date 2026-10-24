@@ -152,6 +152,17 @@ A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the
 
 Escalations show the red question followed by the factual sentence explaining that a human answer resumes work. Landing consent retains Land / Hold. Answer forms and destructive confirmations stay inline; primary/secondary control hierarchy remains clear while pending. Auth and connection pages use the same frame, sans help, mono identities and square controls, with accurate access copy.
 
+### Organization reading pages
+
+Members, Organizations and Projects extend the Flowing Document rule with a
+left-aligned reading measure below the shared account masthead. Ruled roster
+rows show identity, role and explicit JOINED/PENDING state; pending amber stays
+on ground. Forms use square well fields: email values are mono, while organization names and selectors retain sans. Members use a 78ch reading measure; Organizations and Projects extend to 100ch. Removal and move decisions use inline
+red-wash sign-off regions naming the grant being revoked. Phone layouts stack
+identities and wrap full emails and repositories. Headings use the existing 1.6em sans scale. No page numbers are introduced.
+The shared account menu links Builds and Members for every operator, with
+Organizations and Projects for acknowledged super users.
+
 ## Do's and Don'ts
 
 ### Do:

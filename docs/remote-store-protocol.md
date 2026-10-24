@@ -1339,6 +1339,17 @@ and destination IDs. All migration facts survive dispatcher-run turnover.
 Conflicting identity reuse or source-qualified mappings fail replay closed.
 
 
+Browser lookup returns `{connection,assignment,organizations}`. `connection` may
+be null; `assignment` is `new` only when neither registry history nor retained
+assignment exists, otherwise `fixed`. Organizations are eligible `{id,name,membershipRole}`
+destinations for a new project (all for super users, actual memberships otherwise),
+empty for fixed reconnects or unknown codes. Context uses the same lookup limits,
+expiry, admission and foreign-project masking; it does not assign anything.
+The browser shows a chooser only with multiple destinations, disables approval
+with zero, and sends no destination for fixed reconnects. For one actual
+membership it preserves implicit selection; a super user with a sole eligible
+organization but no membership sends that ID explicitly.
+
 Browser connection approval accepts optional `organizationId` in the decide JSON.
 A new project defaults to the approver's only actual membership; zero or multiple
 memberships require an explicit org, including for super users. Members can select

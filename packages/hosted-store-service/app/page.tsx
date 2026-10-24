@@ -33,6 +33,7 @@ export default async function DashboardPage({
     <DashboardClient
       key={initialSelection}
       identity={session.user.email.toLowerCase()}
+      isSuperUser={principal.isSuperUser()}
       repositories={repositories}
       initialSelection={initialSelection}
     />
