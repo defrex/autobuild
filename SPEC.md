@@ -1012,8 +1012,17 @@ Database-authorized owners administer it without redeploying through
 `ab-hosted-store projects list`, `projects add REPOSITORY --user IDENTITY`, and
 `projects remove REPOSITORY --user IDENTITY`. Attribution is declared by the
 administrator; ordinary store/project tokens cannot administer registration.
-All allowlisted signed-in users own every registered project (single-owner
-model). Per-project memberships and machine credential boundaries are deferred.
+Human access is scoped to Better Auth organizations. Super users named by
+`AB_WEB_SUPER_USER_EMAILS` can operate every registered project. Other users
+can operate only projects assigned to an organization containing their normalized
+email. Membership grants work before first sign-in; each organization has zero
+or one owner. Only super users create organizations, change ownership, or move
+projects. Owners can manage their own members but cannot remove themselves.
+Creation does not make the super user a member. Legacy projects remain unassigned
+and visible only to super users until assigned. Admission and repository authority
+are checked from current state on every browser request and MCP tool callback.
+Removed members lose access immediately without re-login. Machine project,
+delegated, internal and admin credentials retain their existing boundaries.
 
 Dashboard discovery, MCP `repositories.list` and every repository tool call,
 and all operator API routes for every operator credential consult current

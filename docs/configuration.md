@@ -109,13 +109,13 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
-| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated sign-in email allowlist; matching is case-insensitive. |
+| `AB_WEB_SUPER_USER_EMAILS` | Web dashboard | Nonempty comma-separated super-user emails; matching is case-insensitive. Ordinary users require organization membership. |
 | `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
 the `user:email` scope (or GitHub App read-only email permission). Sessions are
 database-backed and represented in the browser only by an HTTP-only cookie.
-Allowlist removal takes effect on the next web API request. Never expose these
+Membership or super-user removal takes effect on the next web API request or MCP tool call. Never expose these
 secrets, `AB_STORE_SECRET`, database/blob credentials, machine tokens, or OAuth
 account tokens through a `NEXT_PUBLIC_` variable.
 
@@ -3364,7 +3364,7 @@ progress is not shown. Harvest does not consume build capacity.
 ### Hosted project selection
 
 The durable PostgreSQL project registry controls dashboard, MCP and operator
-API access. Every allowlisted user sees every active entry. Administer it with
+API access. Super users see every active entry; members see only their organizations’ projects. Administer it with
 `ab-hosted-store projects list|add|remove` using deployment database credentials;
 mutations require `--user IDENTITY` for declared attribution. See
 [connected projects](setup.md#connected-projects) for migration and retention.
@@ -3641,3 +3641,14 @@ when eligible, and never pushes. Pinned dispatchers follow after that commit
 reaches the base branch; installed-mode dispatchers follow their replaced install.
 Source-mode dispatchers follow changes to packaged inputs merged to the base,
 including shipped canonical skills, without a version bump.
+
+
+The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
+Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
+are deployment maintainers. Bootstrap the first organization through the
+[browser management contract](operator-api.md#organization-management-browser),
+then add members by email and assign legacy unassigned projects. Super users alone
+create orgs, set or clear the single owner, and assign or move projects. Owners
+manage their org's members. Removing the last membership or super-user designation
+revokes human access on the next request without re-login; existing project
+credentials remain valid until revoked.
