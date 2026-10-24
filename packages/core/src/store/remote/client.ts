@@ -1,4 +1,10 @@
 import {
+  operatorPresenceBodySchema,
+  operatorPresenceWireSchema,
+  operatorPresenceListSchema,
+} from './protocol'
+import type { OperatorIdentity, OperatorPresence } from '../operator-presence'
+import {
   clientIdentityError,
   classifyClient,
   releaseVersion,
@@ -617,6 +623,27 @@ export class RemoteBuildStore implements BuildStore {
     await this.requestJson('POST', `${this.buildPath(slug)}/lease/release`, okResponseSchema, {
       holder,
     })
+  }
+
+  async upsertOperatorPresence(
+    repo: string,
+    identity: OperatorIdentity,
+  ): Promise<OperatorPresence> {
+    return this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/operator-presence`,
+      operatorPresenceWireSchema,
+      operatorPresenceBodySchema.parse(identity),
+      AbortSignal.timeout(10_000),
+    )
+  }
+
+  async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/operator-presence`,
+      operatorPresenceListSchema,
+    )
   }
 
   async ensureRepo(repo: string): Promise<RepositoryRecord> {

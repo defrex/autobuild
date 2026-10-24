@@ -16,6 +16,8 @@ import {
   MIGRATE_COMMAND,
   SCHEMA_CHECKSUM,
   SCHEMA_DDL,
+  SCHEMA_V16_DDL,
+  SCHEMA_V16_CHECKSUM,
   SCHEMA_V1_CHECKSUM,
   SCHEMA_V1_DDL,
   SCHEMA_V2_DDL,
@@ -152,6 +154,44 @@ if (testUrl) {
         }
       })
     }
+
+    test('v16 presence migration preserves streams, events and dispatcher liveness', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await sql.unsafe(SCHEMA_V16_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES (true,16,${SCHEMA_V16_CHECKSUM},${CONTRACT_T0})`
+        await sql`INSERT INTO repo_streams (repo,created_at,updated_at,lease_holder,lease_expires_at,lease_ttl_ms,heartbeat_at)
+          VALUES ('presence-migration',${CONTRACT_T0},${CONTRACT_T0},'dispatcher',${CONTRACT_T0},60000,${CONTRACT_T0})`
+        await sql`INSERT INTO repo_events (repo,seq,ts,actor,type,payload)
+          VALUES ('presence-migration',1,${CONTRACT_T0},'{"kind":"human","user":"owner"}','dispatcher.intake-set','{"enabled":false}')`
+        await sql`INSERT INTO streams (id,scope_kind,repo,label,format,status,created_at,creation_seq)
+          VALUES ('preserved-stream','repo','presence-migration','log','ui-message','open',${CONTRACT_T0},1)`
+        const before = await sql`SELECT * FROM repo_streams`
+        await migratePostgres(harness.url)
+        expect(await sql`SELECT * FROM repo_streams`).toEqual(before)
+        expect(await sql`SELECT * FROM repo_events`).toHaveLength(1)
+        expect(await sql`SELECT * FROM streams WHERE id='preserved-stream'`).toHaveLength(1)
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const identity = { id: 'one', host: 'host', pid: 1, startedAt: CONTRACT_T0 }
+          await Promise.all(
+            Array.from({ length: 8 }, () =>
+              store.upsertOperatorPresence('presence-migration', identity),
+            ),
+          )
+          expect(await store.listOperatorPresence('presence-migration')).toHaveLength(1)
+          expect(await sql`SELECT * FROM repo_streams`).toEqual(before)
+          expect(await sql`SELECT * FROM repo_events`).toHaveLength(1)
+        } finally {
+          await store.close()
+        }
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
 
     // Retention policy for the hand-written per-version fixtures (AUT-547).
     // Per schema family (build, auth; a family enters this scheme once it

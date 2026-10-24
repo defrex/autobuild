@@ -374,6 +374,10 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return undefined
   }
 
+  if (root === 'repos' && segments[2] === 'operator-presence' && segments.length === 3) {
+    return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
+  }
+
   // Ticket assets (SPEC §7.1): the effective-limits route and the per-ticket
   // asset family under a repository.
   if (root === 'repos' && segments[2] === 'ticket-asset-limits' && segments.length === 3) {

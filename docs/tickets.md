@@ -48,6 +48,12 @@ The dispatcher claims only tickets in the ready state with the required labels a
 - **Blockers.** Unresolved prerequisite tickets keep it queued; they don't create a blocked build. With nodes, prerequisites with builds must be present at the sampled destination; see [integration and blocker presence](integration-overview.md).
 - **Destination and capacity.** Its target must accept new work, and a capacity slot must be free.
 
+Before ready filing, the agent checks `ab repository status --json`. With live
+`operator.registrations`, it records intent, rejected alternatives and out-of-scope
+reasons in the ticket body, files, tells you the existing operator will pick it up,
+and stops without a watch. Otherwise it takes the operator role for the builds the repository's dispatcher dispatches.
+Your explicit instruction overrides either default; non-ready work needs no watch.
+
 At dispatch, Autobuild pins the spec, so later tracker edits don't change what reviewers approved. A deliberate revision goes through your operator agent answering an escalation, and restarts planning:
 
 ```sh

@@ -241,3 +241,16 @@ export const repoChangePositions = sqliteTable('repo_change_positions', {
   repo: text('repo').primaryKey(),
   position: integer('position').notNull(),
 })
+
+export const operatorPresence = sqliteTable(
+  'operator_presence',
+  {
+    repo: text('repo').notNull(),
+    id: text('id').notNull(),
+    host: text('host').notNull(),
+    pid: integer('pid').notNull(),
+    startedAt: text('started_at').notNull(),
+    heartbeatAt: text('heartbeat_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.repo, t.id] })],
+)

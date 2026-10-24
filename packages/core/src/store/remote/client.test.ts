@@ -1239,3 +1239,24 @@ test('repository invalidation and discovery are single encoded requests with dec
     await expect(invalid.getRepoChangePosition('repo')).rejects.toThrow()
   }
 })
+
+test('operator presence wire shapes, strict validation and bounded writes', async () => {
+  const identity = {
+    id: 'registration',
+    host: 'workstation',
+    pid: 42,
+    startedAt: '2026-10-24T12:00:00.000Z',
+  }
+  const record = { ...identity, repo: 'acme/repo', heartbeatAt: '2026-10-24T12:01:00.000Z' }
+  const { store, calls } = makeStore([{ body: record }, { body: [record] }])
+  expect(await store.upsertOperatorPresence('acme/repo', identity)).toEqual(record)
+  expect(await store.listOperatorPresence('acme/repo')).toEqual([record])
+  expect(calls.map((call) => [call.method, call.url])).toEqual([
+    ['POST', 'http://store.test/repos/acme%2Frepo/operator-presence'],
+    ['GET', 'http://store.test/repos/acme%2Frepo/operator-presence'],
+  ])
+  expect(calls[0]!.body).toEqual(identity)
+  expect(calls[0]!.signal).toBeInstanceOf(AbortSignal)
+  await expect(store.upsertOperatorPresence('acme/repo', { ...identity, pid: 0 })).rejects.toThrow()
+  expect(calls).toHaveLength(2)
+})

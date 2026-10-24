@@ -1,7 +1,7 @@
 # Operator API v1
 
 The hosted service exposes the polling-oriented operator surface at
-`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **4**.
+`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **5**.
 Every request must send `X-Autobuild-Version`,
 `X-Autobuild-Protocol-Version: 3`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
@@ -99,7 +99,9 @@ Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
 Clients poll these reads — the operator HTTP API exposes no push or long-poll
-event transport. Streaming is provided as a CLI read surface: `ab watch`
+event transport. Streaming is provided by `ab watch`; unflagged watches are read-only.
+Only CLI `--operator` watches write advisory liveness, never events or authority;
+MCP presence registration is deferred. `ab watch`
 streams build and repository events by polling the same event logs client-side
 (the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
 reads), not as a transport on this API. `triageState`, `readyState`,
