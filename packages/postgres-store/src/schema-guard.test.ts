@@ -6,6 +6,8 @@ import {
   AUTH_SCHEMA_V1_CHECKSUM,
   AUTH_SCHEMA_V1_DDL,
   AUTH_SCHEMA_V2_CHECKSUM,
+  AUTH_SCHEMA_V3_CHECKSUM,
+  AUTH_SCHEMA_V3_DDL,
   AUTH_SCHEMA_V2_DDL,
   AUTH_SCHEMA_VERSION,
 } from './auth-schema'
@@ -97,6 +99,7 @@ export const FROZEN: Record<'build' | 'ticket' | 'auth', Map<number, FrozenSchem
     [4, { ddl: TICKET_SCHEMA_V4_DDL, checksum: TICKET_SCHEMA_V4_CHECKSUM }],
   ]),
   auth: new Map([
+    [3, { ddl: AUTH_SCHEMA_V3_DDL, checksum: AUTH_SCHEMA_V3_CHECKSUM }],
     [1, { ddl: AUTH_SCHEMA_V1_DDL, checksum: AUTH_SCHEMA_V1_CHECKSUM }],
     [2, { ddl: AUTH_SCHEMA_V2_DDL, checksum: AUTH_SCHEMA_V2_CHECKSUM }],
   ]),
@@ -136,8 +139,8 @@ const PINNED: Record<'build' | 'ticket' | 'auth', { version: number; checksum: s
     checksum: '713b937bc056188487767eac8e434980cf0068d5567e928a43feebab07db80d1',
   },
   auth: {
-    version: 3,
-    checksum: '252e3c3ddae60e64c64b71ed8979f5bc78ec02491eb6879983f61b818903b174',
+    version: 4,
+    checksum: '31e6b25c9b53e4a14dab646a3bca0125111e1fc3df89afdd55cfba1cea022437',
   },
 }
 
