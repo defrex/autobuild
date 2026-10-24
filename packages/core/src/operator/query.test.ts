@@ -299,6 +299,7 @@ describe('operator query wiring', () => {
         latestRun: null,
         latestStoppedRun: null,
       },
+      operator: { registrations: [] },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],

@@ -126,7 +126,8 @@ exits nonzero on failure. Then:
 6. Run `ab init --validate`. Fix every named failure, review warnings and unknowns, and rerun
    validation. Setup ends at successful validation. Ask the human to start
    `bun ab dispatch`, then open their coding agent at the repository root with
-   `ab-operate` loaded to specify, create, groom, and shepherd the first ticket.
+   `ab-operate` loaded to specify, create and groom the first ticket. Check operator
+   presence before taking the role; an existing operator picks up ready work.
    The setup agent must not start dispatch itself.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a

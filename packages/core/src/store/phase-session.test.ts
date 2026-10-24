@@ -136,6 +136,14 @@ describe('local build-session scope', () => {
     )
 
     const repositoryCalls: Array<() => unknown | Promise<unknown>> = [
+      () =>
+        store.upsertOperatorPresence(REPO, {
+          id: 'op',
+          host: 'host',
+          pid: 1,
+          startedAt: '2026-10-24T12:00:00.000Z',
+        }),
+      () => store.listOperatorPresence(REPO),
       () => store.ensureRepo(REPO),
       () => store.getRepo(REPO),
       () => store.getRepoChangePosition(REPO),
@@ -255,6 +263,14 @@ describe('local Harvest-session scope', () => {
     expect(() => store.subscribe(BUILD, {}, () => {})).toThrow(PhaseSessionError)
 
     const foreignRepoCalls: Array<() => unknown | Promise<unknown>> = [
+      () =>
+        store.upsertOperatorPresence(REPO, {
+          id: 'op',
+          host: 'host',
+          pid: 1,
+          startedAt: '2026-10-24T12:00:00.000Z',
+        }),
+      () => store.listOperatorPresence(OTHER_REPO),
       () => store.getRepo(OTHER_REPO),
       () => store.getRepoChangePosition(OTHER_REPO),
       () => store.listBuildsForRepo(OTHER_REPO),
