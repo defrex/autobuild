@@ -105,6 +105,10 @@ type SkillHandler = (ctx: ScriptContext) => Promise<AgentTurnResult> | AgentTurn
  * Resolved VERBATIM from this turn's env: the runner re-issues it on every
  * continued producer turn (§10), so the fake CLI never rebuilds it. */
 function sessionOf(ctx: ScriptContext): string {
+  const phase = ctx.opts.env.AB_PHASE?.split('@')[0]
+  if (phase === 'finalize')
+    expect(ctx.opts.env.AB_CONTEXT_DIR).toMatch(/^\.ab\/finalize(?:-[A-Za-z0-9._-]+)?$/)
+  else if (phase) expect(ctx.opts.env.AB_CONTEXT_DIR).toBe(`.ab/${phase.replace(':', '-')}`)
   return ctx.opts.env.AB_SESSION ?? ctx.session.id
 }
 
@@ -137,7 +141,10 @@ async function guidanceMaterializedFor(
     },
   })
   return JSON.parse(
-    await readFile(join(ctx.opts.workspacePath, '.ab', 'guidance.json'), 'utf8'),
+    await readFile(
+      join(ctx.opts.workspacePath, ctx.opts.env.AB_CONTEXT_DIR!, 'guidance.json'),
+      'utf8',
+    ),
   ) as { escalation: string; answer: string }
 }
 
@@ -2050,13 +2057,19 @@ describe('happy path (§15.6)', () => {
     expect(journal.opts.env.AB_STORE).toBe('local')
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
     expect(journal.opts.env.AB_PHASE).toBe('verify:e2e@1')
+    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/verify-e2e')
     expect(journal.opts.env.AB_SESSION).toBe(e2eSession.payload.session)
   })
 
   test('sessionEnv spreads extra AB_* and may override AB_STORE, never the identity keys', async () => {
     const h = await makeHarness({
       delegateCredential: async () => 'phase-token',
-      sessionEnv: { AB_STORE: 'https://store.test', AB_TOKEN: 'tok_1', AB_SESSION: 'spoofed' },
+      sessionEnv: {
+        AB_STORE: 'https://store.test',
+        AB_TOKEN: 'tok_1',
+        AB_SESSION: 'spoofed',
+        AB_CONTEXT_DIR: '.ab/spoofed',
+      },
     })
     await h.br.step() // plan
     const journal = [...h.runner.sessions.values()][0]!
@@ -2064,6 +2077,7 @@ describe('happy path (§15.6)', () => {
     expect(journal.opts.env.AB_TOKEN).toBe('phase-token')
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
     expect(journal.opts.env.AB_SESSION).not.toBe('spoofed')
+    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/plan')
   })
 
   test('deterministic checks run through exec sh -c in the workspace (§8.2), commands resolved from [commands]', async () => {
@@ -2499,47 +2513,61 @@ skill = "custom-notes-skill"
     })
   }
 
-  test('runs a check in the workspace with no session, then invokes the configured agent skill verbatim', async () => {
-    const h = await makeHarness({
-      configToml: finalizeConfig,
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'custom-notes-skill': () => defaultTurnResult('notes posted'),
-      }),
-    })
-    await seedReady(h.store)
+  test.each([false, true])(
+    'routes finalize post-step context with alternate routing %s',
+    async (alternates) => {
+      const h = await makeHarness({
+        configToml:
+          finalizeConfig +
+          (alternates
+            ? '\n[roles.release-notes]\nruntime = "scripted"\nmodel = "m-post"\nalternates = [{ runtime = "pi", model = "kimi-post" }]\n'
+            : ''),
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'custom-notes-skill': (ctx) => {
+            expect(ctx.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+            return ctx.opts.model === 'm-post'
+              ? failedTurnResult('primary exhausted', true, '', 'exhaustion')
+              : defaultTurnResult('notes posted')
+          },
+        }),
+      })
+      await seedReady(h.store)
 
-    expect(await h.br.step()).toEqual({
-      kind: 'run-finalize-step',
-      step: 'publish',
-      action: { kind: 'check', command: 'bun run publish' },
-    })
-    expect(h.execCalls).toEqual([
-      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-      { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
-      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-      { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
-    ])
-    let events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'session.started')).toHaveLength(0)
-    expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
-      actor: { kind: 'kernel' },
-      payload: { step: 'publish', ok: true },
-    })
+      expect(await h.br.step()).toEqual({
+        kind: 'run-finalize-step',
+        step: 'publish',
+        action: { kind: 'check', command: 'bun run publish' },
+      })
+      expect(h.execCalls).toEqual([
+        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+        { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
+        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+        { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
+      ])
+      let events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'session.started')).toHaveLength(0)
+      expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
+        actor: { kind: 'kernel' },
+        payload: { step: 'publish', ok: true },
+      })
 
-    expect(await h.br.step()).toEqual({
-      kind: 'run-finalize-step',
-      step: 'release-notes',
-      action: { kind: 'agent', skill: 'custom-notes-skill' },
-    })
-    const journal = [...h.runner.sessions.values()][0]!
-    expect(journal.opts.skill).toBe('custom-notes-skill')
-    expect(journal.opts.workspacePath).toBe(h.workspacePath)
-    events = await h.store.getEvents(SLUG)
-    const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
-    expect(agentDone.actor.kind).toBe('agent')
-    expect(ofType(events, 'session.ended')).toHaveLength(1)
-  })
+      expect(await h.br.step()).toEqual({
+        kind: 'run-finalize-step',
+        step: 'release-notes',
+        action: { kind: 'agent', skill: 'custom-notes-skill' },
+      })
+      const journal = [...h.runner.sessions.values()].at(-1)!
+      expect(journal.opts.skill).toBe('custom-notes-skill')
+      expect(journal.opts.env.AB_PHASE).toBe('finalize@1')
+      expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+      expect(journal.opts.workspacePath).toBe(h.workspacePath)
+      events = await h.store.getEvents(SLUG)
+      const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
+      expect(agentDone.actor.kind).toBe('agent')
+      expect(ofType(events, 'session.ended')).toHaveLength(alternates ? 2 : 1)
+    },
+  )
 
   test('publishes a check-created descendant through the same kernel boundary', async () => {
     const checkHead = 'c'.repeat(40)
@@ -2685,7 +2713,7 @@ describe('session memory (§10)', () => {
     expect(journal.turns.length).toBe(2)
     expect(journal.messages.length).toBe(1)
     expect(journal.messages[0]).toContain('f_1')
-    expect(journal.messages[0]).toContain('.ab/')
+    expect(journal.messages[0]).toContain('$AB_CONTEXT_DIR/findings.json')
   })
 
   test('reviewer rounds are FRESH sessions (fresh skeptic)', async () => {
@@ -7619,5 +7647,42 @@ describe('accepted runtime relaunch at phase boundaries', () => {
       await h.br.run()
       expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(0)
     })
+  }
+})
+
+test('continued producer prompts route all feedback to the receiving directory', async () => {
+  const cases: Array<{ feedback?: import('../ontology').Feedback; pointer: string }> = [
+    { feedback: undefined, pointer: '$AB_CONTEXT_DIR/' },
+    { feedback: { findings: ['f_1'] }, pointer: '$AB_CONTEXT_DIR/findings.json' },
+    {
+      feedback: { verify: { step: 'e2e', report: { kind: 'verify-report:e2e', rev: 0 } } },
+      pointer: '$AB_CONTEXT_DIR/verify/',
+    },
+    {
+      feedback: { guidance: { escalation: 'esc_resume', answer: 'Continue with this scope.' } },
+      pointer: '$AB_CONTEXT_DIR/',
+    },
+  ]
+  for (const item of cases) {
+    const h = await makeHarness()
+    await h.br.step() // plan
+    await h.br.step() // approve plan
+    await h.br.step() // first implement turn
+    // Exercise the runner invocation seam with each durable decision shape.
+    // biome-ignore lint/complexity/useLiteralKeys: Exercise the private runner seam without widening its production API.
+    await h.br['runPhase']({
+      kind: 'run-phase',
+      phase: 'implement',
+      round: 2,
+      ...(item.feedback ? { feedback: structuredClone(item.feedback) } : {}),
+    })
+    const journal = [...h.runner.sessions.values()].find(
+      (entry) => entry.opts.skill === 'ab-implement',
+    )!
+    expect(journal.messages).toHaveLength(1)
+    expect(journal.messages[0]).toContain(item.pointer)
+    expect(journal.messages[0]).toContain('refresh $AB_CONTEXT_DIR/')
+    expect(journal.messages[0]).not.toContain('.ab/')
+    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/implement')
   }
 })

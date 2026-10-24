@@ -353,7 +353,14 @@ restart and decision replay agree.
 `finalize` and `reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
-`packages/core/src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
+Build agent environments carry `AB_CONTEXT_DIR`, a workspace-relative directory
+under `.ab/`: core phases use their phase name, agent verifiers use
+`verify-<step>`, and agent finalize post-steps use `finalize-<step>`. Hydration
+replaces only the receiving directory's disposable files. The manifest records
+`contextDir`; `materialized` keys are directory-relative, while manifest path
+fields remain workspace-relative. Sibling contexts remain readable.
+
+`packages/core/src/cli/context.ts` materializes `$AB_CONTEXT_DIR/guidance.json` with the escalation id and
 answer text. For producer and verifier feedback routes, `packages/core/src/kernel/engine.ts`
 indexes each guidance-bearing phase start as a durable carrier and pairs only
 the latest carrier for an exact phase plus round/attempt with a subsequent
@@ -361,7 +368,7 @@ matching `session.started`. An unpaired carrier remains deliverable across
 recovery; the matching launch consumes it once without process-local state. A
 producer round's feedback is a discriminated union — findings, a
 failed verify report, or guidance — and a round may carry none, so a round with
-guidance writes no `.ab/findings.json`. The receiving skills document their
+guidance writes no `$AB_CONTEXT_DIR/findings.json`. The receiving skills document their
 corresponding input, and `packages/core/src/cli/skill-guidance.test.ts` derives that
 requirement from the phase table.
 
@@ -400,7 +407,7 @@ queryable skipped outcome; Git failure is infrastructure and fails closed,
 never a synthetic skip. Verify escalation routing is also explicit in the
 engine: guidance answering an agent verifier's own `ab escalate` returns to the
 same step on `verify.started.feedback`, which `ab context` materializes as
-`.ab/guidance.json`; that cited start remains recoverable before launch, and the
+`$AB_CONTEXT_DIR/guidance.json`; that cited start remains recoverable before launch, and the
 matching `session.started` for the same step and attempt consumes the answer
 once. Guidance answering the policy escalation after failed-report exhaustion
 instead routes to `implement` and outranks the pending report. A bare retry carries no
@@ -1001,7 +1008,7 @@ A claim freezes the ticket's current assets into the build (SPEC §6.3):
 `build.created.assets` (and, when a spec is revised from the ticket,
 `spec.revised.assets`) record the pinned revisions, `state.pinnedAssets` in the
 reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
-and `ab context` writes them under `.ab/assets/`.
+and `ab context` writes them under `$AB_CONTEXT_DIR/assets/`.
 
 For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
 into chunked immutable repository artifacts in the build store before pinning.
@@ -1015,8 +1022,8 @@ has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
 `specPath` and `commits`. The JSON index repeats this metadata and adds the
 exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
 and reflect scratch allocation, including legacy tracked-file collisions.
-Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
-normally lives at `.ab/node-verification.json`. These files are marked `derived`
+Contribution specs normally live at `$AB_CONTEXT_DIR/contributions/<build>/spec.md`; the index
+normally lives at `$AB_CONTEXT_DIR/node-verification.json`. These files are marked `derived`
 in `materialized`, with their source build and revision recorded in the metadata.
 
 Membership comes from build identity trailers on every commit reachable in the
@@ -1033,7 +1040,7 @@ These messages express maintainer-authorized intent: judge quality and consisten
 never fail these commits solely for lacking a covering spec.
 Other node changes are authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
-Leaf verification context is unchanged.
+Leaf verification omits node provenance.
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance

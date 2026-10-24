@@ -410,10 +410,14 @@ A repository-owned agent-verify skill is a verifier, not a reviewer: it drives
 the running application and observes whether the spec's acceptance criteria
 hold. It does not inspect the diff for style or edit product code.
 
+Repository-authored finalize skills also run `ab context` and read hydrated inputs
+from `$AB_CONTEXT_DIR`, using the manifest for collision-adjusted paths.
+
 Its session instructions must preserve this contract:
 
-1. Run `ab context`. The verifier receives `.ab/spec.md`, the configured step,
-   the commit range, and, after escalation is answered, `.ab/guidance.json`.
+1. Run `ab context` and read `"$AB_CONTEXT_DIR/context.json"`. The verifier receives
+   `$AB_CONTEXT_DIR/spec.md`, the configured step,
+   the commit range, and, after escalation is answered, `$AB_CONTEXT_DIR/guidance.json`.
    Node verify sessions also receive `nodeVerification` in the context manifest:
    contribution specs and a provenance index mapping commits to the builds that
    introduced them. Read those specs through the manifest's allocated paths.

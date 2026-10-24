@@ -14,24 +14,24 @@ Guidance is an external operator answer, from the operator agent or a human.
 ## Session shape
 
 1. Run `ab context`. Read the manifest path printed by the command (normally
-   `.ab/context.json`); its `materialized` entries are the actual input paths
+   `$AB_CONTEXT_DIR/context.json`); its `materialized` entries are the actual directory-relative input paths
    and may be relocated when a legacy repository tracks a conventional path.
    You get the approved spec and plan, your own prior-round notes, every verify report
-   deposited so far under `.ab/verify/`, and this round's feedback when the
-   round has any — at most one of `.ab/findings.json` (code-review findings), a
-   failed verify step's report in `.ab/verify/`, or `.ab/guidance.json` (an
+   deposited so far under `$AB_CONTEXT_DIR/verify/`, and this round's feedback when the
+   round has any — at most one of `$AB_CONTEXT_DIR/findings.json` (code-review findings), a
+   failed verify step's report in `$AB_CONTEXT_DIR/verify/`, or `$AB_CONTEXT_DIR/guidance.json` (an
    operator's answer to the escalation that blocked this build). The manifest's
    `feedback` field names which one this round is, and is absent when the round
    carries none.
    When the manifest lists `assets`, they are the build's pinned ticket assets
-   under `.ab/assets/<kind>/<name>/`; read them with the spec. A `design` asset
+   under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.
 2. Execute the plan. Commit in coherent increments with real messages —
    the commit history is part of the paper trail.
 3. Run the repo's checks yourself before finishing (the config's typecheck /
    lint / test commands). A verify failure that a local run would have caught
    is a wasted round trip.
-4. Write the manifest's `notesPath` (normally `.ab/implement-notes.md`) — what
+4. Write the manifest's `notesPath` (normally `$AB_CONTEXT_DIR/implement-notes.md`) — what
    you did, where you deviated from the plan and why, what the reviewer should
    look at hardest — then run `ab done --notes <notesPath>`. The notes bytes
    reach the store only through this flag; the file is never committed.
@@ -59,11 +59,11 @@ Guidance is an external operator answer, from the operator agent or a human.
   ```
 
 - **Handle feedback before anything else.** A round with feedback carries
-  exactly one kind, named by `.ab/context.json`'s `feedback` field:
-  `findings` → resolve every finding in `.ab/findings.json`; findings you
+  exactly one kind, named by `$AB_CONTEXT_DIR/context.json`'s `feedback` field:
+  `findings` → resolve every finding in `$AB_CONTEXT_DIR/findings.json`; findings you
   dodge come back marked as persisting, and a chain that stays persistent
-  goes to a human. `verify` → get the named step's report in `.ab/verify/`
-  to pass. `guidance` → `.ab/guidance.json` carries an operator's reply
+  goes to a human. `verify` → get the named step's report in `$AB_CONTEXT_DIR/verify/`
+  to pass. `guidance` → `$AB_CONTEXT_DIR/guidance.json` carries an operator's reply
   to the escalation that blocked this build. The escalation may have come
   from you, from the reviewer, from the kernel's code-loop stall or policy
   guards, or from the verify-attempt policy guard after a failed report.
@@ -71,7 +71,7 @@ Guidance is an external operator answer, from the operator agent or a human.
   authoritative for the round and act on it in the code. The spec remains
   the contract this phase is measured against — if honoring the answer means
   breaking the spec, escalate rather than quietly picking one. A guidance
-  round comes with no `.ab/findings.json` and no routed verify step; the
+  round comes with no `$AB_CONTEXT_DIR/findings.json` and no routed verify step; the
   answer is the entirety of your feedback. If `feedback` is absent
   entirely, the round has none: build the plan.
 - **Keep `.ab/` out of every commit.** Never stage or commit it, even with
@@ -87,3 +87,8 @@ Guidance is an external operator answer, from the operator agent or a human.
   ```
   ab escalate "…the question…" --refs src/whatever.ts
   ```
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

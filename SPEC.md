@@ -1261,6 +1261,7 @@ The runner launches every session with environment set:
 AB_STORE     # store URL or local path
 AB_BUILD     # build slug
 AB_PHASE     # current phase (+ round)
+AB_CONTEXT_DIR # workspace-relative session scratch directory
 AB_SESSION   # session id
 AB_TOKEN     # signed credential for this exact phase session (remote store)
 ```
@@ -1362,7 +1363,7 @@ sessions need no separate global installation.
 
 | Command | Purpose | Terminal? |
 |---|---|---|
-| `ab context` | hydrate `.ab/` with the phase's inputs; print the manifest | no |
+| `ab context` | hydrate `$AB_CONTEXT_DIR/` with the phase's inputs; print the manifest | no |
 | `ab artifact put <kind> <file> [--attach]` | deposit a versioned artifact → returns rev; optionally designate that exact revision for the PR | no |
 | `ab artifact get <kind>[@rev]` | fetch an artifact within own build | no |
 | `ab artifact download …` | read-only exact-byte retrieval; operator-wide without identity, own-build only with ambient phase identity; works after build termination | no |
@@ -1391,7 +1392,7 @@ Exact flags and validation live with the CLI implementation and its tests.
 A phase-scoped hydration into the gitignored scratch dir:
 
 ```
-.ab/
+.ab/<dir>/
   context.json      # manifest: build, phase, round, artifact revs,
                     #   required deposits, allowed terminal commands
   spec.md
@@ -1405,10 +1406,24 @@ A phase-scoped hydration into the gitignored scratch dir:
                     #   assets/<kind>/<name>/…, folders keep their trees
 ```
 
+Every build agent receives workspace-relative `AB_CONTEXT_DIR`. Core phases use
+`.ab/plan`, `.ab/plan-review`, `.ab/implement`, `.ab/code-review`, `.ab/reconcile`
+and `.ab/finalize`; agent verify and finalize post-steps use `.ab/verify-<step>`
+and `.ab/finalize-<step>`. Step names contain ASCII letters, digits, `.`, `_`,
+and `-`, excluding exactly `.` and `..`.
+
+`ab context` prints this directory and records `contextDir` in its manifest.
+Hydration replaces only that directory's disposable files, retaining tracked
+content and sibling directories. Sessions may read each other's directories;
+these directories provide scratch separation, not filesystem isolation.
+`materialized` keys are directory-relative; manifest, notes, asset, provenance
+index and contribution spec paths remain workspace-relative. Implement receives
+routed verify reports under its own `$AB_CONTEXT_DIR/verify/`.
+
 The manifest tells the agent its contract — `required` deposits and
 `allowedTerminals` — so skills are self-checking against the same data the
 CLI validates with. When the build pinned ticket assets, every phase also gets
-them under `.ab/assets/<kind>/<name>/` and the manifest lists each as
+them under `$AB_CONTEXT_DIR/assets/<kind>/<name>/` and the manifest lists each as
 `assets: [{kind, name, revision, layout, size, path}]`; a `file` asset is the
 single file inside its directory. A build with no assets gets no `assets` key
 and no directory. `ab build asset get <slug> <kind> <name> <dest>` downloads a
@@ -1431,8 +1446,8 @@ has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
 `specPath` and `commits`. The JSON index repeats this metadata and adds the
 exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
 and reflect scratch allocation, including legacy tracked-file collisions.
-Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
-normally lives at `.ab/node-verification.json`. These files are marked `derived`
+Contribution specs normally live at `$AB_CONTEXT_DIR/contributions/<build>/spec.md`; the index
+normally lives at `$AB_CONTEXT_DIR/node-verification.json`. These files are marked `derived`
 in `materialized`, with their source build and revision recorded in the metadata.
 
 Membership comes from build identity trailers on every commit reachable in the
@@ -1449,11 +1464,11 @@ These messages express maintainer-authorized intent: judge quality and consisten
 never fail these commits solely for lacking a covering spec.
 Other node changes are authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
-Leaf verification context is unchanged.
+Leaf verification omits node provenance.
 
-Scoping is deliberate: the planner never sees code-review rounds; the
-reviewer sees prior findings but not the producer's session. What a phase
-*can't* see is part of its design.
+The current manifest deliberately selects phase-appropriate inputs: the planner
+is not given code-review rounds, while a reviewer receives prior findings.
+Sibling directories remain readable; this selection is not an isolation boundary.
 
 ### 8.4 Terminal discipline [D5]
 
@@ -1562,7 +1577,7 @@ request, never to the base branch.
 
 ```
 implementer:  ab context → (work, commit) → ab observe --kind refactor "…"
-              → ab done --notes .ab/implement-notes.md
+              → ab done --notes "$AB_CONTEXT_DIR/implement-notes.md"
                   ⇒ validates clean worktree and focused review boundary,
                     pushes branch, emits implement.completed {commits, artifact}
 reviewer:     ab context   (gets spec, plan, {base,head}, prior findings)
@@ -1993,7 +2008,7 @@ like everything else. An answer carries either bare `retry` or free-text
 not a forced success — an unresolved condition may escalate again. For an
 agent verifier's own `ab escalate`, that next run is the same `verify:<step>`:
 `verify.started.feedback` cites the answer and `ab context` materializes it as
-`.ab/guidance.json`. The citation remains the durable carrier across any crash
+`$AB_CONTEXT_DIR/guidance.json`. The citation remains the durable carrier across any crash
 before launch; only a later `session.started` with the same phase and attempt
 consumes it. Producer guidance uses the same phase-and-round launch boundary. A
 bare retry reruns the step without guidance. The intentionally different policy
@@ -2962,7 +2977,7 @@ exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
 policy escalation routes to `implement` and outranks the pending report. By
 contrast, when the agent verifier itself uses `ab escalate`, guidance answering
 it reruns that same step with `verify.started {feedback: {guidance}}`; `ab context`
-writes `.ab/guidance.json`. The start citation remains pending through repeated
+writes `$AB_CONTEXT_DIR/guidance.json`. The start citation remains pending through repeated
 pre-launch recovery. A later `session.started` for that same verifier and
 attempt consumes the answer once, so a later failure routes its report to
 `implement` without stale guidance. Producer starts use the same exact-phase,

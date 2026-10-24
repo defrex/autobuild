@@ -82,7 +82,9 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
   const handlers = happyHandlers()
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+    const context = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    ) as {
       conflict?: { baseSha: string }
     }
     const baseSha = context.conflict?.baseSha
@@ -124,7 +126,7 @@ function attachmentHandlers(): SkillHandlers {
   const handlers = happyHandlers()
   handlers.finalize = async (cli) => {
     await cli.run(['context'])
-    const image = join(cli.ws, '.ab', 'plugin-forge.png')
+    const image = join(cli.ws, cli.env.contextDir!, 'plugin-forge.png')
     await writeFile(image, new Uint8Array([137, 80, 78, 71, 1]))
     await cli.run(['artifact', 'put', 'visual:plugin-forge', image, '--attach'])
     const description = await writeFileIn(

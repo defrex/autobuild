@@ -25,7 +25,7 @@ publish, collapse the node, choose another item, or rewrite the public branch.
 ## Session shape
 
 1. Run `ab context`. Read the printed manifest and its `materialized` paths for
-   the spec, approved plan, implement-notes, and any `.ab/guidance.json` guidance. `replay` names the
+   the spec, approved plan, implement-notes, and any `$AB_CONTEXT_DIR/guidance.json` guidance. `replay` names the
    original head, old contribution base, single change, frozen target base and
    whether replay conflicted. A replay may originate at verify entry before any
    PR exists; `restackId` identifies an adopted automatic transaction. Never fetch, merge, rebase, select another base,
@@ -73,3 +73,8 @@ A human answer in guidance is authoritative while the spec remains the contract.
 If they cannot both be satisfied, escalate the contradiction. Reconcile has no
 code-review round; risky resolutions need human judgment. The only successful
 terminal commands are `ab done` and `ab escalate`.
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

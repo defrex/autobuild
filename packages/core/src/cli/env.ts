@@ -1,3 +1,4 @@
+import { resolveContextDirectory } from '../context-directory'
 /**
  * Ambient auth resolution (SPEC §8.1, D8): the runner launches every session
  * with `AB_STORE`, `AB_BUILD`, `AB_PHASE`, `AB_SESSION` (and `AB_TOKEN` for a
@@ -21,6 +22,8 @@ export interface HarvestCliEnv {
 }
 
 export interface CliEnv {
+  /** Workspace-relative session scratch directory (`AB_CONTEXT_DIR`); phase-derived when omitted. */
+  contextDir?: string
   /** Store URL or local path (`AB_STORE`). */
   store: string
   /** Build slug (`AB_BUILD`). */
@@ -162,6 +165,7 @@ export function resolveCliEnv(env: Record<string, string | undefined>): CliEnv {
   return {
     store,
     build,
+    contextDir: resolveContextDirectory(phase, env.AB_CONTEXT_DIR),
     phase,
     round,
     session,

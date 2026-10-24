@@ -9,6 +9,11 @@ description: "Update the pinned installation, preserve customization, and resume
 
 Autobuild is an exact pinned development dependency. Pin the release you intend and review manifest and lockfile together.
 
+Build sessions now hydrate inputs under `.ab/<phase>/` (or `.ab/verify-<step>/`
+and `.ab/finalize-<step>/`). Repository-authored skills must replace hardcoded
+hydrated `.ab/<file>` paths with `$AB_CONTEXT_DIR/<file>`. Custom output scratch
+may still live elsewhere under `.ab/`.
+
 ## Update the installation
 
 Stop the dispatcher cleanly first and let its sessions drain or suspend. Your operator agent diagnoses the need; you manage the process.

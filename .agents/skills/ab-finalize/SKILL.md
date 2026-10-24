@@ -14,11 +14,11 @@ Guidance is an external operator answer, from the operator agent or a human.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`, every verify report,
+1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, every verify report,
    the repo's PR template config if one exists, and — when a human answered an
-   escalation this phase raised on an earlier attempt — `.ab/guidance.json`,
+   escalation this phase raised on an earlier attempt — `$AB_CONTEXT_DIR/guidance.json`,
    their answer to it.
-2. Write `.ab/pr-description.md`:
+2. Write `$AB_CONTEXT_DIR/pr-description.md`:
    - **Title line first** — imperative, ≤ 70 chars, from the spec's what.
    - **What & why** — from the spec, compressed for a human reviewer who
      hasn't read it.
@@ -32,16 +32,21 @@ Guidance is an external operator answer, from the operator agent or a human.
 3. Finish:
 
    ```
-   ab artifact put pr-description .ab/pr-description.md
+   ab artifact put pr-description "$AB_CONTEXT_DIR/pr-description.md"
    ab done
    ```
 
    `ab done` validates the deposit; the kernel opens the PR from it. One
    terminal command; if validation fails, fix what it names and rerun.
 
-`.ab/guidance.json`, when present, is an operator's answer to the
+`$AB_CONTEXT_DIR/guidance.json`, when present, is an operator's answer to the
 escalation that blocked this build: the escalation id and the answer text. It
 is authoritative feedback for this attempt and the PR description must act on
 it, while the spec remains the contract this phase is measured against — if the
 two cannot both be satisfied, escalate instead of guessing. Finalize has no
 review round of its own, so guidance is the only feedback it ever receives.
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

@@ -322,9 +322,11 @@ test('reparent conflict reconciles the source contribution against the frozen ne
       ...happyHandlers(),
       reconcile: async (cli) => {
         await cli.run(['context'])
-        const context = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+        const context = await Bun.file(join(cli.ws, cli.env.contextDir!, 'context.json')).json()
         expect(context.nodeChange).toMatchObject({ build: sourceSlug, foreign: false })
-        expect(await Bun.file(join(cli.ws, '.ab/plan.md')).text()).toContain('Add rate-limit.txt')
+        expect(await Bun.file(join(cli.ws, cli.env.contextDir!, 'plan.md')).text()).toContain(
+          'Add rate-limit.txt',
+        )
         await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve both lines\n')
         await git(['add', 'rate-limit.txt'], cli.ws)
         await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
