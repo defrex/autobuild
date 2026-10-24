@@ -9,6 +9,8 @@ export interface OperatorShellProps {
   identity: string
   /** The last poll's wall clock, formatted; absent before the first frame. */
   clock?: string
+  /** Initial account-menu disclosure for offline presentation fixtures. */
+  menuOpen?: boolean
   pending?: boolean
   error?: string
   onRepo: (repo: string) => void
@@ -29,6 +31,7 @@ export function OperatorShell({
   repositories,
   identity,
   clock,
+  menuOpen,
   pending,
   error,
   onRepo,
@@ -40,10 +43,12 @@ export function OperatorShell({
     <main className="frame">
       <header className="masthead">
         <h1 className="masthead-copy title">
-          <span>{repo || 'no repository configured'}</span>
+          <span className="brand">Autobuild</span>{' '}
+          <span className="project">{repo || 'no repository configured'}</span>
         </h1>
         <Menu
           className="account"
+          initiallyOpen={menuOpen}
           label={<span className="identity">{identity}</span>}
           items={[{ label: 'sign out', onSelect: onSignOut }]}
         />
