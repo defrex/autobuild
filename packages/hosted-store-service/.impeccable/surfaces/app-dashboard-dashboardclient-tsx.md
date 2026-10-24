@@ -2,7 +2,7 @@
 version: 1
 slug: "app-dashboard-dashboardclient-tsx"
 primary_target: "app/dashboard/DashboardClient.tsx"
-related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/sign-in/page.tsx","app/connect/Connection.tsx","app/connect/page.tsx","app/layout.tsx","app/globals.css"]
+related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/sign-in/page.tsx","app/connect/Connection.tsx","app/connect/page.tsx","app/layout.tsx","app/globals.css","app/members/MembersClient.tsx","app/members/MembersView.tsx","app/organizations/OrganizationsClient.tsx","app/organizations/OrganizationsView.tsx","app/projects/ProjectsClient.tsx","app/projects/ProjectsView.tsx","app/access/Frame.tsx","app/access/AccountMenu.tsx"]
 ---
 
 # Operator web app
