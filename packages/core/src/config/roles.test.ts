@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from './load'
+import { isSafeStepName } from '../context-directory'
 import {
   effectiveRuntimeReferences,
   INTERNAL_ROLES,
@@ -310,7 +311,9 @@ skill = "e2e"
 })
 
 describe('roleKeyWarnings — a user-chosen name renders safely, whatever it holds', () => {
-  // Role and step names are ARBITRARY nonempty strings, and a notice both
+  // Role names remain arbitrary nonempty strings. The renderer also handles
+  // historical in-memory step names; current config ingress rejects unsafe steps.
+  // A notice both
   // prints one and tells the operator to type it. Two invariants follow, and
   // both are asserted below over a whole corpus rather than case by case:
   //
@@ -362,28 +365,43 @@ describe('roleKeyWarnings — a user-chosen name renders safely, whatever it hol
 
   /** The same name driven through every branch of the notice renderer. */
   function branches(name: string) {
+    const stepName = isSafeStepName(name) ? name : 'fixture-step'
+    // Parse a current valid config, then supply the historical name directly
+    // to this pure renderer. This keeps escaping coverage independent of the
+    // stricter current step-name ingress contract, while roles still parse normally.
+    const fixture = (body: string) => {
+      const parsed = config(body)
+      parsed.verify.steps = parsed.verify.steps.map((step) => (step === stepName ? name : step))
+      parsed.verify.stepConfigs = Object.fromEntries(
+        Object.entries(parsed.verify.stepConfigs).map(([step, value]) => [
+          step === stepName ? name : step,
+          value,
+        ]),
+      )
+      return parsed
+    }
     return {
-      unconsumed: config(`${DEFAULT_ROLE}${roleFor(name)}`),
-      safeRename: config(
-        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
+      unconsumed: fixture(`${DEFAULT_ROLE}${roleFor(name)}`),
+      safeRename: fixture(
+        `[verify]\nsteps = [${tomlString(stepName)}]\n${agentStep(stepName, 'legacy')}` +
           `${DEFAULT_ROLE}${roleFor('legacy')}`,
       ),
-      inert: config(
-        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
+      inert: fixture(
+        `[verify]\nsteps = [${tomlString(stepName)}]\n${agentStep(stepName, 'legacy')}` +
           `${DEFAULT_ROLE}${roleFor(name)}${roleFor('legacy')}`,
       ),
       // The declared legacy key is ALSO a canonical step name, so the
       // shared/colliding branch appends the `canonicalUse` phrase — the phrase
       // built in `roleKeyDiagnostics`, one layer above the notice renderer.
-      canonicalCollision: config(
-        `[verify]\nsteps = [${tomlString(name)}, "visual"]\n` +
-          `${agentStep(name, 'other-skill')}${agentStep('visual', name)}` +
+      canonicalCollision: fixture(
+        `[verify]\nsteps = [${tomlString(stepName)}, "visual"]\n` +
+          `${agentStep(stepName, 'other-skill')}${agentStep('visual', name)}` +
           `${DEFAULT_ROLE}${roleFor(name)}`,
       ),
       // A stray key alongside a step with this name — the one arrangement that
       // emits the valid-key LIST with the name in it.
-      strayAlongsideStep: config(
-        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
+      strayAlongsideStep: fixture(
+        `[verify]\nsteps = [${tomlString(stepName)}]\n${agentStep(stepName, 'legacy')}` +
           `${DEFAULT_ROLE}${roleFor('ghost')}`,
       ),
     }
