@@ -1378,14 +1378,14 @@ There are two strict step variants:
 
 **TOML key:** `verify.steps`
 
-- **Type:** `array of string`
+- **Type:** `array of (string | array of string)`
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
+**Description:** Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
-**Constraints:** Each item: minimum length 1
+**Constraints:** Each name is nonempty; each grouped stage contains at least one nonempty name. Names must be unique within and across stages.
 
 #### `verify.afterReconcile`
 
@@ -1438,6 +1438,19 @@ There are two strict step variants:
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
 **Constraints:** minimum length 1
+
+#### `verify.<step>.failFast` (kind = "check")
+
+**TOML key:** `verify.<step>.failFast`
+
+- **Type:** `boolean`
+- **Default:** `false (omission is preserved)`
+- **Required:** Optional when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
+
+**Constraints:** None beyond the input type.
 
 #### `verify.<step>.afterReconcile` (kind = "check")
 
@@ -1503,6 +1516,19 @@ There are two strict step variants:
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 
 **Constraints:** minimum length 1
+
+#### `verify.<step>.failFast` (kind = "agent")
+
+**TOML key:** `verify.<step>.failFast`
+
+- **Type:** `boolean`
+- **Default:** `false (omission is preserved)`
+- **Required:** Optional when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
+
+**Constraints:** None beyond the input type.
 
 #### `verify.<step>.afterReconcile` (kind = "agent")
 

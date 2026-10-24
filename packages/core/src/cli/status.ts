@@ -115,6 +115,8 @@ export interface BuildSummary {
   /** The reducer's effective status (§15.5) — never mixed with lease health. */
   status: BuildStatus
   phase?: Phase
+  runningVerifySteps?: string[]
+  cancelledVerifySteps?: { step: string; cause: { step: string } }[]
   round?: number
   attempt?: number
   pr?: { number: number; url: string; state?: PrLifecycle }
@@ -130,6 +132,8 @@ export interface VerifyProgress {
   /** Current cycle only — selected by sequence boundary, never attempt. */
   steps: { step: string; outcome: VerifyOutcome; reason?: string }[]
   currentStep?: string
+  runningSteps?: string[]
+  cancelled?: { step: string; cause: { step: string } }[]
 }
 
 export interface SetupFailureDetail {
@@ -167,6 +171,7 @@ export interface BuildDetail extends BuildSummary {
    * cancelling) — the same projection the dashboards render, so `--json` and
    * the text agree and `waiting: on PR` can say why it is waiting. */
   autoMerge: AutoMergeDisplay
+  supersededEscalations?: BuildState['verifyStage']['superseded']
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
@@ -252,6 +257,16 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    ...((state.verify.running?.length ?? 0) > 1
+      ? { runningVerifySteps: state.verify.running }
+      : {}),
+    ...(Object.values(state.verifyStage.cancellations).some((c) => c.seq > state.verify.cycleSince)
+      ? {
+          cancelledVerifySteps: Object.values(state.verifyStage.cancellations)
+            .filter((c) => c.seq > state.verify.cycleSince)
+            .map((c) => ({ step: c.step, cause: c.cause })),
+        }
+      : {}),
     ...(state.kind === 'node' ? { integrationState: state.integration } : {}),
     ...(state.kind === 'node'
       ? { nodeRestack: state.nodeRestack, handPushedCommits: projectHandPushed(state.nodeRestack) }
@@ -371,6 +386,9 @@ export function detailFromFacts(
     autoMerge: autoMergeDisplay(state),
     ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
     ...(decision !== undefined ? { decision } : {}),
+    ...(state.verifyStage.superseded.length
+      ? { supersededEscalations: state.verifyStage.superseded }
+      : {}),
     openEscalations: state.openEscalations,
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
@@ -419,6 +437,16 @@ export function detailFromFacts(
       // from the reducer's full-log high-water, never from cycle membership.
       attempt: state.verify.maxAttemptSeen,
       steps,
+      ...((state.verify.running?.length ?? 0) > 1 ? { runningSteps: state.verify.running } : {}),
+      ...(Object.values(state.verifyStage.cancellations).some(
+        (c) => c.seq > state.verify.cycleSince,
+      )
+        ? {
+            cancelled: Object.values(state.verifyStage.cancellations)
+              .filter((c) => c.seq > state.verify.cycleSince)
+              .map((c) => ({ step: c.step, cause: c.cause })),
+          }
+        : {}),
       ...(state.verify.currentStep !== undefined ? { currentStep: state.verify.currentStep } : {}),
     },
     ...(state.lastEvent !== undefined
@@ -458,6 +486,8 @@ function safeStatusText(value: string): string {
 
 /** `r<round>` / `a<attempt>` suffixed onto the phase — the loop vs verify axis. */
 function phaseCell(summary: BuildSummary): string {
+  if (summary.runningVerifySteps?.length)
+    return `${summary.runningVerifySteps.map((step) => `verify:${step}`).join(', ')}${summary.attempt === undefined ? '' : ` a${summary.attempt}`}`
   if (summary.phase === undefined) return '—'
   if (summary.attempt !== undefined) return `${summary.phase} a${summary.attempt}`
   if (summary.round !== undefined) return `${summary.phase} r${summary.round}`
@@ -793,9 +823,11 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
         lines.push(`    ${step.outcome === 'pass' ? 'pass' : 'FAIL'}  ${step.step}`)
       }
     }
-    if (d.verify.currentStep !== undefined) {
-      lines.push(`    running  ${d.verify.currentStep}`)
-    }
+    for (const step of d.verify.runningSteps ??
+      (d.verify.currentStep ? [d.verify.currentStep] : []))
+      lines.push(`    running  ${step}`)
+    for (const cancelled of d.verify.cancelled ?? [])
+      lines.push(`    not run  ${cancelled.step}: cancelled by ${cancelled.cause.step}`)
   }
 
   if (d.lastEvent !== undefined) {

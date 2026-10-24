@@ -806,11 +806,13 @@ async function agentVerifyVerdict(
       return [event]
     }
     return [
-      await store.append(env.build, {
-        actor,
-        type: 'verify.completed',
-        payload: { ...evidence, step, attempt: env.round, outcome: 'pass' },
-      }),
+      (
+        await terminalDeposit(deps, [], () => ({
+          actor,
+          type: 'verify.completed',
+          payload: { ...evidence, step, attempt: env.round, outcome: 'pass' },
+        }))
+      ).event,
     ]
   }
 
@@ -823,11 +825,13 @@ async function agentVerifyVerdict(
       )
     }
     return [
-      await store.append(env.build, {
-        actor,
-        type: 'verify.completed',
-        payload: { ...evidence, step, attempt: env.round, outcome: 'skipped', reason },
-      }),
+      (
+        await terminalDeposit(deps, [], () => ({
+          actor,
+          type: 'verify.completed',
+          payload: { ...evidence, step, attempt: env.round, outcome: 'skipped', reason },
+        }))
+      ).event,
     ]
   }
 

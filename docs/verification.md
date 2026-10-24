@@ -18,16 +18,49 @@ Every repository needs an **acceptance check**: an agent verify step that runs t
 
 ## Steps and outcomes
 
-`[verify].steps` lists ordered `verify:*` steps, each configured in its own table.
+Verification uses ordered stages. A string in `[verify].steps` is a singleton
+stage; a nonempty array groups members that start together. Empty stages and
+repeated names are errors. Plain string lists retain serial event sequences.
+Every member resolves post-reconcile policy, approved selection/`always`, then
+path applicability at stage entry. Only pass or skip satisfies a member. The
+next stage, or finalize after the last, waits for every member to pass or skip.
+
+By default a failure lets all siblings finish; the settled stage routes once
+with every failed report, and no later stage runs. `failFast = true` on either
+step kind instead cancels members without outcomes, preserving existing
+outcomes. The kernel records `verify.cancelled {step, attempt, cause: {step}}`.
+Cancellation is neither a pass nor a failure. It ends the entire build execution
+through its existing process-group or environment supervisor; a replacement
+execution resumes before implement can start. This opt-in teardown/relaunch cost
+avoids per-member process groups and ensures cancelled descendants cannot keep
+writing to the shared workspace, including after a crash.
+
+An agent escalation holds its own member while siblings continue. The barrier
+waits for the answer and that member's rerun, unless fail-fast cancels it.
+Cancellation supersedes only that exact verifier occurrence's agent escalations,
+including late raises and answers. They stay in history but no longer block,
+route guidance, reset budgets, revise the spec or request abort. Answer commands
+reject a superseded escalation as stale. Unrelated escalations retain authority.
+
+All members of a cycle share one monotonic attempt. A failed cycle spends one
+`maxVerifyAttempts` unit regardless of its failure count. Restart preserves
+outcomes and reruns members without outcomes at that same attempt, with
+independent agent contexts under `$AB_CONTEXT_DIR` in the shared workspace.
+Integration nodes use the same barriers with exact head, parent and restack
+identity; their failed-cycle attention is published only after settlement.
+
+Each step has its own `[verify.<step>]` table.
+
+For example: `steps = ["types", ["unit", "integration"], ["acceptance", "docs"]]`.
 
 | Kind | Runs | Outcome |
 |---|---|---|
 | `check` | a named `command` from `[commands]`, no agent | exit 0 passes; nonzero fails, keeping the output |
 | `agent` | the exact `skill` you configure ([repository-local](skills.md#add-a-repository-local-skill), no prefix inferred) | `ab verdict` records pass, fail or skip |
 
-- **Pass** advances to the next step.
-- **Fail** sends the report back through implement and code review, then verification, up to `[policy].maxVerifyAttempts`; then the build escalates.
-- **Skip** advances without counting as a pass or spending retries. Plan exclusions and path misses skip deterministically. An agent may skip only when the whole step doesn't apply, with a reason; an applicable behavior it can't exercise is a failure.
+- **Pass** satisfies the member; the next stage waits for its siblings.
+- **Fail**, after its stage settles, sends all failed reports back through implement and code review, then verification, up to `[policy].maxVerifyAttempts`; then the build escalates.
+- **Skip** satisfies its member without counting as a pass or spending retries. Plan exclusions and path misses skip deterministically. An agent may skip only when the whole step doesn't apply, with a reason; an applicable behavior it can't exercise is a failure.
 
 ## Select what a build needs
 
@@ -145,3 +178,15 @@ Autobuild's own chain: this repository's choices, not defaults.
 Steps 5 to 9 are optional and path-scoped. Integration covers core, the Postgres store and the hosted packages; the others run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
 
 A plan for a docs change like this page selects lint, types, unit, build, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.
+
+Grouped failures retain the legacy `feedback.verify` object for the first report
+in configured order. A decisive `verify.stage-failed` receipt carries the full
+ordered reports and cancelled members; `implement.started.verifyStageFailure`
+references it. `ab context` materializes all reports and lists cancelled members
+as not run, including when guidance is the immediate feedback. Older readers
+defer on the decisive new event rather than misreading the stage's outcome.
+
+Implement cancellation feedback is scoped to its referenced failed-stage receipt,
+including guidance rounds. Later implement rounds without that receipt have no
+`cancelledVerify` list. Finalize receives historical reports but omits that list;
+its current verification gates have passed or been skipped.

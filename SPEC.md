@@ -506,10 +506,41 @@ Empty nodes have no PR.
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize (+ finalize:*)
 ```
 
+Verification uses ordered stages. A string in `[verify].steps` is a singleton
+stage; a nonempty array groups members that start together. Empty stages and
+repeated names are errors. Plain string lists retain serial event sequences.
+Every member resolves post-reconcile policy, approved selection/`always`, then
+path applicability at stage entry. Only pass or skip satisfies a member. The
+next stage, or finalize after the last, waits for every member to pass or skip.
+
+By default a failure lets all siblings finish; the settled stage routes once
+with every failed report, and no later stage runs. `failFast = true` on either
+step kind instead cancels members without outcomes, preserving existing
+outcomes. The kernel records `verify.cancelled {step, attempt, cause: {step}}`.
+Cancellation is neither a pass nor a failure. It ends the entire build execution
+through its existing process-group or environment supervisor; a replacement
+execution resumes before implement can start. This opt-in teardown/relaunch cost
+avoids per-member process groups and ensures cancelled descendants cannot keep
+writing to the shared workspace, including after a crash.
+
+An agent escalation holds its own member while siblings continue. The barrier
+waits for the answer and that member's rerun, unless fail-fast cancels it.
+Cancellation supersedes only that exact verifier occurrence's agent escalations,
+including late raises and answers. They stay in history but no longer block,
+route guidance, reset budgets, revise the spec or request abort. Answer commands
+reject a superseded escalation as stale. Unrelated escalations retain authority.
+
+All members of a cycle share one monotonic attempt. A failed cycle spends one
+`maxVerifyAttempts` unit regardless of its failure count. Restart preserves
+outcomes and reruns members without outcomes at that same attempt, with
+independent agent contexts under `$AB_CONTEXT_DIR` in the shared workspace.
+Integration nodes use the same barriers with exact head, parent and restack
+identity; their failed-cycle attention is published only after settlement.
+
 The grammar is fixed — an opinionated skeleton, not a generic workflow
 engine. Exactly two extension points:
 
-- **`verify:*`** — an ordered, configurable list of verifiers, declared in
+- **`verify:*`** — ordered stages of configurable verifiers, declared in
   per-repo config. Two subtypes: *check* (deterministic command; pass/fail is
   its exit code) and *agent-verify* (an agent run with a `pass|fail|skip`
   verdict schema). The durable outcomes are `pass`, `fail(report)`, and
@@ -2755,7 +2786,7 @@ with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent and budget ceiling); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.cancelled {step, attempt, cause: {step}, baseSha?, headSha?, restackId?}`, `verify.stage-failed {attempt, cycle, stage, failed, cancelled, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
@@ -2803,6 +2834,20 @@ the kernel raises `escalation.raised {source: "stall"}` when any persistence
 chain survives `policy.stallRounds` rounds.
 
 ### 15.5 Derived state (the reducer)
+
+The reducer retains every outstanding verifier keyed by step and attempt,
+independent of the compatibility `currentPhase`/`currentStep` projection. Each
+completion or cancellation clears only its member. Occurrence ownership comes
+from the raising agent's session and its durable phase start, never a phase name
+alone. Cancellation tombstones supersede delayed escalation raises and answers;
+only effective escalations contribute to blocked status or engine routing.
+Grouped stage failures use the decisive `verify.stage-failed` receipt. Existing
+`Feedback.verify` stays a single `{step, report}` object on every known event.
+The additive `implement.started.verifyStageFailure` sequence references the
+complete receipt, retained across crashed implement reruns and guidance rounds.
+Both new event types are decisive under version-tolerant reads, fencing older
+engines while their known event payloads remain valid after projection.
+
 
 **Mixed-version reads.** Within the supported client window, readers that
 implement this contract preserve raw unknown facts and skip them in functional
@@ -2963,6 +3008,14 @@ any unexpired execution lease, then releases a partial workspace and stale
 lease, returns the ticket to Ready, and appends `build.completed {outcome:
 discarded}` last. No runner is required.
 
+**A — grouped verification:** a failing member waits at its stage barrier for
+all siblings unless a fail-fast member fails. After cancellation and confirmed
+whole-execution teardown, a replacement execution records/reuses one complete
+`verify.stage-failed` receipt and routes to implement. The receipt orders failed
+reports by configuration and lists cancelled members as not run. An answered
+verifier escalation reruns only its owner while other members continue; a
+cancelled owner's escalation has no remaining blocked or routing effect.
+
 **A — verify failure:** `verify.completed {step: acceptance, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
@@ -3116,6 +3169,10 @@ but remains only a liveness signal, never a pipeline outcome. Build progress,
 config, diagnostics, and outcomes cross the process boundary only through
 build-owned Store state. The kernel claims each execution's durable lease before
 launch and releases that exact holder only after completion; the child renews it.
+Recovered remote execution settlement requires confirmed whole-environment
+teardown too: a guest command exit alone is insufficient. A failed or ambiguous
+sandbox stop records no `execution.ended`, releases no lease, and permits no
+publication or replacement execution; observation retries on a later tick.
 The lease remains the cross-process recovery and workspace-teardown gate (the
 in-memory guard is deliberately not durable: a dead process's memory disappears
 with it). Ordinary dispatcher shutdown gracefully signals each local runner leader and
@@ -3444,6 +3501,12 @@ Decisions here continue the series: **[D9]** declarative repo config and
 **[D11]** vendored editable skills.
 
 ### 16.1 `autobuild.toml` [D9]
+
+`[verify].steps` accepts strings and nonempty arrays of strings. Names are unique
+within and across stages and retain the configured flat order for selection and
+role validation. Each verify table accepts optional boolean `failFast` (absent
+means false); finalize remains a serial string list without that option.
+
 
 One declarative file at the repo root. A running dispatcher owns an accepted
 snapshot read from the **main checkout** and refreshes it before each dispatch

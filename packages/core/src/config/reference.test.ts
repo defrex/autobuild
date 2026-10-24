@@ -269,3 +269,13 @@ describe('real configuration reference', () => {
     expect(reloadBehavior('roles.<name>.runtime')).toContain('Hot:')
   })
 })
+
+test('verification reference groups its input union and documents semantic defaults and stage constraints', () => {
+  const model = Object.values(configurationReference()).flat()
+  const steps = model.find((field) => field.path === 'verify.steps')!
+  expect(steps.type).toBe('array of (string | array of string)')
+  expect(steps.constraints.join(' ')).toContain('at least one nonempty name')
+  const failFast = model.filter((field) => field.path.endsWith('.failFast'))
+  expect(failFast.length).toBeGreaterThan(0)
+  for (const field of failFast) expect(field.default).toBe('false (omission is preserved)')
+})

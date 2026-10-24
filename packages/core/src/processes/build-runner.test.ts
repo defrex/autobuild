@@ -311,6 +311,7 @@ class OneShotPostAppendFaultStore extends MemoryBuildStore {
 }
 
 interface HarnessOptions {
+  checkExec?: Exec
   store?: OneShotPostAppendFaultStore
   instance?: string
   runtimeIdentity?: typeof RUNTIME_IDENTITY
@@ -490,6 +491,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   let replayPrepared = false
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
+    if (cmd[0] === 'sh' && options.checkExec) return options.checkExec(cmd, opts)
     execCalls.push({ cmd, cwd: opts.cwd })
     await options.beforeExec?.(cmd, store)
     if (cmd[0] === 'git' && cmd[1] === 'commit-tree') {
@@ -7686,3 +7688,406 @@ test('continued producer prompts route all feedback to the receiving directory',
     expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/implement')
   }
 })
+
+test('a stage starts both checks before either resolves and collects both failures before routing', async () => {
+  type Result = { stdout: string; stderr: string; exitCode: number }
+  const releases = new Map<string, (result: Result) => void>()
+  let bothStarted!: () => void
+  const launched = new Promise<void>((resolve) => {
+    bothStarted = resolve
+  })
+  const h = await makeHarness({
+    configToml: CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = [["types", "unit"], "e2e"]',
+    ),
+    checkExec: async (cmd) =>
+      new Promise<Result>((resolve) => {
+        releases.set(cmd[2]!, resolve)
+        if (releases.size === 2) bothStarted()
+      }),
+  })
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  await h.br.attach()
+  let finished = false
+  const work = h.br.step().then((decision) => {
+    finished = true
+    return decision
+  })
+  await launched
+  expect(
+    (await h.store.getEvents(SLUG))
+      .filter((e) => e.type === 'verify.started')
+      .map((e) => e.payload.step)
+      .slice(-2),
+  ).toEqual(['types', 'unit'])
+  releases.get('bun tsc --noEmit')!({ stdout: 'types failure', stderr: '', exitCode: 1 })
+  await new Promise<void>((resolve) => {
+    const stop = h.store.subscribe(SLUG, { fromSeq: 0, pollMs: 1 }, (event) => {
+      if (event.type === 'verify.completed' && event.payload.step === 'types') {
+        stop()
+        resolve()
+      }
+    })
+  })
+  expect(finished).toBe(false)
+  expect(
+    (await h.store.getEvents(SLUG)).some(
+      (e) => e.type === 'implement.started' && e.payload.round === 2,
+    ),
+  ).toBe(false)
+  releases.get('bun test')!({ stdout: 'unit failure', stderr: '', exitCode: 1 })
+  await work
+  expect((await h.br.step()).kind).toBe('record-verify-stage-failure')
+  const receipts = (await h.store.getEvents(SLUG)).filter((e) => e.type === 'verify.stage-failed')
+  expect(receipts).toHaveLength(1)
+  expect(receipts[0]!.payload.failed.map((f) => f.step)).toEqual(['types', 'unit'])
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: {
+      round: 2,
+      verifyStageFailure: receipts[0]!.seq,
+      feedback: { guidance: { escalation: 'operator', answer: 'Address both reports' } },
+    },
+  })
+  const manifest = await buildContext({
+    store: h.store,
+    workspacePath: h.workspacePath,
+    env: { store: 'local', build: SLUG, phase: 'implement', round: 2, session: 's_aggregate' },
+  })
+  expect(manifest.feedback).toEqual({
+    guidance: { escalation: 'operator', answer: 'Address both reports' },
+  })
+  expect(manifest.verifyReports?.map((report) => report.step)).toEqual(['types', 'unit'])
+  for (const report of manifest.verifyReports ?? [])
+    expect(await readFile(join(h.workspacePath, report.path), 'utf8')).toContain(
+      `${report.step} failure`,
+    )
+})
+
+test('fail-fast records cancellation and exits for supervised teardown before implement', async () => {
+  type Result = { stdout: string; stderr: string; exitCode: number }
+  const releases = new Map<string, (result: Result) => void>()
+  let started!: () => void
+  const launched = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const h = await makeHarness({
+    configToml: CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = [["types", "unit"], "e2e"]',
+    ).replace('[verify.types]', '[verify.types]\nfailFast=true'),
+    checkExec: async (cmd) =>
+      new Promise<Result>((resolve) => {
+        releases.set(cmd[2]!, resolve)
+        if (releases.size === 2) started()
+      }),
+  })
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  await h.br.attach()
+  const running = h.br.step()
+  await launched
+  releases.get('bun tsc --noEmit')!({ stdout: 'failure', stderr: '', exitCode: 1 })
+  await running
+  expect((await h.br.step()).kind).toBe('restart-execution')
+  const state = await h.br.run()
+  expect(state.verifyStage.cancellations['["unit",1]']?.cause.step).toBe('types')
+  expect(
+    (await h.store.getEvents(SLUG)).some(
+      (e) => e.type === 'implement.started' && e.payload.round === 2,
+    ),
+  ).toBe(false)
+  releases.get('bun test')!({ stdout: 'late result', stderr: '', exitCode: 0 })
+  await Promise.resolve()
+  expect(
+    (await h.store.getEvents(SLUG)).some(
+      (e) => e.type === 'verify.completed' && e.payload.step === 'unit',
+    ),
+  ).toBe(false)
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { instance: 'replacement', workspaceRef: h.workspacePath, provider: 'test' },
+  })
+  expect((await h.br.step()).kind).toBe('record-verify-stage-failure')
+  const receipt = (await h.store.getEvents(SLUG)).find((e) => e.type === 'verify.stage-failed')!
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: { round: 2, verifyStageFailure: receipt.seq },
+  })
+  const manifest = await buildContext({
+    store: h.store,
+    workspacePath: h.workspacePath,
+    env: {
+      store: 'local',
+      build: SLUG,
+      phase: 'implement',
+      round: 2,
+      session: 's_cancelled_context',
+    },
+  })
+  expect(manifest.cancelledVerify).toEqual([
+    { step: 'unit', attempt: 1, cause: { step: 'types' }, status: 'not-run' },
+  ])
+})
+
+test('fail-fast durably cancels and ends an agent that ignores abort before requesting execution replacement', async () => {
+  let checkReady!: () => void
+  let agentReady!: () => void
+  const checkStarted = new Promise<void>((resolve) => {
+    checkReady = resolve
+  })
+  const agentStarted = new Promise<void>((resolve) => {
+    agentReady = resolve
+  })
+  let fail!: (result: { stdout: string; stderr: string; exitCode: number }) => void
+  let cancelledSession = ''
+  const h = await makeHarness({
+    configToml: CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = [["types", "e2e"], "unit"]',
+    ).replace('[verify.types]', '[verify.types]\nfailFast=true'),
+    checkExec: async () =>
+      new Promise((resolve) => {
+        fail = resolve
+        checkReady()
+      }),
+    handlers: () => ({
+      'ab-verify-e2e': async (ctx) => {
+        cancelledSession = ctx.opts.env.AB_SESSION!
+        agentReady()
+        return new Promise(() => {})
+      },
+    }),
+  })
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  await h.br.attach()
+  const work = h.br.step()
+  await Promise.all([checkStarted, agentStarted])
+  fail({ stdout: 'decisive failure', stderr: '', exitCode: 1 })
+  await work
+  const events = await h.store.getEvents(SLUG)
+  const cancellation = events.find(
+    (e) => e.type === 'verify.cancelled' && e.payload.step === 'e2e',
+  )!
+  const ended = events.find(
+    (e) => e.type === 'session.ended' && e.payload.session === cancelledSession,
+  )!
+  expect(ended.seq).toBeGreaterThan(cancellation.seq)
+  expect(events.some((e) => e.type === 'phase.failed')).toBe(false)
+  expect((await h.br.step()).kind).toBe('restart-execution')
+})
+
+test('late verifier infrastructure failure after cancellation spends no retry budget', async () => {
+  const h = await makeHarness()
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.cancelled',
+    payload: { step: 'e2e', attempt: 1, cause: { step: 'types' } },
+  })
+  // biome-ignore lint/complexity/useLiteralKeys: intentional private-method test of the terminal write fence.
+  await h.br['failPhase']('verify:e2e', 1, 0, 'late adapter error')
+  expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'phase.failed')).toBe(false)
+})
+
+test('two agent verifiers start concurrently in one workspace with separate contexts', async () => {
+  let bothStarted!: () => void
+  let release!: () => void
+  const started = new Promise<void>((resolve) => {
+    bothStarted = resolve
+  })
+  const finish = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const contexts: Array<{ path: string; workspace: string; session: string }> = []
+  const h = await makeHarness({
+    configToml: `${CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = ["types", "unit", ["e2e", "other"]]',
+    )}\n[verify.other]\nkind="agent"\nskill="verify-other"\n`,
+    handlers: (store) => {
+      const handler: SkillHandler = async (ctx) => {
+        contexts.push({
+          path: ctx.opts.env.AB_CONTEXT_DIR!,
+          workspace: ctx.opts.workspacePath,
+          session: ctx.opts.env.AB_SESSION!,
+        })
+        if (contexts.length === 2) bothStarted()
+        await finish
+        const step = ctx.opts.env.AB_PHASE!.split('@')[0]!.slice(7)
+        await store.append(SLUG, {
+          actor: agentActor(step, ctx.opts.env.AB_SESSION!),
+          type: 'verify.completed',
+          payload: { step, attempt: roundOf(ctx), outcome: 'pass' },
+        })
+        return defaultTurnResult()
+      }
+      return { 'ab-verify-e2e': handler, 'verify-other': handler }
+    },
+  })
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  await h.br.attach()
+  const work = h.br.step()
+  await started
+  expect(new Set(contexts.map((c) => c.path)).size).toBe(2)
+  expect(new Set(contexts.map((c) => c.session)).size).toBe(2)
+  expect(contexts.every((c) => c.workspace === h.workspacePath)).toBe(true)
+  release()
+  await work
+  expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'phase.failed')).toBe(false)
+})
+
+for (const interruption of ['crash', 'shutdown'] as const) {
+  test(`a stage recovers both native agents and its unfinished check after ${interruption}`, async () => {
+    const shutdown = new AbortController()
+    const configToml = `${CONFIG_TOML.replace(
+      'steps = ["types", "unit", "e2e"]',
+      'steps = [["types", "unit", "e2e", "other"]]',
+    )}\n[verify.other]\nkind="agent"\nskill="verify-other"\n`
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const seen = new Set<string>()
+    const observe = (name: string) => {
+      seen.add(name)
+      if (seen.size === 3) started()
+    }
+    let destination: BuildStore
+    const h = await makeHarness({
+      configToml,
+      nativeSessions: true,
+      workspaceProvider: 'git-worktree',
+      shutdownSignal: shutdown.signal,
+      checkExec: async () => {
+        observe('unit')
+        return new Promise(() => {})
+      },
+      handlers: () => {
+        const verify: SkillHandler = async (ctx) => {
+          const step = ctx.opts.env.AB_PHASE!.split('@')[0]!.slice(7)
+          if (!ctx.message) {
+            observe(step)
+            return new Promise(() => {})
+          }
+          expect(ctx.message).toContain(
+            `interrupted (${interruption === 'crash' ? 'runner-loss' : 'shutdown'})`,
+          )
+          await destination.append(SLUG, {
+            actor: agentActor(step, ctx.opts.env.AB_SESSION!),
+            type: 'verify.completed',
+            payload: { step, attempt: roundOf(ctx), outcome: 'pass' },
+          })
+          return defaultTurnResult()
+        }
+        return { 'ab-verify-e2e': verify, 'verify-other': verify }
+      },
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'types', attempt: 1, outcome: 'pass' },
+    })
+    await h.br.attach()
+    const work = h.br.step()
+    await ready
+    const crashPrefix = await h.store.getEvents(SLUG)
+    shutdown.abort()
+    await work
+    const stopped = await h.store.getEvents(SLUG)
+    expect(
+      ofType(stopped, 'session.suspended')
+        .map((e) => e.payload.phase)
+        .sort(),
+    ).toEqual(['verify:e2e', 'verify:other'])
+    const prefix = interruption === 'crash' ? crashPrefix : stopped
+    const recoveredStore = new MemoryBuildStore()
+    await recoveredStore.createBuild({
+      slug: SLUG,
+      repo: 'acme/app',
+      ticket: TICKET,
+      branch: BRANCH,
+    })
+    for (const meta of await h.store.listArtifacts(SLUG)) {
+      const artifact = (await h.store.getArtifact(SLUG, meta.kind, meta.revision))!
+      await recoveredStore.putArtifact(SLUG, {
+        kind: meta.kind,
+        content: artifact.content,
+        metadata: meta.metadata,
+      })
+    }
+    for (const event of prefix)
+      await recoveredStore.append(SLUG, {
+        actor: event.actor,
+        type: event.type,
+        payload: event.payload,
+      } as EventWrite)
+    destination = recoveredStore
+    const checks: string[] = []
+    let nextId = 1000
+    const recoveredConfig = parseConfig(configToml)
+    recoveredConfig.roles.default = { runtime: 'scripted' }
+    const next = new BuildRunner({
+      store: recoveredStore.scopeBuild(SLUG),
+      config: recoveredConfig,
+      runtimes: {
+        scripted: { runner: h.runner, servesModels: ['m-'] },
+        pi: { runner: h.runner, servesModels: ['kimi-'] },
+        claude: { runner: h.runner, servesModels: ['claude-'] },
+      },
+      workspacePath: h.workspacePath,
+      workspaceProvider: 'git-worktree',
+      branch: BRANCH,
+      slug: SLUG,
+      forge: h.forge,
+      clock: () => new Date(),
+      instance: 'successor',
+      host: 'sandbox-a',
+      ids: (kind) => `${kind}_${++nextId}`,
+      exec: async (cmd) => {
+        if (cmd[0] === 'sh') checks.push(cmd[2]!)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
+    await next.attach()
+    await next.step()
+    const events = await recoveredStore.getEvents(SLUG)
+    expect(checks).toEqual(['bun test'])
+    expect(
+      ofType(events, 'verify.completed')
+        .map((e) => [e.payload.step, e.payload.attempt])
+        .sort(),
+    ).toEqual([
+      ['e2e', 1],
+      ['other', 1],
+      ['types', 1],
+      ['unit', 1],
+    ])
+    expect(ofType(events, 'verify.started').filter((e) => e.payload.step === 'types')).toHaveLength(
+      1,
+    )
+    const resumptions = ofType(events, 'session.resumed')
+    expect(resumptions).toHaveLength(2)
+    expect(new Set(resumptions.map((e) => e.payload.handle.nativeId)).size).toBe(2)
+    expect(resumptions.map((e) => e.payload.cause)).toEqual([
+      interruption === 'crash' ? 'runner-loss' : 'shutdown',
+      interruption === 'crash' ? 'runner-loss' : 'shutdown',
+    ])
+    expect(ofType(events, 'session.resume-fallback')).toHaveLength(0)
+    expect(
+      ofType(events, 'session.ended').filter(
+        (e) => 'outcome' in e.payload && e.payload.outcome === 'reclaimed',
+      ),
+    ).toHaveLength(0)
+    expect(reduceBuild(events).sessions.open).toHaveLength(0)
+    await recoveredStore.close()
+  })
+}

@@ -3503,3 +3503,164 @@ test('interleaved target passes never erase failures and the third distinct fail
   )
   expect(decide(writes)).toMatchObject({ kind: 'run-phase', phase: 'implement' })
 })
+
+describe('ordered concurrent verification stages', () => {
+  const grouped = parseConfig(
+    CONFIG_TOML.replace('steps = ["types", "unit", "e2e"]', 'steps = [["types", "unit"], "e2e"]'),
+  )
+  const ready = [
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'approve'),
+  ]
+  test('launches every member and keeps the barrier after an early failure', () => {
+    const launch = decideNext(toLog(ready), grouped)
+    expect(launch.kind).toBe('run-verify-stage')
+    if (launch.kind !== 'run-verify-stage') throw new Error('missing stage')
+    expect(launch.members.map((m) => m.step)).toEqual(['types', 'unit'])
+    const partial = [...ready, ...verifyRun('types', 1, false)]
+    const next = decideNext(toLog(partial), grouped)
+    expect(next.kind).toBe('run-verify-stage')
+    if (next.kind === 'run-verify-stage') expect(next.members.map((m) => m.step)).toEqual(['unit'])
+    const settled = [...partial, ...verifyRun('unit', 1, false)]
+    const receipt = decideNext(toLog(settled), grouped)
+    expect(receipt.kind).toBe('record-verify-stage-failure')
+    if (receipt.kind !== 'record-verify-stage-failure') throw new Error('missing receipt')
+    expect(receipt.failure.failed.map((f) => f.step)).toEqual(['types', 'unit'])
+    const log = toLog([...settled, ev('verify.stage-failed', receipt.failure)])
+    const implement = decideNext(log, grouped)
+    expect(implement).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      round: 2,
+      verifyStageFailure: log.at(-1)!.seq,
+    })
+    expect(log.some((e) => e.type === 'verify.started' && e.payload.step === 'e2e')).toBe(false)
+  })
+  test('does not advance until all passes or skips, then launches the next stage', () => {
+    const next = decideNext(
+      toLog([...ready, ...verifyRun('types', 1, true), ...verifySkip('unit', 1, 'not applicable')]),
+      grouped,
+    )
+    expect(next.kind).toBe('run-verify-stage')
+    if (next.kind === 'run-verify-stage') expect(next.members.map((m) => m.step)).toEqual(['e2e'])
+  })
+  test('fail-fast preserves completed siblings and requires execution replacement', () => {
+    const fast = {
+      ...grouped,
+      verify: {
+        ...grouped.verify,
+        stepConfigs: {
+          ...grouped.verify.stepConfigs,
+          types: { ...grouped.verify.stepConfigs.types!, failFast: true },
+        },
+      },
+    }
+    const failed = [...ready, ...verifyRun('types', 1, false)]
+    expect(decideNext(toLog(failed), fast)).toEqual({
+      kind: 'cancel-verify-stage',
+      steps: ['unit'],
+      cause: 'types',
+      attempt: 1,
+    })
+    const cancelled = [
+      ...failed,
+      ev('verify.cancelled', { step: 'unit', attempt: 1, cause: { step: 'types' } }),
+    ]
+    expect(decideNext(toLog(cancelled), fast)).toEqual({ kind: 'restart-execution' })
+    const replacement = [
+      ...cancelled,
+      ev('execution.started', { provider: 'test', workspaceRef: '/ws', instance: 'new' }),
+    ]
+    expect(decideNext(toLog(replacement), fast).kind).toBe('record-verify-stage-failure')
+    expect(decideNext(toLog([...failed, ...verifyRun('unit', 1, true)]), fast).kind).toBe(
+      'record-verify-stage-failure',
+    )
+  })
+})
+
+test('verifier escalation holds only its member; fail-fast supersedes it without an answer', () => {
+  const grouped = parseConfig(
+    CONFIG_TOML.replace('steps = ["types", "unit", "e2e"]', 'steps = [["types", "e2e"], "unit"]'),
+  )
+  const ready = [
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'approve'),
+  ]
+  const held = [
+    ...ready,
+    ev('verify.started', { step: 'e2e', attempt: 1 }),
+    ev('session.started', {
+      session: 's_held',
+      role: 'e2e',
+      runner: 'test',
+      phase: 'verify:e2e',
+      round: 1,
+    }),
+    ev(
+      'escalation.raised',
+      { id: 'held', phase: 'verify:e2e', source: 'agent', question: 'question' },
+      { kind: 'agent', role: 'e2e', session: 's_held' },
+    ),
+  ]
+  const decision = decideNext(toLog(held), grouped)
+  expect(decision.kind).toBe('run-verify-stage')
+  if (decision.kind === 'run-verify-stage')
+    expect(decision.members.map((m) => m.step)).toEqual(['types'])
+  const failed = [...held, ...verifyRun('types', 1, false)]
+  expect(decideNext(toLog(failed), grouped)).toEqual({ kind: 'wait', reason: 'verify-stage' })
+  const answered = [
+    ...failed,
+    ev('escalation.answered', {
+      id: 'held',
+      answer: 'retry this verifier',
+      resolution: 'guidance',
+    }),
+  ]
+  const rerun = decideNext(toLog(answered), grouped)
+  expect(rerun).toMatchObject({
+    kind: 'run-verify-stage',
+    members: [
+      {
+        kind: 'run-agent-verify',
+        step: 'e2e',
+        feedback: { guidance: { escalation: 'held', answer: 'retry this verifier' } },
+      },
+    ],
+  })
+  const fast = {
+    ...grouped,
+    verify: {
+      ...grouped.verify,
+      stepConfigs: {
+        ...grouped.verify.stepConfigs,
+        types: { ...grouped.verify.stepConfigs.types!, failFast: true },
+      },
+    },
+  }
+  expect(decideNext(toLog(failed), fast)).toEqual({
+    kind: 'cancel-verify-stage',
+    steps: ['e2e'],
+    cause: 'types',
+    attempt: 1,
+  })
+  const cancelled = [
+    ...failed,
+    ev('verify.cancelled', { step: 'e2e', attempt: 1, cause: { step: 'types' } }),
+  ]
+  expect(reduceBuild(toLog(cancelled)).openEscalations).toEqual([])
+  const unrelated = [
+    ...cancelled,
+    ev('escalation.raised', {
+      id: 'other',
+      phase: 'implement',
+      source: 'policy',
+      policyCause: 'phase-attempt-limit',
+      question: 'unrelated',
+    }),
+  ]
+  expect(decideNext(toLog(unrelated), fast)).toEqual({ kind: 'wait', reason: 'blocked' })
+})

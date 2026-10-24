@@ -102,7 +102,9 @@ export interface BuildExecutionHandle {
 }
 
 /** Provider liveness observation of one recorded execution, derived from
- * provider state rather than process memory. `ended` carries the observed
+ * provider state rather than process memory. Terminal observations also confirm
+ * that the whole execution environment has stopped, including descendants.
+ * A command exit without confirmed teardown is not terminal. `ended` carries the observed
  * exit code; `lost` means the provider proved the environment/command no
  * longer exists without an exit code. */
 export type ExecutionObservation =

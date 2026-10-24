@@ -10,7 +10,7 @@ import {
   initialCompatibility,
   advanceCompatibility,
 } from './compatibility'
-import { compatibilityDiagnostic } from '../kernel/mixed-version'
+import { compatibilityDiagnostic, mixedVersionDeferred } from '../kernel/mixed-version'
 import { newerFact } from '../testing/newer-writer'
 import { AUTOBUILD_VERSION } from '../store/remote/version'
 
@@ -219,4 +219,80 @@ test('pre-deferral reader decodes the complete protocol without new values in kn
       question: 'bad enum',
     }),
   ).toThrow()
+})
+
+test('pre-stage readers validate the entire failure log and defer on the new decisive receipt', () => {
+  const ref = z.strictObject({ kind: z.string(), rev: z.number().int().nonnegative() })
+  // Frozen pre-stage wire schema: verify is an object, never an array.
+  const oldImplement = z.strictObject({
+    round: z.number().int().positive(),
+    feedback: z
+      .union([
+        z.strictObject({ findings: z.array(z.string()) }),
+        z.strictObject({ verify: z.strictObject({ step: z.string(), report: ref }) }),
+        z.strictObject({
+          guidance: z.strictObject({ escalation: z.string(), answer: z.string() }),
+        }),
+      ])
+      .optional(),
+  })
+  const schemas = { ...eventPayloadSchemas, 'implement.started': oldImplement } as Record<
+    string,
+    z.ZodType
+  >
+  delete schemas['verify.cancelled']
+  delete schemas['verify.stage-failed']
+  for (const cancelled of [false, true]) {
+    const report = { kind: 'verify-report:a', rev: 0 }
+    const payloads: Array<[string, unknown]> = [
+      ['verify.started', { step: 'a', attempt: 1 }],
+      ['verify.started', { step: 'b', attempt: 1 }],
+      ['verify.completed', { step: 'a', attempt: 1, outcome: 'fail', report }],
+      cancelled
+        ? ['verify.cancelled', { step: 'b', attempt: 1, cause: { step: 'a' } }]
+        : [
+            'verify.completed',
+            { step: 'b', attempt: 1, outcome: 'fail', report: { kind: 'verify-report:b', rev: 0 } },
+          ],
+      [
+        'verify.stage-failed',
+        {
+          attempt: 1,
+          cycle: 0,
+          stage: ['a', 'b'],
+          failed: [{ step: 'a', report }],
+          cancelled: cancelled ? [{ step: 'b', cause: { step: 'a' } }] : [],
+        },
+      ],
+      [
+        'implement.started',
+        { round: 2, feedback: { verify: { step: 'a', report } }, verifyStageFailure: 5 },
+      ],
+    ]
+    const opaque = []
+    const oldCompatibility = initialCompatibility()
+    // Frozen old catalog read: project every known payload first, retaining
+    // unknown envelopes as opaque decisive evidence before any routing.
+    const decoded: Array<{ type: string; payload: unknown }> = []
+    for (const [type, payload] of payloads) {
+      if (schemas[type]) {
+        expect(() => projectPayload(schemas[type]!, payload)).not.toThrow()
+        decoded.push({ type, payload: projectPayload(schemas[type]!, payload) })
+      } else {
+        expect(buildEventPolicy[type as keyof typeof buildEventPolicy]).toBe('decisive')
+        opaque.push(type)
+        decoded.push({ type, payload })
+        oldCompatibility.unknownFacts += 1
+        oldCompatibility.decisiveFacts += 1
+        oldCompatibility.decisiveTypes.push(type)
+      }
+    }
+    expect(opaque).toContain('verify.stage-failed')
+    expect(decoded).toHaveLength(payloads.length)
+    expect(mixedVersionDeferred({ compatibility: oldCompatibility })).toBe(true)
+    expect(compatibilityDiagnostic(oldCompatibility)).toContain('Kernel decisions deferred')
+    expect(projectPayload(oldImplement, payloads.at(-1)![1])).not.toHaveProperty(
+      'verifyStageFailure',
+    )
+  }
 })
