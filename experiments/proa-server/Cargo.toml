@@ -1,0 +1,28 @@
+[package]
+name = "proa-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+
+[dependencies]
+anyhow = "1"
+axum = "0.7.9"
+dotenvy = "0.15"
+proa_core = { version = "0.3.0" }
+proa_framework_axum = { version = "0.3.0" }
+proa_macros = { version = "0.3.0" }
+proa_stream = { version = "0.3.0" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
