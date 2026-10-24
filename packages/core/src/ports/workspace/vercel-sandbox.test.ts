@@ -46,6 +46,7 @@ import {
   type VercelSnapshotInfo,
 } from './vercel-sandbox'
 
+import { settleOpenExecution } from '../../processes/execution-settlement'
 import { settlePendingPublication } from '../../cli/publication-settlement'
 import { agentActor, DISPATCHER } from '../../events/envelope'
 import { sequentialIds } from '../../ids'
@@ -1895,6 +1896,51 @@ describe('VercelSandboxProvider', () => {
     // A sandbox the facade can no longer resolve at all is lost.
     await h.sandbox.delete()
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
+  })
+
+  test('recovered guest exit settles only after whole-environment stop, retrying failed teardown', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'recovered',
+      workspaceRef: workspace.ref,
+    })
+    await execution.detach()
+    const identity = execution.identity!
+    h.sandbox.detachedExits.set(identity.commandId!, 0)
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'remote-build', repo: 'repo' })
+    await store.claimLease('remote-build', 'recovered', 60_000)
+    const open = { ...identity, instance: 'recovered' }
+    let publications = 0
+    const deps = {
+      store,
+      execution: h.provider.buildExecution,
+      settlePublication: async () => {
+        publications += 1
+      },
+    }
+    const stops = h.sandbox.stops
+    h.sandbox.stopFailures = 1
+    expect(await settleOpenExecution(deps, 'remote-build', open)).toBe('running')
+    expect(h.sandbox.stops).toBe(stops + 1)
+    expect(await store.getEvents('remote-build')).toEqual([])
+    expect((await store.getBuild('remote-build'))?.lease?.holder).toBe('recovered')
+    expect(publications).toBe(0)
+    // A fresh supervisor has no in-memory launch handle; durable identity and
+    // provider proof are sufficient, including retry after an ambiguous stop.
+    expect(await settleOpenExecution(deps, 'remote-build', open)).toBe('settled')
+    expect(h.sandbox.stops).toBe(stops + 2)
+    expect((await store.getEvents('remote-build')).map((e) => e.type)).toEqual(['execution.ended'])
+    expect((await store.getBuild('remote-build'))?.lease).toBeUndefined()
+    expect(publications).toBe(1)
   })
 
   test('observe stops re-issuing polls once the environment lifetime plus margin has passed', async () => {

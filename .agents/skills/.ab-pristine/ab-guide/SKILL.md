@@ -248,6 +248,9 @@ The distinctions that change an administrator's answer:
   executions while the successor owns ticks and launches. Local and remote runners finish
   their current phase, compare their immutable attach runtime with the accepted
   target using existing boundary facts, and durably request relaunch on mismatch.
+  Remote recovery confirms whole-sandbox stop before recording an execution end
+  or releasing its lease; command exit alone is insufficient. Stop failure defers
+  publication and replacement until teardown succeeds.
   Confirmed teardown has the neutral `relaunch` outcome; the current repository
   owner resumes from durable state on its runtime, even after an ownership gap.
   Equal or absent targets preserve normal execution. Unknown/incompatible

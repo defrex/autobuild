@@ -3116,6 +3116,10 @@ but remains only a liveness signal, never a pipeline outcome. Build progress,
 config, diagnostics, and outcomes cross the process boundary only through
 build-owned Store state. The kernel claims each execution's durable lease before
 launch and releases that exact holder only after completion; the child renews it.
+Recovered remote execution settlement requires confirmed whole-environment
+teardown too: a guest command exit alone is insufficient. A failed or ambiguous
+sandbox stop records no `execution.ended`, releases no lease, and permits no
+publication or replacement execution; observation retries on a later tick.
 The lease remains the cross-process recovery and workspace-teardown gate (the
 in-memory guard is deliberately not durable: a dead process's memory disappears
 with it). Ordinary dispatcher shutdown gracefully signals each local runner leader and

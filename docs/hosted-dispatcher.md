@@ -169,8 +169,11 @@ lookup reports no exit code for a command that finished while no client was
 waiting on it, and keeps reporting none until some client issues a wait on the
 command. The dispatcher's execution observation therefore issues one bounded
 (~5 s) wait on the recorded command whenever the lookup shows no exit: a wait
-that resolves proves the guest's end (with its exit code) and the build settles
-in that same tick, while a timed-out wait leaves the guest running — one
+that resolves proves the guest command's end (with its exit code). Before
+settlement the provider must also confirm that the whole sandbox has stopped,
+including descendants. A failed or ambiguous stop leaves the execution and lease
+open, with publication and relaunch deferred until a later tick confirms teardown.
+A timed-out command wait leaves the guest running — one
 observation never approaches the tick's operation timeout, and the next tick
 retries. Settlement of a guest that exited after the launching invocation
 detached is expected within one tick of its exit.
