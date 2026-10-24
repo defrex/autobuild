@@ -104,6 +104,12 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
       return Promise.reject(new BuildScopeError(scope, 'listBuildsForRepo', repo))
     },
+    async upsertOperatorPresence(): Promise<never> {
+      throw new BuildScopeError(scope, 'upsertOperatorPresence')
+    },
+    async listOperatorPresence(): Promise<never> {
+      throw new BuildScopeError(scope, 'listOperatorPresence')
+    },
     getRepoChangePosition(repo: string): Promise<string> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoChangePosition', repo))
     },

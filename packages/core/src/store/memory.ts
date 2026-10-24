@@ -1,3 +1,9 @@
+import {
+  operatorIdentitySchema,
+  OPERATOR_PRESENCE_TTL_MS,
+  type OperatorIdentity,
+  type OperatorPresence,
+} from './operator-presence'
 import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { readPersistedBuildDigests } from './reduced-reads'
 import { assertPublicSnapshotReducer } from './snapshots'
@@ -710,6 +716,37 @@ export class MemoryBuildStore implements BuildStore {
       this.repos.set(repo, state)
     }
     return this.repoSnapshot(state)
+  }
+
+  private readonly operators = new Map<string, Map<string, OperatorPresence>>()
+
+  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+    if (!repo) throw new Error('repo is required')
+    const identity = operatorIdentitySchema.parse(input)
+    let rows = this.operators.get(repo)
+    if (!rows) {
+      rows = new Map()
+      this.operators.set(repo, rows)
+    }
+    const old = rows.get(identity.id)
+    const row = {
+      ...identity,
+      repo,
+      startedAt: old?.startedAt ?? identity.startedAt,
+      heartbeatAt: new Date(
+        Math.max(this.clock().getTime(), old ? Date.parse(old.heartbeatAt) : -Infinity),
+      ).toISOString(),
+    }
+    rows.set(identity.id, row)
+    return { ...row }
+  }
+
+  async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
+    const cutoff = this.clock().getTime() - OPERATOR_PRESENCE_TTL_MS
+    return [...(this.operators.get(repo)?.values() ?? [])]
+      .filter((row) => Date.parse(row.heartbeatAt) > cutoff)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((row) => ({ ...row }))
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {

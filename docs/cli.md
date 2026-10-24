@@ -25,7 +25,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `landings` — List landings awaiting consent.
 - `builds` — List builds and status.
 - `build` — Inspect one build's state and events.
-- `watch` — Follow events with a resumable cursor.
+- `watch` — Follow events with a resumable cursor. Opt-in `--operator` registers advisory liveness for a repository-wide standing watch; unflagged watches write nothing.
 - `wait` — Block until a build condition holds; print one record.
 - `mcp` — Serve the operator tools over stdio.
 - `pause` — Request a build or repository pause.

@@ -16,7 +16,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -853,7 +853,15 @@ export const SCHEMA_V15_CHECKSUM = new Bun.CryptoHasher('sha256')
   .digest('hex')
 const COMPATIBILITY_DDL = `ALTER TABLE events ADD COLUMN IF NOT EXISTS compatibility jsonb;
 ALTER TABLE repo_events ADD COLUMN IF NOT EXISTS compatibility jsonb;`
-export const SCHEMA_DDL = `${SCHEMA_V15_DDL}\n${COMPATIBILITY_DDL}`
+export const SCHEMA_V16_DDL = `${SCHEMA_V15_DDL}\n${COMPATIBILITY_DDL}`
+export const SCHEMA_V16_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V16_DDL)
+  .digest('hex')
+export const OPERATOR_PRESENCE_DDL = `CREATE TABLE IF NOT EXISTS operator_presence (
+  repo text NOT NULL, id text NOT NULL, host text NOT NULL, pid integer NOT NULL,
+  started_at timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL, PRIMARY KEY (repo,id)
+);`
+export const SCHEMA_DDL = `${SCHEMA_V16_DDL}\n${OPERATOR_PRESENCE_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -951,6 +959,14 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  operator_presence: [
+    ['repo', 'text', true],
+    ['id', 'text', true],
+    ['host', 'text', true],
+    ['pid', 'integer', true],
+    ['started_at', 'timestamp with time zone', true],
+    ['heartbeat_at', 'timestamp with time zone', true],
+  ],
   project_connections: [
     ['id', 'text', true],
     ['repo', 'text', true],
@@ -1149,6 +1165,7 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'operator_presence|p|repo,id||||',
   'project_ticket_policy|p|repo||||',
   'ticket_grants|p|id||||',
   'ticket_grants|c|||||',
@@ -1526,6 +1543,7 @@ export async function migratePostgres(
     await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(470281941)`
       await tx.unsafe(SCHEMA_V14_DDL)
+      await tx.unsafe(OPERATOR_PRESENCE_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1706,6 +1724,8 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 16 && marker.checksum === SCHEMA_V16_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 15 && marker.checksum === SCHEMA_V15_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 14 && marker.checksum === SCHEMA_V14_CHECKSUM) {

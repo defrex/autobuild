@@ -1,3 +1,9 @@
+import {
+  operatorIdentitySchema,
+  OPERATOR_PRESENCE_TTL_MS,
+  type OperatorIdentity,
+  type OperatorPresence,
+} from '../operator-presence'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { readPersistedBuildDigests } from '../reduced-reads'
 import { assertPublicSnapshotReducer } from '../snapshots'
@@ -177,6 +183,10 @@ export const BOOTSTRAP_DDL = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (scope_kind, scope_key, reducer)
   )`,
+  `CREATE TABLE IF NOT EXISTS operator_presence (
+  repo TEXT NOT NULL, id TEXT NOT NULL, host TEXT NOT NULL, pid INTEGER NOT NULL,
+  started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, PRIMARY KEY (repo, id)
+);`,
   `CREATE TABLE IF NOT EXISTS builds (
     slug TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
@@ -1175,6 +1185,28 @@ export class SqliteBuildStore implements BuildStore {
       this.db.insert(repoStreams).values({ repo, createdAt: ts, updatedAt: ts }).run()
       return this.toRepoRecord(this.requireRepo(repo))
     })
+  }
+
+  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+    if (!repo) throw new Error('repo is required')
+    const identity = operatorIdentitySchema.parse(input)
+    const row = this.sqlite
+      .query(`INSERT INTO operator_presence (repo,id,host,pid,started_at,heartbeat_at)
+      VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(repo,id) DO UPDATE SET
+      host=excluded.host, pid=excluded.pid, heartbeat_at=MAX(operator_presence.heartbeat_at,excluded.heartbeat_at)
+      RETURNING repo,id,host,pid,started_at AS startedAt,heartbeat_at AS heartbeatAt`)
+      .get(repo, identity.id, identity.host, identity.pid, identity.startedAt, this.now())
+    return row as OperatorPresence
+  }
+
+  async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
+    return this.sqlite
+      .query(`SELECT repo,id,host,pid,started_at AS startedAt,heartbeat_at AS heartbeatAt
+      FROM operator_presence WHERE repo=?1 AND heartbeat_at>?2 ORDER BY id`)
+      .all(
+        repo,
+        new Date(this.clock().getTime() - OPERATOR_PRESENCE_TTL_MS).toISOString(),
+      ) as OperatorPresence[]
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {

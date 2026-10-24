@@ -1,3 +1,4 @@
+import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
 import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
@@ -1350,6 +1351,23 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (segments.length === 1) return repoAdminRoute(req)
       const repo = segments[1]!
       const scope = await authorize(req, 'repo', repo)
+      if (segments.length === 3 && segments[2] === 'operator-presence') {
+        if (scope?.kind === 'delegated')
+          throw new MachineAuthError(
+            403,
+            'operator presence requires repository operator authority',
+          )
+        if (req.method === 'GET') return json(200, await store.listOperatorPresence(repo))
+        if (req.method === 'POST')
+          return json(
+            200,
+            await store.upsertOperatorPresence(
+              repo,
+              await readBody(req, operatorPresenceBodySchema),
+            ),
+          )
+        return fail(404, 'not-found', 'unknown operator presence route')
+      }
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
       }

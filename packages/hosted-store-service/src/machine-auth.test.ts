@@ -511,3 +511,66 @@ test('delegated listing retains project scope while internal operator grants rem
   expect((await server.fetch(request('/builds', internal))).status).toBe(403)
   expect(calls).toEqual([A])
 })
+
+test('operator presence requires repository operator authority before reads or writes', async () => {
+  const projects = testProjects([A, B])
+  const { store: credentials, auth } = testCredentials(projects)
+  const owner = await credentials.issue(A, 'owner')
+  const foreign = await credentials.issue(B, 'owner')
+  const store = new MemoryBuildStore()
+  const server = createStoreServer({ store, auth })
+  const path = `/repos/${encodeURIComponent(A)}/operator-presence`
+  const identity = { id: 'one', host: 'host', pid: 1, startedAt: '2026-10-24T12:00:00.000Z' }
+  expect(await (await server.fetch(request(path, owner.token))).json()).toEqual([])
+  expect(await store.getRepo(A)).toBeNull()
+  expect((await server.fetch(request(path, foreign.token, identity))).status).toBe(403)
+  for (const bad of [
+    { ...identity, pid: 0 },
+    { ...identity, extra: true },
+  ]) {
+    expect((await server.fetch(request(path, owner.token, bad))).status).toBe(400)
+  }
+  expect((await server.fetch(request(path, owner.token, identity))).status).toBe(200)
+  expect((await server.fetch(request(path, owner.token, { ...identity, id: 'two' }))).status).toBe(
+    200,
+  )
+  expect((await (await server.fetch(request(path, owner.token))).json()).length).toBe(2)
+  expect(await store.getRepo(A)).toBeNull()
+  const internal = mintToken('secret', {
+    version: 1,
+    internalOperator: { repo: A, user: 'owner' },
+    exp: Date.now() + 60_000,
+  })
+  expect((await server.fetch(request(path, internal))).status).toBe(403)
+
+  let reads = 0
+  let writes = 0
+  store.listOperatorPresence = async () => {
+    reads++
+    return []
+  }
+  store.upsertOperatorPresence = async () => {
+    writes++
+    throw new Error('unexpected')
+  }
+  for (const kind of ['build-runner', 'harvest-runner', 'conversation'] as const) {
+    const delegated = createStoreServer({
+      store,
+      auth: {
+        async authenticate() {
+          return {
+            kind: 'delegated',
+            repo: A,
+            user: 'owner',
+            delegation: { kind, id: 'scope' },
+          } as never
+        },
+      },
+    })
+    for (const body of [undefined, identity]) {
+      const response = await delegated.fetch(request(path, 'unused', body))
+      expect(response.status).toBe(403)
+    }
+  }
+  expect([reads, writes]).toEqual([0, 0])
+})

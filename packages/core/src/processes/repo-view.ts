@@ -1,3 +1,4 @@
+import type { OperatorIdentity, OperatorPresence } from '../store/operator-presence'
 import { readBuildDigests } from '../store/reduced-reads'
 /** Repository-scoped sequencing and metadata coordination. Current reductions
  * come exclusively from persisted values; raw methods return actual event output. */
@@ -460,6 +461,12 @@ export class RepoViewStore implements BuildStore {
   async releaseLease(slug: string, holder: string): Promise<void> {
     await this.backing.releaseLease(slug, holder)
     this.invalidate()
+  }
+  upsertOperatorPresence(repo: string, identity: OperatorIdentity): Promise<OperatorPresence> {
+    return this.backing.upsertOperatorPresence(repo, identity)
+  }
+  listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
+    return this.backing.listOperatorPresence(repo)
   }
   ensureRepo(repo: string): Promise<RepositoryRecord> {
     return this.backing.ensureRepo(repo)

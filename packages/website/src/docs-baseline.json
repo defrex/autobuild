@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "66a0ddb83f626448c2541109aac7993bd561ef0e948b0bd11deb6caba50a447e",
+    "textHash": "dce631bd25eb121063e5a3dffb232596ac90f69f508dd358450b7e93c6bf46e0",
     "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
@@ -50,7 +50,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "8c4ef468cb7c30e121d3f73314cfd859b0f826192924bbdc3c256c5fa2d9a9d4",
+    "textHash": "106c0f851a55a9deddcdd4853329ccc8fc94e85411fe89db3f4dbc04b00bff75",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
@@ -84,7 +84,7 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "5178e72e7c20049132997612a25afb6a1e42b3061b5466c976b701ae689974de",
+    "textHash": "70fd1fb2dca8c0749085cdd5db4e7c0a6293a70ecd8cc5a5abe35bae45aaa646",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -119,7 +119,7 @@
     "title": "Skills",
     "group": "concepts",
     "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-    "textHash": "db3076fcf627d1751ba68d2a268738e64bd165c0965db432253e4883f54c913d",
+    "textHash": "71398257d23466694d1c53b1c85ad540d86bb4e06dbe5aa97687a1c055391608",
     "headings": [
       "Strong defaults, yours to edit",
       "The shipped skills",
@@ -159,7 +159,7 @@
     "title": "Working with your operator agent",
     "group": "guides",
     "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
-    "textHash": "701a03a32359ce4e76e2cbed2b3ce9a1c0e43d8c143608403c9ba7920ed777f9",
+    "textHash": "230af2a59bf4cbcc67684ff7893e978ba65db72cd9f37438140b35e5c9785f1b",
     "headings": [
       "Choose a harness",
       "Give the agent memory",
@@ -171,7 +171,7 @@
       "An example session"
     ],
     "code": [
-      "bun ab watch --json",
+      "bun ab repository status --json\nbun ab watch --operator --json",
       "bun ab wait my-build --for attention --json --timeout 5m",
       "bun ab answer my-build \"Keep the public API compatible\"",
       "bun ab pause my-build\nbun ab resume my-build",
