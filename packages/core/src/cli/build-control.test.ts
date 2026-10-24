@@ -460,15 +460,19 @@ describe('controlBuild — shared durable controls', () => {
     const store = await makeStore()
     await raise(store, 'esc-first')
     await raise(store, 'esc-second')
-    const originalAppend = store.append.bind(store)
+    const originalAppend = store.appendIfCurrent.bind(store)
     let answerAttempts = 0
-    store.append = (async (target: string, event: Parameters<BuildStore['append']>[1]) => {
+    store.appendIfCurrent = (async (
+      target: string,
+      seq: number,
+      event: Parameters<BuildStore['append']>[1],
+    ) => {
       if (event.type === 'escalation.answered') {
         answerAttempts += 1
         if (answerAttempts === 2) throw new Error('transient append failure')
       }
-      return originalAppend(target, event)
-    }) as BuildStore['append']
+      return originalAppend(target, seq, event)
+    }) as BuildStore['appendIfCurrent']
 
     const action = {
       kind: 'answer' as const,
@@ -2302,4 +2306,103 @@ test('node publication refuses live runner or writer leases, then succeeds after
     else await store.releaseNodeWriter(SLUG, 'busy')
     expect(await reviseNode(store)).toMatchObject({ nodeRevision: true, specRev: 2 })
   }
+})
+
+test('shared CLI/operator answer validation rejects a captured cancelled verifier escalation', async () => {
+  const store = await makeStore()
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'agent', attempt: 1 },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'cancelled-agent',
+      role: 'agent',
+      runner: 'test',
+      phase: 'verify:agent',
+      round: 1,
+    },
+  })
+  await store.append(SLUG, {
+    actor: agentActor('agent', 'cancelled-agent'),
+    type: 'escalation.raised',
+    payload: {
+      id: 'cancelled-question',
+      phase: 'verify:agent',
+      source: 'agent',
+      question: 'question',
+    },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.cancelled',
+    payload: { step: 'agent', attempt: 1, cause: { step: 'types' } },
+  })
+  const before = (await store.getEvents(SLUG)).length
+  for (const escalationIds of [undefined, ['cancelled-question']])
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: { USER: 'operator' },
+        action: { kind: 'answer', text: 'late answer', escalationIds },
+      }),
+    ).rejects.toThrow('cancelled')
+  expect((await store.getEvents(SLUG)).length).toBe(before)
+})
+
+test('an uncaptured answer racing fail-fast cancellation is refused at compare-and-append', async () => {
+  const store = await makeStore()
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'agent', attempt: 1 },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 'raced-agent',
+      role: 'agent',
+      runner: 'test',
+      phase: 'verify:agent',
+      round: 1,
+    },
+  })
+  await store.append(SLUG, {
+    actor: agentActor('agent', 'raced-agent'),
+    type: 'escalation.raised',
+    payload: { id: 'raced-question', phase: 'verify:agent', source: 'agent', question: 'question' },
+  })
+  const append = store.appendIfCurrent.bind(store)
+  let injected = false
+  store.appendIfCurrent = async (slug, seq, event) => {
+    if (!injected && event.type === 'escalation.answered') {
+      injected = true
+      await store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.cancelled',
+        payload: { step: 'agent', attempt: 1, cause: { step: 'types' } },
+      })
+    }
+    return append(slug, seq, event)
+  }
+  await expect(
+    controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: { kind: 'answer', text: 'Proceed' },
+    }),
+  ).rejects.toThrow('stale')
+  expect(injected).toBe(true)
+  expect((await store.getEvents(SLUG)).some((event) => event.type === 'escalation.answered')).toBe(
+    false,
+  )
+  await store.close()
 })

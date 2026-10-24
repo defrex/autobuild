@@ -1369,3 +1369,55 @@ test('a tracked file blocking the named directory is preserved with a diagnostic
   ).rejects.toThrow('Tracked content blocks context directory .ab/plan')
   expect(await readFile(join(workspace, '.ab/plan'), 'utf8')).toBe('repository bytes')
 })
+
+test('cancellation feedback belongs only to the routed implement receipt, never later rounds or finalize', async () => {
+  await seedPlanApproved()
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'slow', attempt: 1 },
+  })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'verify.cancelled',
+    payload: { step: 'slow', attempt: 1, cause: { step: 'fast' } },
+  })
+  const receipt = await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'verify.stage-failed',
+    payload: {
+      cycle: 0,
+      attempt: 1,
+      stage: ['fast', 'slow'],
+      failed: [{ step: 'fast' }],
+      cancelled: [{ step: 'slow', cause: { step: 'fast' } }],
+    },
+  })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: { round: 2, verifyStageFailure: receipt.seq },
+  })
+  const routed = await buildContext({
+    store,
+    workspacePath: workspace,
+    env: makeEnv({ phase: 'implement', round: 2 }),
+  })
+  expect(routed.cancelledVerify).toEqual([
+    { step: 'slow', attempt: 1, cause: { step: 'fast' }, status: 'not-run' },
+  ])
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: { round: 3, feedback: { findings: ['new-finding'] } },
+  })
+  for (const phase of ['implement', 'finalize'] as const) {
+    const manifest = await buildContext({
+      store,
+      workspacePath: workspace,
+      env: makeEnv({ phase, round: 3 }),
+    })
+    expect(manifest.cancelledVerify).toBeUndefined()
+    expect(manifest.verifyStageFailure).toBeUndefined()
+  }
+})
