@@ -14,6 +14,21 @@ Missing or unreadable range, revisions, or diff is a failure. Never substitute
 merge-base, a destination branch, HEAD~1, working-tree changes, or other commits.
 Do not re-evaluate applicability or emit skip.
 
+When the manifest contains `nodeVerification`, read its allocated `indexPath`,
+every contribution's `specPath` and all full `handPushedCommits` messages. Require
+the index `range` to match `commitRange` and its identities, spec revisions,
+contribution commit lists and hand-pushed entries to agree with the manifest.
+Missing, unreadable or inconsistent required node evidence fails; do not guess alternate
+paths, specs, identities or ranges. Empty contribution or hand-pushed lists are
+valid. Use the index mapping and history only inside the supplied range to tie
+changed behavior to its introducing contribution (build, ticket and spec revision)
+or listed hand-pushed commit (current SHA, original SHA and full message).
+Read these sources alongside the node spec as intended-behavior context; do not
+borrow intent from an unrelated child or treat `unattributedCommits` as maintainer
+authorization. Without `nodeVerification`, retain the leaf spec context above.
+Code and before/after docs remain evidence of actual behavior: intended behavior
+never excuses documentation drift.
+
 Inventory the diff's changed user-facing behavior: configuration, defaults,
 constraints, CLI/API contracts, lifecycle, ticket workflows, installed skill
 instructions, setup, and user-visible UI terminology or behavior. Search `docs/`
@@ -34,6 +49,9 @@ Write `.ab/docs-verify-report.md` containing:
 - For each failure, the behavior that drifted, specific `docs/<page>.md`
   section(s) needing updates (or an appropriate existing page for newly exposed
   behavior), and the required correction.
+- Relevant introducing contribution identities and spec revisions or hand-pushed
+  SHA, original SHA and message intent, and how they inform each node behavior.
+  Record missing or inconsistent provenance evidence explicitly.
 - An overall verdict. Missing evidence is a failure with a report.
 
 Do not edit code or docs, commit, push, or attach arbitrary artifacts. End exactly
