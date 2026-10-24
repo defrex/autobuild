@@ -32,6 +32,7 @@ import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
   identity: string
+  isSuperUser?: boolean
   initialSelection: string
   repositories: readonly string[]
 }
@@ -110,7 +111,12 @@ export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
   }
 }
 
-export function DashboardClient({ identity, repositories, initialSelection }: ClientProps) {
+export function DashboardClient({
+  identity,
+  isSuperUser,
+  repositories,
+  initialSelection,
+}: ClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const repo = initialSelection
@@ -470,6 +476,7 @@ export function DashboardClient({ identity, repositories, initialSelection }: Cl
       repo={repo}
       repositories={repositories}
       identity={identity}
+      isSuperUser={isSuperUser}
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
       pending={pending !== undefined || pollPending}
       error={repo ? error : 'no repository configured'}

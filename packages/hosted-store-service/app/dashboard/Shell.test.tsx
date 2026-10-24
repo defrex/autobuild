@@ -69,7 +69,7 @@ test('shell composes selector, page controls, and the clock in one named landmar
   )
   expect(nav).toContain('--:--:--')
   expect(nav).not.toContain('operator@example.com')
-  expect(nav).not.toContain('sign out')
+  expect(nav).not.toContain('Sign out')
 })
 
 test('shell places the account menu in the masthead, closed at rest', () => {
@@ -81,7 +81,7 @@ test('shell places the account menu in the masthead, closed at rest', () => {
   expect(header).toContain('aria-haspopup="menu"')
   expect(header).toContain('aria-expanded="false"')
   expect(header).toContain('<span class="identity">operator@example.com</span>')
-  expect(header).not.toContain('sign out')
+  expect(header).not.toContain('Sign out')
   expect(header).not.toContain('class="clock"')
 })
 
@@ -127,5 +127,30 @@ test('account menu presents all theme choices with selected semantics', () => {
   expect(html).toContain('aria-label="Theme"')
   expect(html).toContain('role="menuitemradio" aria-checked="true"')
   for (const choice of ['System', 'Light', 'Dark']) expect(html).toContain(`>${choice}</button>`)
-  expect(html).toContain('sign out')
+  expect(html).toContain('Sign out')
+})
+
+test('account links show Members to every operator and management only to super users', () => {
+  const common = {
+    repo: '',
+    repositories: [],
+    identity: 'member@example.com',
+    menuOpen: true,
+    onRepo: () => {},
+    onSignOut: () => {},
+    controls: null,
+    children: null,
+  }
+  const member = renderToStaticMarkup(<OperatorShell {...common} />)
+  expect(member).toContain('href="/members"')
+  expect(member).not.toContain('href="/organizations"')
+  expect(member).not.toContain('href="/projects"')
+  expect(member).not.toContain('aria-label="Super user"')
+  const root = renderToStaticMarkup(<OperatorShell {...common} isSuperUser />)
+  expect(root).toContain('href="/organizations"')
+  expect(root).toContain('href="/projects"')
+  expect(root).toContain('class="menu-group" aria-label="Super user"')
+  expect(root.indexOf('>Members</a>')).toBeLessThan(root.indexOf('aria-label="Super user"'))
+  expect(root.indexOf('>Projects</a>')).toBeLessThan(root.indexOf('>Theme</div>'))
+  expect(root.indexOf('>Theme</div>')).toBeLessThan(root.indexOf('>Sign out</button>'))
 })

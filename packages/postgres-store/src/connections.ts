@@ -21,7 +21,13 @@ export interface ConnectionRecord extends ConnectionOutcome {
   code: string
   expiresAt: string
 }
+export interface ApprovalContext {
+  connection: ConnectionRecord | null
+  assignment: 'new' | 'fixed'
+  organizations: { id: string; name: string; membershipRole: 'owner' | 'member' | null }[]
+}
 export interface ConnectionStore {
+  approvalContext(code: string, actor: string, principal: HumanActor): Promise<ApprovalContext>
   start(proposal: ConnectionProposal): Promise<ConnectionRecord & { capability: string }>
   poll(id: string, capability: string, cancel?: boolean): Promise<ConnectionOutcome>
   lookup(code: string, actor: string, principal?: HumanActor): Promise<ConnectionRecord | null>
@@ -133,6 +139,25 @@ export class PostgresConnectionStore implements ConnectionStore {
     const result = record(row)
     if (result.status === 'pending' && new Date(result.expiresAt) <= now) result.status = 'expired'
     return result
+  }
+  async approvalContext(
+    code: string,
+    actor: string,
+    principal: HumanActor,
+  ): Promise<ApprovalContext> {
+    if (principal.email !== actor) throw new ConnectionError(403, 'browser principal required')
+    const connection = await this.lookup(code, actor, principal)
+    if (!connection) return { connection: null, assignment: 'fixed', organizations: [] }
+    const rows = await this.sql`SELECT 1 FROM project_journal WHERE repo = ${connection.repo}
+      UNION ALL SELECT 1 FROM project_organizations WHERE repo = ${connection.repo} LIMIT 1`
+    const assignment = rows.length ? 'fixed' : 'new'
+    const organizations =
+      assignment === 'new'
+        ? (await new PostgresOrganizationStore(this.sql).organizations(principal)).map(
+            ({ id, name, membershipRole }) => ({ id, name, membershipRole }),
+          )
+        : []
+    return { connection, assignment, organizations }
   }
   private async checkConnection(sql: SQL, repo: string, principal: HumanActor) {
     const access = new PostgresOrganizationStore(sql)
