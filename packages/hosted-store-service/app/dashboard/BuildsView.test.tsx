@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BuildsView, type Selection } from './BuildsView'
+import { awaitingConsent, BuildsView, LandingSignoff, type Selection } from './BuildsView'
 
 const noop = () => {}
 
@@ -100,7 +100,7 @@ test('integration list uses shared words and qualifiers, accessible states and f
   expect(html).toContain('8/11 landed')
   expect(html).toContain('2 building')
   expect(html).toContain('1 queued')
-  expect(html).toContain('land(consent)')
+  expect(html).toContain('land<span class="note">(consent)</span>')
   expect(html).toContain('class="sr-only">, current')
   expect(html).toContain('integration-alert warn')
   expect(html).toContain('old-detail-step')
@@ -116,7 +116,7 @@ test('integration list uses shared words and qualifiers, accessible states and f
   expect(unknown).toContain('children unknown')
   expect(unknown).not.toContain('8/11')
   expect(unknown).toContain('integration-alert alert')
-  expect(unknown).toContain('verify(failed)')
+  expect(unknown).toContain('verify<span class="note">(failed)</span>')
 })
 
 test('integration detail uses the shared facts and text progress within the existing grammar', () => {
@@ -173,4 +173,165 @@ test('integration detail uses the shared facts and text progress within the exis
   expect(html).toContain('text-overflow:ellipsis')
   expect(html).not.toContain('<h3>Pipeline</h3>')
   expect(html).not.toContain('role="progressbar"')
+})
+
+test('title leads while slug remains a machine value, with slug fallback', () => {
+  const row = pinnedBuild({})
+  row.collectionIdentity = {
+    repo: 'owner/repo',
+    status: 'running',
+    title: 'Preview the pricing page',
+  }
+  const html = renderBuildsView(row)
+  expect(html).toContain('class="build-title">Preview the pricing page</span>')
+  expect(html).toContain('class="slug">demo</span>')
+  delete row.collectionIdentity.title
+  expect(renderBuildsView(row)).toContain('class="build-title">demo</span>')
+})
+
+test('blocked rows show complete question, plain explanation and a single answer composer', () => {
+  const row = pinnedBuild({})
+  row.status = 'blocked'
+  row.blockers = ['Should the link expire?']
+  const html = renderBuildsView(row)
+  expect(html).toContain('! Should the link expire?')
+  expect(html).toContain(
+    'The build stopped to ask a person. Your answer resumes it from where it paused.',
+  )
+  expect(html.match(/class="composer"/g)).toHaveLength(1)
+  expect(html).toContain('class="btn primary"')
+  expect(html).toContain('aria-label="Step marks"')
+})
+
+test('auto-merge deferrals remain alerts without escalation controls or stop/resume copy', () => {
+  const row = pinnedBuild({})
+  const reason = 'Auto-merge gate could not apply consent for PR #12: the PR has merge conflicts'
+  row.blockers = [reason]
+  const html = renderBuildsView(row)
+  expect(html).toContain(`<p class="sub alert">! ${reason}</p>`)
+  expect(html).not.toContain('Escalation for')
+  expect(html).not.toContain('The build stopped to ask a person.')
+  expect(html).not.toContain('Answer escalation')
+  expect(html).not.toContain('class="composer"')
+})
+
+test('failed integration nodes keep their integration alert without a duplicate escalation', () => {
+  const row = pinnedBuild({})
+  row.kind = 'integration'
+  row.status = 'blocked'
+  row.integration = 'verification failed'
+  row.blockers = ['verification failed: file a repair child targeting this node']
+  row.integrationRow = {
+    destination: 'main',
+    openChildren: [],
+    children: { known: true, landed: 1, building: 0, queued: 0, total: 1 },
+    verified: false,
+    steps: [{ label: 'verify', state: 'current', qualifier: 'failed' }],
+    alert: { tone: 'red', text: 'unit failed — file a repair child targeting NODE-900' },
+  }
+  const html = renderBuildsView(row)
+  expect(html).toContain('integration-alert alert')
+  expect(html).toContain('unit failed — file a repair child targeting NODE-900')
+  expect(html).not.toContain('! verification failed: file a repair child targeting this node')
+  expect(html).not.toContain('Escalation for')
+  expect(html).not.toContain('The build stopped to ask a person.')
+  expect(html).not.toContain('Answer escalation')
+  expect(html).not.toContain('class="composer"')
+})
+
+test('landing sign-off requires the recorded consent decision and current waiting merge', () => {
+  const row = pinnedBuild({})
+  row.pr = { url: 'https://forge.example/pr/1', state: 'open' }
+  row.steps = [{ label: 'merge', state: 'current', qualifier: 'waiting' }]
+  expect(awaitingConsent(row)).toBe(false)
+  row.landing = {
+    decision: {
+      seq: 10,
+      mode: 'consent',
+      candidate: { head: 'head', parent: 'parent', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      rule: { default: true },
+    },
+  }
+  expect(awaitingConsent(row)).toBe(true)
+  const html = renderBuildsView(row)
+  expect(html).toContain('>Land</button>')
+  expect(html).toContain('>Hold</button>')
+  row.status = 'paused'
+  expect(awaitingConsent(row)).toBe(false)
+  row.status = 'running'
+  row.steps[0]!.state = 'pending'
+  expect(awaitingConsent(row)).toBe(false)
+  row.steps[0]!.state = 'current'
+  row.landing!.command = { kind: 'land', seq: 11 }
+  expect(awaitingConsent(row)).toBe(false)
+})
+
+test('Land and Hold forward the existing typed actions and both disable while pending', () => {
+  const requests: string[] = []
+  const create = (pending: boolean) =>
+    LandingSignoff({
+      slug: 'demo',
+      pending,
+      onControl: (slug, action) => requests.push(`${slug}:${action}`),
+    })
+  const controls = create(false).props.children[1].props.children
+  for (const control of controls) control.props.onClick()
+  expect(requests).toEqual(['demo:land', 'demo:hold'])
+  for (const control of create(true).props.children[1].props.children)
+    expect(control.props.disabled).toBe(true)
+})
+
+test('node landing sign-off follows projected readiness, never an open PR or current merge alone', () => {
+  const row = pinnedBuild({})
+  row.kind = 'integration'
+  row.status = 'collecting'
+  row.pr = { url: 'https://forge.example/pr/node', state: 'open' }
+  row.landing = {
+    decision: {
+      seq: 10,
+      mode: 'consent',
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      rule: { default: true },
+      candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+    },
+  }
+  row.integrationRow = {
+    destination: 'main',
+    openChildren: [],
+    children: { known: true, landed: 1, building: 0, queued: 0, total: 1 },
+    verified: true,
+    steps: [{ label: 'merge', state: 'current', qualifier: 'waiting' }],
+  }
+  for (const state of [
+    'collecting',
+    'verifying',
+    'verification failed',
+    'ready to land',
+    'reparenting',
+  ] as const) {
+    row.integration = state
+    expect(awaitingConsent(row), state).toBe(false)
+    expect(renderBuildsView(row)).not.toContain('class="signoff landing"')
+  }
+  row.integration = 'awaiting consent'
+  expect(awaitingConsent(row)).toBe(true)
+  const html = renderBuildsView(row)
+  expect(html).toContain('class="signoff landing"')
+  expect(html).toContain('>Land</button>')
+  expect(html).toContain('>Hold</button>')
+  row.status = 'paused'
+  expect(awaitingConsent(row)).toBe(false)
+  row.status = 'blocked'
+  expect(awaitingConsent(row)).toBe(false)
+  row.status = 'collecting'
+  row.landing.command = { kind: 'land', seq: 11 }
+  expect(awaitingConsent(row)).toBe(false)
+  delete row.landing.command
+  delete row.landing.decision
+  expect(awaitingConsent(row)).toBe(false)
 })
