@@ -1048,7 +1048,9 @@ Human access is scoped to Better Auth organizations. Super users named by
 can operate only projects assigned to an organization containing their normalized
 email. Membership grants work before first sign-in; each organization has zero
 or one owner. Only super users create organizations, change ownership, or move
-projects. Owners can manage their own members but cannot remove themselves.
+projects. Members can inspect their own organization’s active projects and roster,
+including emails and persisted identity names/joined status. Owners can manage
+their own members but cannot remove themselves.
 Creation does not make the super user a member. Legacy projects remain unassigned
 and visible only to super users until assigned. Admission and repository authority
 are checked from current state on every browser request and MCP tool callback.

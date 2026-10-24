@@ -56,7 +56,15 @@ live(
         status: 403,
       })
       await expect(store.setOwner(owner, a.id, member.email)).rejects.toMatchObject({ status: 403 })
-      await expect(store.members(member, a.id)).rejects.toMatchObject({ status: 403 })
+      expect(await store.members(member, a.id)).toHaveLength(2)
+      const foreignOrg = await store.create(superActor, 'Foreign', 'foreign')
+      await expect(store.members(member, foreignOrg.id)).rejects.toMatchObject({ status: 403 })
+      await expect(store.inspect(member, foreignOrg.id)).rejects.toMatchObject({ status: 403 })
+      await expect(store.inspect(member, 'missing')).rejects.toMatchObject({ status: 403 })
+      expect((await store.inspect(owner, a.id)).organization.membershipRole).toBe('owner')
+      expect(
+        (await store.members(member, a.id)).find((m) => m.email === owner.email),
+      ).toMatchObject({ name: null, status: 'pending' })
       await expect(store.addMember(owner, b.id, 'foreign@example.com')).rejects.toMatchObject({
         status: 403,
       })
@@ -68,6 +76,14 @@ live(
       await store.materialize('owner', owner.email)
       await store.materialize('owner', owner.email)
       expect((await sql`SELECT role FROM member WHERE "userId" = 'owner'`)[0].role).toBe('owner')
+      expect(
+        (await store.members(member, a.id)).find((m) => m.email === owner.email),
+      ).toMatchObject({ name: 'Owner', status: 'joined' })
+      await store.addMember(superActor, b.id, owner.email)
+      expect((await store.members(member, b.id)).find((m) => m.email === owner.email)?.status).toBe(
+        'joined',
+      )
+      await store.removeMember(superActor, b.id, owner.email)
       const repoA = 'https://github.com/example/a',
         repoB = 'https://github.com/example/b',
         legacy = 'https://github.com/example/legacy'
@@ -81,6 +97,7 @@ live(
       await expect(store.unassigned(member)).rejects.toMatchObject({ status: 403 })
       await registry.remove(repoA, 'fixture')
       expect(await store.projects(owner)).toEqual([])
+      expect((await store.inspect(member, a.id)).projects).toEqual([])
       await registry.add(repoA, 'fixture')
       expect(await store.projects(owner)).toEqual([repoA])
       // Database-level constraints, independent of the adapter's guards.
@@ -124,7 +141,7 @@ live(
         isSuperUser: false,
         organizations: [{ ...a, ownerEmail: owner.email, membershipRole: 'owner' }],
       })
-      expect((await handler(req(`orgs/${a.id}`))).status).toBe(403)
+      expect((await handler(req(`orgs/${a.id}`))).status).toBe(200)
       expect((await handler(req(`orgs/${a.id}/members`))).status).toBe(200)
       expect(
         (await handler(req(`orgs/${a.id}/members`, 'POST', { email: 'new@example.com' }))).status,
@@ -165,11 +182,12 @@ live(
       ).toBe(400)
       email = member.email
       expect((await (await handler(req('orgs'))).json()).organizations).toHaveLength(2)
-      expect((await handler(req(`orgs/${a.id}/members`))).status).toBe(403)
+      expect((await handler(req(`orgs/${a.id}/members`))).status).toBe(200)
+      expect((await handler(req(`orgs/${foreignOrg.id}/members`))).status).toBe(403)
       expect((await handler(req('projects/unassigned'))).status).toBe(403)
       for (const [path, method, body] of [
         ['orgs', 'POST', { name: 'No', slug: 'no' }],
-        [`orgs/${a.id}`, 'GET', undefined],
+        [`orgs/${foreignOrg.id}`, 'GET', undefined],
         [`orgs/${a.id}/members`, 'POST', { email: 'no@example.com' }],
         [`orgs/${a.id}/members`, 'DELETE', { email: owner.email }],
         [`orgs/${a.id}/owner`, 'PUT', { email: member.email }],

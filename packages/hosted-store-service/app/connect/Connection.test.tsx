@@ -45,3 +45,42 @@ test('login returns only to the same-origin connection path', () => {
   ])
     expect(connectionReturnPath(value)).toBe('/')
 })
+
+test('organization chooser only for new projects with multiple destinations', () => {
+  const organizations = [
+    { id: 'a', name: 'Alpha', membershipRole: 'member' as const },
+    { id: 'b', name: 'Beta', membershipRole: null },
+  ]
+  const html = renderToStaticMarkup(
+    <ConnectionView
+      code="123456789A"
+      connection={{
+        code: '123456789A',
+        repo: 'example/new',
+        credentialId: 'a'.repeat(32),
+        status: 'pending',
+      }}
+      context={{ assignment: 'new', organizations }}
+    />,
+  )
+  expect(html).toContain('type="radio"')
+  expect(html).toContain('Add it to an organization')
+  expect(html).toContain('disabled')
+})
+
+test('approval payload policy preserves single membership defaults and fixed reconnects', async () => {
+  const { approvalOrganization, approvalBlocked } = await import('./Connection')
+  const org = { id: 'a', name: 'A', membershipRole: 'member' as const }
+  expect(approvalOrganization({ assignment: 'new', organizations: [org] })).toBeUndefined()
+  expect(
+    approvalOrganization({ assignment: 'new', organizations: [{ ...org, membershipRole: null }] }),
+  ).toBe('a')
+  expect(approvalOrganization({ assignment: 'fixed', organizations: [org] }, 'a')).toBeUndefined()
+  expect(approvalBlocked({ assignment: 'new', organizations: [] })).toBe(true)
+  expect(approvalBlocked({ assignment: 'new', organizations: [org, { ...org, id: 'b' }] })).toBe(
+    true,
+  )
+  expect(
+    approvalBlocked({ assignment: 'new', organizations: [org, { ...org, id: 'b' }] }, 'b'),
+  ).toBe(false)
+})

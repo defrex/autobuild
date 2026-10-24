@@ -5,6 +5,12 @@ import { assertAuthSchema } from './auth-schema'
 import { normalizeProjectRepository, PostgresProjectRegistry } from './projects'
 
 export type MembershipRole = 'owner' | 'member'
+export interface OrganizationMember {
+  email: string
+  role: MembershipRole
+  name: string | null
+  status: 'joined' | 'pending'
+}
 export interface HumanActor {
   email: string
   /** Evaluated inside the transaction so configuration removal takes effect. */
@@ -36,7 +42,7 @@ export interface OrganizationStore {
     actor: HumanActor,
     id: string,
   ): Promise<{ organization: Organization; projects: string[] }>
-  members(actor: HumanActor, id: string): Promise<{ email: string; role: MembershipRole }[]>
+  members(actor: HumanActor, id: string): Promise<OrganizationMember[]>
   addMember(
     actor: HumanActor,
     id: string,
@@ -146,21 +152,28 @@ export class PostgresOrganizationStore implements OrganizationStore {
       return store.org(actor, id)
     })
   }
+  private async read(actor: HumanActor, id: string): Promise<Organization> {
+    if (!actor.isSuperUser()) {
+      const [grant] = await this
+        .sql`SELECT 1 FROM organization_emails WHERE organization_id = ${id} AND email = ${actor.email}`
+      if (!grant) throw new AccessError(403, 'organization access required')
+    }
+    return this.org(actor, id)
+  }
   async inspect(actor: HumanActor, id: string) {
-    this.super(actor)
-    const organization = await this.org(actor, id)
+    const organization = await this.read(actor, id)
     const rows = await this
       .sql`SELECT p.repo FROM project_organizations p WHERE organization_id = ${id}
       AND (SELECT action FROM project_journal WHERE repo = p.repo ORDER BY seq DESC LIMIT 1) = 'added' ORDER BY p.repo`
     return { organization, projects: rows.map((row: { repo: string }) => String(row.repo)) }
   }
-  async members(actor: HumanActor, id: string): Promise<{ email: string; role: MembershipRole }[]> {
-    await this.manage(actor, id)
-    return (await this
-      .sql`SELECT email, role FROM organization_emails WHERE organization_id = ${id} ORDER BY email`) as {
-      email: string
-      role: MembershipRole
-    }[]
+  async members(actor: HumanActor, id: string): Promise<OrganizationMember[]> {
+    await this.read(actor, id)
+    return (await this.sql`SELECT e.email, e.role, u.name,
+      CASE WHEN u.id IS NULL THEN 'pending' ELSE 'joined' END AS status
+      FROM organization_emails e LEFT JOIN LATERAL (
+        SELECT id, name FROM "user" WHERE lower(email) = e.email ORDER BY id LIMIT 1
+      ) u ON true WHERE e.organization_id = ${id} ORDER BY e.email`) as OrganizationMember[]
   }
   private async sync(email: string) {
     await this
