@@ -14,16 +14,16 @@ Guidance is an external operator answer, from the operator agent or a human.
 
 ## Session shape
 
-1. Run `ab context` first. It hydrates `.ab/` with everything you may see:
-   `.ab/context.json` (the manifest — your required deposits, allowed terminal
-   commands, and this round's `feedback` when the round has any), `.ab/spec.md`
-   (the contract you plan against), `.ab/ticket.md`, your prior plan revision
-   once you have one, and this round's feedback: `.ab/findings.json` (the
-   reviewer's findings) or `.ab/guidance.json` (an operator's answer to
+1. Run `ab context` first. It hydrates `$AB_CONTEXT_DIR/` with everything you may see:
+   `$AB_CONTEXT_DIR/context.json` (the manifest — your required deposits, allowed terminal
+   commands, and this round's `feedback` when the round has any), `$AB_CONTEXT_DIR/spec.md`
+   (the contract you plan against), `$AB_CONTEXT_DIR/ticket.md`, your prior plan revision
+   once you have one, and this round's feedback: `$AB_CONTEXT_DIR/findings.json` (the
+   reviewer's findings) or `$AB_CONTEXT_DIR/guidance.json` (an operator's answer to
    the escalation that blocked this build). A round never carries both, and a
    round may carry neither.
    When the manifest lists `assets`, they are the build's pinned ticket assets
-   under `.ab/assets/<kind>/<name>/`; read them with the spec. A `design` asset
+   under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — the plan must satisfy it, while how stays yours. The spec cites
    assets by kind and name.
 2. Read the spec, then the codebase. The spec says what and why; you decide
@@ -34,10 +34,10 @@ Guidance is an external operator answer, from the operator agent or a human.
    identifier constraints; memory, nearby adapter code, and passing tests over
    a fake or mock are not evidence of the real contract because they can
    repeat the author's assumption.
-3. Write the plan to `.ab/plan.md`, deposit it, and finish:
+3. Write the plan to `$AB_CONTEXT_DIR/plan.md`, deposit it, and finish:
 
    ```
-   ab artifact put plan .ab/plan.md
+   ab artifact put plan "$AB_CONTEXT_DIR/plan.md"
    ab done
    ```
 
@@ -58,7 +58,7 @@ Read `autobuild.toml` before writing the plan:
   path-glob calculation.
 
 Put the selection in an opening TOML front-matter block in the same
-`.ab/plan.md` artifact:
+`$AB_CONTEXT_DIR/plan.md` artifact:
 
 ```toml
 +++
@@ -103,10 +103,10 @@ ab observe --kind followup "…"
 ## Feedback rounds
 
 A round that carries feedback carries exactly one kind, and only that file
-exists. `.ab/findings.json` is the reviewer's findings against your previous
+exists. `$AB_CONTEXT_DIR/findings.json` is the reviewer's findings against your previous
 revision: address every one — change the plan, or state in the plan why the
 finding is wrong (the reviewer sees your revision next round).
-`.ab/guidance.json` is an operator's answer to the escalation that blocked
+`$AB_CONTEXT_DIR/guidance.json` is an operator's answer to the escalation that blocked
 this build. It may have been raised by you or the reviewer, or by the kernel's
 plan-loop stall or policy guards. The file carries the escalation id and the
 answer text.
@@ -129,8 +129,13 @@ If the spec is contradictory, unbuildable, or wrong — do not plan around it.
 Park the build for a human:
 
 ```
-ab escalate "…the question, concretely…" --refs .ab/spec.md
+ab escalate "…the question, concretely…" --refs "$AB_CONTEXT_DIR/spec.md"
 ```
 
 This is also a terminal command; use exactly one of `ab done` or
 `ab escalate` per session.
+
+Read the manifest path printed by `ab context`. Its `materialized` keys are
+relative to `contextDir`: join them to locate collision-adjusted inputs.
+Manifest path fields are workspace-relative; use `notesPath` for producer notes.
+Run commands from the workspace root.

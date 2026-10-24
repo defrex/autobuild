@@ -53,7 +53,7 @@ export interface ContextInputs {
    */
   answeredGuidance?: boolean
   /** The ticket assets the build froze at claim (SPEC §6.3), written under
-   * `.ab/assets/`. Every phase receives them. */
+   * `$AB_CONTEXT_DIR/assets/`. Every phase receives them. */
   assets?: boolean
 }
 

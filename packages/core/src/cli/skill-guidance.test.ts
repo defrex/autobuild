@@ -2,7 +2,7 @@
  * Guidance-delivery content guards: the seam between the phase table and the
  * skills that can receive a human's answer.
  *
- * `ab context` writes `.ab/guidance.json` from three inputs — the producer
+ * `ab context` writes `$AB_CONTEXT_DIR/guidance.json` from three inputs — the producer
  * round-feedback union (`inputs.findings === 'current'`, whose third member is
  * `{guidance}`), feedback cited by an agent verifier's exact started event
  * (`inputs.currentFeedback === true`), and `inputs.answeredGuidance === true`
@@ -15,14 +15,14 @@
  * The second guard mechanizes "no instruction points a phase at a file a
  * guidance round does not produce". Prose cannot be type-checked, so the unit
  * of an instruction is the blank-line-separated block — a paragraph, a bullet,
- * a numbered step — and a block naming `.ab/findings.json` must also name
- * `.ab/guidance.json`. Fenced code is deliberately NOT stripped: a sample
- * command that reads `.ab/findings.json` unconditionally is an instruction too.
+ * a numbered step — and a block naming `$AB_CONTEXT_DIR/findings.json` must also name
+ * `$AB_CONTEXT_DIR/guidance.json`. Fenced code is deliberately NOT stripped: a sample
+ * command that reads `$AB_CONTEXT_DIR/findings.json` unconditionally is an instruction too.
  *
  * `.ab/verify/` is excluded from that rule on purpose. `implement` has
  * `verifyReports: true`, so its verify reports are materialized from every
  * deposit regardless of feedback and can be present on a guidance round. Only
- * `.ab/findings.json` is written solely as feedback, so only it is the file a
+ * `$AB_CONTEXT_DIR/findings.json` is written solely as feedback, so only it is the file a
  * guidance round provably does not produce.
  *
  * If a guard feels awkward to satisfy, fix the prose, not the anchor:
@@ -35,7 +35,7 @@ import { readDistSkills } from './init'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
-/** The `ab context` inputs that can materialize `.ab/guidance.json`. */
+/** The `ab context` inputs that can materialize `$AB_CONTEXT_DIR/guidance.json`. */
 function receivesGuidance(spec: PhaseSpec): boolean {
   return (
     spec.inputs.answeredGuidance === true ||
@@ -73,7 +73,7 @@ describe('guidance delivery — every receiving phase documents the file', () =>
     ])
   })
 
-  test('each receiving phase ships a skill naming `.ab/guidance.json`', () => {
+  test('each receiving phase ships a skill naming `$AB_CONTEXT_DIR/guidance.json`', () => {
     const missing: string[] = []
     for (const spec of guidancePhases) {
       const documents = guidanceDocumentsFor(spec)
@@ -82,39 +82,39 @@ describe('guidance delivery — every receiving phase documents the file', () =>
         continue
       }
       for (const document of documents) {
-        if (!document.content.includes('.ab/guidance.json')) missing.push(document.name)
+        if (!document.content.includes('$AB_CONTEXT_DIR/guidance.json')) missing.push(document.name)
       }
     }
     expect(
       missing,
-      `phases that can receive human guidance without a skill naming .ab/guidance.json: ${missing.join(', ')}`,
+      `phases that can receive human guidance without a skill naming $AB_CONTEXT_DIR/guidance.json: ${missing.join(', ')}`,
     ).toEqual([])
   })
 
   test('the repository-authored verifier authority retains context and verdict terminals', () => {
     expect(setupReference).toBeDefined()
     expect(setupReference?.content).toContain('Run `ab context`')
-    expect(setupReference?.content).toContain('`.ab/guidance.json`')
+    expect(setupReference?.content).toContain('`$AB_CONTEXT_DIR/guidance.json`')
     expect(setupReference?.content).toContain('ab verdict pass --notes')
     expect(setupReference?.content).toContain('ab verdict fail --report')
     expect(setupReference?.content).toContain('ab verdict skip --reason')
   })
 
-  test('no instruction points at `.ab/findings.json` without the guidance alternative', () => {
+  test('no instruction points at `$AB_CONTEXT_DIR/findings.json` without the guidance alternative', () => {
     const offenders: string[] = []
     for (const spec of guidancePhases) {
       if (spec.inputs.findings !== 'current') continue
       const skill = byInstallName.get(spec.skill)
       if (skill === undefined) continue
       for (const block of skill.content.split(/\n\s*\n/)) {
-        if (!block.includes('.ab/findings.json')) continue
-        if (block.includes('.ab/guidance.json')) continue
+        if (!block.includes('$AB_CONTEXT_DIR/findings.json')) continue
+        if (block.includes('$AB_CONTEXT_DIR/guidance.json')) continue
         offenders.push(`${spec.skill}:\n${block}`)
       }
     }
     expect(
       offenders,
-      `instructions naming .ab/findings.json on a round that may carry guidance instead:\n${offenders.join('\n---\n')}`,
+      `instructions naming $AB_CONTEXT_DIR/findings.json on a round that may carry guidance instead:\n${offenders.join('\n---\n')}`,
     ).toEqual([])
   })
 })

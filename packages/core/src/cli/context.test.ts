@@ -16,7 +16,13 @@ import type { IdSource } from '../ids'
 import type { Feedback, Finding } from '../ontology'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
-import { buildContext } from './context'
+import { buildContext as hydrateContext } from './context'
+let activeContext = '.ab/plan'
+async function buildContext(deps: Parameters<typeof hydrateContext>[0]) {
+  const result = await hydrateContext(deps)
+  activeContext = result.contextDir
+  return result
+}
 import { BUILD, makeEnv, seedStore } from './testkit'
 
 let workspace: string
@@ -52,7 +58,10 @@ async function treeOf(dir: string, prefix = ''): Promise<string[]> {
 }
 
 async function abFile(relPath: string): Promise<string> {
-  return readFile(join(workspace, '.ab', relPath), 'utf8')
+  return readFile(
+    join(workspace, relPath === '.gitignore' ? '.ab' : activeContext, relPath),
+    'utf8',
+  )
 }
 
 async function seedPlanApproved(): Promise<void> {
@@ -104,8 +113,7 @@ describe('buildContext — plan (§8.3: ticket, spec; prior plan + findings on r
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'spec.md',
       'ticket.md',
@@ -150,8 +158,7 @@ describe('buildContext — plan (§8.3: ticket, spec; prior plan + findings on r
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'findings.json',
       'plan.md',
@@ -234,8 +241,7 @@ describe('buildContext — plan-review (§8.3: spec, plan@latest, all prior roun
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'history/findings-r1.json',
       'plan.md',
@@ -281,8 +287,7 @@ describe('buildContext — implement (§8.3: feedback is findings OR verify repo
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'findings.json',
       'implement-notes.md',
@@ -299,7 +304,7 @@ describe('buildContext — implement (§8.3: feedback is findings OR verify repo
     })
   })
 
-  test('verify-failure feedback: the cited report rev lands under .ab/verify/', async () => {
+  test('verify-failure feedback: the cited report rev lands under $AB_CONTEXT_DIR/verify/', async () => {
     await seedPlanApproved()
     await seedImplementRound(1, 'sha-head-1')
     await store.putArtifact(BUILD, {
@@ -331,8 +336,7 @@ describe('buildContext — implement (§8.3: feedback is findings OR verify repo
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'implement-notes.md',
       'plan.md',
@@ -416,8 +420,7 @@ describe('buildContext — code-review (§8.3: commit range, prior findings, dis
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'dismissed-findings.json',
       'history/findings-r1.json',
@@ -470,7 +473,7 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual(['.gitignore', 'context.json', 'spec.md'])
+    expect(await treeOf(join(workspace, activeContext))).toEqual(['context.json', 'spec.md'])
     expect(manifest.step).toEqual({
       name: 'e2e',
       config: { kind: 'agent', skill: 'ab-verify-e2e' },
@@ -547,7 +550,7 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
 })
 
 describe('buildContext — finalize (§8.3: spec, plan, verify reports)', () => {
-  test('all verify reports land under .ab/verify/, one file per step', async () => {
+  test('all verify reports land under $AB_CONTEXT_DIR/verify/, one file per step', async () => {
     await seedPlanApproved()
     await store.putArtifact(BUILD, { kind: 'verify-report:types', content: 'types ok\n' })
     await store.putArtifact(BUILD, { kind: 'verify-report:e2e', content: 'e2e ok\n' })
@@ -558,8 +561,7 @@ describe('buildContext — finalize (§8.3: spec, plan, verify reports)', () => 
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'plan.md',
       'spec.md',
@@ -647,8 +649,7 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
+    expect(await treeOf(join(workspace, activeContext))).toEqual([
       'context.json',
       'implement-notes.md',
       'plan.md',
@@ -765,9 +766,12 @@ describe('buildContext — tracked legacy scratch', () => {
     await runGit('init', '-q')
     await runGit('config', 'user.name', 'Test')
     await runGit('config', 'user.email', 'test@example.com')
-    await mkdir(join(workspace, '.ab'))
-    await writeFile(join(workspace, '.ab/implement-notes.md'), 'repository content\n')
-    await runGit('add', '-f', '.ab/implement-notes.md')
+    await mkdir(join(workspace, '.ab/implement'), { recursive: true })
+    await writeFile(join(workspace, '.ab/implement/implement-notes.md'), 'repository content\n')
+    await writeFile(join(workspace, '.ab/implement/context.json'), 'tracked manifest\n')
+    await writeFile(join(workspace, '.ab/code-review-sibling'), 'sibling original\n')
+    await runGit('add', '-f', '.ab/implement/context.json', '.ab/code-review-sibling')
+    await runGit('add', '-f', '.ab/implement/implement-notes.md')
     await runGit('commit', '-qm', 'legacy scratch')
     const baseSha = (await runGit('rev-parse', 'HEAD')).trim()
     await seedPlanApproved()
@@ -798,7 +802,11 @@ describe('buildContext — tracked legacy scratch', () => {
     }
 
     const first = await buildContext(deps)
-    expect(first.notesPath).toBe('.ab/generated/1/implement-notes.md')
+    expect(first.manifestPath).toBe('.ab/implement/generated/1/context.json')
+    expect(await readFile(join(workspace, '.ab/implement/context.json'), 'utf8')).toBe(
+      'tracked manifest\n',
+    )
+    expect(first.notesPath).toBe('.ab/implement/generated/1/implement-notes.md')
     expect(await abFile('implement-notes.md')).toBe('repository content\n')
     expect((await runGit('status', '--porcelain', '--', '.ab')).trim()).toBe('')
     expect((await runGit('check-ignore', first.notesPath!)).trim()).toBe(first.notesPath!)
@@ -814,8 +822,14 @@ describe('buildContext — tracked legacy scratch', () => {
     const observation = observations[0]
     expect(observation?.type).toBe('observation.recorded')
     if (observation?.type !== 'observation.recorded') throw new Error('missing observation')
-    expect(observation.payload.files).toEqual(['.ab/implement-notes.md'])
-    expect((await runGit('ls-files', '-v', '.ab/implement-notes.md')).startsWith('H ')).toBe(true)
+    expect(observation.payload.files).toEqual([
+      '.ab/code-review-sibling',
+      '.ab/implement/context.json',
+      '.ab/implement/implement-notes.md',
+    ])
+    expect(
+      (await runGit('ls-files', '-v', '.ab/implement/implement-notes.md')).startsWith('H '),
+    ).toBe(true)
 
     // A later base update to the colliding tracked path must merge normally:
     // context introduced no skip-worktree/assume-unchanged state and kept the
@@ -826,8 +840,8 @@ describe('buildContext — tracked legacy scratch', () => {
     await runGit('add', 'feature.txt')
     await runGit('commit', '-qm', 'feature work')
     await runGit('checkout', '-q', baseBranch)
-    await writeFile(join(workspace, '.ab/implement-notes.md'), 'advanced base content\n')
-    await runGit('add', '-f', '.ab/implement-notes.md')
+    await writeFile(join(workspace, '.ab/implement/implement-notes.md'), 'advanced base content\n')
+    await runGit('add', '-f', '.ab/implement/implement-notes.md')
     await runGit('commit', '-qm', 'advance tracked scratch')
     await runGit('checkout', '-q', 'feature')
     await runGit('merge', '--no-edit', baseBranch)
@@ -837,10 +851,10 @@ describe('buildContext — tracked legacy scratch', () => {
 })
 
 describe('buildContext — hygiene (§8.3)', () => {
-  test('.ab/ is wiped on every run; the rest of the workspace is untouched', async () => {
-    await mkdir(join(workspace, '.ab', 'history'), { recursive: true })
-    await writeFile(join(workspace, '.ab', 'stale.txt'), 'stale context\n')
-    await writeFile(join(workspace, '.ab', 'history', 'old.json'), '[]\n')
+  test('only the current session directory is wiped; the rest of the workspace is untouched', async () => {
+    await mkdir(join(workspace, '.ab/plan', 'history'), { recursive: true })
+    await writeFile(join(workspace, '.ab/plan', 'stale.txt'), 'stale context\n')
+    await writeFile(join(workspace, '.ab/plan', 'history', 'old.json'), '[]\n')
     await writeFile(join(workspace, 'src.txt'), 'workspace file\n')
 
     await buildContext({
@@ -849,15 +863,15 @@ describe('buildContext — hygiene (§8.3)', () => {
       workspacePath: workspace,
     })
 
-    expect(existsSync(join(workspace, '.ab', 'stale.txt'))).toBe(false)
-    expect(existsSync(join(workspace, '.ab', 'history'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/plan', 'stale.txt'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/plan', 'history'))).toBe(false)
     expect(await readFile(join(workspace, 'src.txt'), 'utf8')).toBe('workspace file\n')
   })
 
   test('the wipe removes legacy server scratch files', async () => {
-    await mkdir(join(workspace, '.ab'), { recursive: true })
-    await writeFile(join(workspace, '.ab', 'server.pid'), '12345\n')
-    await writeFile(join(workspace, '.ab', 'server.log'), 'listening on :3000\n')
+    await mkdir(join(workspace, '.ab/implement'), { recursive: true })
+    await writeFile(join(workspace, '.ab/implement', 'server.pid'), '12345\n')
+    await writeFile(join(workspace, '.ab/implement', 'server.log'), 'listening on :3000\n')
 
     await buildContext({
       store,
@@ -865,8 +879,8 @@ describe('buildContext — hygiene (§8.3)', () => {
       workspacePath: workspace,
     })
 
-    expect(existsSync(join(workspace, '.ab', 'server.pid'))).toBe(false)
-    expect(existsSync(join(workspace, '.ab', 'server.log'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/implement', 'server.pid'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/implement', 'server.log'))).toBe(false)
   })
 
   test('.ab/ is made self-gitignored on every run — the product establishes §7’s "gitignored .ab/"', async () => {
@@ -1026,11 +1040,11 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
         revision: 0,
         layout: 'tree',
         size: 21,
-        path: '.ab/assets/ref/site',
+        path: '.ab/plan/assets/ref/site',
       },
     ])
     expect(await abFile('assets/ref/site/index.html')).toBe('<h1>hosted</h1>')
-    expect(existsSync(join(workspace, '.ab/assets/ref/site/empty'))).toBe(true)
+    expect(existsSync(join(workspace, '.ab/plan/assets/ref/site/empty'))).toBe(true)
   })
 
   test('every phase writes the pinned assets and lists them in the manifest', async () => {
@@ -1065,7 +1079,7 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
           revision: 0,
           layout: 'file',
           size: 8,
-          path: '.ab/assets/mock/home.png',
+          path: `${manifest.contextDir}/assets/mock/home.png`,
         },
         {
           kind: 'ref',
@@ -1073,13 +1087,13 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
           revision: 0,
           layout: 'tree',
           size: 17,
-          path: '.ab/assets/ref/site',
+          path: `${manifest.contextDir}/assets/ref/site`,
         },
       ])
       expect(await abFile('assets/mock/home.png/home.png')).toBe('v0 bytes')
       expect(await abFile('assets/ref/site/index.html')).toBe('<h1>v0</h1>')
       expect(await abFile('assets/ref/site/img/logo.svg')).toBe('<svg/>')
-      expect(existsSync(join(workspace, '.ab/assets/ref/site/empty'))).toBe(true)
+      expect(existsSync(join(workspace, `${manifest.contextDir}/assets/ref/site/empty`))).toBe(true)
       const written = JSON.parse(await abFile('context.json'))
       expect(written.assets).toEqual(manifest.assets)
     }
@@ -1103,7 +1117,7 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
     ])
     expect(await abFile('assets/mock/home.png/home.png')).toBe('v0 bytes')
     expect(await abFile('assets/ref/site/index.html')).toBe('<h1>v0</h1>')
-    expect(existsSync(join(workspace, '.ab/assets/mock/new.png'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/plan/assets/mock/new.png'))).toBe(false)
   })
 
   test('a spec re-pin changes what later phases see', async () => {
@@ -1131,7 +1145,7 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
       'mock/home.png@1',
     ])
     expect(await abFile('assets/mock/home.png/home.png')).toBe('REPLACED')
-    expect(existsSync(join(workspace, '.ab/assets/ref'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/plan/assets/ref'))).toBe(false)
   })
 
   test('a build with no pinned assets has no assets key and no directory', async () => {
@@ -1141,7 +1155,7 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
       workspacePath: workspace,
     })
     expect('assets' in manifest).toBe(false)
-    expect(existsSync(join(workspace, '.ab/assets'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/plan/assets'))).toBe(false)
   })
 
   test('a pin the store cannot produce fails clearly', async () => {
@@ -1277,4 +1291,81 @@ describe('own-build read evidence', () => {
       (await store.getEvents(BUILD)).some((event) => event.type === 'session.build-read-failed'),
     ).toBe(false)
   })
+})
+
+test('overlapping verifier hydration and repeat hydration retain sibling inputs', async () => {
+  await writeFile(
+    join(workspace, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["one", "two"]\n[verify.one]\nkind = "agent"\nskill = "one"\n[verify.two]\nkind = "agent"\nskill = "two"\n',
+  )
+  const second = await seedStore()
+  try {
+    await second.putArtifact(BUILD, { kind: 'spec', content: '# Second verifier spec\n' })
+    await second.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1 },
+    })
+    const deps = (name: 'one' | 'two') => ({
+      store: name === 'one' ? store : second,
+      env: makeEnv({ phase: `verify:${name}`, session: `s_${name}` }),
+      workspacePath: workspace,
+    })
+    for (const [name, target] of [
+      ['one', store],
+      ['two', second],
+    ] as const) {
+      await target.append(BUILD, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: {
+          step: name,
+          attempt: 1,
+          feedback: { guidance: { escalation: `esc_${name}`, answer: name } },
+        },
+      })
+    }
+    const manifests = await Promise.all([hydrateContext(deps('one')), hydrateContext(deps('two'))])
+    const before = await readFile(join(workspace, '.ab/verify-two/context.json'), 'utf8')
+    for (const [index, name] of ['one', 'two'].entries()) {
+      const dir = `.ab/verify-${name}`
+      expect(manifests[index]!.contextDir).toBe(dir)
+      expect(JSON.parse(await readFile(join(workspace, dir, 'guidance.json'), 'utf8')).answer).toBe(
+        name,
+      )
+      expect(await readFile(join(workspace, dir, 'spec.md'), 'utf8')).toContain(
+        name === 'one' ? 'auth rate limiting' : 'Second verifier spec',
+      )
+    }
+    await writeFile(join(workspace, '.ab/verify-one/stale'), 'stale')
+    await hydrateContext(deps('one'))
+    expect(existsSync(join(workspace, '.ab/verify-one/stale'))).toBe(false)
+    expect(await readFile(join(workspace, '.ab/verify-two/context.json'), 'utf8')).toBe(before)
+    expect(existsSync(join(workspace, '.ab/context.json'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab/spec.md'))).toBe(false)
+  } finally {
+    await second.close()
+  }
+})
+
+test('a tracked file blocking the named directory is preserved with a diagnostic', async () => {
+  for (const args of [
+    ['init', '-q'],
+    ['config', 'user.name', 'Test'],
+    ['config', 'user.email', 'test@example.com'],
+  ]) {
+    expect((await spawnExec(['git', ...args], { cwd: workspace })).exitCode).toBe(0)
+  }
+  await mkdir(join(workspace, '.ab'))
+  await writeFile(join(workspace, '.ab/plan'), 'repository bytes')
+  await spawnExec(['git', 'add', '-f', '.ab/plan'], { cwd: workspace })
+  await expect(
+    hydrateContext({
+      store,
+      env: makeEnv({ phase: 'plan' }),
+      workspacePath: workspace,
+      exec: spawnExec,
+    }),
+  ).rejects.toThrow('Tracked content blocks context directory .ab/plan')
+  expect(await readFile(join(workspace, '.ab/plan'), 'utf8')).toBe('repository bytes')
 })

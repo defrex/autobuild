@@ -1370,7 +1370,7 @@ There are two strict step variants:
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered verification steps and applicability rules.
+**Description:** Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
 **Constraints:** None beyond the input type.
 
@@ -1383,7 +1383,7 @@ There are two strict step variants:
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.
+**Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
 **Constraints:** Each item: minimum length 1
 
@@ -1584,8 +1584,8 @@ has `build`, its current stored `ticket` identity, `spec: {kind: 'spec', rev}`,
 `specPath` and `commits`. The JSON index repeats this metadata and adds the
 exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
 and reflect scratch allocation, including legacy tracked-file collisions.
-Contribution specs normally live at `.ab/contributions/<build>/spec.md`; the index
-normally lives at `.ab/node-verification.json`. These files are marked `derived`
+Contribution specs normally live at `$AB_CONTEXT_DIR/contributions/<build>/spec.md`; the index
+normally lives at `$AB_CONTEXT_DIR/node-verification.json`. These files are marked `derived`
 in `materialized`, with their source build and revision recorded in the metadata.
 
 Membership comes from build identity trailers on every commit reachable in the
@@ -1602,7 +1602,7 @@ These messages express maintainer-authorized intent: judge quality and consisten
 never fail these commits solely for lacking a covering spec.
 Other node changes are authorized when the node spec or the spec of the contribution
 that introduced it covers it; use the commit mapping to find that spec.
-Leaf verification context is unchanged.
+Leaf verification omits node provenance.
 
 ### Role routing for an agent verify step
 
@@ -1712,7 +1712,7 @@ are errors.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered post-PR steps. Failures are recorded without blocking the PR.
+**Description:** Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
 **Constraints:** None beyond the input type.
 
@@ -1725,7 +1725,7 @@ are errors.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.
+**Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
 **Constraints:** Each item: minimum length 1
 

@@ -192,6 +192,7 @@ describe('ambient-aware finite read opening', () => {
         expect(ambient).toEqual({
           store: '/phase/store',
           build: 'build-a',
+          contextDir: '.ab/implement',
           phase: 'implement',
           round: 1,
           session: 's_build',

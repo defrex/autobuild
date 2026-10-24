@@ -324,7 +324,7 @@ describe('layered CLI help catalog', () => {
       land: ['land <slug>'],
       models: ['models [query] [--available]', 'provider-qualified', 'outside sessions'],
       plugin: ['plugin list', 'plugin doctor', 'plugin test', 'AB_RUN_LIVE_PORT_CONTRACTS=1'],
-      context: ['context [--json]', 'Hydrate .ab/', 'inside a build session'],
+      context: ['context [--json]', 'Hydrate $AB_CONTEXT_DIR/', 'inside a build session'],
       artifact: [
         'artifact put',
         '--attach',

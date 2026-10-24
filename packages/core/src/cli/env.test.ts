@@ -44,6 +44,7 @@ describe('resolveCliEnv', () => {
     expect(resolveCliEnv(FULL_ENV)).toEqual({
       store: '/home/user/.autobuild',
       build: 'auth-rate-limit',
+      contextDir: '.ab/implement',
       phase: 'implement',
       round: 2,
       session: 's_9f2',
@@ -217,4 +218,14 @@ describe('parseAbPhase — malformations (D6: precise, named errors)', () => {
   test('verify:e2e without a round defaults to round 1', () => {
     expect(parseAbPhase('verify:e2e')).toEqual({ phase: 'verify:e2e', round: 1 })
   })
+})
+
+test('build context directories validate explicit routing and fallback', () => {
+  expect(resolveCliEnv(FULL_ENV).contextDir).toBe('.ab/implement')
+  expect(resolveCliEnv({ ...FULL_ENV, AB_CONTEXT_DIR: '.ab/implement' }).contextDir).toBe(
+    '.ab/implement',
+  )
+  for (const path of ['', '../outside', '.ab/plan', '.ab/implement/child', '/tmp/context']) {
+    expect(() => resolveCliEnv({ ...FULL_ENV, AB_CONTEXT_DIR: path })).toThrow('AB_CONTEXT_DIR')
+  }
 })

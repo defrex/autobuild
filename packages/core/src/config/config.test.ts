@@ -1454,3 +1454,23 @@ describe('automatic upgrade configuration', () => {
     expect(() => parseConfig(`${READY}\n[upgrade]\ninterval=1\n`)).toThrow('interval')
   })
 })
+
+for (const kind of ['verify', 'finalize'] as const) {
+  test(`${kind} rejects unsafe list and table names with a named diagnostic`, () => {
+    for (const name of ['a/b', 'a\\b', 'a b', 'a:b', '../x', 'é', '.', '..']) {
+      for (const listed of [true, false]) {
+        const input = `${READY}\n[${kind}]\nsteps = ${JSON.stringify(listed ? [name] : [])}\n[${kind}.${JSON.stringify(name)}]\nkind = "agent"\nskill = "custom"\n`
+        expect(() => parseConfig(input)).toThrow(name)
+      }
+    }
+  })
+  test(`${kind} accepts path-safe names including prototype keys`, () => {
+    for (const name of ['Ab1', '.hidden', 'a.b_c-d', '__proto__']) {
+      expect(() =>
+        parseConfig(
+          `${READY}\n[${kind}]\nsteps = [${JSON.stringify(name)}]\n[${kind}.${JSON.stringify(name)}]\nkind = "agent"\nskill = "custom"\n`,
+        ),
+      ).not.toThrow()
+    }
+  })
+}

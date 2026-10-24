@@ -128,9 +128,12 @@ test('node context materializes allocated paths and removes stale contributions'
     join(workspace, 'autobuild.toml'),
     '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
   )
-  await mkdir(join(workspace, '.ab', 'contributions', BUILD), { recursive: true })
-  await writeFile(join(workspace, '.ab', 'contributions', BUILD, 'spec.md'), 'tracked spec')
-  await writeFile(join(workspace, '.ab', 'node-verification.json'), 'tracked index')
+  await mkdir(join(workspace, '.ab/verify-visual', 'contributions', BUILD), { recursive: true })
+  await writeFile(
+    join(workspace, '.ab/verify-visual', 'contributions', BUILD, 'spec.md'),
+    'tracked spec',
+  )
+  await writeFile(join(workspace, '.ab/verify-visual', 'node-verification.json'), 'tracked index')
   await git('add', '.ab')
   await git('add', 'autobuild.toml')
   await git('commit', '-m', 'config')
@@ -156,14 +159,16 @@ test('node context materializes allocated paths and removes stale contributions'
       .handPushedCommits,
   ).toEqual(intent)
   const contribution = manifest.nodeVerification!.contributions[0]!
-  expect(contribution.specPath).not.toBe(`.ab/contributions/${BUILD}/spec.md`)
-  expect(await readFile(join(workspace, '.ab', 'contributions', BUILD, 'spec.md'), 'utf8')).toBe(
-    'tracked spec',
-  )
+  expect(contribution.specPath).not.toBe(`.ab/verify-visual/contributions/${BUILD}/spec.md`)
+  expect(
+    await readFile(join(workspace, '.ab/verify-visual', 'contributions', BUILD, 'spec.md'), 'utf8'),
+  ).toBe('tracked spec')
   expect(await readFile(join(workspace, contribution.specPath), 'utf8')).toContain(
     'auth rate limiting',
   )
-  expect(manifest.materialized[contribution.specPath.slice(4)]).toBe('derived')
+  expect(manifest.materialized[contribution.specPath.slice(manifest.contextDir.length + 1)]).toBe(
+    'derived',
+  )
   expect(
     JSON.parse(await readFile(join(workspace, manifest.nodeVerification!.indexPath), 'utf8'))
       .commits,
@@ -198,13 +203,13 @@ test('missing specs and rejected reads fail without publishing a partial manifes
     exec: spawnExec,
   }
   await expect(buildContext(deps)).rejects.toThrow('missing spec@0')
-  expect(await Bun.file(join(workspace, '.ab/context.json')).exists()).toBe(false)
+  expect(await Bun.file(join(workspace, '.ab/verify-visual/context.json')).exists()).toBe(false)
   store.getArtifact = async (build, kind, rev) => {
     if (build === BUILD) throw new Error('store unavailable')
     return original(build, kind, rev)
   }
   await expect(buildContext(deps)).rejects.toThrow('store unavailable')
-  expect(await Bun.file(join(workspace, '.ab/context.json')).exists()).toBe(false)
+  expect(await Bun.file(join(workspace, '.ab/verify-visual/context.json')).exists()).toBe(false)
 })
 
 test('self identity retains own spec, and leaf context has no provenance reads', async () => {
@@ -227,7 +232,9 @@ test('self identity retains own spec, and leaf context has no provenance reads',
     workspacePath: workspace,
     exec: spawnExec,
   })
-  expect(await readFile(join(workspace, '.ab/spec.md'), 'utf8')).toBe('Authorize node')
+  expect(await readFile(join(workspace, '.ab/verify-visual/spec.md'), 'utf8')).toBe(
+    'Authorize node',
+  )
   store.getBuild = async () => {
     throw new Error('unexpected record read')
   }
@@ -238,7 +245,9 @@ test('self identity retains own spec, and leaf context has no provenance reads',
     exec: spawnExec,
   })
   expect(leaf.nodeVerification).toBeUndefined()
-  expect(await Bun.file(join(workspace, '.ab/node-verification.json')).exists()).toBe(false)
+  expect(await Bun.file(join(workspace, '.ab/verify-visual/node-verification.json')).exists()).toBe(
+    false,
+  )
 })
 
 test('owned hand-pushed intent excludes inherited and side history and survives real replay', async () => {

@@ -425,7 +425,7 @@ describe('ab-guide — durable build-control coverage', () => {
     for (const contract of [
       "guidance answering an agent verifier's own `ab escalate` returns to that same `verify:<step>`",
       '`verify.started.feedback`',
-      'materializes as `.ab/guidance.json`',
+      'materializes as `$AB_CONTEXT_DIR/guidance.json`',
       'the cited start carries it durably across any pre-launch recovery',
       'the matching `session.started` consumes it once after launch',
       'policy escalation after exhausted failed verify reports instead goes to `implement` and outranks the pending report',
@@ -456,7 +456,7 @@ describe('ab-guide — durable build-control coverage', () => {
     const section = headingSection('### Durable build controls: CLI and dashboard')
     expect(section).toBeDefined()
     for (const claim of [
-      '`.ab/guidance.json`',
+      '`$AB_CONTEXT_DIR/guidance.json`',
       'feeds the next `plan` round',
       'An escalation from `implement` or `code-review`',
       "An agent verifier's own escalation feeds the next run of that same",

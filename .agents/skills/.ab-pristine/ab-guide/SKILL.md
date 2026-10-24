@@ -84,7 +84,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   starts builds up to the top-level `capacity` bound.
 - **Ticket assets** — files or folders attached to a ticket (see
   [Ticket assets](#ticket-assets)) are frozen into the build at claim and
-  appear under `.ab/assets/` in every phase, as inputs alongside the spec.
+  appear under `$AB_CONTEXT_DIR/assets/` in every phase, as inputs alongside the spec.
   A `design` asset is part of the contract: `plan`, `plan-review`, `implement`,
   `code-review`, and agent verify steps judge against it, as a contract on
   observable visual and reference outcomes, not on implementation. Other kinds
@@ -633,8 +633,12 @@ Names must already exist in `[verify].steps` with matching tables; duplicates,
 blanks, unknown names, malformed metadata, and omission of an `always = true`
 step make the planner's `ab done` fail before `plan.completed` is appended.
 
+Repository-authored verify and finalize skills must run `ab context`, then read
+`"$AB_CONTEXT_DIR/context.json"` and the inputs under `$AB_CONTEXT_DIR`.
+Materialized keys are directory-relative; manifest path fields are workspace-relative.
+
 An agent verify step is handed the build's pinned ticket assets under
-`.ab/assets/` (listed in `.ab/context.json`) as well as the spec. A verify skill
+`$AB_CONTEXT_DIR/assets/` (listed in `$AB_CONTEXT_DIR/context.json`) as well as the spec. A verify skill
 should treat a `design` asset as part of the contract, a contract on observable
 visual and reference outcomes, not on implementation, and judge the result
 against it.
@@ -1519,8 +1523,8 @@ assets are not moved and are not a fallback. Each has a kind and a name.
   `--revise-spec-from-ticket` pins again. `ab build asset get <slug> <kind>
   <name> <dest> [--rev <n>]` downloads what the build froze, also after it ends.
 - **Where phases find them.** `ab context` writes each pinned asset to
-  `.ab/assets/<kind>/<name>/` (a file asset is the single file inside that
-  directory) and lists them under `assets` in `.ab/context.json` with kind,
+  `$AB_CONTEXT_DIR/assets/<kind>/<name>/` (a file asset is the single file inside that
+  directory) and lists them under `assets` in `$AB_CONTEXT_DIR/context.json` with kind,
   name, revision, layout, size, and path. The key is absent when the build has
   none.
 
@@ -1849,7 +1853,7 @@ and delivered as authoritative guidance. With no text (or only whitespace), it
 requests a bare retry and supplies no agent guidance. Verify has two explicit
 answer routes: guidance answering an agent verifier's own `ab escalate` returns
 to that same `verify:<step>` on `verify.started.feedback` and materializes as
-`.ab/guidance.json`; the cited start carries it durably across any pre-launch
+`$AB_CONTEXT_DIR/guidance.json`; the cited start carries it durably across any pre-launch
 recovery, and the matching `session.started` consumes it once after launch.
 Guidance answering the policy escalation after exhausted failed verify reports
 instead goes to `implement` and outranks the pending report. A bare retry on either path carries
@@ -1872,18 +1876,18 @@ after the winner is delivered. Destinations remain independent, and a new
 answer recorded after an earlier delivery is eligible for the next appropriate
 run. `finalize` and `reconcile` receive their own answers on their next attempt.
 In each of these routed cases, `ab context`
-writes the answer to `.ab/guidance.json` in the build's workspace, and the
+writes the answer to `$AB_CONTEXT_DIR/guidance.json` in the build's workspace, and the
 receiving skill treats it as authoritative feedback for that round or attempt.
 A producer round's feedback is exclusive: on a guidance round
-`.ab/guidance.json` replaces the reviewer's findings or a routed-back verify
+`$AB_CONTEXT_DIR/guidance.json` replaces the reviewer's findings or a routed-back verify
 failure, so the answer has to carry what the agent needs. A bare retry writes no
-`.ab/guidance.json` and displaces nothing: the resumed round still gets whatever
+`$AB_CONTEXT_DIR/guidance.json` and displaces nothing: the resumed round still gets whatever
 the loop was already routing, such as the last review round's findings.
 
 `--dismiss` is per escalation. It answers only blockers that cite at least one
 real plan-review or code-review finding; blockers with no such citation remain
 open. A dismissed finding id means a human retired that disagreement. The next
-reviewer receives `.ab/dismissed-findings.json`, must not re-raise the finding,
+reviewer receives `$AB_CONTEXT_DIR/dismissed-findings.json`, must not re-raise the finding,
 and must use a fresh id without `persists` if a genuinely different problem
 touches the same code. Dismissal settles a chain, not a file or the reviewer's
 ability to report new problems.

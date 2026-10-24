@@ -183,14 +183,16 @@ test('node conflict runner resolves the source build with its own spec and plan'
       ...happyHandlers(),
       reconcile: async (cli) => {
         await cli.run(['context'])
-        const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+        const manifest = await Bun.file(join(cli.ws, cli.env.contextDir!, 'context.json')).json()
         expect(manifest.nodeChange).toMatchObject({
           owner: ownerSlug,
           build: sourceSlug,
           foreign: false,
         })
-        expect(await Bun.file(join(cli.ws, '.ab/spec.md')).text()).toBe(sourceSpec)
-        expect(await Bun.file(join(cli.ws, '.ab/plan.md')).text()).toContain('Add rate-limit.txt')
+        expect(await Bun.file(join(cli.ws, cli.env.contextDir!, 'spec.md')).text()).toBe(sourceSpec)
+        expect(await Bun.file(join(cli.ws, cli.env.contextDir!, 'plan.md')).text()).toContain(
+          'Add rate-limit.txt',
+        )
         await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve root and source intent\n')
         await git(['add', 'rate-limit.txt'], cli.ws)
         await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
@@ -299,14 +301,18 @@ for (const waiting of ['blocked', 'paused'] as const)
         ...happyHandlers(),
         reconcile: async (cli) => {
           await cli.run(['context'])
-          const manifest = await Bun.file(join(cli.ws, '.ab/context.json')).json()
+          const manifest = await Bun.file(join(cli.ws, cli.env.contextDir!, 'context.json')).json()
           expect(manifest.nodeChange).toMatchObject({
             owner: ownerSlug,
             build: sourceSlug,
             foreign: false,
           })
-          expect(await Bun.file(join(cli.ws, '.ab/spec.md')).text()).toBe(sourceSpec)
-          expect(await Bun.file(join(cli.ws, '.ab/plan.md')).text()).toContain('Add rate-limit.txt')
+          expect(await Bun.file(join(cli.ws, cli.env.contextDir!, 'spec.md')).text()).toBe(
+            sourceSpec,
+          )
+          expect(await Bun.file(join(cli.ws, cli.env.contextDir!, 'plan.md')).text()).toContain(
+            'Add rate-limit.txt',
+          )
           await Bun.write(join(cli.ws, 'rate-limit.txt'), 'preserve root and source intent\n')
           await git(['add', 'rate-limit.txt'], cli.ws)
           await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cli.ws)
@@ -1074,7 +1080,7 @@ test('operator revision retries failed node verification on the same head withou
       'spec-check': async (cli) => {
         await cli.run(['context'])
         if (cli.env.build === nodeSlug) {
-          expect(await Bun.file(`${cli.ws}/.ab/spec.md`).text()).toBe(replacement)
+          expect(await Bun.file(`${cli.ws}/${cli.env.contextDir}/spec.md`).text()).toBe(replacement)
           nodeContexts++
         }
         await cli.run(['verdict', 'pass'])

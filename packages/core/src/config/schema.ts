@@ -1,3 +1,4 @@
+import { isSafeStepName } from '../context-directory'
 /**
  * autobuild.toml schema (SPEC §16.1, D9): the one declarative per-repo config
  * file. Declarative, not executable — the kernel, dispatcher, CLI, and any
@@ -95,7 +96,7 @@ function stepSection<T, C>(
     .prefault({})
   documentSchema(stepsSchema, {
     description:
-      'Ordered names of the configured step tables. Every listed step must have a table and every table must be listed.',
+      'Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.',
   })
   documentSchema(tableSchema, {
     description:
@@ -1180,8 +1181,10 @@ documentFields(configRootSchema, {
   pr: 'Pull request review image hosting configuration.',
   workspace: 'Workspace provider selector and provider-specific configuration.',
   commands: 'Named shell commands used by setup and deterministic checks.',
-  verify: 'Ordered verification steps and applicability rules.',
-  finalize: 'Ordered post-PR steps. Failures are recorded without blocking the PR.',
+  verify:
+    'Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
+  finalize:
+    'Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
   roles: 'Named agent roles. The reserved default role provides inherited runtime axes.',
   policy: 'Lifecycle budgets, retries, convergence and harvest limits.',
   orchestrator:
@@ -1215,6 +1218,19 @@ export const TOP_LEVEL_KEYS = Object.keys(configRootSchema.shape)
  * discipline applied to config).
  */
 export const configSchema = configRootSchema.superRefine((config, ctx) => {
+  for (const kind of ['verify', 'finalize'] as const) {
+    const section = config[kind]
+    if (!section) continue
+    for (const name of new Set([...section.steps, ...Object.keys(section.stepConfigs)])) {
+      if (!isSafeStepName(name))
+        ctx.addIssue({
+          code: 'custom',
+          path: [kind, name],
+          message: `${kind} step "${name}" must contain only ASCII letters, digits, ., _ or - and cannot be . or ..`,
+        })
+    }
+  }
+
   const firstPluginIndex = new Map<string, number>()
   config.plugins.forEach((specifier, index) => {
     const firstIndex = firstPluginIndex.get(specifier)

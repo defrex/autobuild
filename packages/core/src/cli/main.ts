@@ -248,7 +248,7 @@ function requireSession(command: string, deps: SessionlessCliDeps): CliDeps {
   ) {
     throw new Error(
       `'ab ${command}' runs inside a build session — the runner sets AB_STORE, ` +
-        'AB_BUILD, AB_PHASE, AB_SESSION for every session (SPEC §8.1, D8). ' +
+        'AB_BUILD, AB_PHASE, AB_SESSION, AB_CONTEXT_DIR for every session (SPEC §8.1, D8). ' +
         'Use `ab help` for commands that run sessionless.',
     )
   }
@@ -408,6 +408,7 @@ function renderManifest(manifest: ContextManifest): string[] {
     `context materialized for ${manifest.build} — ${manifest.phase}@${manifest.round}`,
     `required deposits: ${manifest.required.join(', ') || '(none)'}`,
     `allowed terminals: ${manifest.allowedTerminals.join(', ')}`,
+    `directory: ${manifest.contextDir}`,
     `manifest: ${manifest.manifestPath}`,
   ]
   if (manifest.notesPath !== undefined) lines.push(`notes path: ${manifest.notesPath}`)
@@ -420,7 +421,7 @@ function renderManifest(manifest: ContextManifest): string[] {
   if (manifest.step !== undefined) {
     lines.push(`verify step: ${manifest.step.name} (kind ${manifest.step.config.kind})`)
   }
-  lines.push('.ab/ files:')
+  lines.push(`${manifest.contextDir}/ files:`)
   const entries = Object.entries(manifest.materialized)
   if (entries.length === 0) {
     lines.push('  (none)')
