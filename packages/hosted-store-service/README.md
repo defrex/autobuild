@@ -65,7 +65,7 @@ See [remote store authority](../../docs/remote-store-protocol.md#7-authenticatio
 - `BETTER_AUTH_URL`: exact public origin (`http://localhost:3000` locally).
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: server-only OAuth app values.
 - `AB_WEB_AUTH_PROVIDERS=github`: enabled provider set.
-- `AB_WEB_ALLOWED_EMAILS`: comma-separated, case-insensitive operator allowlist.
+- `AB_WEB_SUPER_USER_EMAILS`: comma-separated, case-insensitive super-user email list.
 - `AB_WEB_REPOSITORIES` (deprecated): optional once-per-database import of
   normalized repository origins. The durable registry is authoritative after
   import; edits and restarts never resurrect removed projects.
@@ -121,7 +121,10 @@ and adding identity. SSH git spellings normalize to HTTPS; local paths and
 credential-bearing HTTPS URLs are rejected. Duplicate adds preserve metadata;
 remove is idempotent, and re-adding records a fresh addition.
 
-Every allowlisted signed-in user owns every registered project. The dashboard,
+Super users can operate every registered project. Organization members can
+operate only active projects assigned to their organizations; legacy unassigned
+projects are visible only to super users. Membership is granted by normalized
+email, including before first sign-in, and is rechecked on every request. The dashboard,
 MCP discovery and calls, and every operator API route consult current
 registration. Removal hides a project from all these surfaces and subsequent
 hosted dispatcher invocations; builds, events, artifacts and tickets remain,
@@ -155,3 +158,14 @@ message, and all `AB_TICKET_*_STATE` lifecycle variables are removed and ignored
 See [project ticket migration](../../docs/hosted-service.md#hosted-ticket-projects-and-v1-migration)
 for atomic v1 upgrades, owner `tickets assign-team` recovery, and the blob
 credentials/access/prefix required during populated-v1 deployment builds.
+
+
+The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
+Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
+are deployment maintainers. Bootstrap the first organization through the
+[browser management contract](../../docs/operator-api.md#organization-management-browser),
+then add members by email and assign legacy unassigned projects. Super users alone
+create orgs, set or clear the single owner, and assign or move projects. Owners
+manage their org's members. Removing the last membership or super-user designation
+revokes human access on the next request without re-login; existing project
+credentials remain valid until revoked.

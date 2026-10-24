@@ -18,3 +18,6 @@ export type { WebAuthConfig, WebAuthProvider, WebEnv } from './web/config'
 export { createWebGateway } from './web/gateway'
 export type { GatewaySession, WebGatewayOptions } from './web/gateway'
 export { hostedService, webGateway } from './web/runtime'
+
+export { createOrganizationHandler } from './web/organizations'
+export { HumanAccess, humanAccess, organizationStore, validSession } from './web/access'

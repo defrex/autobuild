@@ -10,6 +10,7 @@
  * StreamableHTTPClientTransport, exactly the machinery Claude web, Claude
  * Code, and Codex bring, so contract drift on either side fails loudly.
  */
+import { testAccess } from '../testing/access'
 import { describe, expect, test } from 'bun:test'
 import { refreshAuthorization } from '@modelcontextprotocol/sdk/client/auth.js'
 import type {
@@ -42,7 +43,7 @@ import { MCP_SERVER_INSTRUCTIONS } from './mcp'
 describe('hosted MCP over OAuth (memory adapter)', () => {
   const env = { ...baseEnv }
   const db = emptyDB()
-  const auth = createWebAuth(env, { database: memoryAdapter(db) })
+  const auth = createWebAuth(env, { access: testAccess(env), database: memoryAdapter(db) })
   const { app, backing } = buildApp(env, auth)
   let adaCookie = ''
   let adaTokens: OAuthTokens | undefined
@@ -237,8 +238,10 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
   })
 
   test('a non-allowlisted operator completes authorization but is refused at the resource', async () => {
+    env.AB_WEB_SUPER_USER_EMAILS += ',mallory@example.com'
     const seeded = await seedUser(auth, 'mallory@example.com', db)
     const tokens = await authorizeFlow(app, seeded.cookie)
+    env.AB_WEB_SUPER_USER_EMAILS = baseEnv.AB_WEB_SUPER_USER_EMAILS!
     const response = await app(toolsListRequest(tokens.access_token!, 4))
     expect(response.status).toBe(403)
   })
