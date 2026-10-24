@@ -12,8 +12,16 @@ the diff and not to decide applicability again.
 
 ## Session shape
 
-1. Run `ab context`. If it materializes `.ab/guidance.json`, this is an
-   answered escalation for the retried verification: read it first and apply
+1. Run `ab context`, then resolve `context_dir="${AB_CONTEXT_DIR:-.ab}"`
+   (unset or empty falls back to `.ab`). Read the printed manifest, normally
+   `"$context_dir/context.json"`, and its materialized inputs from that context
+   directory. Follow printed or manifest-allocated paths when they differ;
+   use allocated paths verbatim, without adding another context prefix.
+   Quote variable-derived paths and reuse or recompute `context_dir` in later
+   shell invocations.
+   If the manifest lists guidance (normally `"$context_dir/guidance.json"`),
+   this is an answered escalation for the retried verification: read it first
+   and apply
    the guidance while performing the same dashboard capture and visual
    inspection below. If the file is absent, continue with the existing flow
    unchanged.
