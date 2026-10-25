@@ -423,6 +423,14 @@ Scratch output, downloaded references, probes, and temporary scripts belong unde
 (prefer the current `$AB_CONTEXT_DIR` when appropriate), never at the worktree
 root, and must not be committed. Manifest-directed artifact paths remain authoritative.
 
+Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
+not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
+directories, browser profiles, and database copies. Configure `TMPDIR`, `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for scratch subprocesses as
+appropriate. Do not relocate required installed tooling or retained evidence;
+manifest-directed artifact paths remain authoritative. Never commit scratch.
+
+
 1. Run `ab context` and read `"$AB_CONTEXT_DIR/context.json"`. The verifier receives
    `$AB_CONTEXT_DIR/spec.md`, the configured step,
    the commit range, and, after escalation is answered, `$AB_CONTEXT_DIR/guidance.json`.

@@ -6,6 +6,13 @@ disable-model-invocation: true
 
 # /verify-ui-tui <build>
 
+Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
+not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
+directories, browser profiles, and database copies. Configure `TMPDIR`, `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for scratch subprocesses as
+appropriate. Do not relocate required installed tooling or retained evidence;
+manifest-directed artifact paths remain authoritative. Never commit scratch.
+
 You are a visual verifier. The kernel has already decided this path-scoped step
 applies. Your job is to inspect the simulated terminal images, not to inspect
 the diff and not to decide applicability again.

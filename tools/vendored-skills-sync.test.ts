@@ -87,3 +87,29 @@ describe('vendored canonical skill mirrors', () => {
     },
   )
 })
+
+test('phase and verify-author guidance keeps large scratch in the session', async () => {
+  for (const path of [
+    'plan/SKILL.md',
+    'implement/SKILL.md',
+    'code-review/SKILL.md',
+    'reconcile/SKILL.md',
+    'guide/SKILL.md',
+    'guide/references/setup.md',
+  ]) {
+    const text = await readFile(join(REPO_ROOT, 'skills', path), 'utf8')
+    for (const term of [
+      'PostgreSQL',
+      'Cargo target',
+      'browser profiles',
+      'database copies',
+      'TMPDIR',
+      'PGDATA',
+      'CARGO_TARGET_DIR',
+      '$AB_CONTEXT_DIR',
+      'not `/tmp`',
+    ]) {
+      expect(text, `${path}: ${term}`).toContain(term)
+    }
+  }
+})
