@@ -14,7 +14,7 @@ slug: "configuration"
 
 ## Commands and extension steps
 
-Verify and finalize steps run named commands or agent skills, in order:
+Verify and finalize steps run named commands or agent skills. Verification runs ordered stages whose members may run concurrently; finalize post-steps run serially. A plain list of verify step names keeps serial execution, as in this example:
 
 ```toml
 [commands]

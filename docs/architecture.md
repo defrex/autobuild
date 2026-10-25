@@ -652,7 +652,10 @@ so the detached SDK command plus VM stop owns full teardown. Scoped Store facts
 are the only state channel. Remote terminals append `publication.requested` and
 park. Only confirmed VM teardown plus execution-lease release permits the local
 supervisor to use the provider's exact SHA/branch publication capability; a
-rejected/uncertain executor completion leaves the request pending. The supervisor
+rejected/uncertain executor completion leaves the request pending. Recovery from
+supervisor loss applies the same gate: observing guest exit must stop the entire
+sandbox before returning terminal evidence. Stop failure retains the open
+execution and its lease for retry. The supervisor
 verifies the remote head and records the ordinary completion; PR API operations
 remain on the dispatcher. A failed finalize post-step publication records the
 ordinary failure-tolerant step outcome and follow-up observation rather than
@@ -1565,6 +1568,14 @@ pending controls, landing intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
+
+Verification stages are planned purely in `kernel/verify-stages.ts`, shared by
+leaf and integration decisions in `kernel/engine.ts`. The build runner keeps
+only live per-member handles and recovery contexts; durable starts, outcomes,
+cancellations and failed-stage receipts drive every barrier and restart.
+Fail-fast cancellation records facts before whole-execution teardown and
+replacement. `kernel/verify-stage-state.ts` owns occurrence/session associations,
+including escalation supersession and complete implement feedback references.
 
 ## Operator presence
 

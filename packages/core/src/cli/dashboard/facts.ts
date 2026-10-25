@@ -14,7 +14,7 @@ import type { AbEvent } from '../../events/catalog'
 import { defineReducer } from '../../kernel/incremental'
 import { verifyPhase } from '../../ontology'
 
-export const DASHBOARD_FACTS_REDUCER_VERSION = 2
+export const DASHBOARD_FACTS_REDUCER_VERSION = 3
 
 /** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
  * seq of the `*.started` event, so callers can scope by the same seq
@@ -130,6 +130,7 @@ function foldInterval(intervals: Record<string, PhaseTiming>, ev: AbEvent): void
     case 'verify.started':
       open(verifyPhase(ev.payload.step))
       break
+    case 'verify.cancelled':
     case 'verify.completed':
       close(verifyPhase(ev.payload.step))
       break

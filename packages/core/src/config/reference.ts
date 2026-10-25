@@ -37,10 +37,12 @@ function fail(path: string, message: string): never {
 function metadata(schema: z.ZodType, path: string): ReferenceMetadata {
   const result = referenceMetadata(schema) ?? {}
   for (const [key, value] of Object.entries(result)) {
-    if (!['description', 'constraints', 'required', 'examples', 'structure'].includes(key))
+    if (
+      !['description', 'constraints', 'required', 'examples', 'structure', 'default'].includes(key)
+    )
       fail(path, `unknown metadata ${key}`)
     if (
-      ['description', 'constraints', 'required'].includes(key) &&
+      ['description', 'constraints', 'required', 'default'].includes(key) &&
       (typeof value !== 'string' || !value.trim())
     )
       fail(path, `blank or malformed ${key}`)
@@ -155,7 +157,13 @@ function input(schema: z.ZodType, path: string): Input {
     optional = true
     fallback = `${JSON.stringify(definition(current).defaultValue)} (input supplied on omission)`
   }
-  return { schema: current, metadata: meta, optional, default: fallback, constraints }
+  return {
+    schema: current,
+    metadata: meta,
+    optional,
+    default: meta.default ?? fallback,
+    constraints,
+  }
 }
 function typeOf(value: Input, path: string): string {
   if (value.metadata.structure) return 'table'
@@ -177,8 +185,11 @@ function typeOf(value: Input, path: string): string {
       return Object.values(def.entries!)
         .map((v) => JSON.stringify(v))
         .join(' | ')
-    case 'array':
-      return `array of ${typeOf(input(def.element!, `${path}[]`), `${path}[]`)}`
+    case 'array': {
+      const elementInput = input(def.element!, `${path}[]`)
+      const element = typeOf(elementInput, `${path}[]`)
+      return `array of ${definition(elementInput.schema).type === 'union' ? `(${element})` : element}`
+    }
     case 'union':
       return def.options!.map((v) => typeOf(input(v, path), path)).join(' | ')
     default:

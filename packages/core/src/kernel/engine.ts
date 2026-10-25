@@ -1,3 +1,5 @@
+import { activeVerifyStage } from './verify-stages'
+import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 /**
@@ -43,6 +45,7 @@ import { stalledChains, type FindingChain } from './stall'
 // ── The decision contract ────────────────────────────────────────────────────
 
 export type WaitReason =
+  | 'verify-stage'
   | 'mixed-version'
   | 'blocked'
   | 'paused'
@@ -63,7 +66,30 @@ export type VerifyAction =
 
 export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
 
+export type VerifyMemberDecision =
+  | VerifyAction
+  | {
+      kind: 'evaluate-verify'
+      step: string
+      attempt: number
+      paths: string[]
+      action: VerifyAction
+    }
+  | {
+      kind: 'skip-verify'
+      step: string
+      attempt: number
+      reason: string
+      skipCause?: 'post-reconcile-policy'
+    }
 export type Decision =
+  | { kind: 'restart-execution' }
+  | { kind: 'run-verify-stage'; members: VerifyMemberDecision[] }
+  | { kind: 'cancel-verify-stage'; steps: string[]; cause: string; attempt: number }
+  | {
+      kind: 'record-verify-stage-failure'
+      failure: import('../events/payloads').EventPayload<'verify.stage-failed'>
+    }
   | ({ kind: 'raise-read-deferral' } & import('./read-deferrals').ReadDeferral)
   | { kind: 'restack'; trigger: 'verify-entry' | 'awaiting-landing'; cycle: number }
   | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
@@ -74,6 +100,7 @@ export type Decision =
       phase: CorePhase
       round: number
       feedback?: Feedback
+      verifyStageFailure?: number
       /** Present iff phase === 'reconcile'; execution resolves its base (§15.7). */
       reconcile?: { attempt: number }
     }
@@ -129,6 +156,48 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
  * the event array. `decideNext(events, config)` is exactly this over
  * `reduceBuild(events)` and `indexLog(events)`. */
 export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Config): Decision {
+  const decision = decideNextInternal(
+    state,
+    {
+      ...log,
+      verifyCompleted: log.verifyCompleted.filter((r) => {
+        const cancellation = state.verifyStage.cancellations[verifyMemberKey(r.step, r.attempt)]
+        return cancellation === undefined || r.seq < cancellation.seq
+      }),
+    },
+    config,
+  )
+  if (
+    decision.kind !== 'run-phase' ||
+    decision.phase !== 'implement' ||
+    config.verify.stages === undefined
+  )
+    return decision
+  const receipt =
+    state.verifyStage.failures.findLast(
+      (f) =>
+        f.cycle >=
+          Math.max(log.restartSeq, log.code.latestApproveSeq, log.lastReconcileCompletedSeq) &&
+        f.seq > log.lastImplementCompletedSeq,
+    ) ??
+    state.verifyStage.failures.find(
+      (f) => f.seq === state.verifyStage.implementations[String(decision.round)],
+    )
+  if (!receipt) return decision
+  const first = receipt.failed.find((f) => f.report !== undefined)
+  return {
+    ...decision,
+    verifyStageFailure: receipt.seq,
+    ...(decision.feedback && 'guidance' in decision.feedback
+      ? {}
+      : {
+          feedback: first?.report
+            ? { verify: { step: first.step, report: first.report } }
+            : undefined,
+        }),
+  }
+}
+function decideNextInternal(state: BuildState, log: LogIndex, config: Config): Decision {
   if (mixedVersionDeferred(state)) return { kind: 'wait', reason: 'mixed-version' }
   // ── 1. Terminal (§15.5: terminal wins, latest wins) ────────────────────────
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
@@ -154,7 +223,55 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
 
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).
-  if (state.openEscalations.length > 0) return { kind: 'wait', reason: 'blocked' }
+  const stageCycle =
+    state.kind === 'node'
+      ? (state.integration?.cycle?.seq ?? 0)
+      : Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq, log.restartSeq)
+  const stage =
+    config.verify.stages === undefined
+      ? undefined
+      : activeVerifyStage(
+          config.verify,
+          state.kind === 'node'
+            ? log.verifyCompleted.filter(
+                (r) =>
+                  r.restackId === state.integration?.cycle?.id &&
+                  r.headSha === state.integration?.cycle?.head &&
+                  r.baseSha === state.integration?.cycle?.parent,
+              )
+            : log.verifyCompleted,
+          state.verifyStage,
+          stageCycle,
+        )
+  const heldVerifier = (step: string): boolean =>
+    state.openEscalations.some(
+      (e) =>
+        e.source === 'agent' &&
+        e.session !== undefined &&
+        state.verifyStage.owners[e.session] === verifyMemberKey(step, state.verify.maxAttemptSeen),
+    )
+  if (
+    state.openEscalations.some(
+      (e) =>
+        !(
+          stage &&
+          e.source === 'agent' &&
+          e.session !== undefined &&
+          stage.stage.some(
+            (step) =>
+              state.verifyStage.owners[e.session!] ===
+              verifyMemberKey(step, state.verify.maxAttemptSeen),
+          )
+        ),
+    )
+  )
+    return { kind: 'wait', reason: 'blocked' }
+  if (
+    state.verifyStage.cleanupExecutionSeq !== undefined &&
+    state.verifyStage.executionSeq <= state.verifyStage.cleanupExecutionSeq &&
+    !(stage?.cause && stage.unfinished.length)
+  )
+    return { kind: 'restart-execution' }
   const deferred = log.readDeferrals.find((item) => item.ended)
   if (deferred) return { kind: 'raise-read-deferral', ...deferred }
   if (state.kind === 'node') {
@@ -186,7 +303,38 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     )
     const attempts = [...results, ...starts].map((result) => result.attempt)
     const attempt = attempts.length ? Math.max(...attempts) : log.maxVerifyAttemptEver + 1
-    for (const step of config.verify.steps) {
+    if (stage?.cause && stage.unfinished.length)
+      return {
+        kind: 'cancel-verify-stage',
+        steps: stage.unfinished,
+        cause: stage.cause.step,
+        attempt,
+      }
+    if (
+      stage?.settled &&
+      stage.failures.length &&
+      !state.verifyStage.failures.some((f) => f.cycle === cycle.seq && f.attempt === attempt)
+    )
+      return {
+        kind: 'record-verify-stage-failure',
+        failure: {
+          cycle: cycle.seq,
+          stage: stage.stage,
+          attempt,
+          restackId: cycle.id,
+          headSha: cycle.head,
+          baseSha: cycle.parent,
+          failed: stage.failures.map((f) => ({
+            step: f.step,
+            ...(f.report ? { report: f.report } : {}),
+          })),
+          cancelled: stage.cancellations.map((c) => ({ step: c.step, cause: c.cause })),
+        },
+      }
+    if (stage?.settled && stage.failures.length) return { kind: 'wait', reason: 'blocked' }
+    const members: VerifyMemberDecision[] = []
+    for (const step of stage?.unfinished ?? config.verify.steps) {
+      if (stage && heldVerifier(step)) continue
       if (
         results.some(
           (result) =>
@@ -204,10 +352,17 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
               attempt,
             }
           : { kind: 'run-agent-verify', step, skill: selected.skill, attempt }
-      return selected.paths === undefined || selected.always === true
-        ? action
-        : { kind: 'evaluate-verify', step, attempt, paths: selected.paths, action }
+      const member: VerifyMemberDecision =
+        selected.paths === undefined || selected.always === true
+          ? action
+          : { kind: 'evaluate-verify', step, attempt, paths: selected.paths, action }
+      if (!stage) return member
+      members.push(member)
     }
+    if (stage)
+      return members.length
+        ? { kind: 'run-verify-stage', members }
+        : { kind: 'wait', reason: 'verify-stage' }
     return { kind: 'wait', reason: 'awaiting-pr' }
   }
   // revise-spec: park until the human lands spec rev N+1 (§6.3); the
@@ -347,9 +502,46 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   // (including failures) do not carry across a spec revision (§6.3). Attempt
   // NUMBERS, by contrast, continue monotonically over the full log — see the
   // attempt computation below and LogIndex.maxVerifyAttemptEver.
+  if (stage?.cause && stage.unfinished.length)
+    return {
+      kind: 'cancel-verify-stage',
+      steps: stage.unfinished,
+      cause: stage.cause.step,
+      attempt: stage.cause.attempt,
+    }
+  if (
+    stage?.settled &&
+    stage.failures.length &&
+    !state.verifyStage.failures.some(
+      (f) => f.cycle === cycleBoundary && f.attempt === stage.failures[0]!.attempt,
+    )
+  )
+    return {
+      kind: 'record-verify-stage-failure',
+      failure: {
+        cycle: cycleBoundary,
+        ...(stage.failures[0]!.baseSha === undefined
+          ? {}
+          : { baseSha: stage.failures[0]!.baseSha }),
+        ...(stage.failures[0]!.headSha === undefined
+          ? {}
+          : { headSha: stage.failures[0]!.headSha }),
+        ...(stage.failures[0]!.restackId === undefined
+          ? {}
+          : { restackId: stage.failures[0]!.restackId }),
+        stage: stage.stage,
+        attempt: stage.failures[0]!.attempt,
+        failed: stage.failures.map((f) => ({
+          step: f.step,
+          ...(f.report ? { report: f.report } : {}),
+        })),
+        cancelled: stage.cancellations.map((c) => ({ step: c.step, cause: c.cause })),
+      },
+    }
   const fails = log.verifyCompleted.filter((v) => v.outcome === 'fail')
   const lastFail = fails.at(-1)
   if (
+    (stage === undefined || stage.settled) &&
     lastFail !== undefined &&
     new Set(fails.map((failure) => failure.attempt)).size >= config.policy.maxVerifyAttempts &&
     !raisedAfter(lastFail.seq, 'policy', verifyPhase(lastFail.step))
@@ -365,7 +557,7 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
       question: `maxVerifyAttempts (${config.policy.maxVerifyAttempts}) exhausted: verify:${lastFail.step} is still failing`,
     }
   }
-  if (pendingFail !== undefined) {
+  if (pendingFail !== undefined && (stage === undefined || stage.settled)) {
     // A pending fail in the current cycle routes back into the code loop
     // (§15.6-A) — it never re-runs the step directly. Guidance outranks the
     // verify report (§15.6-B: a human answer is authoritative feedback).
@@ -428,17 +620,17 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
           steps: new Set(approvedPlan.verifySteps),
           planRev: approvedPlan.artifact.rev,
         }
-  for (const step of config.verify.steps) {
+  const memberDecision = (step: string): VerifyMemberDecision | undefined => {
     // First unsatisfied step in the current cycle runs next — only an explicit
     // pass or skip satisfies that step. A failure anywhere was handled above
     // and therefore can never be hidden by another step's skip.
     if (
       cycleResults.some((v) => v.step === step && (v.outcome === 'pass' || v.outcome === 'skipped'))
     ) {
-      continue
+      return undefined
     }
     const stepConfig = config.verify.stepConfigs[step]
-    if (stepConfig === undefined) continue // unreachable: configSchema cross-validates (§16.1)
+    if (stepConfig === undefined) return undefined // unreachable: configSchema cross-validates (§16.1)
 
     const exclusion = policy?.steps.find((s) => s.step === step && !s.enabled)
     if (exclusion !== undefined)
@@ -500,6 +692,18 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
       action,
     }
   }
+  const members: VerifyMemberDecision[] = []
+  for (const step of stage?.unfinished ?? config.verify.steps) {
+    if (stage && heldVerifier(step)) continue
+    const member = memberDecision(step)
+    if (!member) continue
+    if (!stage) return member
+    members.push(member)
+  }
+  if (stage)
+    return members.length
+      ? { kind: 'run-verify-stage', members }
+      : { kind: 'wait', reason: 'verify-stage' }
 
   // ── 8. Finalize (§5): all verify steps satisfied in the current cycle ─────
   if (!log.finalizeCompleted) return { kind: 'run-phase', phase: 'finalize', round: 1 }

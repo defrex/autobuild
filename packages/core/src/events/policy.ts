@@ -116,6 +116,8 @@ export const buildEventPolicy = {
   'code-review.verdict': 'decisive',
   'verify.reconcile-policy-captured': 'decisive',
   'verify.started': 'decisive',
+  'verify.cancelled': 'decisive',
+  'verify.stage-failed': 'decisive',
   'verify.completed': 'decisive',
   'finalize.started': 'decisive',
   'finalize.completed': 'decisive',

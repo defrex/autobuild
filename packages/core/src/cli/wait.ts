@@ -207,7 +207,11 @@ function stateSatisfies(
     case 'pr':
       return state.prState === cond.prState
     case 'phase':
-      return (state.phase ?? null) === cond.phase
+      return (
+        (state.phase ?? null) === cond.phase ||
+        (cond.phase.startsWith('verify:') &&
+          (state.verify.running ?? []).includes(cond.phase.slice(7)))
+      )
     case 'consent':
       return awaitsConsent(state, restack)
     case 'node-landed':

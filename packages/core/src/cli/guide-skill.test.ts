@@ -461,7 +461,8 @@ describe('ab-guide — durable build-control coverage', () => {
       'An escalation from `implement` or `code-review`',
       "An agent verifier's own escalation feeds the next run of that same",
       'policy escalation instead feeds the next `implement` round and takes',
-      "A producer round's feedback is exclusive",
+      'A producer round has one immediate feedback kind',
+      '`verifyStageFailure` receipt remains',
     ]) {
       expect(section ?? '').toContain(claim)
     }
