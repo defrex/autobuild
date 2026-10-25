@@ -1,10 +1,11 @@
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { authorizeRemoteHandoffs } from '../kernel/dispatch-drain-recovery'
 import { readBuildFacts } from '../store/reduced-reads'
 import { relaunchTarget } from '../processes/execution-relaunch'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { distributionStampFor } from '../ports/workspace/distribution-archive'
-import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
@@ -30,6 +31,8 @@ import {
 } from '../ports/workspace/vercel-sandbox'
 import { MemoryBuildStore } from '../store/memory'
 import { systemClock } from '../store/types'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const SHA = 'a'.repeat(40)
 const BASE = 'b'.repeat(40)

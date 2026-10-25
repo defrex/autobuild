@@ -1,9 +1,12 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bunExec } from './github'
 import { gitRewrite } from './git-rewrite'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 for (const local of [true, false]) {
   for (const branch of ['ab/probe', 'ab-node/probe']) {

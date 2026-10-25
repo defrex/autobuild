@@ -699,6 +699,16 @@ dispatcher — requires an exported token before any side effect and never consu
 a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
 injects that same token.
 
+**Hosted sandbox lifetime.** `createHostedOperatorSandboxService` owns its default
+local scratch root and removes it on construction failure or asynchronous,
+idempotent `dispose()`. Explicit caller scratch remains caller-owned. Disposal
+cleans local composition resources, independently of durable remote sandbox
+`release`. The operator archive handler disposes a backend acquired through
+`sandboxFor` after each request, including failure; a static backend retains its
+caller's lifetime. Distribution packing likewise protects both temporary roots
+from allocation onward and awaits both cleanup attempts before returning bytes
+or reporting failure.
+
 **Stable build identity.** The forge merge seam accepts optional build identity at operation time. Both
 built-in adapters preserve their squash message and normalize a final
 `Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub

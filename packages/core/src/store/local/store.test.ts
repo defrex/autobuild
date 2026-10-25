@@ -1,3 +1,4 @@
+import { temporaryDirectories } from '../../testing/temp-directories'
 import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { validateReducerValue } from '../reducer-value-validation'
 /**
@@ -9,9 +10,9 @@ import { validateReducerValue } from '../reducer-value-validation'
  * ([D2], §15.2.7), so the dispatcher, runners, and the agent's `ab` CLI
  * write this file from separate processes (§3.3).
  */
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { humanActor } from '../../events/envelope'
@@ -32,6 +33,8 @@ import { EVENT_WAIT_POLL_MS } from '../streams/wait'
 import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
 import { openLocalStore, SqliteBuildStore } from './store'
+
+const mkdtemp = temporaryDirectories(afterEach)
 
 async function freshRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'ab-sqlite-'))

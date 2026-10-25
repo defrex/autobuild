@@ -1,7 +1,8 @@
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { createTicketServer } from './ticket-server'
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { MemoryBuildStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
 import { mintToken, verifyToken, type DelegatedTokenScope } from '@defrex/autobuild/remote-store'
 import { createMachineAuth } from './machine-auth'
@@ -15,6 +16,8 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const A = 'https://github.com/acme/a'
 const B = 'https://github.com/acme/b'
@@ -571,7 +574,7 @@ test('a prepared harvest reads hosted tickets and files proposals using delegate
     submitHarvestVerdict,
     resolveHarvestCliEnv,
   } = await import('@defrex/autobuild/testing')
-  const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises')
+  const { readFile, writeFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const f = await fixture()

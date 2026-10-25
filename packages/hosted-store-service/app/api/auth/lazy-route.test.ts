@@ -1,7 +1,12 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+const scratch: string[] = []
+afterEach(() => {
+  for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true })
+})
 
 const root = join(import.meta.dir, '..', '..', '..')
 const routeModule = join(root, 'app', 'api', 'auth', '[...all]', 'route.ts')
@@ -21,8 +26,10 @@ describe('web auth route', () => {
       console.log(JSON.stringify({ exported, failure }))
     `
     // A scratch cwd keeps Bun from auto-loading this checkout's .env files.
+    const cwd = mkdtempSync(join(tmpdir(), 'ab-auth-route-'))
+    scratch.push(cwd)
     const result = Bun.spawnSync(['bun', '-e', script], {
-      cwd: mkdtempSync(join(tmpdir(), 'ab-auth-route-')),
+      cwd,
       env: { PATH: process.env.PATH ?? '' },
       stdout: 'pipe',
       stderr: 'pipe',

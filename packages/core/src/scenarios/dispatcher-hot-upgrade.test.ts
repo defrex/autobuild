@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { cp, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareRuntime } from '../cli/dispatch-runtime-cache'
@@ -8,6 +9,8 @@ import { distributionRoot } from '../distribution'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import type { RepositoryEvent } from '../events/repository'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('real launcher adopts two replacements of the original installation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-hot-upgrade-'))

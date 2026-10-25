@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -9,6 +10,8 @@ import {
 } from './contract'
 import { buildTrailers } from '../../kernel/build-identity'
 import { bunExec, GitHubForge, rulesetsHaveMergeGate, type ExecResult } from './github'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const GIT_ID = [
   '-c',

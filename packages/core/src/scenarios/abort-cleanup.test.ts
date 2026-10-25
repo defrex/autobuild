@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
@@ -12,6 +13,8 @@ import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { Dispatcher } from '../processes/dispatcher'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const result = await spawnExec(['git', ...args], { cwd })

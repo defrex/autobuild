@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { MemoryBuildStore } from '../store/memory'
@@ -7,6 +8,8 @@ import { steppingClock } from '../testing/fixed'
 import type { BuildStore } from '../store/types'
 import { createTicketSource } from '../ports/tickets/create'
 import { guestTicketSourceArgs, runHarvestChild } from './harvest-child'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const HOST_ENV = {
   provider: 'vercel-sandbox',

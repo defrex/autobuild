@@ -1,3 +1,7 @@
+import {
+  temporaryDirectories as ownTempDirectories,
+  temporaryOriginScratch,
+} from '@defrex/autobuild/testing'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
@@ -18,8 +22,8 @@ import { testProjects } from './testing/projects'
  * decision, yield-on-overlap, the bounded invocation (skipped repository), and
  * the endpoint auth matrix.
  */
-import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, expect, test } from 'bun:test'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -72,6 +76,9 @@ import { OperatorApiClient } from '@defrex/autobuild-hosted-store-service/operat
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from '@defrex/autobuild-hosted-store-service/service'
 import { createDispatcherEndpoint } from './dispatcher'
+
+const mkdtemp = ownTempDirectories(afterEach)
+const trackOrigin = temporaryOriginScratch(afterEach)
 
 const storeEnv = {
   AB_STORE_SECRET: 'integration-signing-secret',
@@ -496,6 +503,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       { AB_STORE: opts.env!.AB_STORE!, AB_TOKEN: opts.env!.AB_TOKEN! },
       guestRemote,
     )
+    trackOrigin(opts.repository!)
     await abDispatch({
       targetRepo: join(tmp, 'unused-checkout'),
       repository: opts.repository!,

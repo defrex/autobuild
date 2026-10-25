@@ -1,10 +1,13 @@
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describeWorkspaceProviderContract } from './contract'
 import { FakeWorkspaceProvider } from './fake'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const OPTS = { repo: '/repos/origin', baseBranch: 'main', branch: 'ab/fix-login' }
 

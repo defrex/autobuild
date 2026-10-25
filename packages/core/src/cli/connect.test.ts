@@ -1,3 +1,4 @@
+import { temporaryOriginScratch } from '../testing/temp-directories'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,6 +8,7 @@ import { ProjectCredentials } from './project-credentials'
 import { normalizeServiceURL } from '../connection'
 import { resolveRepoStatePaths } from './repo-state'
 import type { Exec } from '../ports/workspace/git-worktree'
+const trackOrigin = temporaryOriginScratch(afterEach)
 const dirs: string[] = []
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -186,6 +188,7 @@ test('timeout confirms cancellation without writing local state', async () => {
 })
 
 test('origin-mode dispatch reads the forge config and forwards the exact saved service/project token', async () => {
+  trackOrigin(repo)
   const { abDispatch } = await import('./dispatch')
   const f = await fixture(),
     storage = new ProjectCredentials(f.env)
