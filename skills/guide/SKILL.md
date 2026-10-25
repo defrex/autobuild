@@ -2257,7 +2257,10 @@ invocation hides the holder start or the latest stop. Other state reads retain
 their bounded semantics.
 
 Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
-observation when an observed lease expires without a matching stop. JSON carries
+observation when an observed lease expires without a matching stop or validated
+successor takeover. A completed ownership transfer suppresses predecessor loss
+even while its sessions drain; a handoff without takeover still reports loss on
+expiry. Successor loss and upgrade-failure/rollback attention remain independent. JSON carries
 `observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
 identity, plus the usual repo/build/state/cursor fields. It invents no durable
 sequence or actor. Retain the cursor to avoid repeat reports across invocations.
