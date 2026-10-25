@@ -37,7 +37,7 @@ Revisit linked reuse when upgrading Proa; keep linked builds and the pinned
 toolchain enabled.
 
 Capture evidence is under the printed .ab/proa-frames-* directory, including
-inventory.json, verify-report.md and eight PNGs. Each run owns a server port,
+inventory.json, verify-report.md and sixteen PNGs. Each run owns two server ports (admitted and refused identities),
 Chromium profile and exported executable. Process cleanup runs in finally and
 termination handlers. Old evidence/build logs can be deleted when no longer needed.
 The agent must inspect every PNG; deterministic probes are necessary, not a
@@ -54,9 +54,23 @@ tools/web-dashboard-dev.ts at repository root), seed before starting the server,
 and drop only that isolated database in finally. Never run the shared dev reset or
 invent browser rows. Data-dependent cases without an adapter fail.
 
-Auth contract: **auth=none** today. When authentication arrives, signed-in capture
-must use a local development session issued by Rust. Require development-mode
-switch plus loopback binding plus loopback peer validation; refuse production and
-non-loopback issuance. Ordinary operation disables or omits the issuer. Add
-refusal tests and signed-in route cases with that change. Browser cookie stubs and
-GitHub authentication are forbidden. Current capture claims no signed-in coverage.
+Auth contract: capture requires the supported Rust development issuer and fails
+closed if its capability contract is absent. It launches isolated loopback servers
+from a clean temporary cwd with explicit development settings, random session
+secrets and a fresh issuance capability. The admitted identity is
+operator@example.com; the second server's configured refused@example.com is absent
+from its allowlist. No live GitHub calls or browser-signed cookie stubs are used.
+The exact server-issued cookie is installed into Chromium; each frame starts with
+cleared cookies. Refusal is a real POST navigation to the denied issuer, with only
+that route's expected 403 excluded from asset-error detection.
+
+The matrix covers initial public sign-in, actual refusal, signed-in Builds and
+open account menu at 1440/390 in both grounds. Content/readiness probes understand
+public versus authenticated pages and assert identity, sign-out and alert content.
+Palette, rendered fonts, overflow, external requests, HTTP asset failures and
+browser exceptions remain enforced. After capture a real sign-out form submission
+must revoke the copied cookie. Rust tests cover config, return paths, state/PKCE,
+callback replay, allowlist removal, cookie/session policy, CSRF, peer checks and
+the GitHub adapter's wire shapes/pagination. A real TCP test proves the development
+serve adapter supplies ConnectInfo. The gate retains Proa accessibility/performance
+checks and linked builds.

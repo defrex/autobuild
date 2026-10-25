@@ -346,3 +346,46 @@ html {
     width: auto;
   }
 }
+
+.narrow {
+  max-width: 56ch;
+  margin: 0 auto;
+  padding-top: 56px;
+}
+.lede {
+  color: var(--slack);
+  margin: 0 0 20px;
+  max-width: 64ch;
+}
+a.btn {
+  text-decoration: none;
+}
+.refused {
+  border: 1.5px solid var(--amber);
+  padding: 14px 16px;
+  margin-top: 20px;
+}
+.refused .line {
+  color: var(--amber);
+  font-weight: 600;
+}
+.refused p {
+  margin: 4px 0 0;
+}
+.refused .m,
+.menu-panel .label,
+#account-trigger {
+  overflow-wrap: anywhere;
+}
+#account-trigger {
+  white-space: normal;
+  text-align: right;
+}
+@media (max-width: 719px) {
+  .narrow {
+    padding-top: 56px;
+  }
+  .menu {
+    max-width: 100%;
+  }
+}

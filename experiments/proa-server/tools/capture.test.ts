@@ -11,7 +11,7 @@ test('route inventory rejects new and unsupported route declarations', async () 
   expect(() => checkRoutes(source)).not.toThrow()
   expect(() => checkRoutes(`${source}\n.route("/new", get(page))`)).toThrow('Unclassified')
   expect(() => checkRoutes(`${source}\n.route(path, get(page))`)).toThrow('Unclassified')
-  expect(new Set(frames.map((f) => f.id)).size).toBe(8)
+  expect(new Set(frames.map((f) => f.id)).size).toBe(16)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
       for (const state of ['open', 'closed'])
@@ -49,7 +49,7 @@ for (const [name, injection, expected] of [
         if (path === '/') {
           // Fixture uses scaffold markup and real local fonts/CSS, with one intentional defect.
           return new Response(
-            `<!doctype html><html data-theme="light"><head><link rel="stylesheet" href="/static/styles.css">${injection}</head><body><header>Autobuild proa/server <button id="account-trigger" aria-expanded="false">Experiment menu</button></header><main><h1>Builds</h1><p>No build data connected yet.</p><p>This experiment establishes the server and app shell. Builds will appear here when the event log is connected.</p></main></body></html>`,
+            `<!doctype html><html data-theme="light"><head><link rel="stylesheet" href="/static/styles.css">${injection}</head><body><header>Autobuild proa/server <button id="account-trigger" aria-expanded="false">operator@example.com</button></header><main><h1>Builds</h1><p>No build data connected yet.</p><p>This experiment establishes the server and app shell. Builds will appear here when the event log is connected.</p></main></body></html>`,
             { headers: { 'content-type': 'text/html' } },
           )
         }

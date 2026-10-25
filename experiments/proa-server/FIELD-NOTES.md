@@ -191,3 +191,65 @@ new-document injection time throws because it does not exist yet. The real
 server starts in a temporary cwd with a link to worktree public assets, so
 repository .env files cannot supply production/auth settings through dotenvy's
 ancestor search. Capture performs no GitHub or other external page requests.
+
+## 2026-10-24 — Rust-owned GitHub operator auth
+
+The experiment now has a closed-by-default gateway around HTML, Markdown and
+fallback routes. GitHub OAuth uses a ten-minute single-use state transaction,
+random browser binding and S256 PKCE. The adapter exchanges the code server-side,
+requests verified email records with user:email and paginates up to ten pages
+(fails closed beyond that bound). Selection prefers an allowlisted verified
+primary address, then sorts other allowed verified addresses by email.
+Tokens never become browser state. Adapter tests use an actual local HTTP
+transport to check form fields, JSON shapes, bearer headers and pagination;
+production endpoints are fixed and redirects disabled.
+
+Eight-hour signed opaque cookie IDs address bounded process-local records.
+Restart invalidates sessions; multiple replicas cannot share them. The current
+allowlist is checked on every request, with an injected mutable source proving
+immediate removal/revocation in tests. A supervisor must replace the process to
+change its environment. Logout requires both a session CSRF token and the exact
+canonical Origin, with same-origin Referer fallback, and deletes the record so a
+copied cookie cannot replay it. OAuth state/binding and logout CSRF are separate
+checks. Cookies are host-only, Path=/, HttpOnly and SameSite=Lax, with Secure on
+HTTPS and off loopback. Canonical configuration, not forwarded/Host headers,
+controls redirects and cookie policy. Credentials are never Debug-rendered.
+
+Framework evidence: pinned proa_framework_axum 0.3.0's router_from_spec does not
+install FrameworkBuilder's security layers. We explicitly install
+SecurityHeadersLayer and CrossOriginProtectionLayer over the full router.
+CrossOriginProtection accepts safe methods and nonbrowser requests with neither
+Origin nor Fetch Metadata; it is not enough for logout or development issuance.
+Its trusted-origin setting names the validated canonical origin; handlers still
+require their independent proof. An outer privacy layer covers early rejection
+responses with no-store. OAuth responses use no-referrer; signed-in pages use same-origin to preserve form Origin proof. CSP permits only self-hosted external
+scripts/styles/fonts and forbids objects/framing; forms/base are self. HSTS is
+conditional on HTTPS. This listener speaks HTTP and assumes trusted TLS termination
+for non-loopback deployment.
+
+Proa serve does not insert ConnectInfo. Reproduction: inspect its pinned serve
+implementation, which accepts the socket but hands requests directly to Router.
+The explicit loopback development-auth mode therefore uses Axum's
+into_make_service_with_connect_info adapter, with SIGINT/SIGTERM and a bounded
+30-second drain. A real TCP test issues through this path and proves the actual
+loopback peer reaches the handler. Missing/remote peers, missing/wrong random
+capture capability and cross-origin browser issuance are refused. The adapter
+uses the exported binary without Proa's dev reload injection.
+
+Visual capture now starts two isolated loopback server instances with fresh
+secrets and capability: one admitted identity and one genuinely denied identity.
+The refusal frame comes from a real POST response, not a query parameter or
+browser stub. Sixteen frames cover sign-in, refusal, Builds and account disclosure
+at both widths/grounds. Browser checks retain palette, loaded/rendered fonts,
+overflow, network and error probes, and require real logout to revoke a copied
+cookie under the enforced CSP. The ANSI organization's refusal wording is reference
+copy only; this experiment authorizes solely by email and implements no org roles.
+
+Browser evidence caught a policy interaction that direct router tests cannot:
+Chromium can serialize Origin as null for a form POST from a no-referrer document.
+Applying no-referrer indiscriminately therefore broke legitimate sign-out while
+the CSRF check correctly refused the request. OAuth pages retain no-referrer;
+protected pages use same-origin. The capture's real form submission plus copied
+cookie replay check guards this behavior. Public sign-in has no monospace text,
+so capture explicitly loads both local font faces before checking their availability;
+rendered-font probes still verify the faces actually used on each page.
