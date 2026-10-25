@@ -146,6 +146,7 @@ test('npm and Bun install real beta package tarballs together without peer diagn
           ? await installPackedDistribution(args, consumer)
           : await spawnExec(['npm', 'install', '--no-audit', '--no-fund', ...args], {
               cwd: consumer,
+              env: { NODE_COMPILE_CACHE: join(consumer, '.node-compile-cache') },
             })
       const output = installed.stdout + installed.stderr
       expect({ code: installed.exitCode, output }).toMatchObject({ code: 0 })

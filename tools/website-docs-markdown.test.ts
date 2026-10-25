@@ -128,8 +128,9 @@ test('production copy covers every article, responsive geometry, formatting and 
   meta.content = JSON.stringify({ error:errors.join('; '), status:'markdown complete' }); document.head.append(meta)
   </script></body></html>`
   const site = serveSite(files)
-  const profile = await mkdtemp(join(tmpdir(), 'docs-markdown-'))
+  let profile: string | undefined
   try {
+    profile = await mkdtemp(join(tmpdir(), 'docs-markdown-'))
     const result = parseProbe(
       await runRealtimeChromium(
         chromium,
@@ -144,6 +145,6 @@ test('production copy covers every article, responsive geometry, formatting and 
     expect(result.error).toBe('')
   } finally {
     site.stop()
-    await rm(profile, { recursive: true, force: true })
+    if (profile) await rm(profile, { recursive: true, force: true })
   }
 }, 30000)

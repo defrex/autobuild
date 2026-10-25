@@ -1,10 +1,13 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runLiveAgentRunnerContract, runLiveNativeResumeContract } from './live-contract-fixture'
 import { JsonlDecoder, PI_BRIDGE_PATH } from './pi-rpc'
 import { checkLocalPi, PiAgentRunner } from './pi'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const enabled = process.env.AB_RUN_LIVE_PORT_CONTRACTS === '1'
 const PROBE_PREFIX = 'autobuild-pi-tool-probe:'

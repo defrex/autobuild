@@ -1,8 +1,11 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { distributionPath } from '../distribution'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('shared PTY survives retired Bun exits across presentation lifetimes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ab-raw-'))
@@ -105,6 +108,7 @@ setInterval(() => {
       join(dir, 'current.ts'),
       `
 import { existsSync, writeFileSync, unlinkSync } from 'node:fs'
+
 import { processTerminalInput } from ${JSON.stringify(distributionPath('packages/core/src/cli/terminal.ts'))}
 const path = ${JSON.stringify(dir)}
 const start = () => processTerminalInput().start(event => {

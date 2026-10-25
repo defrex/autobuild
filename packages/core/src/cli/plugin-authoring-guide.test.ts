@@ -35,6 +35,9 @@ async function run(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !key.startsWith('AB_')) env[key] = value
   }
+  const scratch = join(root, 'subprocess-tmp')
+  await mkdir(scratch, { recursive: true })
+  Object.assign(env, { TMPDIR: scratch, TMP: scratch, TEMP: scratch })
   const child = Bun.spawn(['bun', join(DIST_ROOT, 'bin', 'ab.ts'), ...args], {
     cwd: root,
     env,

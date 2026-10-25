@@ -1,5 +1,6 @@
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -14,6 +15,8 @@ import { MemoryBuildStore, sampleEventWrite } from '@defrex/autobuild/plugin-sdk
 import { createTicketServer } from './ticket-server'
 import { createMachineAuth } from './machine-auth'
 import { createDelegationHandler } from './delegated-authority'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const A = 'https://github.com/acme/a'
 const B = 'https://github.com/acme/b'
@@ -598,7 +601,7 @@ test('node verifier hydrates prepared inputs with a server-issued build token', 
   )
   const { spawnExec } = await import('@defrex/autobuild/testing')
   const { DISPATCHER, KERNEL } = await import('@defrex/autobuild/testing')
-  const { mkdtemp, rm, readFile } = await import('node:fs/promises')
+  const { rm, readFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const workspace = await mkdtemp(join(tmpdir(), 'node-remote-context-'))

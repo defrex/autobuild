@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import {
-  abInit,
+  abInit as initializeFixture,
   defaultDistRoot,
   installedSkillFilePath,
   installedSkillPath,
@@ -30,6 +30,11 @@ import { abUpgrade } from './upgrade'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
 import { spawnExec } from '../ports/workspace/git-worktree'
+
+// Vendoring fixtures do not need installed runtime probes (which create
+// provider caches and can outlive a failed fixture setup).
+const abInit: typeof initializeFixture = (options) =>
+  initializeFixture({ ...options, runtimes: {} })
 
 const BODY = [
   '# alpha',

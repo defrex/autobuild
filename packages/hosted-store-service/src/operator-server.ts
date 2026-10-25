@@ -486,7 +486,11 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         const sandbox = opts.sandboxFor
           ? await opts.sandboxFor(repo, requestCredentials(req))
           : opts.sandbox
-        await archiveOperatorSession(opts.store, repo, sid, user, sandbox)
+        try {
+          await archiveOperatorSession(opts.store, repo, sid, user, sandbox)
+        } finally {
+          if (opts.sandboxFor) await sandbox?.dispose?.()
+        }
         return json(200, { ok: true })
       }
       if (
