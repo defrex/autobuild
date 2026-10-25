@@ -123,9 +123,39 @@ async function captureSeeded(
     stdout: Bun.file(join(output, 'refusal-server.log')),
     stderr: Bun.file(join(output, 'refusal-server-errors.log')),
   })
+  const backendReservation = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(),
+  })
+  const backendPort = backendReservation.port!
+  backendReservation.stop(true)
+  const backendOrigin = `http://127.0.0.1:${backendPort}`
+  const backendServer = Bun.spawn([binary], {
+    cwd: runtime,
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      PROA_HOST: '127.0.0.1',
+      PORT: String(backendPort),
+      PROA_AUTH_URL: backendOrigin,
+      GITHUB_CLIENT_ID: 'capture-id',
+      GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
+      PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
+      AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+      AB_STORE_SECRET: randomBytes(32).toString('hex'),
+      PROA_ENV: 'development',
+      PROA_DEV_AUTH: 'true',
+      PROA_DEV_AUTH_EMAIL: 'operator@example.com',
+      PROA_DEV_AUTH_CAPABILITY: capability,
+    },
+    stdout: Bun.file(join(output, 'backend-unavailable-server.log')),
+    stderr: Bun.file(join(output, 'backend-unavailable-server-errors.log')),
+  })
   const stopServer = () => {
     server.kill()
     refusalServer.kill()
+    backendServer.kill()
   }
   process.once('SIGTERM', stopServer)
   process.once('SIGINT', stopServer)
@@ -135,7 +165,11 @@ async function captureSeeded(
     for (let i = 0; i < 200; i++) {
       if (server.exitCode !== null) throw Error('Server exited before readiness')
       try {
-        if ((await fetch(`${origin}/readyz`)).ok && (await fetch(`${refusalOrigin}/readyz`)).ok) {
+        if (
+          (await fetch(`${origin}/readyz`)).ok &&
+          (await fetch(`${refusalOrigin}/readyz`)).ok &&
+          (await fetch(`${backendOrigin}/readyz`)).ok
+        ) {
           ready = true
           break
         }
@@ -148,6 +182,7 @@ async function captureSeeded(
     const captured = await captureFrames(origin, output, {
       capability,
       refusalOrigin,
+      backendOrigin,
       seed,
       store,
     })
@@ -198,6 +233,7 @@ export async function captureFrames(
   auth?: {
     capability: string
     refusalOrigin: string
+    backendOrigin?: string
     seed?: SeedEvidence
     store?: BuildStore
   },
@@ -375,8 +411,14 @@ export async function captureFrames(
         source: `window.__captureFrame=${JSON.stringify(frame.id)};localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)})`,
       })
       await send('Network.clearBrowserCookies')
+      const frameOrigin =
+        frame.state === 'refused' && auth
+          ? auth.refusalOrigin
+          : frame.state === 'connect-error' && auth?.backendOrigin
+            ? auth.backendOrigin
+            : origin
       if (auth && !['sign-in', 'refused'].includes(frame.state)) {
-        const issued = await fetch(`${origin}/auth/dev-session`, {
+        const issued = await fetch(`${frameOrigin}/auth/dev-session`, {
           method: 'POST',
           headers: { 'x-proa-dev-capability': auth.capability },
           redirect: 'manual',
@@ -389,7 +431,7 @@ export async function captureFrames(
           await send('Network.setCookie', {
             name: pair!.slice(0, at),
             value: pair!.slice(at + 1),
-            url: origin,
+            url: frameOrigin,
             httpOnly: true,
             sameSite: 'Lax',
             path: '/',
@@ -413,7 +455,7 @@ export async function captureFrames(
           ? `?${new URLSearchParams({ project: frame.state.startsWith('control-') ? detail!.project : projectId })}`
           : ''
       await send('Page.navigate', {
-        url: (frame.state === 'refused' && auth ? auth.refusalOrigin : origin) + route + query,
+        url: frameOrigin + route + query,
       })
       let loaded = false
       for (let i = 0; i < 200; i++) {

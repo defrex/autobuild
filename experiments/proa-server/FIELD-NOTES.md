@@ -928,3 +928,10 @@ BuildStore authorization would impose the wrong contract. The capture seed
 creates real requests and terminal decisions through the shared TypeScript
 connection store; it does not manufacture page view models. Approval remains
 project scoped: the reference's organization picker is deliberately omitted.
+
+The first expanded capture caught a clock-fixture defect: looking up a pending
+request with a future clock and then resetting the clock does not durably expire
+it. The browser correctly showed pending again. The expired capture now starts
+the real request eleven minutes in the past, so its stored expiry is already
+past when the normal server reads it. Backend-failure capture uses a separate
+normal server with storage unconfigured, rather than a fabricated error model.

@@ -477,3 +477,13 @@ bridge against isolated migrated PostgreSQL and checks restart, mixed-server
 approval, credential usability, denial/expiry, collision rollback, cancellation
 and revocation. Both participate in the experiment verify gate. Connect captures
 seed real durable requests and decisions at both widths and in both grounds.
+
+`ticket-protocol-integration.ts` compares native ticket reads and transactional
+writes with the real TypeScript handler over isolated PostgreSQL/S3 projects.
+`ticket-cli-integration.ts` exercises the actual ticket command parser/handlers
+against both normal HTTP services and compares outputs and downloaded asset
+bytes. `connect-integration.ts` runs the normal native server with server-issued
+development browser sessions and unchanged CLI connection functions, including
+hosted policy publication, cross-server credential use, no-JavaScript decisions,
+Origin/CSRF refusals, restart, cancellation and disconnect. These commands run
+inside the maintained experiment gate; they do not use production credentials.

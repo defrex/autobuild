@@ -168,6 +168,7 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/protocol-contract.ts', '--caller-holds-lock'],
         ['bun', 'tools/protocol-integration.ts', '--caller-holds-lock'],
         ['bun', 'tools/ticket-protocol-integration.ts', '--caller-holds-lock'],
+        ['bun', 'tools/ticket-cli-integration.ts'],
       ]
   commands.push([
     'proa',

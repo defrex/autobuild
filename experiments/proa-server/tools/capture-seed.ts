@@ -484,6 +484,7 @@ export async function withCaptureSeed<T>(
       const connections = new PostgresConnectionStore(writer, () => connectionNow)
       const connect: Record<string, string> = { entry: '', unknown: '0000000000', error: 'INVALID' }
       for (const status of ['pending', 'approved', 'denied', 'expired']) {
+        connectionNow = new Date(Date.now() - (status === 'expired' ? 11 * 60_000 : 0))
         const request = await connections.start({
           repo: `https://github.com/capture/connect-${status}`,
           credentialId: randomBytes(16).toString('hex'),
@@ -493,7 +494,7 @@ export async function withCaptureSeed<T>(
         if (status === 'approved' || status === 'denied')
           await connections.decide(request.code, 'seed@example.com', status === 'approved')
         if (status === 'expired') {
-          connectionNow = new Date(Date.now() + 11 * 60_000)
+          connectionNow = new Date()
           await connections.lookup(request.code, 'seed@example.com')
           connectionNow = new Date()
         }
