@@ -2336,6 +2336,28 @@ command = "unit"
     ]
   }
 
+  test('a removed selected name runs the renamed optional verifier', () => {
+    const log = toLog([...approved(['types', 'web-dashboard']), ...verifyRun('types', 1, true)])
+    const drift = decideNext(log, selectedConfig)
+    expect(drift.kind).toBe('record-verify-selection-drift')
+    if (drift.kind !== 'record-verify-selection-drift') throw new Error('missing drift')
+    expect(drift.summary).toContain('web-dashboard')
+    const observation = {
+      ...log.at(-1)!,
+      seq: log.length + 1,
+      ...ev('observation.recorded', {
+        id: 'obs-drift',
+        kind: 'followup',
+        summary: drift.summary,
+        files: [],
+      }),
+    } as AbEvent
+    expect(decideNext([...log, observation], selectedConfig)).toMatchObject({
+      kind: 'evaluate-verify',
+      step: 'dashboard',
+    })
+  })
+
   test('selected steps execute in config order while an omitted optional step gets a plan-specific skip', () => {
     const throughTypes = [...approved(['unit', 'types']), ...verifyRun('types', 1, true)]
     expect(decideNext(toLog(throughTypes), selectedConfig)).toEqual({

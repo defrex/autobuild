@@ -114,6 +114,8 @@ export const executionProgress = {
   'code-review.started': 'progress',
   'code-review.verdict': 'progress',
   'verify.reconcile-policy-captured': 'progress',
+  'verify.config-captured': 'progress',
+  'verify.config-superseded': 'progress',
   'verify.started': 'progress',
   'verify.cancelled': 'progress',
   'verify.stage-failed': 'progress',
@@ -155,7 +157,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 5,
+  version: 6,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {

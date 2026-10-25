@@ -3053,3 +3053,77 @@ test('h3. unresolved observation origin holds and then releases a ready proposal
   expect(h.tickets.claims).toContain('fake-1')
   expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(true)
 }, 30_000)
+
+test('verify cycle repins a renamed skill after upstream config enters the checkout', async () => {
+  const oldConfig =
+    CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "web-dashboard"]') +
+    `
+[verify.web-dashboard]
+kind = "agent"
+skill = "verify-web-dashboard"
+`
+  const handlers = happyHandlers()
+  handlers.plan = async (cli) => {
+    await cli.run(['context'])
+    const plan = await writeFileIn(
+      cli.ws,
+      '.ab/plan.md',
+      '+++\nverifySteps = ["unit", "web-dashboard"]\n+++\n# Plan\n',
+    )
+    await cli.run(['artifact', 'put', 'plan', plan])
+    await cli.run(['done'])
+  }
+  handlers['verify-ui-app'] = async (cli) => {
+    await cli.run(['context'])
+    await cli.run(['verdict', 'pass'])
+  }
+  const h = await track(
+    makeHarness({
+      handlers,
+      tickets: [readyTicket('T-1')],
+      configToml: oldConfig,
+      verifyCycleConfig: true,
+    }),
+  )
+  await h.dispatcher.tick()
+  const runner = h.launched[0]!.runner
+  await runner.attach()
+  // Stop after the cheap check, before constructing the agent verifier.
+  for (let i = 0; i < 20; i++) {
+    const decision = await runner.step()
+    if (decision.kind === 'run-check') break
+    if (i === 19) throw new Error('did not reach verification')
+  }
+  const before = reduceBuild(await h.events(SLUG)).verify.configPin!
+  expect(before).toBeDefined()
+  const ws = ofType(await h.events(SLUG), 'workspace.provisioned')[0]!.payload.ref
+  const upstream = await h.advanceRemote(
+    { 'autobuild.toml': oldConfig.replaceAll('web-dashboard', 'ui-app') },
+    'rename verification skill',
+  )
+  await git(['fetch', 'origin', 'main'], ws)
+  await git([...GIT_ID, 'merge', '--no-edit', upstream], ws)
+  const head = await git(['rev-parse', 'HEAD'], ws)
+  expect(await runner.step()).toMatchObject({ kind: 'record-verify-selection-drift' })
+  expect(await runner.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
+  expect(await runner.step()).toMatchObject({
+    kind: 'run-agent-verify',
+    step: 'ui-app',
+    skill: 'verify-ui-app',
+  })
+  const events = await h.events(SLUG)
+  const pin = reduceBuild(events).verify.configPin!
+  expect(pin).toMatchObject({ head, source: { commit: head } })
+  expect(pin.artifact.rev).toBeGreaterThan(before.artifact.rev)
+  expect(ofType(events, 'verify.started').map((e) => e.payload.step)).toEqual([
+    'unit',
+    'unit',
+    'ui-app',
+  ])
+  expect(
+    ofType(events, 'observation.recorded').filter((e) =>
+      e.payload.summary.includes('web-dashboard'),
+    ),
+  ).toHaveLength(1)
+  expect(h.cliErrors).toEqual([])
+}, 30_000)

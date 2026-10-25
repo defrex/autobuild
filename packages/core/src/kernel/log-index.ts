@@ -136,6 +136,7 @@ export interface LogIndex {
   /** Latest post-restart policy fact; authoritative only for its originating
    * reconcile completion, never for a newer review or reconcile cycle. */
   reconcilePolicy?: {
+    cycle?: number
     reconcileSeq: number
     steps: { step: string; enabled: boolean; source: string }[]
   }
@@ -162,6 +163,7 @@ export interface LogIndex {
   maxVerifyAttemptEver: number
   /** seq of the latest post-restart `reconcile.completed` — cycle boundary
    * input: reconciliation changed code, verify re-runs in full (§15.7). */
+  verifyConfigBoundary: number
   lastReconcileCompletedSeq: number
   /** seq of the latest post-restart `implement.completed` — a verify failure
    * with an implement round after it was already routed (§15.6-A). */
@@ -194,7 +196,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 5
+export const LOG_INDEX_REDUCER_VERSION = 6
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
@@ -228,6 +230,7 @@ export type LogIndexCandidate =
   | { kind: 'finalize-completed'; seq: number }
   | { kind: 'finalize-step'; seq: number; step: string }
   | { kind: 'reconcile-completed'; seq: number }
+  | { kind: 'config-superseded'; seq: number }
 
 export interface LogIndexAcc {
   readDeferrals: ReadDeferralsAcc
@@ -371,6 +374,10 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
         acc.candidates.push(verdictCandidate('code', event.payload, event.seq))
         break
 
+      case 'verify.config-captured':
+      case 'verify.config-superseded':
+        acc.candidates.push({ kind: 'config-superseded', seq: event.seq })
+        break
       case 'verify.started':
         noteGuidanceStart(
           `${verifyPhase(event.payload.step)}@${event.payload.attempt}`,
@@ -497,6 +504,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   const verifyStarted: VerifyStartRecord[] = []
   const finalizeStepsDone = new Set<string>()
   let reconcilePolicy: LogIndex['reconcilePolicy']
+  let verifyConfigBoundary = 0
   let lastReconcileCompletedSeq = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
@@ -563,6 +571,9 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
       }
       case 'implement-completed':
         lastImplementCompletedSeq = candidate.seq
+        break
+      case 'config-superseded':
+        verifyConfigBoundary = Math.max(verifyConfigBoundary, candidate.seq)
         break
       case 'verify-started':
         verifyStarted.push({
@@ -652,6 +663,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     verifyStarted,
     maxVerifyAttemptEver: acc.maxVerifyAttemptEver,
     reconcilePolicy,
+    verifyConfigBoundary,
     lastReconcileCompletedSeq,
     lastImplementCompletedSeq,
     finalizeCompleted,

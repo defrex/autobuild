@@ -1,3 +1,4 @@
+import { capturedBuildConfig } from '../processes/verify-cycle-config'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { recordRuntimeRollback } from './dispatch-handoff'
 import { syncRollbackRetention } from './dispatch-runtime-use'
@@ -924,6 +925,12 @@ class DispatchLoop {
    * naming the failed attempts; the documented fallbacks (an unpublished
    * branch, an unreadable legacy base) stay quiet. */
   private async publishBuildConfig(slug: string, snapshot = this.currentConfig()): Promise<void> {
+    const state = (await readBuildFacts(this.wiring.store, slug)).value.state
+    if (state.verify.configPin) {
+      const config = await capturedBuildConfig(this.wiring.store, slug, state, snapshot.config)
+      await this.depositBuildConfig(slug, snapshot, config, state.verify.configPin.source)
+      return
+    }
     const { source, failures, observations } = await this.resolveBuildPipeline(slug)
     if (source !== undefined) {
       await this.depositBuildConfig(
@@ -1026,8 +1033,8 @@ class DispatchLoop {
   /** Re-deposit deployment-owned sections to active builds on a reload. The
    * build-owned sections are reused verbatim from the build's last deposit, so
    * a base-branch reload can never retarget an in-flight build's pipeline; a
-   * build picks up pipeline changes only from its own branch at its next
-   * launch (SPEC §16.1). */
+   * runner refreshes the execution checkout at settled verification boundaries.
+   * A cycle capture's exact revision outranks latest-artifact races (SPEC §16.1). */
   private async publishActiveBuildConfigs(snapshot: ConfigSnapshot): Promise<void> {
     await Promise.all(
       [...this.activeBuildRuns.keys()].map(async (slug) => {
@@ -1046,11 +1053,17 @@ class DispatchLoop {
           return
         }
         const meta = parseBuildConfigMetadata(artifact)
+        const state = (await readBuildFacts(this.wiring.store, slug)).value.state
         await this.depositBuildConfig(
           slug,
           snapshot,
-          composeBuildConfig(existing, snapshot.config),
-          meta.pipelineSource,
+          await capturedBuildConfig(
+            this.wiring.store,
+            slug,
+            state,
+            composeBuildConfig(existing, snapshot.config),
+          ),
+          state.verify.configPin?.source ?? meta.pipelineSource,
         )
       }),
     )
