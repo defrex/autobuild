@@ -1211,7 +1211,7 @@ local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
 recording completion; PR API work stays local. If that acknowledgement is lost
-after the push merges, the next launch observes the exact remote branch head and
+after the push succeeds, the next launch observes the exact remote branch head and
 records the missing completion before allowing a replacement phase to run. If
 the commit is absent, release of the old workspace abandons its request and the
 replacement reruns the phase. Before every guest runner launch, the provider

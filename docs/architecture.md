@@ -1441,7 +1441,7 @@ escape hatches independent of completeness and verification.
 
 ### Merge authorization
 
-The pure evaluator in `kernel/merge-policy.ts` chooses the first matching
+The pure evaluator in `kernel/landing-policy.ts` chooses the first matching
 `[[merge]]` rule. `kernel/landing-state.ts` reduces immutable candidate
 decisions and persistent hold/merge commands. The dispatcher owns readiness,
 ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
