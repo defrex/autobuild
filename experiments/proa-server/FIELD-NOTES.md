@@ -191,3 +191,39 @@ new-document injection time throws because it does not exist yet. The real
 server starts in a temporary cwd with a link to worktree public assets, so
 repository .env files cannot supply production/auth settings through dotenvy's
 ancestor search. Capture performs no GitHub or other external page requests.
+
+## Rust data-access foundation
+
+The `data` library now contains environment parsing and a SELECT-only PostgreSQL
+reader. The reader checks migration version 17 and its checksum before accessing
+application tables, uses read-only transactions even with ordinary credentials,
+and filters build/session reads by repository. Event suffix reads use `seq >`
+with PostgreSQL bigint parameters. This is a library foundation: server startup,
+blob retrieval, reducer parity and accumulator caching are not connected yet.
+No cross-language integration or incremental-query measurement is claimed here.
+
+Proa's `DataLoader` / `cx.load_typed(...)` shares keyed work within one request;
+each HTML response should retain its own `DataResolver::request_scope(...)`.
+The planned scope-keyed incremental reader has a different lifetime: its event
+cursor and reducer accumulator must survive across requests, while failures must
+stay local to their build (or repository/session scope). Request sharing alone
+cannot avoid replaying whole event logs on subsequent polls. The PostgreSQL
+suffix API supplies that boundary but does not yet implement those caches.
+
+Provider inspection for the remaining blob work: the pinned TypeScript
+`@vercel/blob` 2.8.0 `dist/index.js` `get` and
+`dist/chunk-YYMLUMXS.js` `resolveBlobAuth` / `constructBlobUrl` send GET directly to
+`https://{storeId}.{public|private}.blob.vercel-storage.com/{pathname}` with
+`authorization: Bearer {token}` for either access mode. The read/write token's
+fourth underscore-delimited segment supplies the store id; OIDC uses the
+configured store id with an optional `store_` prefix removed. This SDK performs
+no OIDC exchange for GET: the OIDC token itself is the bearer. GET has no
+`x-api-version` header. A 404 returns null; other unsuccessful responses throw;
+304 has no stream. The store adapter does not request conditional reads or
+cache bypass. Prefix normalization removes empty slash-separated components.
+Rust blob implementation and wire proof remain outstanding.
+
+Provider contracts consulted:
+[AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
+[Vercel SDK get](https://vercel.com/docs/vercel-blob/using-blob-sdk#get), and
+[S3rver 3.7.1 lifecycle](https://github.com/jamhall/s3rver/blob/v3.7.1/README.md).
