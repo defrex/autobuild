@@ -16,9 +16,12 @@ pub(crate) fn event_record(row: &Row, scope: Scope<'_>) -> Result<Value, Protoco
     if seq > 9_007_199_254_740_991 {
         return Err(ProtocolError::internal());
     }
-    let mut event = json!({scope.event_key():scope.id(),"seq":seq,"ts":super::records::row_timestamp(row,"ts"),"actor":row.get::<_,Value>("actor"),"type":row.get::<_,String>("type"),"payload":row.get::<_,Value>("payload")});
+    let mut event = json!({scope.event_key():scope.id(),"seq":seq,"ts":super::records::row_timestamp(row,"ts"),"actor":row.get::<_,crate::protocol::js_json::JsValue>("actor").0,"type":row.get::<_,String>("type"),"payload":row.get::<_,crate::protocol::js_json::JsValue>("payload").0});
     if !matches!(scope, Scope::Session(_)) {
-        if let Some(compatibility) = row.get::<_, Option<Value>>("compatibility") {
+        if let Some(compatibility) = row
+            .get::<_, Option<crate::protocol::js_json::JsValue>>("compatibility")
+            .map(|value| value.0)
+        {
             event["compatibility"] = compatibility;
         }
     }
@@ -44,6 +47,7 @@ pub(crate) async fn insert_prepared(
     seq: i64,
     now: DateTime<Utc>,
 ) -> Result<Value, ProtocolError> {
+    let event = crate::protocol::js_json::serializable(event.clone());
     let compatibility = event.get("compatibility");
     let kind = event["type"].as_str().ok_or_else(ProtocolError::internal)?;
     if matches!(scope, Scope::Session(_)) {

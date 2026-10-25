@@ -194,10 +194,13 @@ The private `protocol-blob-proof` example cross-reads whole S3 objects with the
 TypeScript adapter. Vercel request tests are local SDK/request evidence, not a
 claim of live Vercel access. See [BLOB-CONTRACT.md](../BLOB-CONTRACT.md).
 
-A remaining request-boundary conformance gap is confirmed for raw JSON numeric
-literals. The current serde parser can preserve unsafe integers or round decimal
-lexemes differently from JavaScript, and rejects exponent overflow that
-JavaScript accepts before later schema validation/serialization. A complete
-request numeric model is still required before conformance is claimed. Probe
-regressions must send raw literal text and inspect persisted JSON as well as
-responses: parsing both responses through JavaScript can hide the divergence.
+Raw JSON numbers are parsed through `protocol/js_json.rs` with JavaScript's
+IEEE-754 rounding and ECMAScript shortest formatting (`ryu-js`). Overflow remains
+a number during typed schema validation, then accepted unknown values serialize
+to null. Literal serde private-marker keys stay ordinary object properties.
+PostgreSQL JSON/JSONB decoding uses the same safe wrapper, and replies normalize
+expanded database numbers. `bun tools/protocol-json-number-fixtures.ts` and
+`bun tools/protocol-numeric-fixtures.ts` check parser/stringification and Zod
+number oracles (`--generate` refreshes each). The aggregate includes 204 raw HTTP
+comparisons with exact response-number tokens and SQL JSON text; comparing only
+`response.json()` would hide unsafe-integer differences.

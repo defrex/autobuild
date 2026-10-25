@@ -125,7 +125,13 @@ pub fn validate_created_event(input: &Value) -> Result<Option<Value>, String> {
     Ok(Some(validated))
 }
 fn js_number(number: &serde_json::Number) -> String {
-    let n = number.as_f64().unwrap();
+    let Some(n) = number.as_f64().filter(|number| number.is_finite()) else {
+        return if number.as_str().starts_with('-') {
+            "-Infinity".into()
+        } else {
+            "Infinity".into()
+        };
+    };
     if n == 0.0 {
         return "0".into();
     }
@@ -190,6 +196,20 @@ mod tests {
     use super::*;
     use flate2::read::GzDecoder;
     use std::io::Read;
+    #[test]
+    fn invalid_nonfinite_expected_sequence_formats_without_panicking() {
+        for (raw, expected) in [
+            ("1e400", "Infinity"),
+            ("-1e400", "-Infinity"),
+            ("[1e400,-1e400]", "Infinity,-Infinity"),
+        ] {
+            let value = crate::protocol::js_json::parse_js_json(raw.as_bytes()).unwrap();
+            assert_eq!(
+                validate_expected_seq(&value).unwrap_err(),
+                format!("expectedSeq must be a nonnegative integer, got {expected}")
+            );
+        }
+    }
     #[test]
     fn prepared_writes_and_created_and_sequence_validation_match_typescript() {
         let mut checked = 0;

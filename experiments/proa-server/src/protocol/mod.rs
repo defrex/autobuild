@@ -11,3 +11,5 @@ pub mod router;
 pub mod wire;
 
 pub mod artifact_preparation;
+
+pub mod js_json;

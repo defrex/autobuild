@@ -46,7 +46,7 @@ fn unavailable() -> ProtocolError {
 fn reply(status: u16, value: Value) -> Response {
     (
         StatusCode::from_u16(status).expect("static status"),
-        Json(value),
+        Json(super::js_json::serializable(value)),
     )
         .into_response()
 }
@@ -165,7 +165,7 @@ async fn body_with_limit(
         }
         ProtocolError::validation("request body is not valid JSON")
     })?;
-    let raw: Value = serde_json::from_slice(&bytes)
+    let raw: Value = super::js_json::parse_js_json(&bytes)
         .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
     super::validation::validate_request(schema, &raw)
         .map_err(|message| ProtocolError::validation(format!("invalid request body: {message}")))

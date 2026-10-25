@@ -449,13 +449,25 @@ the entire unchanged contract, historical clients and isolated dispatch/reader
 evidence remain required. Rendering the dispatch result on the Builds page
 remains deferred to node integration after file-131 under ruling esc_6370a20b.
 
-A final raw-text probe exposed another boundary still to implement: JSON numeric
-semantics. Rust's default serde parser preserved `9007199254740993` while
-JavaScript rounded it, rounded `0.9999999999999999` up to one, and refused
-`1e400` where JavaScript accepted Infinity before unknown metadata serialized it
-to null. Comparing both responses with `response.json()` hid the large-integer
-difference; SQL JSON text and raw response text exposed it. Request parsing must
-preserve JavaScript's correctly rounded numbers and nonfinite validation behavior
-before full protocol conformance can be claimed. Mapping overflow directly to
-null is insufficient because typed numeric and literal schemas must reject it
-according to their original type.
+A final raw-text probe exposed JSON numeric semantics. Rust's default serde
+parser preserved `9007199254740993` while JavaScript rounded it, rounded
+`0.9999999999999999` up to one, and refused `1e400` where JavaScript accepted
+Infinity before unknown metadata serialized it to null. Comparing both responses
+with `response.json()` hid the large-integer difference; SQL JSON text and raw
+response text exposed it.
+
+Request parsing now retains raw numeric lexemes until correctly rounded f64
+conversion, then uses ECMAScript shortest formatting. Nonfinite numbers remain
+numeric through schema validation, so typed numbers reject them with Zod's exact
+Infinity diagnostics while accepted unknown values become null at serialization.
+The safe parser also preserves duplicate-key semantics and JavaScript's integer
+property order, which affects strict-schema refusal ordering.
+
+Enabling serde arbitrary precision introduces a separate trap: its ordinary
+Value deserializer reserves a private object key as a number marker. A legal
+user object carrying that key was silently converted into a scalar. Explicit
+raw-object parsing and a JSON/JSONB FromSql wrapper preserve such objects on both
+request and database read paths. The production read-only reader uses that same
+wrapper without changing its transactions. Regression proof covers 83 parser
+oracles, 218 raw Zod cases and 204 native HTTP comparisons including stored JSON,
+private-marker objects, decimal rounding, overflow and underflow.

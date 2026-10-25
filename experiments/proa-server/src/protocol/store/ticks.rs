@@ -97,7 +97,10 @@ impl Store {
         }
         let started_at = self.now();
         let mut tick = json!({"run":holder,"open":{"startedAt":timestamp(started_at)}});
-        if let Some(previous) = row.get::<_, Option<Value>>("tick") {
+        if let Some(previous) = row
+            .get::<_, Option<crate::protocol::js_json::JsValue>>("tick")
+            .map(|value| value.0)
+        {
             if let Some(finished) = previous.get("finished").filter(|value| !value.is_null()) {
                 tick["finished"] = finished.clone();
             }
@@ -127,7 +130,10 @@ impl Store {
         if !held(&row, holder, self.now()) {
             return Ok(Value::Null);
         }
-        let previous = row.get::<_, Option<Value>>("tick").unwrap_or(Value::Null);
+        let previous = row
+            .get::<_, Option<crate::protocol::js_json::JsValue>>("tick")
+            .map(|value| value.0)
+            .unwrap_or(Value::Null);
         if previous["run"] != holder || previous.get("open").is_none_or(Value::is_null) {
             return Err(ProtocolError::new(
                 500,

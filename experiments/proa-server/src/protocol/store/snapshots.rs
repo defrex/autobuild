@@ -82,14 +82,13 @@ impl Store {
             .await;
         match found {
             Ok(Some(row)) => {
-                let stored = row.get::<_, Value>("state");
+                let stored = row.get::<_, crate::protocol::js_json::JsValue>("state").0;
                 // BunSQL binds the TypeScript adapter's JSON.stringify output
                 // as a JSONB scalar string. Its json() helper unwraps that one
                 // layer; legacy direct JSONB objects remain readable too.
                 let state = match stored {
-                    Value::String(text) => {
-                        serde_json::from_str(&text).map_err(|_| ProtocolError::internal())?
-                    }
+                    Value::String(text) => crate::protocol::js_json::parse_js_json(text.as_bytes())
+                        .map_err(|_| ProtocolError::internal())?,
                     other => other,
                 };
                 Ok(
@@ -114,8 +113,10 @@ impl Store {
         // Preserve the shared adapter's JSONB string envelope, including scalar
         // JSON states and escaped NULs, so both languages decode the same bytes.
         let state = Value::String(
-            serde_json::to_string(snapshot.get("state").unwrap_or(&Value::Null))
-                .map_err(|_| ProtocolError::internal())?,
+            serde_json::to_string(&crate::protocol::js_json::serializable(
+                snapshot.get("state").cloned().unwrap_or(Value::Null),
+            ))
+            .map_err(|_| ProtocolError::internal())?,
         );
         let client = self.database.client().await?;
         let written = client.query_opt(

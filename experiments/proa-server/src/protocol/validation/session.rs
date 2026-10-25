@@ -252,6 +252,13 @@ pub(super) fn parse(
                 issues.push(type_issue("number", input, path));
                 return (None, true);
             };
+            if value.as_f64().is_none_or(|number| !number.is_finite()) {
+                // JSON.parse accepts exponent overflow as either Infinity. Zod
+                // rejects it at the primitive number gate before integer/bound
+                // checks, while other primitive diagnostics still say number.
+                issues.push(json!({"expected":"number","code":"invalid_type","received":"Infinity","path":path,"message":"Invalid input: expected number, received number"}));
+                return (None, true);
+            }
             value.clone()
         }
         _ => unreachable!("generation rejects unknown session schema: {kind}"),
@@ -407,6 +414,38 @@ mod tests {
     use super::*;
     use flate2::read::GzDecoder;
     use std::io::Read;
+    #[test]
+    fn raw_numeric_text_matches_zod_before_json_serialization() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/protocol-numeric-validation.json"
+        ))
+        .unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        for case in cases {
+            let input =
+                crate::protocol::js_json::parse_js_json(case["raw"].as_str().unwrap().as_bytes())
+                    .unwrap();
+            let mut issues = Vec::new();
+            let (value, _) = parse(&case["schema"], Some(&input), &mut Vec::new(), &mut issues);
+            if let Some(expected) = case["oracle"]["rejected"].as_str() {
+                assert_eq!(
+                    serde_json::to_string_pretty(&issues).unwrap(),
+                    expected,
+                    "{}",
+                    case["id"]
+                );
+            } else {
+                assert!(issues.is_empty(), "{}: {issues:?}", case["id"]);
+                let actual = crate::protocol::js_json::serializable(value.unwrap());
+                let expected = crate::protocol::js_json::parse_js_json(
+                    &serde_json::to_vec(&case["oracle"]["accepted"]).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(actual, expected, "{}", case["id"]);
+            }
+        }
+        assert!(cases.len() > 200);
+    }
     #[test]
     fn session_write_validator_matches_all_oracle_outcomes() {
         let mut data = String::new();

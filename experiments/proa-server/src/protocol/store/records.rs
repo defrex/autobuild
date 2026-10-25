@@ -68,7 +68,10 @@ pub fn record(row: &Row, scope: Scope<'_>) -> Value {
     match scope {
         Scope::Build(_) => {
             result["slug"] = row.get::<_, String>("slug").into();
-            if let Some(ticket) = row.get::<_, Option<Value>>("ticket") {
+            if let Some(ticket) = row
+                .get::<_, Option<crate::protocol::js_json::JsValue>>("ticket")
+                .map(|value| value.0)
+            {
                 result["ticket"] = ticket;
             }
             for (column, field) in [("branch", "branch"), ("repo_origin", "repoOrigin")] {
@@ -80,7 +83,10 @@ pub fn record(row: &Row, scope: Scope<'_>) -> Value {
             }
         }
         Scope::Repo(_) => {
-            if let Some(tick) = row.get::<_, Option<Value>>("tick") {
+            if let Some(tick) = row
+                .get::<_, Option<crate::protocol::js_json::JsValue>>("tick")
+                .map(|value| value.0)
+            {
                 result["tick"] = tick;
             }
         }

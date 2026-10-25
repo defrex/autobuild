@@ -114,6 +114,8 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/protocol-artifact-preparation-fixtures.ts'],
         ['bun', 'tools/protocol-tick-fixtures.ts'],
         ['bun', 'tools/protocol-blob-fixtures.ts'],
+        ['bun', 'tools/protocol-json-number-fixtures.ts'],
+        ['bun', 'tools/protocol-numeric-fixtures.ts'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],

@@ -38,11 +38,14 @@ fn meta(row: &Row, scope: Scope<'_>) -> Result<Value, ProtocolError> {
     if revision > 9_007_199_254_740_991 {
         return Err(ProtocolError::internal());
     }
-    let raw: Value = row.get("metadata");
+    let raw = row
+        .get::<_, crate::protocol::js_json::JsValue>("metadata")
+        .0;
     // Bun.SQL normally stores objects directly; accept the historical encoded
     // JSONB envelope as the TS adapter's `json` helper also does.
     let metadata = if let Value::String(raw) = raw {
-        serde_json::from_str(&raw).map_err(|_| ProtocolError::internal())?
+        crate::protocol::js_json::parse_js_json(raw.as_bytes())
+            .map_err(|_| ProtocolError::internal())?
     } else {
         raw
     };
@@ -79,7 +82,7 @@ impl Store {
         Ok(PreparedArtifact {
             kind: input.kind,
             blob_ref: input.blob_ref,
-            metadata: input.metadata,
+            metadata: crate::protocol::js_json::serializable(input.metadata),
         })
     }
     pub(crate) async fn deposit_artifact_locked(

@@ -7,6 +7,7 @@ import { runCredentialHttpProof, runCredentialProof } from './protocol-credentia
 import { proveProtocolStore } from './protocol-store.integration.test'
 import { proveProtocolSessions } from './protocol-sessions.integration.test'
 import { proveProtocolSnapshotsPresence } from './protocol-snapshots-presence.integration.test'
+import { proveProtocolJson } from './protocol-json.integration.test'
 import { protocolBlobInteroperability } from './protocol-blobs.integration.test'
 import { proveProtocolTicks } from './protocol-ticks.integration.test'
 import { proveProtocolArtifactBoundaries } from './protocol-artifact-boundaries.integration.test'
@@ -37,6 +38,7 @@ if (!process.argv.includes('--caller-holds-lock')) {
     await runCredentialProof(credential, admin, env)
     await runCredentialHttpProof(server, admin, env)
   })
+  const json = await proveProtocolJson(server)
   const blobs = await protocolBlobInteroperability(blob)
   const ticks = await proveProtocolTicks(server)
   const records = await proveProtocolStore(server)
@@ -49,7 +51,7 @@ if (!process.argv.includes('--caller-holds-lock')) {
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol checkpoint proof passed; complete shared suite remains required. Evidence: ${evidence}`,

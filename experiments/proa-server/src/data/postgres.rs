@@ -275,8 +275,8 @@ impl PostgresReader {
             .map(|row| {
                 let mut event = json!({
                     "seq": row.get::<_, i64>("seq"), "ts": timestamp(row, "ts"),
-                    "actor": row.get::<_, Value>("actor"), "type": row.get::<_, String>("type"),
-                    "payload": row.get::<_, Value>("payload"),
+                    "actor": row.get::<_,crate::protocol::js_json::JsValue>("actor").0, "type": row.get::<_, String>("type"),
+                    "payload": row.get::<_,crate::protocol::js_json::JsValue>("payload").0,
                 });
                 match scope {
                     Scope::Build(slug) => {
@@ -289,7 +289,7 @@ impl PostgresReader {
                         event["session"] = json!(id);
                     }
                 }
-                if let Ok(Some(compatibility)) = row.try_get::<_, Option<Value>>("compatibility") {
+                if let Ok(Some(compatibility)) = row.try_get::<_,Option<crate::protocol::js_json::JsValue>>("compatibility").map(|value|value.map(|value|value.0)) {
                     event["compatibility"] = compatibility;
                 }
                 event
@@ -312,7 +312,7 @@ impl PostgresReader {
         let result = rows.iter().map(|row| {
             let mut record = json!({ "slug": row.get::<_, String>("slug"), "repo": repo,
                 "createdAt": timestamp(row, "created_at"), "updatedAt": timestamp(row, "updated_at") });
-            if let Some(ticket) = row.get::<_, Option<Value>>("ticket") { record["ticket"] = ticket; }
+            if let Some(ticket) = row.get::<_,Option<crate::protocol::js_json::JsValue>>("ticket").map(|value|value.0) { record["ticket"] = ticket; }
             if let Some(branch) = row.get::<_, Option<String>>("branch") { record["branch"] = json!(branch); }
             record
         }).collect();
@@ -362,7 +362,7 @@ impl PostgresReader {
         }.map_err(|_| DataError::Query)?;
         let result = rows.first().map(|row| json!({
             "kind": row.get::<_, String>("kind"), "revision": row.get::<_, i64>("revision"),
-            "blobRef": row.get::<_, String>("blob_ref"), "metadata": row.get::<_, Value>("metadata"),
+            "blobRef": row.get::<_, String>("blob_ref"), "metadata": row.get::<_,crate::protocol::js_json::JsValue>("metadata").0,
             "createdAt": timestamp(row, "created_at"),
         }));
         tx.commit().await.map_err(|_| DataError::Query)?;

@@ -56,7 +56,8 @@ impl Store {
         let payload = title
             .map(|title| json!({"title":title}))
             .unwrap_or_else(|| json!({}));
-        let event = validate_session_write(&json!({"actor":{"kind":"human","user":operator},"type":"session.created","payload":payload})).map_err(|message|ProtocolError::new(422,"validation",message))?;
+        let mut event = validate_session_write(&json!({"actor":{"kind":"human","user":operator},"type":"session.created","payload":payload})).map_err(|message|ProtocolError::new(422,"validation",message))?;
+        event.payload = crate::protocol::js_json::serializable(event.payload);
         let now = self.now();
         let id = new_id();
         let mut client = self.database.client().await?;
@@ -84,8 +85,9 @@ impl Store {
             ));
         }
         // Validate before even the stale-head check, like the ordinary conditional append.
-        let event = validate_session_write(input)
+        let mut event = validate_session_write(input)
             .map_err(|message| ProtocolError::new(422, "validation", message))?;
+        event.payload = crate::protocol::js_json::serializable(event.payload);
         let mut client = self.database.client().await?;
         let tx = client.transaction().await?;
         lock(&tx, Scope::Session(id)).await?;
