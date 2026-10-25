@@ -462,3 +462,11 @@ requires a valid seed for every exported hosted ticket operation, and records
 strict-envelope, required-field, null and type diagnostics plus policy probes.
 This is a request-validation oracle only; it does not establish native ticket
 HTTP behavior, historical response compatibility or durable connect parity.
+
+`bun tools/ticket-http-fixtures.ts` checks actual TypeScript ticket-handler
+responses over a seeded in-memory TicketSource. The corpus covers every ticket
+operation, independent capability headers, unknown capability values and release
+refusals before source construction. Frozen historical decoders are replayed when
+their release line remains admitted; outside the release window the oracle
+records the version refusal instead. This evidence does not prove PostgreSQL,
+native HTTP parity or browser connect behavior. Use `--write` to refresh.
