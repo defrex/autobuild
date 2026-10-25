@@ -103,3 +103,24 @@ callback replay, allowlist removal, cookie/session policy, CSRF, peer checks and
 the GitHub adapter's wire shapes/pagination. A real TCP test proves the development
 serve adapter supplies ConnectInfo. The gate retains Proa accessibility/performance
 checks and linked builds.
+
+### Remote store protocol foundation
+
+`protocol-cases.ts` inventories the machine BuildStore routes, including
+current-client additions and the excluded ticket-source/connect/MCP surfaces.
+This is a checklist, not proof of Rust conformance. Future HTTP runners must
+register assertions for each method/path and call `assertProtocolCoverage`;
+an empty or partial registry fails.
+
+`bun tools/protocol-database-proof.ts` runs the initial storage isolation proof:
+it provisions two independently named databases with the TypeScript migrations,
+checks that each is empty, and tears both down. It reuses the loopback-only
+PostgreSQL and isolated S3 lifecycle from `data-services.ts`. Set
+`AB_POSTGRES_TEST_URL` only to a loopback administrative database, or leave it
+unset to use the existing local development PostgreSQL helper. No credentials
+or persistent test state are written to the repository. The proof does not
+start Rust or claim the shared HTTP contract suite; those remain outstanding.
+
+`withProtocolDatabase` supplies only an isolated environment to its callback,
+never a TypeScript backing store. A future remote-client factory must stop its
+Rust server and connections inside that callback before database teardown.
