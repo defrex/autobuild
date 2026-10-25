@@ -18,7 +18,7 @@ import { withDataServices } from './data-services'
 import { expected } from './fixture-core'
 
 const project = resolve(import.meta.dir, '..')
-async function buildNative(env: Record<string, string | undefined>) {
+export async function buildNative(env: Record<string, string | undefined>) {
   const child = Bun.spawn(
     [
       'cargo',
@@ -43,9 +43,12 @@ async function buildNative(env: Record<string, string | undefined>) {
   for (const line of output.split('\n').filter(Boolean)) {
     const artifact = JSON.parse(line) as {
       reason: string
+      message?: { rendered?: string }
       executable?: string
       target?: { name: string }
     }
+    if (artifact.reason === 'compiler-message' && artifact.message?.rendered)
+      process.stderr.write(artifact.message.rendered)
     if (artifact.reason === 'compiler-artifact' && artifact.executable && artifact.target)
       paths.set(artifact.target.name, artifact.executable)
   }
@@ -54,7 +57,11 @@ async function buildNative(env: Record<string, string | undefined>) {
   if (!reader || !server) throw new Error('Cargo did not report native proof executables')
   return { reader, server }
 }
-async function bridge(env: Record<string, string | undefined>, cwd: string, command: string[]) {
+export async function bridge(
+  env: Record<string, string | undefined>,
+  cwd: string,
+  command: string[],
+) {
   // Spawn the actual executable so timeouts/signals reap the reader, not a cargo parent.
   const child = Bun.spawn(command, { cwd, env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
   let diagnostics = ''
@@ -225,6 +232,10 @@ export async function integration(
       assert.equal(reply.error, undefined)
       return reply.value
     }
+    const stream = await store.createStream({ kind: 'build', build: 'healthy' }, 'session:proof')
+    await store.appendStreamParts(stream.id, [
+      { type: 'text-delta', id: 'proof-text', delta: 'first streamed text' },
+    ])
     const before = await snapshot()
     assert.equal((await value({ op: 'projects' })).length, 1)
     assert.equal((await value({ op: 'builds' })).length, 3)
@@ -319,6 +330,31 @@ export async function integration(
       unknownQueries,
     )
 
+    const streamed = await value({ op: 'stream', id: 'healthy', stream: stream.id })
+    assert.equal(streamed, 'first streamed text', JSON.stringify(await value({ op: 'counts' })))
+    assert.equal(
+      await value({ op: 'stream', id: 'healthy', stream: stream.id }),
+      'first streamed text',
+    )
+    const streamReads = (await value({ op: 'counts' })).filter(
+      (read: { scope: string }) => read.scope === `stream:${stream.id}`,
+    )
+    assert.deepEqual(
+      streamReads.map((read: { after: number; rows: number }) => [read.after, read.rows]),
+      [
+        [0, 1],
+        [1, 0],
+      ],
+    )
+    await value({ op: 'artifact', scope: 'build', id: 'healthy', kind: 'binary' })
+    const blobReads = (await value({ op: 'counts' })).filter((read: { scope: string }) =>
+      read.scope.startsWith('artifact:binary@'),
+    )
+    assert.equal(
+      new Set(blobReads.map((read: { scope: string }) => read.scope)).size,
+      blobReads.length,
+      'immutable scoped binary revision was downloaded more than once',
+    )
     await store.append('healthy', sampleEventWrite('second'))
     const concurrent = await value({ op: 'concurrent', id: 'healthy' })
     assert.deepEqual(concurrent[0], concurrent[1])

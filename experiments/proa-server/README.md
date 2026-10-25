@@ -1,8 +1,6 @@
 # Proa server experiment
 
-Nonshipping Rust/Proa experiment, version 0.1.0. Only the Builds placeholder is
-implemented, with Rust-owned GitHub operator sign-in and a read-only native data library
-connecting to the TypeScript store. No page reads data yet.
+Nonshipping Rust/Proa experiment, version 0.1.0. Builds and build detail read the shared TypeScript-owned store through native Rust projections, with GitHub operator sign-in and read-only live updates.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
@@ -20,7 +18,7 @@ Prerequisites:
   with the host trust roots; no dynamic OpenSSL library is required.
 - An installed local PostgreSQL cluster for the full Rust gate. The gate starts
   an existing cluster and provisions its own disposable database and local S3 service.
-  Offline shell development and capture need no database or credentials.
+  Seeded capture also uses isolated local PostgreSQL/S3; it never reads the production database.
 - Chromium for manual visual captures (this host uses `/usr/bin/chromium`).
 
 From this directory:
@@ -41,7 +39,7 @@ pins Rust resolution; use `--locked` for builds and tests.
 Default binding is `127.0.0.1:3000`. Set `PORT=4567` to change the port and
 `PROA_HOST=::1` to change the IP address. Invalid/zero ports fail explicitly.
 `GET /health` returns JSON with status and the crate version. `/readyz` is the
-scaffold readiness endpoint. `/` is Builds; `/index.md` and Markdown content
+scaffold readiness endpoint. `/?project=<id>` selects a configured project; `/builds/<slug>?project=<id>` reads its build trail. `/refresh` returns changed SSR fragments and `/frame` resolves scoped stored image references. `/index.md` and Markdown content
 negotiation expose its textual representation. Assets are under `/static/`.
 
 ```sh
@@ -170,3 +168,33 @@ failed suffix or any later appends; successful neighboring scopes keep advancing
 Closed PostgreSQL pool connections reconnect on subsequent reads and pass the same
 read-only schema preflight before reuse. A disconnect during a query can still
 fail that request; subsequent polls retry with a replacement connection.
+
+## Dashboard reads
+
+The first configured project is selected by default. Project ids in links and the
+native selector are validated against the project registry; detail lookups stay
+inside that project. Every normal GET is a complete snapshot with scripting off.
+A two-second progressive refresh has one request in flight, keeps the last good
+content on failure, and returns 304 for unchanged models. Build and transcript
+cursors are independent. Immutable artifact bytes have a bounded process cache.
+No TypeScript runs inside the server, and no page writes lifecycle state.
+
+The offline TypeScript projection oracle is regenerated with
+`bun tools/projection-fixtures.ts --write` and checked without writing by
+`bun tools/projection-fixtures.ts`. Whole logs, corpus prefix boundaries, session
+stream metadata and tree composition are compared by native Rust tests.
+
+A JSON verify report can attach stored frames with
+`frames: [{kind, rev, mediaType, caption?}]`. Only PNG, JPEG and WebP artifacts are
+served; `/frame` accepts a selected project/build and a report frame index,
+never a blob URL or arbitrary artifact reference.
+
+Dashboard discovery is one batched metadata query returning changed/new/deleted
+records, with durable event sequence checks independent of timestamps. Unchanged
+build facts are reused; only visible builds and their required ancestors read
+stream or pinned-config metadata. Closed stream records and pinned config at an
+unchanged build cursor are retained. Cold startup still reduces each build once
+to determine visibility. Metadata queries are included in capture's SQL evidence.
+Artifact misses use per-object single flight, so a slow download does not block
+unrelated cache hits. Row callouts show the shared three-row preview, retaining
+paragraph breaks and linking to the complete detail text.
