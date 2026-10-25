@@ -2,6 +2,7 @@
 import { strict as assert } from 'node:assert'
 import { SQL } from 'bun'
 import { gzipSync } from 'node:zlib'
+import { HostedTicketSource } from '../../../packages/core/src/ports/tickets/remote'
 import { RemoteBuildStore } from '../../../packages/core/src/store/remote/client'
 import { MemoryBuildStore } from '../../../packages/core/src/store/memory'
 import { buildCreatedWrite } from '../../../packages/core/src/store/contract'
@@ -618,6 +619,97 @@ export async function proveProtocolAssets(executable: string) {
         checks.push(
           'project credential ownership precedes malformed asset bodies and foreign indirect build pin reads',
         )
+        // A ticket connection selects its own URL and bearer even when the build
+        // connection points to another server/project. No local attachment fallback.
+        const ticketDatabase = await openPostgresTicketDatabase(env.AB_POSTGRES_URL!)
+        try {
+          const ticketSource = ticketDatabase.source({
+            repo: project,
+            teamKey: 'ASSET',
+            lifecycle: { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' },
+          })
+          const hosted = await ticketSource.create({
+            title: 'Selected ticket endpoint',
+            body: 'Selected service asset proof',
+          })
+          const opaque = String(
+            (
+              await sql`SELECT id FROM ab_tickets WHERE repo=${project} AND readable_id=${hosted.ref.id}`
+            )[0]!.id,
+          )
+          const buildProject = (await projects.add('https://github.com/proa/build-assets', 'proof'))
+            .repo
+          const buildCredential = await credentials.issue(buildProject, 'build-proof')
+          const buildEndpoint = await start({ PROA_TEST_AUTH: 'project' })
+          const attempts: { url: string; bearer: string | null }[] = []
+          const selected = new HostedTicketSource({
+            url: authenticated.server.url,
+            token: credential.token,
+            teamKey: 'ASSET',
+            fetchFn: async (input, init) => {
+              attempts.push({
+                url: String(input),
+                bearer: new Headers(init?.headers).get('authorization'),
+              })
+              return authenticated.server.fetch(input, init)
+            },
+          })
+          const alias = hosted.ref.id.toLowerCase()
+          const written = await selected.assets.putTicketAsset(
+            project,
+            alias,
+            file('selected ticket bytes'),
+          )
+          assert.equal(written.ticketId, hosted.ref.id)
+          assert.equal(written.revision, 0)
+          assert.deepEqual(
+            await selected.assets.getTicketAsset(project, opaque, 'design', 'reference'),
+            await ts.getTicketAsset(project, alias, 'design', 'reference'),
+          )
+          const viaBuild = new RemoteBuildStore({
+            url: buildEndpoint.server.url,
+            token: buildCredential.token,
+            fetchFn: buildEndpoint.server.fetch,
+          })
+          await assert.rejects(
+            viaBuild.getTicketAsset(project, alias, 'design', 'reference'),
+            /wrong project/,
+          )
+          assert.ok(attempts.length >= 2)
+          assert.ok(
+            attempts.every(
+              (item) =>
+                item.url.startsWith(authenticated.server.url) &&
+                item.bearer === `Bearer ${credential.token}`,
+            ),
+          )
+          assert.notEqual(authenticated.server.url, buildEndpoint.server.url)
+          assert.notEqual(credential.token, buildCredential.token)
+          assert.equal(await ts.getTicketAsset(buildProject, alias, 'design', 'reference'), null)
+          const storage =
+            await sql`SELECT ticket_id FROM ticket_assets WHERE repo=${project} AND kind='design' AND name='reference'`
+          assert.equal(storage.length, 1)
+          assert.equal(storage[0]!.ticket_id, opaque)
+          await selected.assets.removeTicketAsset(project, alias, 'design', 'reference')
+          assert.equal(await ts.getTicketAsset(project, opaque, 'design', 'reference'), null)
+          assert.equal(
+            await selected.assets.getTicketAsset(project, alias, 'design', 'reference'),
+            null,
+          )
+          assert.deepEqual(
+            await selected.assets.getTicketAsset(project, alias, 'design', 'reference', 0),
+            await ts.getTicketAsset(project, opaque, 'design', 'reference', 0),
+          )
+          assert.deepEqual(
+            await selected.assets.listTicketAssets(project, opaque, { revisions: true }),
+            await ts.listTicketAssets(project, alias, { revisions: true }),
+          )
+          checks.push(
+            'selected ticket URL and bearer remain independent of a different build endpoint; readable/lowercase/opaque aliases share immutable revisions and tombstones without fallback',
+          )
+        } finally {
+          await ticketDatabase.close()
+        }
         const stable = await ts.listTicketAssets(repo, ticket, { revisions: true })
         now = new Date('2030-01-01T01:00:00.000Z')
         await sql.unsafe(
