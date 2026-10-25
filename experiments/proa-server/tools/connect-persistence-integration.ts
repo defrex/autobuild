@@ -84,6 +84,16 @@ export async function connectPersistenceIntegration(
       (await credentials.authenticate(`abp_1_${first.credentialId}_${first.secret}`, now))?.repo,
       repo,
     )
+    const firstToken = `abp_1_${first.credentialId}_${first.secret}`
+    const status = await native('http', {
+      method: 'GET',
+      path: '/connect/v1/status',
+      token: firstToken,
+    })
+    assert.deepEqual(status, {
+      status: 200,
+      body: { repo, credentialId: first.credentialId, accepted: true },
+    })
     // Cancel is atomic with revocation and is readable by the TypeScript adapter.
     assert.equal((await native('cancel', started)).status, 'denied')
     assert.equal(
@@ -109,12 +119,70 @@ export async function connectPersistenceIntegration(
       (await native('decide', { code: other.code, actor, approve: false })).status,
       'approved',
     )
+    const secondToken = `abp_1_${second.credentialId}_${second.secret}`
+    assert.equal(
+      (await native('http', { method: 'POST', path: '/connect/v1/revoke', token: secondToken }))
+        .status,
+      200,
+    )
+    assert.equal(
+      (await native('http', { method: 'GET', path: '/connect/v1/status', token: secondToken }))
+        .status,
+      401,
+    )
+    assert.equal(await credentials.authenticate(secondToken, now), null)
+    const publicProposal = proposal()
+    const httpStarted = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/requests',
+      contentType: 'application/json',
+      body: JSON.stringify(publicProposal),
+    })
+    assert.equal(httpStarted.status, 200)
+    assert.equal(httpStarted.body.interval, 5)
+    assert.equal(
+      httpStarted.body.verificationURL,
+      `https://connect.example/connect?code=${httpStarted.body.code}`,
+    )
+    const httpPoll = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/poll',
+      contentType: 'application/json',
+      body: JSON.stringify(httpStarted.body),
+    })
+    assert.equal(httpPoll.body.status, 'pending')
+    const limited = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/poll',
+      contentType: 'application/json',
+      body: JSON.stringify(httpStarted.body),
+    })
+    assert.deepEqual(limited, { status: 429, body: { error: 'poll again in five seconds' } })
+    const httpCancel = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/cancel',
+      contentType: 'application/json',
+      body: JSON.stringify(httpStarted.body),
+    })
+    assert.equal(httpCancel.body.status, 'denied')
     // Deny/expiry install no credential; lookup expiration is observational.
     const denied = await native('start', proposal())
-    assert.equal(
-      (await native('decide', { code: denied.code, actor, approve: false })).status,
-      'denied',
-    )
+    const lookedUp = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/browser/lookup',
+      actor,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: ` ${denied.code.toLowerCase()} ` }),
+    })
+    assert.equal(lookedUp.body.connection.id, denied.id)
+    const browserDenied = await native('http', {
+      method: 'POST',
+      path: '/connect/v1/browser/decide',
+      actor,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: denied.code, approve: false }),
+    })
+    assert.equal(browserDenied.body.connection.status, 'denied')
     const expired = await native('start', proposal())
     now = new Date(now.getTime() + 600000)
     assert.equal((await native('lookup', { code: expired.code, actor })).status, 'expired')
@@ -137,6 +205,22 @@ export async function connectPersistenceIntegration(
     assert.equal(failure.status, 503)
     assert.equal(await registry.has(collision.repo), false)
     assert.equal((await typescript.lookup(collision.code, actor))?.status, 'pending')
+    // Native approval racing a TypeScript cancellation always ends denied and
+    // cannot leave a usable credential, regardless of lock acquisition order.
+    const racedProposal = proposal()
+    const raced = await native('start', racedProposal)
+    await Promise.all([
+      native('decide', { code: raced.code, actor, approve: true }),
+      typescript.poll(raced.id, raced.capability, true),
+    ])
+    assert.equal((await typescript.lookup(raced.code, actor))?.status, 'denied')
+    assert.equal(
+      await credentials.authenticate(
+        `abp_1_${racedProposal.credentialId}_${racedProposal.secret}`,
+        now,
+      ),
+      null,
+    )
     // Capability mismatch is indistinguishable from missing request.
     const unknown = await rust.request({
       op: 'poll',

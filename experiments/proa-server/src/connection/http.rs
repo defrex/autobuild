@@ -17,6 +17,121 @@ pub fn is_public_path(path: &str) -> bool {
     )
 }
 
+pub fn is_machine_path(path: &str) -> bool {
+    matches!(path, "/connect/v1/status" | "/connect/v1/revoke")
+}
+
+/// Fresh credential admission without release negotiation or browser cookies.
+pub async fn credential(state: &MachineState, req: Request) -> Response {
+    let path = req.uri().path();
+    let revoke = path == "/connect/v1/revoke";
+    let expected = if revoke {
+        axum::http::Method::POST
+    } else {
+        axum::http::Method::GET
+    };
+    if req.method() != expected {
+        return respond(json!({"error":"method not allowed"}), 405);
+    }
+    let authorization = crate::protocol::wire::header_text(req.headers(), "authorization");
+    let principal =
+        match crate::protocol::router::authenticate(state, authorization.as_deref()).await {
+            Ok(Some(crate::protocol::delegation::Principal::Project(principal))) => principal,
+            Ok(_) => return respond(json!({"error":"project credential required"}), 403),
+            Err(error) if error.kind == "auth" => {
+                return respond(json!({"error":error.error}), error.status.as_u16())
+            }
+            Err(_) => {
+                return failure(ConnectionError::backend(
+                    "authentication backend unavailable",
+                ))
+            }
+        };
+    if revoke {
+        // Authentication just read registration and revocation from authoritative storage.
+        // Preserve idempotent COALESCE semantics of the shared credential adapter.
+        let result = async {
+            let writer = state.store.database.ticket_writer().map_err(ConnectionError::backend)?;
+            let connection = writer.client().await.map_err(ConnectionError::backend)?;
+            connection.client.execute("UPDATE project_credentials SET revoked_at=COALESCE(revoked_at,$1) WHERE repo=$2 AND id=$3", &[&state.store.now(),&principal.repo,&principal.credential.id]).await.map_err(ConnectionError::backend)?;
+            Ok::<(),ConnectionError>(())
+        }.await;
+        if let Err(error) = result {
+            return failure(error);
+        }
+    }
+    respond(
+        json!({"repo":principal.repo,"credentialId":principal.credential.id,"accepted":true}),
+        200,
+    )
+}
+
+/// Browser admission (fresh session, allowlist and canonical Origin) is owned by
+/// the caller. This handler receives only the admitted normalized email.
+pub async fn browser(state: &MachineState, req: Request, actor: &str) -> Response {
+    match browser_dispatch(state, req, actor).await {
+        Ok(value) => respond(value, 200),
+        Err(error) => failure(error),
+    }
+}
+async fn browser_dispatch(
+    state: &MachineState,
+    req: Request,
+    actor: &str,
+) -> Result<Value, ConnectionError> {
+    if req.method() != axum::http::Method::POST {
+        return Err(ConnectionError::new(405, "method not allowed"));
+    }
+    let content_type = req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if content_type != "application/json" {
+        return Err(ConnectionError::new(400, "application/json required"));
+    }
+    let path = req.uri().path().to_owned();
+    let bytes = to_bytes(req.into_body(), usize::MAX)
+        .await
+        .map_err(ConnectionError::backend)?;
+    let raw = crate::protocol::js_value::decode_http_utf8(&bytes);
+    if raw.encode_utf16().count() > 8192 {
+        return Err(ConnectionError::new(413, "request too large"));
+    }
+    let body = crate::protocol::js_value::parse(raw.as_bytes())
+        .map_err(|_| ConnectionError::new(400, "invalid JSON"))?;
+    if body.as_object().is_none() {
+        return Err(ConnectionError::new(400, "invalid request"));
+    }
+    let writer = state
+        .store
+        .database
+        .ticket_writer()
+        .map_err(ConnectionError::backend)?;
+    let service = ConnectionService { writer: &writer };
+    if let Some(code) = text(&body, "code") {
+        let code = code
+            .trim_matches(crate::operator::auth::js_space)
+            .to_uppercase();
+        if path == "/connect/v1/browser/lookup" {
+            return Ok(json!({"connection":service.lookup(&code,actor,state.store.now()).await?}));
+        }
+        if path == "/connect/v1/browser/decide" {
+            if let Some(approve) = body["approve"].as_bool() {
+                return Ok(
+                    json!({"connection":service.decide(&code,actor,approve,state.store.now()).await?}),
+                );
+            }
+        }
+    }
+    Err(ConnectionError::new(404, "unknown connection route"))
+}
+
 pub fn respond(body: Value, status: u16) -> Response {
     let mut response = (
         StatusCode::from_u16(status).expect("valid connection status"),
@@ -148,6 +263,21 @@ mod tests {
             "/connect/v1/requests/extra",
         ] {
             assert!(!is_public_path(path));
+        }
+    }
+    #[test]
+    fn credential_paths_are_separate_from_public_capabilities() {
+        for path in ["/connect/v1/status", "/connect/v1/revoke"] {
+            assert!(is_machine_path(path));
+            assert!(!is_public_path(path));
+        }
+        for path in [
+            "/connect",
+            "/connect/v1/requests",
+            "/connect/v1/browser/decide",
+            "/connect/v1/status/extra",
+        ] {
+            assert!(!is_machine_path(path));
         }
     }
     #[tokio::test]
