@@ -12,10 +12,10 @@ export function assertLockfileClean(repository = root): void {
     cwd: repository,
   })
   if (result.exitCode === 0) return
-  if (result.exitCode === 1 && !result.stderr.length && !result.error)
+  if (result.exitCode === 1 && !result.stderr.length)
     throw new Error(`${lockfile} differs from HEAD; commit the normalized lockfile.`)
   throw new Error(
-    `Cannot check Cargo.lock against HEAD: ${result.stderr.toString().trim() || result.error?.message || `git exited ${result.exitCode}`}`,
+    `Cannot check Cargo.lock against HEAD: ${result.stderr.toString().trim() || `git exited ${result.exitCode}`}`,
   )
 }
 export async function run(
