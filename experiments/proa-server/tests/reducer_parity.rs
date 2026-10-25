@@ -63,22 +63,21 @@ fn every_catalog_witness_decodes() {
 fn typescript_corpus_matches_native_reducers_and_incremental_splits() {
     let corpus = corpus();
     let mut failures = vec![];
+    let catalog: Value =
+        serde_json::from_str(include_str!("../fixtures/event-schemas.json")).unwrap();
     for fixture in corpus["fixtures"].as_array().unwrap() {
         let name = fixture["id"].as_str().unwrap();
         let scope = scope(fixture["scope"].as_str().unwrap());
         let events = fixture["events"].as_array().unwrap();
         let mut acc = Accumulator::new(scope);
+        let unknown = events.iter().find(|event| {
+            catalog[scope.name()]
+                .get(event["type"].as_str().unwrap_or(""))
+                .is_none()
+        });
+        assert_eq!(fixture.get("rustUnreadable").is_some(), unknown.is_some(), "{name}: unknown-event classification must be exhaustive and exclude every known-only log");
         if let Some(unreadable) = fixture.get("rustUnreadable") {
-            let catalog: Value =
-                serde_json::from_str(include_str!("../fixtures/event-schemas.json")).unwrap();
-            let unknown = events
-                .iter()
-                .find(|event| {
-                    catalog[scope.name()]
-                        .get(event["type"].as_str().unwrap_or(""))
-                        .is_none()
-                })
-                .expect("unreadable fixture must mechanically contain an unknown event");
+            let unknown = unknown.unwrap();
             if let Some(kind) = unreadable.get("type") {
                 assert_eq!(kind, &unknown["type"], "{name}: negative event type");
             }
