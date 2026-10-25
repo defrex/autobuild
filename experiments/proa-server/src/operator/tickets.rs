@@ -7,6 +7,7 @@ use rand::RngCore;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use tokio_postgres::{Row, Transaction};
+pub mod machine;
 
 fn storage(_: impl std::fmt::Display) -> OperatorError {
     OperatorError::internal()
@@ -528,6 +529,49 @@ impl TicketService<'_> {
         let ticket = record(&tx, repo, policy, &row, true).await?;
         tx.commit().await.map_err(storage)?;
         Ok(ticket)
+    }
+    /// Machine get follows TicketSource's nullable boundary; operator get keeps
+    /// its source-local not-found diagnostic.
+    pub async fn machine_get(
+        &self,
+        repo: &str,
+        policy: &TicketPolicy,
+        id: &str,
+    ) -> Result<Value, OperatorError> {
+        let mut connection = self.client().await?;
+        let tx = connection.client.transaction().await.map_err(storage)?;
+        seed(&tx, repo, policy).await?;
+        let ticket = match lookup(&tx, repo, id, false).await? {
+            Some(row) => record(&tx, repo, policy, &row, true).await?,
+            None => Value::Null,
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok(ticket)
+    }
+    /// Machine listReady with absent state lists every state. Operator list
+    /// deliberately retains its triage default and presentation envelope.
+    pub async fn machine_list(
+        &self,
+        repo: &str,
+        policy: &TicketPolicy,
+        selected_state: Option<&str>,
+        labels: Option<&[String]>,
+    ) -> Result<Value, OperatorError> {
+        let mut connection = self.client().await?;
+        let tx = connection.client.transaction().await.map_err(storage)?;
+        seed(&tx, repo, policy).await?;
+        let selected = match selected_state {
+            Some(name) => Some(state(&tx, repo, policy, name).await?),
+            None => None,
+        };
+        let filter = labels.unwrap_or(&[]).to_vec();
+        let rows = tx.query("SELECT *,revision::text AS revision_text FROM ab_tickets WHERE repo=$1 AND ($2::text IS NULL OR state=$2) AND labels @> $3::text[] ORDER BY created_at,id", &[&repo, &selected, &filter]).await.map_err(storage)?;
+        let mut tickets = Vec::new();
+        for row in rows {
+            tickets.push(record(&tx, repo, policy, &row, false).await?);
+        }
+        tx.commit().await.map_err(storage)?;
+        Ok(json!({"tickets": tickets, "diagnostics": []}))
     }
     pub async fn dependencies(
         &self,

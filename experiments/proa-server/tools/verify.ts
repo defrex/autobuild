@@ -112,6 +112,9 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/operator-fixtures.ts'],
         ['bun', 'tools/request-fixtures.ts'],
         ['bun', 'tools/config-fixtures.ts'],
+        ['bun', 'tools/ticket-protocol-fixtures.ts'],
+        ['bun', 'tools/ticket-http-fixtures.ts'],
+        ['bun', 'tools/connect-fixtures.ts'],
         ['bun', 'tools/api-read-fixtures.ts'],
         ['bun', 'tools/advanced-control-fixtures.ts'],
         ['bun', 'tools/registry-fixtures.ts'],
@@ -150,6 +153,8 @@ export async function build(capture = false): Promise<string> {
         ['cargo', 'clippy', '--locked', '--all-targets', '--', '-D', 'warnings'],
         ['cargo', 'test', '--locked'],
         ['proa', 'test', '--locked'],
+        ['bun', 'tools/connect-persistence-integration.ts'],
+        ['bun', 'tools/connect-integration.ts'],
         ['bun', 'tools/data-integration.ts'],
         ['bun', 'tools/data-dashboard-integration.ts'],
         ['bun', 'tools/operator-integration.ts'],
@@ -162,6 +167,8 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/dispatcher-integration.ts'],
         ['bun', 'tools/protocol-contract.ts', '--caller-holds-lock'],
         ['bun', 'tools/protocol-integration.ts', '--caller-holds-lock'],
+        ['bun', 'tools/ticket-protocol-integration.ts', '--caller-holds-lock'],
+        ['bun', 'tools/ticket-cli-integration.ts'],
       ]
   commands.push([
     'proa',

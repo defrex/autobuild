@@ -455,3 +455,41 @@ delegated GET is refused before presence lookup, with the source's exact text;
 POST retains the source's earlier mutation authorization and JSON-parse errors.
 These results are recorded in `routeParity`, `retentionEnvironment` and the
 authority proof's `presenceRefusals` in the family report.
+
+`bun tools/ticket-protocol-fixtures.ts` checks the source-pinned ticket request
+schema corpus (`--write` explicitly regenerates it). Its operation inventory
+requires a valid seed for every exported hosted ticket operation, and records
+strict-envelope, required-field, null and type diagnostics plus policy probes.
+This is a request-validation oracle only; it does not establish native ticket
+HTTP behavior, historical response compatibility or durable connect parity.
+
+`bun tools/ticket-http-fixtures.ts` checks actual TypeScript ticket-handler
+responses over a seeded in-memory TicketSource (`--write` explicitly refreshes).
+The corpus records each request, identity headers and capability masks for every
+ticket operation, including unknown capability values and release refusals.
+The maintained `ticket-protocol-integration.ts` replays every recorded refused
+case against native HTTP with exact status/body comparison. Every admitted
+get/list projection is compared both to its recorded body and the real TypeScript
+handler over an equivalent PostgreSQL seed. Only the generated revision value is
+normalized, preserving its presence/type and all other fields. Frozen decoders
+validate native projections when their release line is admitted; retired clients
+receive the recorded version refusal. The fixture freshness check alone makes
+no persistence or native parity claim; the database/HTTP replay supplies those
+proofs and reports its refusal/projection counts in the gate output.
+
+`connect-fixtures.ts` pins the TypeScript repository normalizer and its accepted
+and refused identity forms. `connect-persistence-integration.ts` runs a native
+bridge against isolated migrated PostgreSQL and checks restart, mixed-server
+approval, credential usability, denial/expiry, collision rollback, cancellation
+and revocation. Both participate in the experiment verify gate. Connect captures
+seed real durable requests and decisions at both widths and in both grounds.
+
+`ticket-protocol-integration.ts` compares native ticket reads and transactional
+writes with the real TypeScript handler over isolated PostgreSQL/S3 projects.
+`ticket-cli-integration.ts` exercises the actual ticket command parser/handlers
+against both normal HTTP services and compares outputs and downloaded asset
+bytes. `connect-integration.ts` runs the normal native server with server-issued
+development browser sessions and unchanged CLI connection functions, including
+hosted policy publication, cross-server credential use, no-JavaScript decisions,
+Origin/CSRF refusals, restart, cancellation and disconnect. These commands run
+inside the maintained experiment gate; they do not use production credentials.
