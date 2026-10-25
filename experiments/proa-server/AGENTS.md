@@ -20,5 +20,5 @@ Install with `bun install --frozen-lockfile`, then export
 Run `proa fmt --check --verify src`, `proa lint src --deny warnings`,
 `proa test --locked`, `cargo test --locked` and `proa build --locked`.
 Keep Proa accessibility checks enabled. Root repository checks also apply.
-Record discoveries and reproducible defects in FIELD-NOTES.md. Capture tooling and
-verify configuration are separate sibling work, not part of this shell.
+Record discoveries and reproducible defects in FIELD-NOTES.md. Run the automated gates documented in tools/README.md. Extend the checked route
+inventory and capture contracts with any new page, database read or auth flow.
