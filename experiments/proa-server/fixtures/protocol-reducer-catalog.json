@@ -1,0 +1,558 @@
+{
+  "request": {
+    "type": "object",
+    "shape": {
+      "reducer": {
+        "type": "string",
+        "checks": [
+          { "check": "min_length", "minimum": 1 },
+          { "check": "max_length", "maximum": 64 }
+        ]
+      },
+      "args": {
+        "type": "optional",
+        "inner": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } }
+      }
+    },
+    "strict": true
+  },
+  "catalog": {
+    "ticketMigrations": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "nodeRestack": {
+      "scope": "build",
+      "version": 7,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "leafRestack": {
+      "scope": "build",
+      "version": 4,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "baseBranchValue": {
+      "scope": "build",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "publishedBranchHeadValue": {
+      "scope": "build",
+      "version": 4,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "verifyDiffBaseValue": {
+      "scope": "build",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "recordedBaseShaValue": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "terminalGuard": {
+      "scope": "build",
+      "version": 2,
+      "args": {
+        "type": "object",
+        "shape": {
+          "phase": {
+            "type": "custom",
+            "checks": [
+              {
+                "check": "phase",
+                "message": "not a phase: expected a core phase or \"verify:<step>\"",
+                "abort": true
+              }
+            ]
+          },
+          "round": {
+            "type": "number",
+            "checks": [{ "check": "number_format", "format": "safeint" }]
+          },
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      }
+    },
+    "dispatcherRunFacts": {
+      "scope": "repo",
+      "version": 3,
+      "args": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      }
+    },
+    "dispatchUpgrade": {
+      "scope": "repo",
+      "version": 6,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "repositoryAttention": {
+      "scope": "repo",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "repositoryReadFacts": {
+      "scope": "repo",
+      "version": 31,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "buildStreamSeed": {
+      "scope": "build",
+      "version": 31,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "buildReadFacts": {
+      "scope": "build",
+      "version": 61,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "effectiveConfig": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "buildDelegation": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "harvestDelegation": {
+      "scope": "repo",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "dispatchFrontend": {
+      "excluded": "returns a list of raw repository journal events",
+      "version": 4
+    },
+    "executionNoProgress": {
+      "scope": "build",
+      "version": 5,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "summaryBoundary": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 1
+    },
+    "summaryRequests": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "ticketSourceHealth": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 2
+    },
+    "build": {
+      "scope": "build",
+      "version": 21,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "harvest": {
+      "scope": "repo",
+      "version": 3,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "dispatchSettings": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "dispatchStatus": {
+      "scope": "repo",
+      "version": 4,
+      "args": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      }
+    },
+    "session": {
+      "excluded": "consumes operator-session logs rather than build or repository events",
+      "version": 1
+    },
+    "buildDigest": {
+      "scope": "build",
+      "version": 10,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "sandboxStates": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "logIndex": { "excluded": "finished value contains Maps and Sets", "version": 5 },
+    "frozenPrImageHost": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 1
+    },
+    "currentPrAttachments": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "hostedPrAttachments": { "excluded": "finished value is a Map", "version": 1 },
+    "pendingPrAttachmentReclaims": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "publicationState": {
+      "excluded": "finished value contains executable selector functions",
+      "version": 5
+    },
+    "repositoryStateEvents": {
+      "excluded": "returns a list of raw repository journal events",
+      "version": 6
+    },
+    "journalView": { "excluded": "returns a list of raw repository journal events", "version": 7 },
+    "openExecution": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "lastExecutionOutcome": {
+      "scope": "build",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "openHarvestExecutions": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "openTick": {
+      "scope": "repo",
+      "version": 1,
+      "args": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      }
+    },
+    "dispatchFailureBudget": {
+      "scope": "build",
+      "version": 1,
+      "args": {
+        "type": "object",
+        "shape": { "infrastructureOwnsWorkspace": { "type": "boolean" } },
+        "strict": true
+      }
+    },
+    "infrastructureFailureReset": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "openWorkspace": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "publishedBranchHead": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 4
+    },
+    "verifyDiffBase": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 2
+    },
+    "recordedBaseSha": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 1
+    },
+    "setupStreak": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "phaseFailures": {
+      "scope": "build",
+      "version": 2,
+      "args": {
+        "type": "object",
+        "shape": {
+          "phase": {
+            "type": "custom",
+            "checks": [
+              {
+                "check": "phase",
+                "message": "not a phase: expected a core phase or \"verify:<step>\"",
+                "abort": true
+              }
+            ]
+          },
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          }
+        },
+        "strict": true
+      }
+    },
+    "openBuildWorkspace": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "baseBranch": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 2
+    },
+    "provisionMarker": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 1
+    },
+    "recoveryCheckpoint": {
+      "excluded": "finished contract can return top-level undefined, which is not JSON",
+      "version": 4
+    },
+    "currentDeferralObservation": {
+      "scope": "build",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "dashboardFacts": {
+      "scope": "build",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "autoMergeDefault": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "pinnedAssets": {
+      "scope": "build",
+      "version": 2,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    },
+    "forgeHealthValue": {
+      "scope": "repo",
+      "version": 1,
+      "args": { "type": "object", "shape": {}, "strict": true }
+    }
+  },
+  "supported": [
+    "build",
+    "repositoryReadFacts",
+    "ticketMigrations",
+    "dispatchUpgrade",
+    "repositoryAttention",
+    "harvest",
+    "dispatchSettings",
+    "forgeHealthValue",
+    "effectiveConfig",
+    "sandboxStates",
+    "openHarvestExecutions",
+    "autoMergeDefault",
+    "dispatcherRunFacts",
+    "dispatchStatus",
+    "openTick",
+    "baseBranchValue",
+    "publishedBranchHeadValue",
+    "verifyDiffBaseValue",
+    "recordedBaseShaValue",
+    "openBuildWorkspace",
+    "openWorkspace",
+    "openExecution",
+    "lastExecutionOutcome",
+    "setupStreak",
+    "pinnedAssets",
+    "infrastructureFailureReset",
+    "buildDelegation",
+    "harvestDelegation",
+    "buildDigest",
+    "currentPrAttachments",
+    "pendingPrAttachmentReclaims",
+    "summaryRequests",
+    "executionNoProgress",
+    "currentDeferralObservation",
+    "dispatchFailureBudget",
+    "phaseFailures",
+    "dashboardFacts",
+    "terminalGuard",
+    "buildStreamSeed",
+    "buildReadFacts",
+    "nodeRestack",
+    "leafRestack"
+  ],
+  "compatibilitySchema": {
+    "type": "object",
+    "shape": {
+      "writerVersion": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+    },
+    "strict": true
+  },
+  "executionProgress": {
+    "execution.relaunch-requested": "bookkeeping",
+    "execution.drain-authorized": "bookkeeping",
+    "execution.drain-settled": "bookkeeping",
+    "build.compatibility-deferred": "bookkeeping",
+    "build.janitor-attempt-failed": "bookkeeping",
+    "build.janitor-failing": "bookkeeping",
+    "build.janitor-recovered": "bookkeeping",
+    "landing.application-failed": "failure",
+    "landing.decided": "progress",
+    "build.hold-requested": "progress",
+    "build.land-requested": "progress",
+    "landing.command-acknowledged": "progress",
+    "landing.native-enable-started": "bookkeeping",
+    "landing.forge-merged": "progress",
+    "landing.native-applied": "bookkeeping",
+    "target.moved": "bookkeeping",
+    "restack.prepared": "progress",
+    "restack.replayed": "progress",
+    "restack.publish-intended": "progress",
+    "restack.rewritten": "progress",
+    "restack.contended": "progress",
+    "restack.completed": "progress",
+    "build.created": "progress",
+    "integration.abandoned": "progress",
+    "integration.observed": "bookkeeping",
+    "integration.prepared": "progress",
+    "integration.landing-intended": "progress",
+    "integration.landed": "progress",
+    "integration.verification-failed": "bookkeeping",
+    "integration.audited": "progress",
+    "node.opening": "progress",
+    "node.writer-reserved": "progress",
+    "node.item-prepared": "progress",
+    "node.item-replayed": "progress",
+    "node.item-conflicted": "progress",
+    "node.publish-intended": "progress",
+    "node.rewritten": "progress",
+    "node.writer-settled": "progress",
+    "node.contribution-recorded": "bookkeeping",
+    "node.inventory": "bookkeeping",
+    "node.restack-requested": "bookkeeping",
+    "node.restack-satisfied": "progress",
+    "node.parent-distance": "bookkeeping",
+    "node.parent-requested": "bookkeeping",
+    "node.parent-accepted": "progress",
+    "node.parent-pr-retargeted": "progress",
+    "node.parent-completed": "progress",
+    "node.parent-cancelled": "bookkeeping",
+    "node.parent-rejection-cleared": "bookkeeping",
+    "node.parent-rejected": "bookkeeping",
+    "node.opened": "progress",
+    "node.poll-checked": "bookkeeping",
+    "node.compared": "bookkeeping",
+    "pr.opened": "progress",
+    "build.completed": "progress",
+    "runner.runtime-recorded": "bookkeeping",
+    "runner.attached": "bookkeeping",
+    "runner.setup-failed": "failure",
+    "workspace.provisioned": "bookkeeping",
+    "workspace.provision-started": "bookkeeping",
+    "workspace.released": "bookkeeping",
+    "execution.started": "bookkeeping",
+    "execution.ended": "bookkeeping",
+    "infrastructure.failed": "failure",
+    "infrastructure.cleanup-attempted": "bookkeeping",
+    "pr-summary.requested": "progress",
+    "pr-summary.attempted": "progress",
+    "pr-summary.result": "progress",
+    "pr-summary.settled": "progress",
+    "finalize.step-started": "progress",
+    "publication.requested": "progress",
+    "publication.lost": "progress",
+    "abort.remote-branch-deleted": "progress",
+    "abort.local-branch-deleted": "progress",
+    "abort.ticket-returned": "progress",
+    "dispatch.failed": "failure",
+    "dispatch.comment-posted": "bookkeeping",
+    "build.pause-requested": "progress",
+    "build.resume-requested": "progress",
+    "build.abort-requested": "progress",
+    "build.discard-requested": "progress",
+    "build.auto-merge-requested": "progress",
+    "build.auto-merge-cancelled": "progress",
+    "build.auto-merge-default-observed": "bookkeeping",
+    "build.paused": "progress",
+    "build.resumed": "progress",
+    "build.aborted": "progress",
+    "spec.imported": "progress",
+    "spec.authored": "progress",
+    "spec.revised": "progress",
+    "session.suspended": "bookkeeping",
+    "session.resumed": "bookkeeping",
+    "session.resume-fallback": "bookkeeping",
+    "session.started": "progress",
+    "session.native-handle-recorded": "bookkeeping",
+    "session.ended": "progress",
+    "plan.started": "progress",
+    "plan.completed": "progress",
+    "plan-review.started": "progress",
+    "plan-review.verdict": "progress",
+    "implement.started": "progress",
+    "implement.completed": "progress",
+    "code-review.started": "progress",
+    "code-review.verdict": "progress",
+    "verify.reconcile-policy-captured": "progress",
+    "verify.started": "progress",
+    "verify.completed": "progress",
+    "finalize.started": "progress",
+    "finalize.completed": "progress",
+    "finalize.step-completed": "progress",
+    "pr-attachment.designated": "progress",
+    "pr-attachment.hosted": "progress",
+    "pr-attachment.reclaimed": "progress",
+    "pr-attachment.reclaim-failed": "progress",
+    "pr.auto-merge-enabled": "progress",
+    "pr.auto-merge-disabled": "progress",
+    "pr.merged": "progress",
+    "pr.closed": "progress",
+    "pr.conflicted": "progress",
+    "reconcile.progress-checked": "progress",
+    "reconcile.prepared": "bookkeeping",
+    "reconcile.contended": "bookkeeping",
+    "reconcile.replayed": "bookkeeping",
+    "reconcile.publish-intended": "bookkeeping",
+    "reconcile.rewritten": "progress",
+    "reconcile.started": "progress",
+    "reconcile.completed": "progress",
+    "observation.recorded": "progress",
+    "escalation.raised": "progress",
+    "escalation.answered": "progress",
+    "session.build-read-failed": "bookkeeping",
+    "phase.deferred": "bookkeeping",
+    "phase.deferral-escalated": "bookkeeping",
+    "phase.failed": "failure"
+  },
+  "phaseFailureResets": {
+    "review-round-limit": "matching-round",
+    "verify-failure-limit": "all-phase-rounds",
+    "reconcile-no-progress": "none",
+    "dispatch-failure-limit": "none",
+    "execution-no-progress": "none",
+    "setup-failure-limit": "none",
+    "infrastructure-failure-limit": "none",
+    "phase-attempt-limit": "matching-round",
+    "non-retryable-phase-failure": "matching-round"
+  },
+  "terminalEvents": {
+    "plan": "plan.completed",
+    "plan-review": "plan-review.verdict",
+    "implement": "implement.completed",
+    "code-review": "code-review.verdict",
+    "verify": "verify.completed",
+    "finalize": "finalize.completed",
+    "reconcile": "reconcile.completed"
+  }
+}

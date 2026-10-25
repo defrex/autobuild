@@ -2,10 +2,12 @@
 //! Secrets deliberately have no Debug implementation.
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct DataConfig {
     pub database_url: String,
     pub blobs: BlobConfig,
     pub prefix: String,
+    pub artifact_retention_max_revisions: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -39,9 +41,13 @@ impl DataConfig {
     pub fn parse(env: &HashMap<String, String>) -> Result<Option<Self>, String> {
         let optional = |name: &str| {
             env.get(name)
-                .map(|value| value.trim())
+                .map(|value| {
+                    crate::protocol::js_value::JsString::from(value.as_str())
+                        .trim_js()
+                        .to_scalar()
+                        .expect("trimming scalar input preserves Unicode scalars")
+                })
                 .filter(|value| !value.is_empty())
-                .map(str::to_owned)
         };
         let required = |name: &str| {
             optional(name).ok_or_else(|| format!("{name} is required and must be nonblank"))
@@ -52,6 +58,7 @@ impl DataConfig {
                 (name.starts_with("AB_BLOB_")
                     || name.starts_with("AB_S3_")
                     || name.starts_with("AB_VERCEL_BLOB_")
+                    || name == "AB_ARTIFACT_RETENTION_MAX_REVISIONS"
                     || matches!(
                         name.as_str(),
                         "BLOB_READ_WRITE_TOKEN" | "VERCEL_OIDC_TOKEN" | "BLOB_STORE_ID"
@@ -70,7 +77,11 @@ impl DataConfig {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("/");
-        let blobs = match required("AB_BLOB_BACKEND")?.as_str() {
+        let backend = required("AB_BLOB_BACKEND")?;
+        let artifact_retention_max_revisions = optional("AB_ARTIFACT_RETENTION_MAX_REVISIONS")
+            .map(|value| positive_int(&value))
+            .transpose()?;
+        let blobs = match backend.as_str() {
             "s3" => BlobConfig::S3 {
                 bucket: required("AB_S3_BUCKET")?,
                 region: required("AB_S3_REGION")?,
@@ -107,7 +118,65 @@ impl DataConfig {
             database_url,
             blobs,
             prefix,
+            artifact_retention_max_revisions,
         }))
+    }
+}
+
+/// The source positiveInt helper uses Number, not parseInt or a decimal-only
+/// integer parser. Beyond usize's range every realizable revision is retained;
+/// saturating preserves that decision instead of rejecting valid JS integers.
+fn positive_int(value: &str) -> Result<usize, String> {
+    let number = if let Some((radix, digits)) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map(|v| (16, v))
+        .or_else(|| {
+            value
+                .strip_prefix("0o")
+                .or_else(|| value.strip_prefix("0O"))
+                .map(|v| (8, v))
+        })
+        .or_else(|| {
+            value
+                .strip_prefix("0b")
+                .or_else(|| value.strip_prefix("0B"))
+                .map(|v| (2, v))
+        }) {
+        if digits.is_empty() {
+            None
+        } else {
+            // Round the entire integer once, as Number does. Accumulating
+            // into f64 can double-round a radix value within usize's range.
+            let exact = digits.chars().try_fold(0u128, |n, d| {
+                n.checked_mul(u128::from(radix))?
+                    .checked_add(u128::from(d.to_digit(radix)?))
+            });
+            exact.map(|n| n as f64).or_else(|| {
+                digits.chars().try_fold(0.0, |n, d| {
+                    d.to_digit(radix)
+                        .map(|d| n * f64::from(radix) + f64::from(d))
+                })
+            })
+        }
+    } else {
+        // Rust additionally accepts spellings such as inf; JavaScript accepts
+        // only this decimal grammar (Infinity is not a positive integer).
+        let decimal =
+            regex::Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+                .expect("constant numeric grammar");
+        decimal
+            .is_match(value)
+            .then(|| value.parse::<f64>().ok())
+            .flatten()
+    };
+    match number {
+        Some(number) if number.is_finite() && number.fract() == 0.0 && number >= 1.0 => {
+            Ok(number as usize)
+        }
+        _ => Err(format!(
+            "AB_ARTIFACT_RETENTION_MAX_REVISIONS must be a positive integer, got {value}"
+        )),
     }
 }
 
@@ -120,6 +189,78 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn retention_override_matches_js_positive_integer_coercion() {
+        let mut env = environment(&[
+            (
+                "AB_POSTGRES_URL",
+                "postgres://unused@127.0.0.1:9/unreachable",
+            ),
+            ("AB_BLOB_BACKEND", "vercel"),
+            ("AB_VERCEL_BLOB_ACCESS", "private"),
+            ("BLOB_READ_WRITE_TOKEN", "unused"),
+        ]);
+        assert_eq!(
+            DataConfig::parse(&env)
+                .unwrap()
+                .unwrap()
+                .artifact_retention_max_revisions,
+            None
+        );
+        for blank in ["", " ", "\u{feff}\u{2029}"] {
+            env.insert("AB_ARTIFACT_RETENTION_MAX_REVISIONS".into(), blank.into());
+            assert_eq!(
+                DataConfig::parse(&env)
+                    .unwrap()
+                    .unwrap()
+                    .artifact_retention_max_revisions,
+                None
+            );
+        }
+        for (raw, expected) in [
+            ("500", 500),
+            ("1", 1),
+            ("2.0", 2),
+            ("+2", 2),
+            ("1e2", 100),
+            (".1e1", 1),
+            ("0x10", 16),
+            ("0x94d2b8fda02f34a6", 10_723_837_062_176_258_048usize),
+            ("0O10", 8),
+            ("0b10", 2),
+            ("\u{feff} 3 \u{2029}", 3),
+            ("0.99999999999999999", 1),
+            ("1e30", usize::MAX),
+        ] {
+            env.insert("AB_ARTIFACT_RETENTION_MAX_REVISIONS".into(), raw.into());
+            assert_eq!(
+                DataConfig::parse(&env)
+                    .unwrap()
+                    .unwrap()
+                    .artifact_retention_max_revisions,
+                Some(expected),
+                "{raw:?}"
+            );
+        }
+        for raw in [
+            "0", "-0", "-1", "1.5", "NaN", "Infinity", "inf", "1e400", "1e-400", "0x", "+0x1",
+            "1_0", "1 0", "\u{85}1",
+        ] {
+            env.insert("AB_ARTIFACT_RETENTION_MAX_REVISIONS".into(), raw.into());
+            assert_eq!(
+                DataConfig::parse(&env).err().unwrap(),
+                format!(
+                    "AB_ARTIFACT_RETENTION_MAX_REVISIONS must be a positive integer, got {raw}"
+                )
+            );
+        }
+        assert!(DataConfig::parse(&environment(&[(
+            "AB_ARTIFACT_RETENTION_MAX_REVISIONS",
+            "2"
+        )]))
+        .is_err());
     }
 
     #[test]
