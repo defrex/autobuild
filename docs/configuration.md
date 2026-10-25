@@ -2837,11 +2837,12 @@ Set `COMPANY_TICKET_TOKEN` in the environment, never in this table.
 
 ## `[orchestrator]`
 
-Gates the operator-agent feature (AUT-340, AUT-342): the per-user sandbox
-environments the `sandbox.*` registry tools drive, and — when the embedded
-orchestrator is enabled — the turn runner that answers your sessions and
-wakes on build events. The table is closed to unknown keys and
-restart-classified as a whole.
+Enables the credential-free per-owner sandbox environments driven by external
+operators through `sandbox.*`, archive cleanup and dispatcher idle settlement.
+Autobuild does not host an operator agent. The table is closed to unknown keys
+and restart-classified as a whole. The removed runner keys `model`,
+`invocationBudgetSeconds`, `approvals` and `wake` are rejected with a diagnostic;
+existing effective-config artifacts remain readable without changing stored bytes.
 
 <!-- configuration-reference:orchestrator -->
 
@@ -2867,7 +2868,7 @@ restart-classified as a whole.
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 
-**Description:** Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment.
+**Description:** Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses.
 
 **Constraints:** None beyond the input type.
 
@@ -2910,58 +2911,6 @@ restart-classified as a whole.
 
 **Constraints:** When enabled, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.; Each item: minimum length 1
 
-#### `orchestrator.model`
-
-**TOML key:** `orchestrator.model`
-
-- **Type:** `string`
-- **Default:** `omitted`
-- **Required:** Required when orchestrator.enabled = true.
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
-
-**Description:** Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential.
-
-**Constraints:** minimum length 1
-
-#### `orchestrator.invocationBudgetSeconds`
-
-**TOML key:** `orchestrator.invocationBudgetSeconds`
-
-- **Type:** `number`
-- **Default:** `240`
-- **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
-
-**Description:** Wall-clock budget in seconds for one turn invocation. Values above the route limit are clamped after parsing.
-
-**Constraints:** safe integer; > 0; Values above 300 are clamped to that limit after parsing.
-
-#### `orchestrator.approvals`
-
-**TOML key:** `orchestrator.approvals`
-
-- **Type:** `array of string`
-- **Default:** `["builds.control:abort","builds.control:discard","builds.answer:revise-spec","sandbox.publish","tickets.move:ready"]`
-- **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
-
-**Description:** Registry tool names whose calls suspend a turn until you answer. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches.
-
-**Constraints:** Each item: matches /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
-
-#### `orchestrator.wake`
-
-**TOML key:** `orchestrator.wake`
-
-- **Type:** `array of string`
-- **Default:** `omitted`
-- **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
-
-**Description:** The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the legacy hosted wake set including `integration.verification-failed`, independently of CLI watch defaults) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins.
-
-**Constraints:** Every glob must match a known build or repository-journal event. Omission inherits the legacy hosted wake set independently of CLI watch defaults; [] disables waking.; Each item: minimum length 1
-
 <!-- configuration-reference:/orchestrator -->
 
 `[orchestrator.sandbox]` fields:
@@ -2992,10 +2941,6 @@ one environment per user and repository.
 ```toml
 [orchestrator]
 enabled = true
-model = "anthropic/claude-sonnet-4"
-invocationBudgetSeconds = 240
-approvals = ["builds.control:abort", "sandbox.publish", "tickets.move:ready"]
-# wake omitted: new sessions inherit the default attention set
 
 [orchestrator.sandbox]
 idleMinutes = 30
@@ -3005,24 +2950,16 @@ environmentVariables = ["MY_TOOL_CONFIG"]
 Set `MY_TOOL_CONFIG` in the host environment of the `ab mcp` process; a missing
 value fails the tool call that needs it, named as a typed `environment` error.
 
-In the hosted deployment the `sandbox.*` tools are served to orchestrator
-turns from two bindings, both composing the backend from the repository's
-deposited effective config: the store service's message-turn runner (and its
-same-invocation approval resumes), and the origin-mode dispatcher tick's wake
-and resume runner, which reuses the dispatcher's wired workspace provider and
-forge. Both use the builtin workspace provider and the builtin `github` forge
-from that config — a plugin-provider or forgeless config degrades that
-binding's sandbox tools only, with a reported diagnostic. The store-service
-path authenticates the Sandbox SDK with the request's `x-vercel-oidc-token`
-header (or an explicit `VERCEL_OIDC_TOKEN`, which takes precedence, or the
-durable `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple, which
-needs no header); the tick path inherits the dispatcher's already-forwarded
-token. Every serving path derives the same deterministic environment name per
-(repository origin, user), so your environment is one
-environment per repository no matter which binding drove it, and the guest
-still receives no credential. Serving stays gated exactly as locally: the
-effective `[orchestrator].enabled`, the registry's closed-table filtering,
-and the `approvals` suspension list in the turn loop.
+Hosted sandbox tools compose their backend from the deposited effective config
+and the authenticated request's credentials. The request's
+`x-vercel-oidc-token` authenticates the Sandbox SDK; an explicit
+`VERCEL_OIDC_TOKEN` takes precedence, or the durable
+`VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple needs no header.
+Archive cleanup uses the same request credential threading. Provider or forge
+construction failures degrade sandbox tools only, with a diagnostic. Guests
+receive no credential. The dispatcher retains idle settlement but never
+constructs a turn runner. Tools stay gated by `[orchestrator].enabled` and the
+registry's closed-table filtering; external harnesses own approvals.
 
 ## Complete example
 
@@ -3536,7 +3473,7 @@ Default `ab watch` and `ab wait --for attention` include
 
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
-Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+Default `ab watch` includes this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
 
 ## Immutable dispatcher generations
 

@@ -770,105 +770,31 @@ stream read's ([docs/remote-store-protocol.md](docs/remote-store-protocol.md),
 
 #### 7.1.2 The embedded orchestrator (turns)
 
-The operator agent is the agent that files tickets,
-watches builds, unblocks them, and discusses direction. Any agent can take it
-on — a coding-agent session at the repository root using the `ab` CLI or
-`ab mcp` needs no initialization — and the canonical `ab-operate` skill is its
-manual in either setting. In the hosted service it is played by a stateless
-turn runner over the operator tool registry, not by an agent living in a
-sandbox (parity with MCP; no credential plumbing) and not by an external
-workflow engine (durability comes from the store; the tick pattern already
-exists). Posting a message to a session of an enabled repository starts a
-turn in the same invocation: an AI SDK tool-loop agent, running with the
-registry bound in process, reads the conversation from the session's durable
-state, streams its output as protocol parts onto the turn's session-scoped
-stream (§7.6), calls tools with the session owner’s attributed identity — the
-authorizing human account as the `human` actor, `via: {kind: "session", id}` —
-checkpoints as it goes, and completes or suspends.
+The operator is always an external agent: a coding-agent harness at the
+repository root using the `ab` CLI, or an agent connected through MCP and the
+operator tools. The canonical `ab-operate` skill describes that role. Autobuild
+never hosts or starts it. The embedded turn runner was abandoned and removed.
 
-**Turn lifecycle.** `turn.started` (naming a new session-scoped stream and
-the trigger — a message or a wake) → running → either `turn.completed`
-(with input/output token usage and the step count), `turn.suspended`
-(cause `budget` or `approval`), or typed `turn.failed`. A suspended turn
-resumes via `turn.resumed` — the sole resume fact, recorded by the runner
-when it actually picks the turn up; `approval.answered` only clears the
-pending approval, so an answered approval whose resuming invocation died
-stays recoverable. The stream stays open across a suspension and is the
-resume checkpoint; it closes `completed` or `aborted` at the outcome.
-Conversation state is reconstructed from durable state alone — the finalized
-artifacts of earlier turns, the live stream of the open turn, and the session
-events — so a turn resumed in a fresh invocation continues from the last
-checkpointed step with identical model input; no process memory survives
-between invocations. A turn's assembled messages attach at its `turn.started`
-event, so a message posted during a suspension reads as the next user message
-after the checkpoint, never interleaved into it.
+The hosted service records sessions, messages, explicit wake settings, approval
+answers and archives as durable facts only. Message, wake and approval writes
+return `{ok:true}` without turn or stream ids. New sessions receive only
+`session.created`; wake settings are written explicitly, never inherited from
+repository config. Neither HTTP writes nor origin-mode dispatcher ticks start,
+resume or reap turns, execute approved calls, or close historical streams.
+External harnesses own their conversation, scheduling, concurrency and approvals.
 
-**Budget suspension.** `[orchestrator].invocationBudgetSeconds` (default 240,
-clamped to the 300-second hosted function limit) bounds one invocation. When
-elapsed time approaches the budget — or a hard abort at the deadline
-interrupts a runaway step — the runner records `turn.suspended` cause
-`budget` and ends the invocation; a new invocation resumes it within 60
-seconds (immediately when the service can self-trigger, otherwise on the
-next dispatcher tick). The dispatcher tick's orchestrator step runs LAST,
-after every build stage, against min(configured, remaining tick budget) with
-a 30-second floor: it can only consume slack, and skipping is always safe
-because suspension state is durable.
+Historical turn events, approvals, wake cursors and session-scoped streams remain
+valid and readable under §7.1.1 and §7.6. Answering a matching pending approval
+clears that approval but does not resume its suspended turn or change its stream.
+The operator API does not expose raw turn-event append. No migration deletes
+historical events or changes their reduction.
 
-**Approval suspension.** A call to a tool named in
-`[orchestrator].approvals` records `approval.requested`, emits the protocol's
-tool-approval-request part, and suspends the turn with cause `approval`. An
-`approve` answer resumes the turn and executes the call; a `deny` answer
-resumes it with a denied tool output. Tools not on the list run without
-pause. Entries are `tool` or `tool:qualifier`; an entry naming an absent or
-unknown tool is inert by design.
-
-**Wake rule.** The dispatcher tick's orchestrator step wakes each idle
-session with non-empty wake settings: it scans the repository's builds for
-build events after the session's per-build wake cursor and the repository
-journal for events after the session's journal wake cursor — both filtered
-by the same compiled settings, which may name build event types,
-repository-journal event types, or both — and starts one turn per session
-per tick with a `wake` trigger naming the winning event's source: the build,
-seq, and type for a build-log wake, or the journal flag, seq, and type for a
-repository-journal wake. A build wake delivers the event record and the
-build's reduced state — frozen into the `turn.started` fact — as the turn's
-input; a journal wake delivers the event record only (the turn's operator
-registry already exposes bounded repository reads). Each source's cursor
-advances only through a recorded trigger naming that source, so a crash
-between scan and start cannot skip or duplicate a wake, and other builds' —
-and the journal's — matching events re-trigger on later ticks. Sessions with
-empty wake settings are never woken. The legacy hosted wake settings retain their event defaults independently of
-the actionable CLI watch projection.
-
-**Crash recovery.** A turn invocation that dies without an outcome leaves the
-session `running` with a silent open stream; the tick's reaper fails such a
-turn (`turn.failed`, kind `internal`) after 15 minutes of stream silence,
-closing the stream `aborted` and leaving the session `idle`. The reaper never
-touches suspended or awaiting-approval sessions — a turn suspended for
-approval is precisely an open stream that goes quiet for however long the
-human takes.
-
-**Typed failures.** Model failures are typed on `turn.failed`:
-`provider-unavailable`, `exhausted`, `credentials`, `configuration` (plus
-`internal` for non-model failures) — never retried unboundedly; a failed
-turn leaves the session `idle` with the error class visible in the session's
-reduced state.
-
-**Opt-in guarantee.** The whole feature is off unless a repository's
-effective config enables it, and it is doubly gated: the tick step is
-constructed only in origin mode (a local `ab dispatch` never constructs it —
-enabled = true in a local autobuild.toml lists no sessions, builds no
-registry, and calls no model), and in origin mode it returns immediately
-unless the effective config enables the orchestrator. The system prompt is
-the canonical `ab-operate` skill shipped in `skills/operate/` — self-contained
-per the vendored-skill rule, teaching the tool surface, the attention set,
-and when to escalate to the human rather than act — plus the current
-`operator-notes` artifact, the session's wake settings, and the session's
-repository identity. The model never supplies a repository argument: the
-tools' model-facing schemas strip `repo`, and the runner injects the
-session's repository before the registry re-validates. A message posted
-while a turn is open is durable and enters the conversation at the next
-resume or turn — no second turn, no concurrent turns, no subagents.
+`[orchestrator].enabled` and `[orchestrator.sandbox]` retain the externally driven
+sandbox tools, credential isolation, archive cleanup and dispatcher idle
+settlement. New config rejects the removed `model`, `invocationBudgetSeconds`,
+`approvals` and repository-default `wake` keys. Immutable historical effective
+config artifacts discard only those obsolete keys during validation; stored
+bytes are unchanged and other unknown or malformed settings still fail.
 
 #### 7.1.3 Ticket assets
 
@@ -1617,7 +1543,7 @@ credentials **never enter the sandbox** (load-bearing once builds run on
 remote sandboxes), ordinary implementation history is extended and reconcile
 uses exact expected-head guarded rewrites with archived evidence, and the
 push-at-boundary rule from [D3] is enforced by construction rather than
-convention. The same rule bounds the orchestrator's small fixes: an operator
+convention. The same rule bounds an external operator's small fixes: an operator
 sandbox publishes work only through the `sandbox.publish` tool, whose push and
 PR creation are kernel-side plumbing executed by the sandbox service through
 the workspace provider's publication capability — the only publication path
@@ -4141,4 +4067,4 @@ Shared requests are attributed to their first requester; cache hits count zero.
 
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
-Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+Default `ab watch` includes this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.

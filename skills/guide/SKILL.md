@@ -1142,22 +1142,20 @@ environment variable instead and say why.
 
 ### `[orchestrator]`
 
-Gates the operator-agent feature (AUT-340, AUT-342): the persistent,
-**credential-free** sandbox environment per session owner × repository that an
-operator agent drives through the `sandbox.*` registry tools (`ab mcp`, and
-every later binding), and — when the embedded orchestrator is enabled — the
-turn runner that answers operator sessions and wakes on build attention
-events. The whole table is **closed to unknown keys** and restart-classified:
-changing it requires a dispatcher restart.
+Enables credential-free sandbox environments per session owner and repository,
+driven by external agents through `sandbox.*` tools. Operators run in external
+harnesses; the service never starts or resumes them. The table is strict and
+restart-classified.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
-| `model` | — (required when `enabled = true`) | nonblank provider-qualified string, same vocabulary as `[roles]` | The turn runner's model, resolved through the deployment's gateway credential; a leading `vercel-ai-gateway/` prefix is accepted and stripped. |
-| `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under. |
-| `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the human answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
-| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the legacy hosted wake event set including `integration.verification-failed`, independent of CLI watch defaults; an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
+| `enabled` | `false` | boolean | Enables external sandbox tools, archive cleanup and dispatcher idle settlement. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
+
+The removed runner settings `model`, `invocationBudgetSeconds`, `approvals` and
+repository-default `wake` are rejected in new config. Historical effective
+config artifacts remain readable. New sessions have no inherited wake settings;
+explicit session wake writes are durable facts and do not execute turns.
 
 `[orchestrator.sandbox]` fields:
 

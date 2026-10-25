@@ -1,6 +1,6 @@
 /**
  * Shared event-glob compilation (§15.3, AUT-342): the anchored glob matcher
- * `ab watch`, `ab wait`, and the `[orchestrator].wake` configuration use.
+ * `ab watch`, `ab wait`, and explicit session wake writes use.
  * `*` matches any run of characters, `?` exactly one, everything else
  * verbatim (so the dots inside event type names are escaped). Every glob
  * must match at least one event type in one of the given catalogs, else a

@@ -75,40 +75,12 @@ import {
   readOperatorTurnStream,
   setOperatorWake,
 } from './operator-sessions'
-import { reduceSession } from './session-reducer'
-import { orchestratorConfig } from '@defrex/autobuild/operator'
-import type { Config } from '@defrex/autobuild/operator'
-import { orchestratorWakeGlobs, type OrchestratorTurnRunner } from '@defrex/autobuild/operator'
-
 /** The request-scoped Vercel SDK credential the routes thread into the
  * sandbox backend composition (AUT-584): the same shape the hosted
  * dispatcher threads. A Vercel Function carries its OIDC token on the
  * request's `x-vercel-oidc-token` header, never in `process.env`. */
 export interface OperatorRequestCredentials {
   oidcToken?: string
-}
-
-/** The embedded orchestrator's hosted wiring (AUT-342): a per-request turn
- * runner factory over the deployment's in-process registry, and the
- * background scheduler that lets a turn outlive the HTTP response. When the
- * option is absent the orchestrator is inert — message posting behaves
- * exactly as it did before this feature. */
-export interface OperatorOrchestratorOptions {
-  /** Build the turn runner for one repository under one resolved effective
-   * config. Called only for enabled repositories on the start/resume paths.
-   * The third parameter carries the request's Vercel OIDC token when the
-   * request carried one (AUT-584); the runner's sandbox backend captures it
-   * at creation for the background loop. May be async. */
-  createRunner(
-    config: Config,
-    repo: string,
-    credentials?: OperatorRequestCredentials,
-  ): OrchestratorTurnRunner | Promise<OrchestratorTurnRunner>
-  /** Schedule the turn loop to continue after the HTTP response resolves
-   * (Next's `after()` in the machine route's request context). Default: a
-   * fire-and-forget detached promise reporting failures through
-   * `onInternalError`. */
-  scheduleBackground(fn: () => Promise<void>): void
 }
 
 export interface OperatorServerOptions {
@@ -134,8 +106,6 @@ export interface OperatorServerOptions {
     repo: string,
     credentials?: OperatorRequestCredentials,
   ) => Promise<OperatorSandboxService | undefined>
-  /** The embedded orchestrator (AUT-342). Absent → inert. */
-  orchestrator?: OperatorOrchestratorOptions
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -223,65 +193,6 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     const record = await opts.store.getBuild(slug)
     if (record === null || record.repo !== repo) {
       throw new HttpError(404, 'not-found', `unknown build "${slug}"`)
-    }
-  }
-
-  /** The repository's orchestrator config: `null` when disabled or when no
-   * orchestrator wiring exists; a `Config` when enabled. A deposited but
-   * unreadable/invalid artifact throws `OrchestratorConfigError` — the outer
-   * handler maps it to a 500 `internal`, never a silent disable. */
-  async function resolveOrchestratorConfig(repo: string): Promise<Config | null> {
-    if (opts.orchestrator === undefined) return null
-    return orchestratorConfig(opts.store, repo)
-  }
-
-  /** Start a turn for a freshly posted message: only when the repository is
-   * enabled and the session is idle. Awaits only `turn.started`; the loop
-   * continues via `scheduleBackground`. Returns the turn/stream ids, or
-   * undefined when no turn started. */
-  async function startTurnForMessage(
-    repo: string,
-    sid: string,
-    messageSeq: number,
-    credentials?: OperatorRequestCredentials,
-  ): Promise<{ turn: string; stream: string } | undefined> {
-    const config = await resolveOrchestratorConfig(repo)
-    if (config === null || opts.orchestrator === undefined) return undefined
-    const state = reduceSession(await opts.store.getSessionEvents(sid))
-    if (state.status !== 'idle') return undefined
-    const runner = await opts.orchestrator.createRunner(config, repo, credentials)
-    const start = await runner.startTurn(sid, { kind: 'message', messageSeq })
-    if (!start.started || start.outcome === undefined) return undefined
-    const outcome = start.outcome
-    opts.orchestrator.scheduleBackground(async () => {
-      await outcome
-    })
-    return { turn: start.turn!, stream: start.stream! }
-  }
-
-  /** Resume a turn whose approval was just answered in this same invocation;
-   * the dispatcher tick is the fallback when this invocation dies. */
-  async function resumeAnsweredApproval(
-    repo: string,
-    sid: string,
-    turn: string,
-    answer: { decision: 'approve' | 'deny'; toolCallId: string },
-    credentials?: OperatorRequestCredentials,
-  ): Promise<void> {
-    const config = await resolveOrchestratorConfig(repo)
-    if (config === null || opts.orchestrator === undefined) return
-    const state = reduceSession(await opts.store.getSessionEvents(sid))
-    if (state.status !== 'suspended' || state.suspendedCause !== 'approval') return
-    if (state.openTurn === undefined || state.openTurn.turn !== turn) return
-    const runner = await opts.orchestrator.createRunner(config, repo, credentials)
-    const resumed = await runner.resumeTurn(sid, {
-      approval: { decision: answer.decision, toolCallId: answer.toolCallId },
-    })
-    if (resumed.resumed && resumed.outcome !== undefined) {
-      const outcome = resumed.outcome
-      opts.orchestrator.scheduleBackground(async () => {
-        await outcome
-      })
     }
   }
 
@@ -539,17 +450,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         }
         if (req.method === 'POST') {
           const request = await body(req, sessionCreateRequestSchema)
-          // A new session on an enabled repository inherits the configured
-          // default wake set (the attention set unless the repo overrides
-          // `wake`); disabled or absent → no wake-set fact (message-only).
-          const resolved = await resolveOrchestratorConfig(repo)
-          const record = await createOperatorSession(
-            opts.store,
-            repo,
-            user,
-            request.title,
-            resolved === null ? undefined : orchestratorWakeGlobs(resolved.orchestrator),
-          )
+          const record = await createOperatorSession(opts.store, repo, user, request.title)
           return json(201, record)
         }
         throw new HttpError(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
@@ -560,14 +461,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'messages') {
         const request = await body(req, sessionMessageRequestSchema)
-        const messageSeq = await postOperatorMessage(opts.store, repo, sid, user, request.text)
-        // Same-invocation turn start (AUT-342): await only `turn.started`
-        // (fast), return the turn and stream, and continue the agent loop as
-        // background work. A message posted while a turn is open is durable
-        // and enters the conversation at the next resume/turn — no second
-        // turn (concurrent turns are out of scope).
-        const turn = await startTurnForMessage(repo, sid, messageSeq, requestCredentials(req))
-        return json(200, turn === undefined ? { ok: true } : { ok: true, ...turn })
+        await postOperatorMessage(opts.store, repo, sid, user, request.text)
+        return json(200, { ok: true })
       }
       if (req.method === 'PUT' && rest.length === 3 && rest[2] === 'wake') {
         const request = await body(req, sessionWakeRequestSchema)
@@ -585,9 +480,6 @@ export function createOperatorServer(opts: OperatorServerOptions): {
           request.toolCallId,
           request.decision,
         )
-        // Same-invocation resume of the answered approval; the dispatcher
-        // tick is the fallback when this invocation dies.
-        await resumeAnsweredApproval(repo, sid, request.turn, request, requestCredentials(req))
         return json(200, { ok: true })
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {

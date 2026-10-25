@@ -34,10 +34,7 @@ import {
 } from '@defrex/autobuild/plugin-sdk'
 import { createOperatorServer } from './operator-server'
 import {
-  buildRegistry,
-  createOrchestratorTurnRunner,
   orchestratorConfig,
-  randomIds,
   type Config,
   type OperatorTicketContext,
   decodeEffectiveConfig,
@@ -93,11 +90,6 @@ export interface HostedStoreServiceOptions {
     error: unknown,
     context: HostedStoreErrorContext,
   ) => unknown | Promise<unknown>
-  /** Background scheduler for the embedded orchestrator's turn loops
-   * (AUT-342): the web wiring passes Next's `after()` so a turn outlives the
-   * HTTP response inside its request context. Default: a fire-and-forget
-   * detached promise reporting failures through `reportInternalError`. */
-  scheduleBackground?: (fn: () => Promise<void>) => void
 }
 
 const internalError = (): Response =>
@@ -692,70 +684,6 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
             statesFor: async (context, source) =>
               (await openTicketBackend()).statesFor(context, source),
-          },
-          // The embedded orchestrator (AUT-342): the turn runner binds the
-          // in-process registry exactly as the tools route does — same store,
-          // same ticket backend, repository-scoped — and its model resolves
-          // through the deployment's gateway credential. The factory is
-          // constructed here deliberately, not threaded through
-          // `HostedStoreServiceOptions`: only `openStoreHandler` holds the
-          // store, clock, and ticket backend it binds. web/runtime.ts reaches
-          // this operator server only through
-          // `HostedStoreServiceOptions.scheduleBackground` (Next's `after()`
-          // in the hosted route's request context); standalone deployments
-          // and tests fall back to the detached-promise default below.
-          orchestrator: {
-            createRunner: async (orchestratorConfig, repo, credentials) => {
-              // The sandbox backend degrades the sandbox tools only: a
-              // construction failure (credential-less env, unsupported
-              // provider or forge, forbidden forwarded env name) is reported
-              // and the registry builds without `sandbox` — the exact
-              // pre-AUT-584 behavior plus a diagnostic. The orchestrator
-              // itself is never affected.
-              let sandbox: OperatorSandboxService | undefined
-              if (sandboxDeps !== undefined) {
-                try {
-                  sandbox = await hostedSandboxBackend(
-                    sandboxDeps,
-                    repo,
-                    orchestratorConfig,
-                    credentials,
-                  )
-                } catch (error) {
-                  sandbox = undefined
-                  await sandboxDeps.report(error)
-                }
-              }
-              return createOrchestratorTurnRunner({
-                store,
-                registry: buildRegistry({
-                  store,
-                  clock,
-                  tickets: {
-                    contextFor: ticketContext,
-                    sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
-                    statesFor: async (context, source) =>
-                      (await openTicketBackend()).statesFor(context, source),
-                  },
-                  ...(sandbox !== undefined ? { sandbox } : {}),
-                  allowedRepo: repo,
-                }),
-                repo,
-                config: orchestratorConfig,
-                clock,
-                ids: randomIds(),
-              })
-            },
-            scheduleBackground:
-              options.scheduleBackground ??
-              ((fn) => {
-                // Standalone deployments (and tests): a fire-and-forget
-                // detached promise; failures surface through the same
-                // internal-error reporter every backend uses.
-                void fn().catch((error) =>
-                  report(error, new Request('ab://orchestrator-background'), 'operator'),
-                )
-              }),
           },
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
           ...(sandboxDeps !== undefined

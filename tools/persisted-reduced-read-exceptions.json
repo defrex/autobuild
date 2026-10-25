@@ -142,20 +142,6 @@
     "kind": "reduction",
     "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
   },
-  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::reduceSession": {
-    "kind": "reduction",
-    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
-  },
-  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::getEvents": {
-    "kind": "raw",
-    "reason": "Actual events delivered to session wake cursors, not current build reduction.",
-    "cursor": true
-  },
-  "packages/core/src/processes/orchestrator-tick.ts::runOrchestratorTickStep::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Actual events delivered to session wake cursors, not current build reduction.",
-    "cursor": true
-  },
   "packages/core/src/processes/publication-loss.ts::settlePublicationBeforeRelease::getEvents": {
     "kind": "raw",
     "reason": "Legacy API returns the actual refreshed event output; all release decisions use the persisted guard."
@@ -207,14 +193,6 @@
   "packages/core/src/processes/tick-state.ts::hasOpenTick::reduce": {
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
-  },
-  "packages/core/src/orchestrator/turn-runner.ts::reduceSessionState::reduceSession": {
-    "kind": "reduction",
-    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
-  },
-  "packages/core/src/orchestrator/turn-runner.ts::createOrchestratorTurnRunner/runLoop::reduceSession": {
-    "kind": "reduction",
-    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
   },
   "packages/core/src/operator/query.ts::latestDispatchConfigStatus::reduceDispatchStatus": {
     "kind": "reduction",
@@ -591,14 +569,6 @@
   "packages/hosted-store-service/src/delegated-authority.ts::evaluateDelegationLifecycle::reduceBuild": {
     "kind": "reduction",
     "reason": "Prerequisite delegated request-policy reference projection; request/auth plumbing is explicitly outside this migration."
-  },
-  "packages/hosted-store-service/src/operator-server.ts::createOperatorServer/startTurnForMessage::reduceSession": {
-    "kind": "reduction",
-    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
-  },
-  "packages/hosted-store-service/src/operator-server.ts::createOperatorServer/resumeAnsweredApproval::reduceSession": {
-    "kind": "reduction",
-    "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
   },
   "packages/hosted-store-service/src/operator-sessions.ts::appendAs::reduceSession": {
     "kind": "reduction",
