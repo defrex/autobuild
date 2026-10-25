@@ -44,10 +44,14 @@ use proa_framework_axum::{explicit_markdown, negotiate, MarkdownAlternate, Route
 
 use crate::{error::AppError, layouts::RootDocument};
 
-pub async fn handler(headers: HeaderMap) -> Result<impl IntoResponse, AppError> {
+pub async fn handler(
+    axum::Extension(viewer): axum::Extension<crate::auth::Viewer>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
     let html = RouteResponse::ssr(RootDocument {
         title: "Builds · Proa server",
         content: HomePage,
+        viewer: Some(viewer),
     });
     Ok(negotiate(
         &headers,
