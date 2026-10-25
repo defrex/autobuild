@@ -1,3 +1,4 @@
+import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity, ticketMigrationsReducer } from '../kernel/ticket-migrations'
 import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
@@ -297,7 +298,9 @@ export class DispatchFrontend {
     if (this.config !== undefined && this.configRef === key) return this.config
     const artifact = await this.reader.getRepoArtifact(this.opts.repo, kind, rev)
     if (artifact === null) throw new Error(`effective config ${key} is not retrievable`)
-    const parsed = configSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
+    const parsed = configSchema.parse(
+      normalizeEffectiveConfigArtifact(JSON.parse(new TextDecoder().decode(artifact.content))),
+    )
     this.config = parsed
     this.configRef = key
     this.configRevision += 1

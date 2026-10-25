@@ -54,7 +54,7 @@ export interface SessionStreamSinkOptions {
 /** The sink's concrete surface. Structurally a superset of the
  * `SessionStreamSink` port (ports/types.ts): `open` keeps its port-declared
  * shape for the build-runner's `openSessionStreamLabel` caller, while the
- * orchestrator turn runner additionally uses `resume` (bind to an
+ * historical turn persistence additionally supported `resume` (bind to an
  * already-open stream — a resumed invocation must append to the turn's
  * existing stream, never create a second one) and `flush` (await the drain,
  * so a step-boundary checkpoint is durable before the next step starts). */

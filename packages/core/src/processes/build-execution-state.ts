@@ -1,3 +1,4 @@
+import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import type { Config } from '../config/schema'
 import { configSchema } from '../config/schema'
 import { BUILD_OWNED_CONFIG_PATHS } from '../config/live'
@@ -38,7 +39,7 @@ export function parseEffectiveBuildConfig(artifact: Artifact): Config {
       }`,
     )
   }
-  const result = configSchema.safeParse(value)
+  const result = configSchema.safeParse(normalizeEffectiveConfigArtifact(value))
   if (!result.success) {
     throw new Error(
       `invalid ${BUILD_EFFECTIVE_CONFIG_ARTIFACT}: ${result.error.issues

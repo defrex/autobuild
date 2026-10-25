@@ -1,3 +1,4 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
@@ -13,7 +14,7 @@ import { controlBuild } from '../cli/build-control'
  * all fakes, sequentialIds + manualClock — deterministic and offline.
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bulkControlRepository } from '../cli/bulk-control'
@@ -22,11 +23,7 @@ import type { Config } from '../config/schema'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
-import { dispatcherStatusEventPayloadSchemas } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
-import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
-import type { LanguageModel } from 'ai'
-import { reduceSession } from '../store/session-reducer'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
@@ -151,11 +148,8 @@ function harness(
     /** Store identity override — an origin URL for the identity-split
      * tests; defaults to the origin-less path fixture. */
     repo?: string
-    /** Explicit normalized origin (origin mode) — the orchestrator step's
-     * construction gate reads this field (AUT-342). */
+    /** Explicit normalized origin for checkoutless dispatch. */
     repoOrigin?: string
-    /** The orchestrator turn runner's injected model. */
-    orchestratorModel?: LanguageModel
     /** Trusted publication settlement seam (AUT-328 release guard). */
     settlePublication?: (slug: string) => Promise<void>
   } = {},
@@ -206,7 +200,6 @@ function harness(
     ...(opts.repairBuildConfig ? { repairBuildConfig: opts.repairBuildConfig } : {}),
     repo: opts.repo ?? REPO,
     ...(opts.repoOrigin !== undefined ? { repoOrigin: opts.repoOrigin } : {}),
-    ...(opts.orchestratorModel !== undefined ? { orchestratorModel: opts.orchestratorModel } : {}),
     ...(opts.checkout !== undefined ? { checkout: opts.checkout } : {}),
     exec,
     launchRunner: async (slug) => {
@@ -6856,7 +6849,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   }
 
   test('a live sandbox past the idle threshold is stopped with a dispatcher fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h)
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -6889,7 +6882,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     const store = new HookStore({ clock: storeClock })
     const h = harness({
       store,
-      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+      toml: '[orchestrator]\nenabled = true\n',
     })
     await seedLiveSandbox(h)
     h.clock.advance(31 * 60 * 1000)
@@ -6927,7 +6920,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
       const store = new HookStore({ clock: storeClock })
       const h = harness({
         store,
-        toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+        toml: '[orchestrator]\nenabled = true\n',
       })
       await seedLiveSandbox(h)
       h.clock.advance(31 * 60_000)
@@ -6961,7 +6954,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
 
   for (const idle of [false, true]) {
     test(`sandbox decision refresh is conditional on idleness: ${idle}`, async () => {
-      const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+      const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
       await seedLiveSandbox(h)
       h.clock.advance((idle ? 31 : 10) * 60_000)
       let reads = 0
@@ -6978,7 +6971,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   }
 
   test('a sandbox inside the threshold is left alone', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h)
     h.clock.advance(10 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -6998,7 +6991,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a capability-less provider makes the stage a no-op', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     // The logical-mode fake hosts the capability; strip it to model a
     // provider without one.
     const bare = h.workspaces as unknown as Record<string, unknown>
@@ -7012,7 +7005,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a stale-provider environment past the idle threshold gets its trail closed with an unconfirmed release fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -7036,7 +7029,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a stale-provider release is not duplicated on the next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const first = await h.dispatcher.tick()
@@ -7051,7 +7044,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('the idle gate still applies to stale-provider environments', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(10 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -7062,7 +7055,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     ;(capability as unknown as { stop: () => Promise<{ outcome: 'absent' }> }).stop = async () => ({
@@ -7084,7 +7077,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('an unsupported provider is skipped silently', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     ;(capability as unknown as { stop: () => Promise<{ outcome: 'unsupported' }> }).stop =
@@ -7098,7 +7091,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a contained settlement failure is reported and retried next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     let failing = true
@@ -7130,7 +7123,7 @@ describe('dispatcher — missing-record journal reads (AUT-543)', () => {
    * tick. Pinned against the ensured-record case: both outcomes must be the
    * empty settlement a fresh store legitimately has. */
   test('a fresh store without a repository record settles nothing and reports cleanly', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     // No `ensureRepo` anywhere — the store has neither a repository row nor a
     // journal, exactly the missing-record shape.
     expect(await h.store.getRepo(REPO)).toBeNull()
@@ -7306,329 +7299,6 @@ describe('the dispatcher tick reads a bounded journal (AUT-489)', () => {
     // The bound does not depend on the invocation history length.
     expect(measured[0]).toBe(measured[1])
     expect(measured[0]).toBe(0)
-  })
-})
-
-describe('dispatcher — orchestrator step gates (AUT-342)', () => {
-  test('a local dispatch never constructs the step: enabled = true is a full no-op', async () => {
-    const modelCalls: number[] = []
-    const model = new MockLanguageModelV3({
-      doStream: async () => {
-        modelCalls.push(1)
-        throw new Error('the orchestrator step must never run locally')
-      },
-    })
-    const h = harness({
-      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
-      orchestratorModel: model,
-    })
-    // A session that WOULD be woken, and a build carrying a matching event,
-    // if the gate leaked into local dispatch.
-    await h.store.ensureRepo(REPO)
-    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
-    await h.store.appendSessionEvent(session.id, {
-      actor: humanActor('op'),
-      type: 'session.wake-set',
-      payload: { globs: ['escalation.raised'] },
-    })
-    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
-    await h.store.append('b1', {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-1', title: 'T' },
-        repo: REPO,
-        baseBranch: 'main',
-      },
-    })
-    await h.store.append('b1', {
-      actor: agentActor('implement', 'session-x'),
-      type: 'escalation.raised',
-      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
-    })
-
-    await h.dispatcher.tick()
-    expect(modelCalls).toHaveLength(0)
-    expect(reduceSession(await h.store.getSessionEvents(session.id)).turns).toHaveLength(0)
-  })
-
-  test('origin mode with the orchestrator disabled is a no-op', async () => {
-    const modelCalls: number[] = []
-    const model = new MockLanguageModelV3({
-      doStream: async () => {
-        modelCalls.push(1)
-        throw new Error('the orchestrator step must never run when disabled')
-      },
-    })
-    // Origin mode (repoOrigin set), orchestrator table absent → disabled.
-    const h = harness({
-      repoOrigin: 'https://github.com/acme/widgets',
-      orchestratorModel: model,
-    })
-    await h.store.ensureRepo(REPO)
-    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
-    await h.store.appendSessionEvent(session.id, {
-      actor: humanActor('op'),
-      type: 'session.wake-set',
-      payload: { globs: ['escalation.raised'] },
-    })
-    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
-    await h.store.append('b1', {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-1', title: 'T' },
-        repo: REPO,
-        baseBranch: 'main',
-      },
-    })
-    await h.store.append('b1', {
-      actor: agentActor('implement', 'session-x'),
-      type: 'escalation.raised',
-      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
-    })
-
-    await h.dispatcher.tick()
-    expect(modelCalls).toHaveLength(0)
-    expect(reduceSession(await h.store.getSessionEvents(session.id)).turns).toHaveLength(0)
-  })
-
-  test('origin mode with the orchestrator enabled wakes an idle session from an attention event', async () => {
-    const chunks = [
-      [
-        { type: 'stream-start', warnings: [] },
-        { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
-        { type: 'text-start', id: 't' },
-        { type: 'text-delta', id: 't', delta: 'On it.' },
-        { type: 'text-end', id: 't' },
-        {
-          type: 'finish',
-          finishReason: { unified: 'stop', raw: 'stop' },
-          usage: {
-            inputTokens: {
-              total: 10,
-              noCache: undefined,
-              cacheRead: undefined,
-              cacheWrite: undefined,
-            },
-            outputTokens: { total: 5, text: undefined, reasoning: undefined, toolCall: undefined },
-            totalTokens: 15,
-          },
-        },
-      ],
-    ]
-    let call = 0
-    const model = new MockLanguageModelV3({
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          chunks: chunks[Math.min(call++, chunks.length - 1)]! as never,
-          initialDelayInMs: 0,
-        }),
-      }),
-    })
-    const h = harness({
-      repoOrigin: 'https://github.com/acme/widgets',
-      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
-      orchestratorModel: model,
-    })
-    await h.store.ensureRepo(REPO)
-    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
-    await h.store.appendSessionEvent(session.id, {
-      actor: humanActor('op'),
-      type: 'session.wake-set',
-      payload: { globs: ['escalation.raised'] },
-    })
-    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
-    await h.store.append('b1', {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-1', title: 'T' },
-        repo: REPO,
-        baseBranch: 'main',
-      },
-    })
-    await h.store.append('b1', {
-      actor: agentActor('implement', 'session-x'),
-      type: 'escalation.raised',
-      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
-    })
-
-    await h.dispatcher.tick()
-    const state = reduceSession(await h.store.getSessionEvents(session.id))
-    expect(state.turns).toHaveLength(1)
-    expect(state.turns[0]).toMatchObject({
-      state: 'completed',
-      trigger: { kind: 'wake', build: 'b1' },
-    })
-    expect(state.wakeCursors).toEqual({ b1: 2 })
-  })
-})
-
-describe('dispatcher — origin-mode sandbox backend (AUT-584)', () => {
-  const WAKE_SEED = async (h: Harness, repo: string = REPO) => {
-    await h.store.ensureRepo(repo)
-    const session = await h.store.createSession({ repo, operator: 'op' })
-    await h.store.appendSessionEvent(session.id, {
-      actor: humanActor('op'),
-      type: 'session.wake-set',
-      payload: { globs: ['escalation.raised'] },
-    })
-    await h.store.createBuild({ slug: 'b1', repo, branch: 'ab/b1' })
-    await h.store.append('b1', {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-1', title: 'T' },
-        repo,
-        baseBranch: 'main',
-      },
-    })
-    await h.store.append('b1', {
-      actor: agentActor('implement', 'session-x'),
-      type: 'escalation.raised',
-      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
-    })
-    return session.id
-  }
-
-  const sequenceModel = (steps: object[][]): LanguageModel => {
-    let call = 0
-    return new MockLanguageModelV3({
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          chunks: steps[Math.min(call++, steps.length - 1)]! as never,
-          initialDelayInMs: 0,
-        }),
-      }),
-    })
-  }
-
-  const textChunk = (text: string): object[] => [
-    { type: 'stream-start', warnings: [] },
-    { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
-    { type: 'text-start', id: 't' },
-    { type: 'text-delta', id: 't', delta: text },
-    { type: 'text-end', id: 't' },
-    {
-      type: 'finish',
-      finishReason: { unified: 'stop', raw: 'stop' },
-      usage: {
-        inputTokens: { total: 10, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 5, text: undefined, reasoning: undefined, toolCall: undefined },
-        totalTokens: 15,
-      },
-    },
-  ]
-
-  const toolChunk = (toolCallId: string, toolName: string, input: string): object[] => [
-    { type: 'stream-start', warnings: [] },
-    { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
-    { type: 'tool-input-start', id: toolCallId, toolName },
-    { type: 'tool-input-delta', id: toolCallId, delta: input },
-    { type: 'tool-input-end', id: toolCallId },
-    { type: 'tool-call', toolCallId, toolName, input },
-    {
-      type: 'finish',
-      finishReason: { unified: 'tool-calls', raw: 'tool-calls' },
-      usage: {
-        inputTokens: { total: 10, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 5, text: undefined, reasoning: undefined, toolCall: undefined },
-        totalTokens: 15,
-      },
-    },
-  ]
-
-  test('the origin-mode tick serves sandbox.* tools from its wired provider and a call reaches it', async () => {
-    // A filesystem-mode fake: the sandbox backend's ensure provisions a real
-    // checkout from the served repository, exactly as a real remote provider
-    // would clone from the origin.
-    const root = await mkdtemp(join(tmpdir(), 'ab-orch-sandbox-'))
-    try {
-      const source = join(root, 'src')
-      await mkdir(source, { recursive: true })
-      await Bun.write(join(source, 'README.md'), 'hello\n')
-      const workspaces = new FakeWorkspaceProvider({
-        root: join(root, 'ws'),
-        mode: 'filesystem',
-      })
-      const model = sequenceModel([
-        toolChunk('c1', 'sandbox.exec', JSON.stringify({ command: 'echo hi' })),
-        textChunk('Ran it.'),
-      ])
-      const h = harness({
-        repo: source,
-        repoOrigin: 'https://github.com/acme/widgets',
-        toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
-        orchestratorModel: model,
-        workspaceProvider: workspaces,
-      })
-      const sessionId = await WAKE_SEED(h, source)
-
-      const report = await h.dispatcher.tick()
-      expect(report.orchestratorSandboxFailures).toBe(0)
-      // The constructed backend dispatched through the tick registry into the
-      // dispatcher's own wired provider — and the guest env carries no store,
-      // forge, or model credential (the credential-free rule).
-      expect(workspaces.sandboxExecEnvironments).toHaveLength(1)
-      const entry = workspaces.sandboxExecEnvironments[0]!
-      expect(entry).toMatchObject({ op: 'exec', command: 'echo hi' })
-      expect(Object.keys(entry.env)).toEqual(['PATH'])
-      const state = reduceSession(await h.store.getSessionEvents(sessionId))
-      expect(state.turns[0]).toMatchObject({ state: 'completed', trigger: { kind: 'wake' } })
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  test('a provider without the capability contains the failure as a standing counter and runs the step without sandbox tools', async () => {
-    const model = sequenceModel([textChunk('done')])
-    const bare = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    const withoutCapability = new Proxy(bare, {
-      get(target, key, receiver) {
-        if (key === 'orchestratorSandbox') return undefined
-        return Reflect.get(target, key, receiver)
-      },
-    })
-    const h = harness({
-      repoOrigin: 'https://github.com/acme/widgets',
-      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
-      orchestratorModel: model,
-      workspaceProvider: withoutCapability,
-    })
-    const sessionId = await WAKE_SEED(h)
-
-    const report = await h.dispatcher.tick()
-    expect(report.orchestratorSandboxFailures).toBe(1)
-    expect(h.workspaces.sandboxExecEnvironments).toEqual([])
-    // The step still ran: the wake turn completed with sandbox tools filtered.
-    const state = reduceSession(await h.store.getSessionEvents(sessionId))
-    expect(state.turns[0]).toMatchObject({ state: 'completed', trigger: { kind: 'wake' } })
-
-    // The regression f_e246b66c pins: a tick that contained a construction
-    // failure still publishes its `dispatcher.tick-completed` status fact —
-    // the counters payload (built exactly as publishTickReport's spread)
-    // validates against the strict event schema.
-    const {
-      janitorDiagnostics: _j,
-      blockedDiagnostics: _b,
-      ticketDiagnostics: _t,
-      creationDiagnostics: _c,
-      dependencyDiagnostics: _d,
-      queued: _q,
-      ...counters
-    } = report
-    const payload = {
-      run: 'run-1',
-      queued: 0,
-      counters,
-      janitorDiagnostics: [],
-      ticketDiagnostics: [],
-      dependencyDiagnostics: [],
-    }
-    const parsed =
-      dispatcherStatusEventPayloadSchemas['dispatcher.tick-completed'].safeParse(payload)
-    expect(parsed.success).toBe(true)
   })
 })
 
@@ -10703,4 +10373,104 @@ test('child phase progress preserves the ticket-list throttle; PR opening invali
   await h.store.append('progress-child', { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
   await h.dispatcher.tick({ acceptNewWork: false })
   expect(listings).toBe(2)
+})
+
+describe('origin ticks preserve inert operator sessions', () => {
+  test('matching wakes, suspended turns and stale running turns append no execution facts', async () => {
+    const h = harness({
+      repoOrigin: 'https://github.com/acme/widgets',
+      toml: '[orchestrator]\nenabled = true\n',
+    })
+    await h.store.ensureRepo(REPO)
+    const sessions: string[] = []
+    for (const cause of ['idle', 'budget', 'approval', 'running'] as const) {
+      const session = await h.store.createSession({ repo: REPO, operator: 'op' })
+      sessions.push(session.id)
+      await h.store.appendSessionEvent(session.id, {
+        actor: humanActor('op'),
+        type: 'session.wake-set',
+        payload: { globs: ['escalation.raised'] },
+      })
+      if (cause === 'idle') continue
+      const stream = await h.store.createStream(
+        { kind: 'session', session: session.id },
+        'historical',
+      )
+      const actor = agentActor('orchestrator', 'old-turn')
+      await h.store.appendSessionEvent(session.id, {
+        actor,
+        type: 'turn.started',
+        payload: {
+          turn: 'old-turn',
+          stream: stream.id,
+          trigger: { kind: 'message', messageSeq: 1 },
+        },
+      })
+      if (cause !== 'running') {
+        if (cause === 'approval') {
+          await h.store.appendSessionEvent(session.id, {
+            actor,
+            type: 'approval.requested',
+            payload: { turn: 'old-turn', toolCallId: 'call', toolName: 'notes.write', input: {} },
+          })
+        }
+        await h.store.appendSessionEvent(session.id, {
+          actor,
+          type: 'turn.suspended',
+          payload: { turn: 'old-turn', cause },
+        })
+        if (cause === 'approval')
+          await h.store.appendSessionEvent(session.id, {
+            actor: humanActor('op'),
+            type: 'approval.answered',
+            payload: { turn: 'old-turn', toolCallId: 'call', decision: 'approve' },
+          })
+      }
+    }
+    await h.store.createBuild({ slug: 'wake-build', repo: REPO, branch: 'ab/wake-build' })
+    await h.store.append('wake-build', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-1', title: 'Wake' },
+        repo: REPO,
+        baseBranch: 'main',
+      },
+    })
+    await h.store.append('wake-build', {
+      actor: agentActor('implement', 'old'),
+      type: 'escalation.raised',
+      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Help?' },
+    })
+    const before = await Promise.all(sessions.map((id) => h.store.getSessionEvents(id)))
+    h.clock.advance(16 * 60_000) // Beyond the removed reaper's silence threshold.
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(await Promise.all(sessions.map((id) => h.store.getSessionEvents(id)))).toEqual(before)
+    for (const events of before) {
+      const started = events.find((e) => e.type === 'turn.started')
+      if (started?.type === 'turn.started')
+        expect((await h.store.readStream(started.payload.stream)).status).toBe('open')
+    }
+  })
+})
+
+test('dispatcher reuses a historical pinned pipeline without config repair', async () => {
+  const repairs: string[] = []
+  const h = harness({
+    repairBuildConfig: async (slug) => {
+      repairs.push(slug)
+    },
+  })
+  const slug = await seedBuild(h, { attached: false })
+  const content = JSON.stringify(historicalEffectiveConfig(true))
+  await h.store.putArtifact(slug, { kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT, content })
+  const report = await h.dispatcher.tick()
+  expect(repairs).toEqual([])
+  expect(report.blockedDiagnostics.some((line) => line.includes('pipeline'))).toBe(false)
+  expect(
+    new TextDecoder().decode(
+      (await h.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT))!.content,
+    ),
+  ).toBe(content)
 })

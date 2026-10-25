@@ -696,8 +696,8 @@ export interface BuildScopedStore extends BuildStore {
 /** A BuildStore constrained to one operator session. `sessionScope` is
  * immutable; the handle may touch only its own session's events, artifacts,
  * and session-scoped streams, and rejects session create/list and every
- * build/repository operation. This is the (later turn runner's) authority
- * over exactly one session, mirroring `BuildScopedStore`. */
+ * build/repository operation. The handle confines access to exactly one
+ * historical session, mirroring `BuildScopedStore`. */
 export interface SessionScopedStore extends BuildStore {
   readonly sessionScope: string
   scopeSession(id: string): SessionScopedStore

@@ -1,3 +1,4 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { describe, expect, test } from 'bun:test'
 import { humanActor } from '../events/envelope'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -430,94 +431,101 @@ test('human repository status explains actual, configured and descendant-held ca
   expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
 })
 
-test('CLI JSON and operator status use the held dispatcher configuration and the same borrowed-slot projection', async () => {
-  const { DISPATCHER, KERNEL } = await import('../events/envelope')
-  const { manualClock } = await import('../testing/fixed')
-  const { getRepositoryStatus, getOperatorDashboard } = await import('../operator/query')
-  const clock = manualClock()
-  const store = new MemoryBuildStore({ clock })
-  await store.ensureRepo(REPO)
-  const config = { capacity: 1, tickets: { source: 'file', readyState: 'Ready' } }
-  const artifact = await store.putRepoArtifact(REPO, {
-    kind: 'config',
-    content: JSON.stringify(config),
-  })
-  await store.appendRepo(REPO, {
-    actor: DISPATCHER,
-    type: 'dispatcher.run-started',
-    payload: {
-      run: 'live',
-      pid: 42,
-      roleWarnings: [],
-      effectiveConfig: { kind: 'config', rev: artifact.revision },
-    },
-  })
-  await store.claimRepoLease(REPO, 'live', 60000)
-  for (const slug of ['node', 'child']) {
-    const ticket = { source: 'file', id: slug }
-    await store.createBuild({
-      slug,
-      repo: REPO,
-      ticket,
-      created: {
-        actor: DISPATCHER,
-        type: 'build.created',
-        payload: {
-          repo: REPO,
-          ticket,
-          baseBranch: 'main',
-          ...(slug === 'node'
-            ? { kind: 'node' as const }
-            : { target: { build: 'node', ticket: { source: 'file', id: 'node' } } }),
-        },
+test.each([false, true])(
+  'CLI JSON and operator status use the held dispatcher configuration and the same borrowed-slot projection (legacy enabled=%s)',
+  async (enabled) => {
+    const { DISPATCHER, KERNEL } = await import('../events/envelope')
+    const { manualClock } = await import('../testing/fixed')
+    const { getRepositoryStatus, getOperatorDashboard } = await import('../operator/query')
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    const config = {
+      ...historicalEffectiveConfig(enabled),
+      capacity: 1,
+      tickets: { source: 'file', readyState: 'Ready' },
+    }
+    const artifact = await store.putRepoArtifact(REPO, {
+      kind: 'config',
+      content: JSON.stringify(config),
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'live',
+        pid: 42,
+        roleWarnings: [],
+        effectiveConfig: { kind: 'config', rev: artifact.revision },
       },
     })
-  }
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'node.writer-reserved',
-    payload: {
-      id: 'restack',
-      operation: 'restack',
-      expected: 'head',
-      parent: 'parent',
-      oldBase: 'base',
-      archive: 'archive',
-      changes: [{ sha: 'change' }],
-      upstreamBuilds: [],
-      merges: [],
-    },
-  })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'node.item-prepared',
-    payload: { id: 'restack', index: 0, base: 'parent' },
-  })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'node.item-conflicted',
-    payload: { id: 'restack', index: 0, base: 'parent' },
-  })
-  await store.append('node', {
-    actor: DISPATCHER,
-    type: 'workspace.provisioned',
-    payload: {
-      provider: 'local',
-      ref: 'node-workspace',
-      branch: 'node',
-      base: { source: 'local', sha: 'head', remoteError: 'fixture' },
-    },
-  })
-  await store.append('child', { actor: DISPATCHER, type: 'build.paused', payload: {} })
-  const expected = { configured: 1, occupied: 2, effective: 2, borrowingNodes: ['node'] }
-  const opts = options(store, { json: true, now: clock })
-  await abRepositoryStatus(opts)
-  expect(JSON.parse(opts.output.join('\n')).capacity).toEqual(expected)
-  expect((await getRepositoryStatus(store, REPO, clock())).capacity).toEqual(expected)
-  expect((await getOperatorDashboard({ store, repo: REPO, clock })).model.capacity).toEqual(
-    expected,
-  )
-})
+    await store.claimRepoLease(REPO, 'live', 60000)
+    for (const slug of ['node', 'child']) {
+      const ticket = { source: 'file', id: slug }
+      await store.createBuild({
+        slug,
+        repo: REPO,
+        ticket,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: REPO,
+            ticket,
+            baseBranch: 'main',
+            ...(slug === 'node'
+              ? { kind: 'node' as const }
+              : { target: { build: 'node', ticket: { source: 'file', id: 'node' } } }),
+          },
+        },
+      })
+    }
+    await store.append('node', {
+      actor: KERNEL,
+      type: 'node.writer-reserved',
+      payload: {
+        id: 'restack',
+        operation: 'restack',
+        expected: 'head',
+        parent: 'parent',
+        oldBase: 'base',
+        archive: 'archive',
+        changes: [{ sha: 'change' }],
+        upstreamBuilds: [],
+        merges: [],
+      },
+    })
+    await store.append('node', {
+      actor: KERNEL,
+      type: 'node.item-prepared',
+      payload: { id: 'restack', index: 0, base: 'parent' },
+    })
+    await store.append('node', {
+      actor: KERNEL,
+      type: 'node.item-conflicted',
+      payload: { id: 'restack', index: 0, base: 'parent' },
+    })
+    await store.append('node', {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'local',
+        ref: 'node-workspace',
+        branch: 'node',
+        base: { source: 'local', sha: 'head', remoteError: 'fixture' },
+      },
+    })
+    await store.append('child', { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    const expected = { configured: 1, occupied: 2, effective: 2, borrowingNodes: ['node'] }
+    const opts = options(store, { json: true, now: clock })
+    await abRepositoryStatus(opts)
+    expect(JSON.parse(opts.output.join('\n')).capacity).toEqual(expected)
+    expect((await getRepositoryStatus(store, REPO, clock())).capacity).toEqual(expected)
+    expect((await getOperatorDashboard({ store, repo: REPO, clock })).model.capacity).toEqual(
+      expected,
+    )
+  },
+)
 
 test('repository status renders available outcome categories on failed tick telemetry', async () => {
   const store = new MemoryBuildStore()

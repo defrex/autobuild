@@ -1,3 +1,4 @@
+import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
@@ -196,7 +197,7 @@ export function decodeEffectiveConfig(content: Uint8Array, label: string): Confi
       `effective config ${label} is not valid JSON`,
     )
   }
-  const parsed = configSchema.safeParse(raw)
+  const parsed = configSchema.safeParse(normalizeEffectiveConfigArtifact(raw))
   if (!parsed.success) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
@@ -468,10 +469,7 @@ async function dashboardFromView(
   }
 }
 
-/** Thrown when a deposited `dispatcher-effective-config` artifact exists but
- * cannot be parsed or validated: the hosted message route maps this to a 500
- * `internal` — a broken config must never silently disable the orchestrator
- * (AUT-342). */
+/** A deposited sandbox-gate config artifact is unreadable or invalid. */
 export class OrchestratorConfigError extends Error {
   constructor(message: string) {
     super(message)
@@ -479,17 +477,10 @@ export class OrchestratorConfigError extends Error {
   }
 }
 
-/** The repository's orchestrator configuration, resolved from the latest
- * deposited `dispatcher-effective-config` artifact (AUT-342). Returns null
- * when no artifact exists — the orchestrator is disabled, and message
- * posting behaves exactly as it did before this feature. Throws
- * `OperatorQueryError` (code `effective-config-unavailable`) when an
- * artifact exists but is unreadable or invalid: a deployment that deposited
- * a broken config must fail loudly (a 500 on the message route), never
- * silently disable the orchestrator. */
+/** Resolve the sandbox gate from the latest effective config; absent/disabled returns null. */
 export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
   // A repository the store has no record for has no deposited artifact and
-  // no dispatcher history: the orchestrator is disabled there.
+  // no dispatcher history: sandbox tools are disabled there.
   if ((await store.getRepo(repo)) === null) return null
   const artifacts = await store.listRepoArtifacts(repo, DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
   if (artifacts.length === 0) return null
@@ -508,7 +499,7 @@ export async function orchestratorConfig(store: BuildStore, repo: string): Promi
       `effective config ${latest.kind}@${latest.revision} is not valid JSON`,
     )
   }
-  const parsed = configSchema.safeParse(raw)
+  const parsed = configSchema.safeParse(normalizeEffectiveConfigArtifact(raw))
   if (!parsed.success) {
     throw new OrchestratorConfigError(
       `effective config ${latest.kind}@${latest.revision} is invalid: ${parsed.error.message}`,

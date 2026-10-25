@@ -79,11 +79,7 @@ export async function createOperatorSession(
   repo: string,
   user: string,
   title?: string,
-  /** When the repository's effective config enables the orchestrator, the
-   * resolved wake globs a NEW session inherits (AUT-342): the configured
-   * `wake`, else the default attention set. Absent → no wake-set fact
-   * (message-only). Existing sessions never retroactively inherit; a
-   * `PUT .../wake` always wins thereafter. */
+  /** Optional explicit initial wake facts for direct callers; HTTP sessions do not inherit config. */
   inheritedWakeGlobs?: string[],
 ): Promise<SessionRecord> {
   const record = await store.createSession({
