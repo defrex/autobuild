@@ -103,3 +103,11 @@ callback replay, allowlist removal, cookie/session policy, CSRF, peer checks and
 the GitHub adapter's wire shapes/pagination. A real TCP test proves the development
 serve adapter supplies ConnectInfo. The gate retains Proa accessibility/performance
 checks and linked builds.
+
+The display projection has a separate offline oracle under
+`fixtures/projection.json.gz`. Regenerate it explicitly with
+`bun tools/projection-fixtures.ts --write`; check freshness without writing with
+`bun tools/projection-fixtures.ts`. It imports the TypeScript projection only
+at generation/check time. The native `projection_parity` test compares retained
+facts, projected rows, session stream metadata and Unicode cells. This is a
+projection foundation; it does not establish live page or seeded capture coverage.

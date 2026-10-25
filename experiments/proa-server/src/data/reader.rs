@@ -22,6 +22,8 @@ enum Key {
 struct Cached {
     cursor: i64,
     accumulator: Accumulator,
+    display: crate::dashboard::facts::DashboardFacts,
+    restack: crate::dashboard::restack::RestackFacts,
     failure: Option<DataError>,
 }
 impl Cached {
@@ -45,6 +47,10 @@ impl Cached {
                 self.failure = Some(error.clone());
             }
             return Err(error);
+        }
+        if self.accumulator.scope() == ReduceScope::Build {
+            self.display.advance(events);
+            self.restack.advance(events);
         }
         self.cursor = cursor;
         Ok(())
@@ -89,7 +95,7 @@ impl DataReader {
     pub async fn clear_cache(&self) {
         self.cache.lock().await.clear();
     }
-    async fn read(&self, repo: &str, scope: Scope<'_>) -> Result<Value, DataError> {
+    async fn read(&self, repo: &str, scope: Scope<'_>) -> Result<(Value, Value, i64), DataError> {
         let (key, reduce_scope) = match scope {
             Scope::Build(slug) => (Key::Build(repo.into(), slug.into()), ReduceScope::Build),
             Scope::Repository => (Key::Repository(repo.into()), ReduceScope::Repository),
@@ -104,6 +110,8 @@ impl DataReader {
                 Arc::new(Mutex::new(Cached {
                     cursor: 0,
                     accumulator: Accumulator::new(reduce_scope),
+                    display: Default::default(),
+                    restack: Default::default(),
                     failure: None,
                 }))
             })
@@ -133,16 +141,28 @@ impl DataReader {
         if !events.is_empty() {
             cached.advance(&events)?;
         }
-        Ok(cached.accumulator.finish())
+        Ok((
+            cached.accumulator.finish(),
+            serde_json::json!({"dashboard":cached.display.finish(),"restack":cached.restack.finish()}),
+            cached.cursor,
+        ))
     }
     pub async fn build(&self, repo: &str, slug: &str) -> Result<Value, DataError> {
+        self.read(repo, Scope::Build(slug)).await.map(|read| read.0)
+    }
+    /// Lifecycle, display facts and suffix cursor from the same locked fold.
+    pub async fn build_display(
+        &self,
+        repo: &str,
+        slug: &str,
+    ) -> Result<(Value, Value, i64), DataError> {
         self.read(repo, Scope::Build(slug)).await
     }
     pub async fn repository(&self, repo: &str) -> Result<Value, DataError> {
-        self.read(repo, Scope::Repository).await
+        self.read(repo, Scope::Repository).await.map(|read| read.0)
     }
     pub async fn session(&self, repo: &str, id: &str) -> Result<Value, DataError> {
-        self.read(repo, Scope::Session(id)).await
+        self.read(repo, Scope::Session(id)).await.map(|read| read.0)
     }
     pub async fn project_builds(&self, repo: &str) -> Result<Vec<BuildRead>, DataError> {
         let mut result = Vec::new();
@@ -153,11 +173,10 @@ impl DataReader {
                 .to_owned();
             match self.build(repo, &slug).await {
                 Ok(value) => result.push(BuildRead::Readable { slug, value }),
-                Err(error @ DataError::Decode { .. }) => result.push(BuildRead::Unreadable {
+                Err(error) => result.push(BuildRead::Unreadable {
                     slug,
                     error: error.to_string(),
                 }),
-                Err(error) => return Err(error),
             }
         }
         Ok(result)
@@ -187,6 +206,8 @@ mod tests {
         let mut cached = Cached {
             cursor: 0,
             accumulator: Accumulator::new(ReduceScope::Session),
+            display: Default::default(),
+            restack: Default::default(),
             failure: None,
         };
         let before = cached.accumulator.finish();
@@ -210,9 +231,13 @@ mod tests {
         let mut cached = Cached {
             cursor: 7,
             accumulator: Accumulator::new(ReduceScope::Build),
+            display: Default::default(),
+            restack: Default::default(),
             failure: None,
         };
         let before = cached.accumulator.finish();
+        let display_before = cached.display.finish();
+        let restack_before = cached.restack.finish();
         for seq in [json!(null), json!(7), json!(6)] {
             assert!(matches!(
                 cached.advance(&[json!({"seq":seq})]),
@@ -220,6 +245,8 @@ mod tests {
             ));
             assert_eq!(cached.cursor, 7);
             assert_eq!(cached.accumulator.finish(), before);
+            assert_eq!(cached.display.finish(), display_before);
+            assert_eq!(cached.restack.finish(), restack_before);
         }
     }
 }
