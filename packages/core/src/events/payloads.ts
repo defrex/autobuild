@@ -470,6 +470,12 @@ export const eventPayloadSchemas = {
     id: z.string().min(1),
     head: z.string().min(1),
     parent: z.string().min(1),
+    context: z
+      .strictObject({
+        kind: z.literal('node-verification-context'),
+        rev: z.number().int().nonnegative(),
+      })
+      .optional(),
     config: z.string().min(1),
   }),
   'integration.landing-intended': z

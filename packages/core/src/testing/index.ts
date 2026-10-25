@@ -81,3 +81,11 @@ export { readBuildFacts, readBuildStreamSeed, readRepositoryFacts } from '../sto
 export { deferMixedVersion } from '../kernel/mixed-version'
 
 export { guardForge } from '../kernel/guarded-forge'
+
+// Node verification delivery seam exercised by the hosted authorization suite.
+export { buildContext } from '../cli/context'
+export { scopeLocalStoreToPhaseSession } from '../store/phase-session'
+export {
+  prepareNodeVerificationContext,
+  NODE_VERIFICATION_CONTEXT,
+} from '../kernel/node-verification-context'
