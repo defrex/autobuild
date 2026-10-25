@@ -50,23 +50,25 @@ pub struct PostgresReader {
     metadata_reads: Mutex<std::collections::VecDeque<super::reader::QueryRead>>,
 }
 struct Connection {
-    client: Client,
-    task: tokio::task::JoinHandle<()>,
+    client: Option<Client>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 impl std::ops::Deref for Connection {
     type Target = Client;
     fn deref(&self) -> &Client {
-        &self.client
+        self.client.as_ref().expect("connected reader slot")
     }
 }
 impl std::ops::DerefMut for Connection {
     fn deref_mut(&mut self) -> &mut Client {
-        &mut self.client
+        self.client.as_mut().expect("connected reader slot")
     }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }
 
@@ -131,20 +133,25 @@ fn stream_parts(raw: Value) -> Result<Value, DataError> {
     }
     Ok(value)
 }
+/// Shared native-root TLS setup for independent reader and writer pools.
+pub(crate) fn connector() -> Result<MakeRustlsConnect, DataError> {
+    // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
+    // platform trust without linking OpenSSL into the captured Proa binary.
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+    let config = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::aws_lc_rs::default_provider().into(),
+    )
+    .with_safe_default_protocol_versions()
+    .map_err(|_| DataError::Connection)?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(MakeRustlsConnect::new(config))
+}
+
 impl PostgresReader {
     pub async fn connect(url: &str) -> Result<Self, DataError> {
-        // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
-        // platform trust without linking OpenSSL into the captured Proa binary.
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
-        let config = rustls::ClientConfig::builder_with_provider(
-            rustls::crypto::aws_lc_rs::default_provider().into(),
-        )
-        .with_safe_default_protocol_versions()
-        .map_err(|_| DataError::Connection)?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        let tls = MakeRustlsConnect::new(config);
+        let tls = connector()?;
         let mut connections = Vec::new();
         for _ in 0..4 {
             connections.push(Mutex::new(Self::open(url, tls.clone()).await?));
@@ -160,6 +167,24 @@ impl PostgresReader {
         Ok(result)
     }
 
+    /// Application startup may defer network I/O so public health is always
+    /// available. Every first/replacement connection still preflights before use.
+    pub fn deferred(url: &str) -> Result<Self, DataError> {
+        Ok(Self {
+            connections: (0..4)
+                .map(|_| {
+                    Mutex::new(Connection {
+                        client: None,
+                        task: None,
+                    })
+                })
+                .collect(),
+            url: url.into(),
+            tls: connector()?,
+            next: AtomicUsize::new(0),
+            metadata_reads: Mutex::new(std::collections::VecDeque::new()),
+        })
+    }
     async fn open(url: &str, tls: MakeRustlsConnect) -> Result<Connection, DataError> {
         // The URL's sslmode and certificate validation apply on every reconnect.
         let (client, connection) = tokio_postgres::connect(url, tls)
@@ -168,8 +193,11 @@ impl PostgresReader {
         let task = tokio::spawn(async move {
             let _ = connection.await;
         });
-        let mut result = Connection { client, task };
-        Self::preflight_client(&mut result.client).await?;
+        let mut result = Connection {
+            client: Some(client),
+            task: Some(task),
+        };
+        Self::preflight_client(result.client.as_mut().expect("connected reader slot")).await?;
         Ok(result)
     }
 
@@ -190,7 +218,7 @@ impl PostgresReader {
         };
         // Replacement stays under the slot lock, so concurrent callers cannot
         // race reconnection. Failed connects leave a closed slot retryable.
-        if client.is_closed() {
+        if client.client.as_ref().is_none_or(Client::is_closed) {
             *client = Self::open(&self.url, self.tls.clone()).await?;
         }
         Ok(client)
@@ -201,7 +229,7 @@ impl PostgresReader {
         Self::preflight_client(&mut client).await
     }
 
-    async fn preflight_client(client: &mut Client) -> Result<(), DataError> {
+    pub(crate) async fn preflight_client(client: &mut Client) -> Result<(), DataError> {
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -386,8 +414,8 @@ impl PostgresReader {
             .map(|row| {
                 let mut event = json!({
                     "seq": row.get::<_, i64>("seq"), "ts": timestamp(row, "ts"),
-                    "actor": row.get::<_, Value>("actor"), "type": row.get::<_, String>("type"),
-                    "payload": row.get::<_, Value>("payload"),
+                    "actor": row.get::<_,crate::protocol::js_json::JsValue>("actor").0, "type": row.get::<_, String>("type"),
+                    "payload": row.get::<_,crate::protocol::js_json::JsValue>("payload").0,
                 });
                 match scope {
                     Scope::Build(slug) => {
@@ -400,7 +428,7 @@ impl PostgresReader {
                         event["session"] = json!(id);
                     }
                 }
-                if let Ok(Some(compatibility)) = row.try_get::<_, Option<Value>>("compatibility") {
+                if let Ok(Some(compatibility)) = row.try_get::<_,Option<crate::protocol::js_json::JsValue>>("compatibility").map(|value|value.map(|value|value.0)) {
                     event["compatibility"] = compatibility;
                 }
                 event
@@ -431,7 +459,7 @@ impl PostgresReader {
         let result = rows.iter().map(|row| {
             let mut record = json!({ "slug": row.get::<_, String>("slug"), "repo": repo,
                 "createdAt": timestamp(row, "created_at"), "updatedAt": timestamp(row, "updated_at") });
-            if let Some(ticket) = row.get::<_, Option<Value>>("ticket") { record["ticket"] = ticket; }
+            if let Some(ticket) = row.get::<_,Option<crate::protocol::js_json::JsValue>>("ticket").map(|value|value.0) { record["ticket"] = ticket; }
             if let Some(branch) = row.get::<_, Option<String>>("branch") { record["branch"] = json!(branch); }
             enrich_build_liveness(&mut record,row);
             projected_ticket(&mut record,row);
@@ -609,7 +637,7 @@ impl PostgresReader {
         }.map_err(|_| DataError::Query)?;
         let result = rows.first().map(|row| json!({
             "kind": row.get::<_, String>("kind"), "revision": row.get::<_, i64>("revision"),
-            "blobRef": row.get::<_, String>("blob_ref"), "metadata": row.get::<_, Value>("metadata"),
+            "blobRef": row.get::<_, String>("blob_ref"), "metadata": row.get::<_,crate::protocol::js_json::JsValue>("metadata").0,
             "createdAt": timestamp(row, "created_at"),
         }));
         tx.commit().await.map_err(|_| DataError::Query)?;

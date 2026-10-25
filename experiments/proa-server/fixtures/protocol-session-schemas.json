@@ -1,0 +1,203 @@
+{
+  "session.created": {
+    "type": "object",
+    "shape": {
+      "title": {
+        "type": "optional",
+        "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+      }
+    },
+    "strict": true
+  },
+  "message.posted": {
+    "type": "object",
+    "shape": { "text": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": true
+  },
+  "session.wake-set": {
+    "type": "object",
+    "shape": {
+      "globs": {
+        "type": "array",
+        "checks": [{ "check": "max_length", "maximum": 100 }],
+        "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+      }
+    },
+    "strict": true
+  },
+  "turn.started": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "stream": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "trigger": {
+        "type": "union",
+        "discriminator": "kind",
+        "options": [
+          {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "literal", "values": ["message"] },
+              "messageSeq": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": false }
+                ]
+              }
+            },
+            "strict": true
+          },
+          {
+            "type": "object",
+            "checks": [{ "check": "wake_exclusive_source" }],
+            "shape": {
+              "kind": { "type": "literal", "values": ["wake"] },
+              "build": {
+                "type": "optional",
+                "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+              },
+              "journal": { "type": "optional", "inner": { "type": "literal", "values": [true] } },
+              "seq": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": false }
+                ]
+              },
+              "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          }
+        ]
+      },
+      "wake": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "event": {
+              "type": "object",
+              "shape": {
+                "seq": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": false }
+                  ]
+                },
+                "ts": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "payload": {
+                  "type": "record",
+                  "key": { "type": "string" },
+                  "value": { "type": "unknown" }
+                }
+              },
+              "strict": true
+            },
+            "buildState": {
+              "type": "optional",
+              "inner": {
+                "type": "record",
+                "key": { "type": "string" },
+                "value": { "type": "unknown" }
+              }
+            }
+          },
+          "strict": true
+        }
+      }
+    },
+    "strict": true
+  },
+  "turn.suspended": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "cause": { "type": "enum", "values": ["budget", "approval"] }
+    },
+    "strict": true
+  },
+  "turn.resumed": {
+    "type": "object",
+    "shape": { "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": true
+  },
+  "approval.requested": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "toolCallId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "toolName": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "input": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } }
+    },
+    "strict": true
+  },
+  "approval.answered": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "toolCallId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "decision": { "type": "enum", "values": ["approve", "deny"] }
+    },
+    "strict": true
+  },
+  "turn.completed": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "usage": {
+        "type": "object",
+        "shape": {
+          "inputTokens": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "outputTokens": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "steps": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "turns": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          }
+        },
+        "strict": true
+      }
+    },
+    "strict": true
+  },
+  "turn.failed": {
+    "type": "object",
+    "shape": {
+      "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "kind": {
+        "type": "enum",
+        "values": ["provider-unavailable", "exhausted", "credentials", "configuration", "internal"]
+      },
+      "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+    },
+    "strict": true
+  },
+  "session.archived": { "type": "object", "shape": {}, "strict": true }
+}
