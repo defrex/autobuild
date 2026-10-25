@@ -1077,11 +1077,11 @@
                 "type": "optional",
                 "inner": {
                   "type": "string",
-                  "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                  "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
                   "checks": [
                     {
                       "op": "nonblank",
-                      "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                      "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
                       "source": "(s) => s.trim().length > 0"
                     }
                   ]

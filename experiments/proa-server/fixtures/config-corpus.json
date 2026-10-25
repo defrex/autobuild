@@ -97,10 +97,10 @@
         {
           "code": "custom",
           "path": ["tickets", "readyState"],
-          "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+          "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
     },
     {
       "id": "config-7",
@@ -4090,15 +4090,15 @@
         {
           "code": "custom",
           "path": ["tickets", "readyState"],
-          "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+          "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
         },
         {
           "code": "custom",
           "path": ["tickets", "teamKey"],
-          "message": "[tickets].source = \"linear\" requires teamKey — the Linear team key (e.g. \"ENG\")"
+          "message": "[tickets].source = \"linear\" requires teamKey \u2014 the Linear team key (e.g. \"ENG\")"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"teamKey\"\n    ],\n    \"message\": \"[tickets].source = \\\"linear\\\" requires teamKey — the Linear team key (e.g. \\\"ENG\\\")\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"teamKey\"\n    ],\n    \"message\": \"[tickets].source = \\\"linear\\\" requires teamKey \u2014 the Linear team key (e.g. \\\"ENG\\\")\"\n  }\n]"
     },
     {
       "id": "config-181",
@@ -4114,15 +4114,15 @@
         {
           "code": "custom",
           "path": ["tickets", "teamKey"],
-          "message": "[tickets].teamKey applies only to source = \"linear\" or \"hosted\" — remove it or select one of those sources"
+          "message": "[tickets].teamKey applies only to source = \"linear\" or \"hosted\" \u2014 remove it or select one of those sources"
         },
         {
           "code": "custom",
           "path": ["tickets", "claimedState"],
-          "message": "[tickets].claimedState applies only to source = \"linear\" or \"hosted\" — remove it or select one of those sources"
+          "message": "[tickets].claimedState applies only to source = \"linear\" or \"hosted\" \u2014 remove it or select one of those sources"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"teamKey\"\n    ],\n    \"message\": \"[tickets].teamKey applies only to source = \\\"linear\\\" or \\\"hosted\\\" — remove it or select one of those sources\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"claimedState\"\n    ],\n    \"message\": \"[tickets].claimedState applies only to source = \\\"linear\\\" or \\\"hosted\\\" — remove it or select one of those sources\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"teamKey\"\n    ],\n    \"message\": \"[tickets].teamKey applies only to source = \\\"linear\\\" or \\\"hosted\\\" \u2014 remove it or select one of those sources\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"claimedState\"\n    ],\n    \"message\": \"[tickets].claimedState applies only to source = \\\"linear\\\" or \\\"hosted\\\" \u2014 remove it or select one of those sources\"\n  }\n]"
     },
     {
       "id": "config-182",
@@ -4137,10 +4137,10 @@
         {
           "code": "custom",
           "path": ["tickets", "readyAssignee"],
-          "message": "[tickets].readyAssignee applies only to source = \"linear\" — remove it or select that source (selected source: \"plugin\")"
+          "message": "[tickets].readyAssignee applies only to source = \"linear\" \u2014 remove it or select that source (selected source: \"plugin\")"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyAssignee\"\n    ],\n    \"message\": \"[tickets].readyAssignee applies only to source = \\\"linear\\\" — remove it or select that source (selected source: \\\"plugin\\\")\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyAssignee\"\n    ],\n    \"message\": \"[tickets].readyAssignee applies only to source = \\\"linear\\\" \u2014 remove it or select that source (selected source: \\\"plugin\\\")\"\n  }\n]"
     },
     {
       "id": "config-183",
@@ -4258,17 +4258,17 @@
       "input": {
         "tickets": {
           "source": "file",
-          "readyState": "�"
+          "readyState": "\ufeff"
         }
       },
       "issues": [
         {
           "code": "custom",
           "path": ["tickets", "readyState"],
-          "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+          "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
     },
     {
       "id": "config-187",
@@ -4283,10 +4283,10 @@
           "expected": "string",
           "code": "invalid_type",
           "path": ["tickets", "readyState"],
-          "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+          "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
         }
       ],
-      "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+      "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
     },
     {
       "id": "config-188",
@@ -4413,10 +4413,10 @@
         {
           "code": "custom",
           "path": ["verify", "steps", 0],
-          "message": "verify step \"absent\" is listed in verify.steps but has no [verify.absent] table — add one with kind = \"check\" (command = <name in [commands]>) or kind = \"agent\" (skill = <skill name>)"
+          "message": "verify step \"absent\" is listed in verify.steps but has no [verify.absent] table \u2014 add one with kind = \"check\" (command = <name in [commands]>) or kind = \"agent\" (skill = <skill name>)"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"steps\",\n      0\n    ],\n    \"message\": \"verify step \\\"absent\\\" is listed in verify.steps but has no [verify.absent] table — add one with kind = \\\"check\\\" (command = <name in [commands]>) or kind = \\\"agent\\\" (skill = <skill name>)\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"steps\",\n      0\n    ],\n    \"message\": \"verify step \\\"absent\\\" is listed in verify.steps but has no [verify.absent] table \u2014 add one with kind = \\\"check\\\" (command = <name in [commands]>) or kind = \\\"agent\\\" (skill = <skill name>)\"\n  }\n]"
     },
     {
       "id": "config-191",
@@ -4440,15 +4440,15 @@
         {
           "code": "custom",
           "path": ["verify", "unit"],
-          "message": "[verify.unit] is defined but \"unit\" is not listed in verify.steps — add \"unit\" to verify.steps or remove the table"
+          "message": "[verify.unit] is defined but \"unit\" is not listed in verify.steps \u2014 add \"unit\" to verify.steps or remove the table"
         },
         {
           "code": "custom",
           "path": ["verify", "unit", "command"],
-          "message": "[verify.unit].command = \"missing\" does not name a key in [commands] — known commands: test"
+          "message": "[verify.unit].command = \"missing\" does not name a key in [commands] \u2014 known commands: test"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"unit\"\n    ],\n    \"message\": \"[verify.unit] is defined but \\\"unit\\\" is not listed in verify.steps — add \\\"unit\\\" to verify.steps or remove the table\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"unit\",\n      \"command\"\n    ],\n    \"message\": \"[verify.unit].command = \\\"missing\\\" does not name a key in [commands] — known commands: test\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"unit\"\n    ],\n    \"message\": \"[verify.unit] is defined but \\\"unit\\\" is not listed in verify.steps \u2014 add \\\"unit\\\" to verify.steps or remove the table\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"verify\",\n      \"unit\",\n      \"command\"\n    ],\n    \"message\": \"[verify.unit].command = \\\"missing\\\" does not name a key in [commands] \u2014 known commands: test\"\n  }\n]"
     },
     {
       "id": "config-192",
@@ -5040,10 +5040,10 @@
         {
           "code": "custom",
           "path": ["plugins", 1],
-          "message": "duplicate plugin module specifier \"a\" — first declared at plugins[0]; remove or deduplicate this entry"
+          "message": "duplicate plugin module specifier \"a\" \u2014 first declared at plugins[0]; remove or deduplicate this entry"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"plugins\",\n      1\n    ],\n    \"message\": \"duplicate plugin module specifier \\\"a\\\" — first declared at plugins[0]; remove or deduplicate this entry\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"plugins\",\n      1\n    ],\n    \"message\": \"duplicate plugin module specifier \\\"a\\\" \u2014 first declared at plugins[0]; remove or deduplicate this entry\"\n  }\n]"
     },
     {
       "id": "config-209",
@@ -5321,10 +5321,10 @@
         {
           "code": "custom",
           "path": ["workspace", "config"],
-          "message": "[workspace.config] is not supported by the builtin \"git-worktree\" provider — remove it or select a plugin workspace provider"
+          "message": "[workspace.config] is not supported by the builtin \"git-worktree\" provider \u2014 remove it or select a plugin workspace provider"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\"\n    ],\n    \"message\": \"[workspace.config] is not supported by the builtin \\\"git-worktree\\\" provider — remove it or select a plugin workspace provider\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\"\n    ],\n    \"message\": \"[workspace.config] is not supported by the builtin \\\"git-worktree\\\" provider \u2014 remove it or select a plugin workspace provider\"\n  }\n]"
     },
     {
       "id": "config-216",
@@ -5748,7 +5748,7 @@
         {
           "code": "custom",
           "path": ["workspace", "config", "provisioning", 1, "name"],
-          "message": "duplicate provisioning step name \"x\" — first declared at provisioning[0].name"
+          "message": "duplicate provisioning step name \"x\" \u2014 first declared at provisioning[0].name"
         },
         {
           "code": "custom",
@@ -5761,7 +5761,7 @@
           "message": "private repository clone credentials must not be exposed as runtime environment variables"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"provisioning\",\n      0,\n      \"command\"\n    ],\n    \"message\": \"provisioning step command must be nonblank\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"provisioning\",\n      1,\n      \"name\"\n    ],\n    \"message\": \"duplicate provisioning step name \\\"x\\\" — first declared at provisioning[0].name\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"gitUsernameEnv\"\n    ],\n    \"message\": \"private repository clone credentials must not be exposed as runtime environment variables\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"gitPasswordEnv\"\n    ],\n    \"message\": \"private repository clone credentials must not be exposed as runtime environment variables\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"provisioning\",\n      0,\n      \"command\"\n    ],\n    \"message\": \"provisioning step command must be nonblank\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"provisioning\",\n      1,\n      \"name\"\n    ],\n    \"message\": \"duplicate provisioning step name \\\"x\\\" \u2014 first declared at provisioning[0].name\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"gitUsernameEnv\"\n    ],\n    \"message\": \"private repository clone credentials must not be exposed as runtime environment variables\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"workspace\",\n      \"config\",\n      \"gitPasswordEnv\"\n    ],\n    \"message\": \"private repository clone credentials must not be exposed as runtime environment variables\"\n  }\n]"
     },
     {
       "id": "config-222",
@@ -5852,10 +5852,10 @@
         {
           "code": "custom",
           "path": ["orchestrator", "model"],
-          "message": "[orchestrator].enabled = true requires [orchestrator].model — name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)"
+          "message": "[orchestrator].enabled = true requires [orchestrator].model \u2014 name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"orchestrator\",\n      \"model\"\n    ],\n    \"message\": \"[orchestrator].enabled = true requires [orchestrator].model — name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"orchestrator\",\n      \"model\"\n    ],\n    \"message\": \"[orchestrator].enabled = true requires [orchestrator].model \u2014 name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)\"\n  }\n]"
     },
     {
       "id": "config-224",
@@ -5924,10 +5924,10 @@
         {
           "code": "custom",
           "path": ["orchestrator", "wake"],
-          "message": "--event \"not.real\" matches no known event type in the build or repository catalogs — [orchestrator].wake"
+          "message": "--event \"not.real\" matches no known event type in the build or repository catalogs \u2014 [orchestrator].wake"
         }
       ],
-      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"orchestrator\",\n      \"wake\"\n    ],\n    \"message\": \"--event \\\"not.real\\\" matches no known event type in the build or repository catalogs — [orchestrator].wake\"\n  }\n]"
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"orchestrator\",\n      \"wake\"\n    ],\n    \"message\": \"--event \\\"not.real\\\" matches no known event type in the build or repository catalogs \u2014 [orchestrator].wake\"\n  }\n]"
     },
     {
       "id": "config-227",
@@ -7072,11 +7072,11 @@
                     "type": "optional",
                     "inner": {
                       "type": "string",
-                      "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                      "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
                       "checks": [
                         {
                           "op": "nonblank",
-                          "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                          "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
                           "source": "(s) => s.trim().length > 0"
                         }
                       ]
@@ -7358,7 +7358,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -7468,10 +7468,10 @@
             {
               "code": "custom",
               "path": ["tickets", "readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": {
@@ -7482,7 +7482,7 @@
             {
               "code": "custom",
               "path": ["tickets", "readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             },
             {
               "code": "unrecognized_keys",
@@ -7491,7 +7491,7 @@
               "message": "Unrecognized key: \"length\""
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"length\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"length\\\"\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"length\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"length\\\"\"\n  }\n]"
         },
         {
           "input": {
@@ -7502,7 +7502,7 @@
             {
               "code": "custom",
               "path": ["tickets", "readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             },
             {
               "code": "unrecognized_keys",
@@ -7511,7 +7511,7 @@
               "message": "Unrecognized key: \"runtime\""
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"runtime\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"runtime\\\"\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"runtime\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"runtime\\\"\"\n  }\n]"
         },
         {
           "input": {
@@ -7522,7 +7522,7 @@
             {
               "code": "custom",
               "path": ["tickets", "readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             },
             {
               "code": "unrecognized_keys",
@@ -7531,7 +7531,7 @@
               "message": "Unrecognized key: \"steps\""
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"steps\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"steps\\\"\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"steps\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"steps\\\"\"\n  }\n]"
         },
         {
           "input": {
@@ -7543,7 +7543,7 @@
             {
               "code": "custom",
               "path": ["tickets", "readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             },
             {
               "code": "unrecognized_keys",
@@ -7552,7 +7552,7 @@
               "message": "Unrecognized keys: \"source\", \"teamKey\""
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"source\",\n      \"teamKey\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"source\\\", \\\"teamKey\\\"\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"source\",\n      \"teamKey\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"source\\\", \\\"teamKey\\\"\"\n  }\n]"
         }
       ]
     },
@@ -7698,7 +7698,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -8048,7 +8048,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -8390,7 +8390,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"store.url must be an absolute HTTPS service URL\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -8679,10 +8679,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -8961,7 +8961,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -9281,7 +9281,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -9581,7 +9581,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -9889,7 +9889,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -10202,10 +10202,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -10492,10 +10492,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -10790,7 +10790,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -11117,7 +11117,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -11441,7 +11441,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -11768,7 +11768,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -12085,7 +12085,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"forge adapter name must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -12369,7 +12369,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"forge adapter name must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -12655,7 +12655,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -12972,7 +12972,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -13284,7 +13284,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"plugin module specifiers must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -13603,7 +13603,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -13954,7 +13954,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -14302,7 +14302,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -14641,7 +14641,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"into must be root, node, or a nonblank node ticket id\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -14925,7 +14925,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"into must be root, node, or a nonblank node ticket id\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -15200,7 +15200,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"leaf\",\n      \"node\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"leaf\\\"|\\\"node\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -15516,7 +15516,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"leaf\",\n      \"node\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"leaf\\\"|\\\"node\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -15831,7 +15831,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"label must be nonblank (labels match exactly, including case)\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -16115,7 +16115,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"label must be nonblank (labels match exactly, including case)\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -16395,7 +16395,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"auto\",\n      \"consent\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"auto\\\"|\\\"consent\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -16747,7 +16747,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -17097,7 +17097,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -17433,7 +17433,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -17865,7 +17865,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -18265,7 +18265,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"github-release\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected \\\"github-release\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -18593,7 +18593,7 @@
           "error": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[^/\\\\s]+\\\\/[^/\\\\s]+$/\",\n    \"path\": [],\n    \"message\": \"expected exactly one non-blank GitHub repository pair in \\\"owner/repo\\\" form\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -18923,7 +18923,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -19263,7 +19263,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -19599,7 +19599,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -19912,7 +19912,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[workspace].provider must be a nonblank provider name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -20196,7 +20196,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[workspace].provider must be a nonblank provider name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -20464,7 +20464,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[workspace.config] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -20674,10 +20674,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -20902,7 +20902,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[commands] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -21202,10 +21202,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -21607,7 +21607,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[verify] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -21920,7 +21920,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -22239,7 +22239,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -22550,10 +22550,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -22946,7 +22946,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -23325,7 +23325,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -23695,7 +23695,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"check\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected \\\"check\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -24011,10 +24011,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -24288,7 +24288,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -24596,7 +24596,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -24929,7 +24929,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -25276,7 +25276,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -25597,10 +25597,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -25864,7 +25864,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -26172,7 +26172,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -26536,7 +26536,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -26906,7 +26906,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"agent\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected \\\"agent\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -27222,10 +27222,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -27561,7 +27561,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[finalize] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -27873,7 +27873,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -28193,7 +28193,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -28505,10 +28505,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -28835,7 +28835,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -29181,7 +29181,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -29551,7 +29551,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"check\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected \\\"check\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -29867,10 +29867,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -30172,7 +30172,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -30542,7 +30542,7 @@
           "error": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"agent\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected \\\"agent\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -30858,10 +30858,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -31276,7 +31276,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[roles] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -31722,7 +31722,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -32021,10 +32021,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -32311,10 +32311,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -32596,10 +32596,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -32886,10 +32886,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -33179,7 +33179,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -33498,7 +33498,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -33809,10 +33809,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -34102,7 +34102,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -34421,7 +34421,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -34732,10 +34732,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -35028,7 +35028,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -35355,7 +35355,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -35725,7 +35725,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -36093,7 +36093,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -36458,7 +36458,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -36765,7 +36765,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -37079,7 +37079,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -37398,7 +37398,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -37709,10 +37709,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -38284,7 +38284,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -38881,7 +38881,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -39214,7 +39214,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -39541,7 +39541,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -39865,7 +39865,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -40192,7 +40192,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -40516,7 +40516,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -40843,7 +40843,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -41167,7 +41167,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -41494,7 +41494,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -41818,7 +41818,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -42145,7 +42145,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -42469,7 +42469,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -42796,7 +42796,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -43120,7 +43120,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -43447,7 +43447,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -43771,7 +43771,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -44098,7 +44098,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -44422,7 +44422,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -44749,7 +44749,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -45073,7 +45073,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -45400,7 +45400,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -45724,7 +45724,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -46051,7 +46051,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -46375,7 +46375,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -46702,7 +46702,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -47026,7 +47026,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -47353,7 +47353,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -47677,7 +47677,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -48004,7 +48004,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -48319,7 +48319,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -48637,7 +48637,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -49092,7 +49092,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -49543,7 +49543,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -49855,7 +49855,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -50163,7 +50163,7 @@
           "error": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -50515,7 +50515,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -50863,7 +50863,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -51183,7 +51183,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -51510,7 +51510,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -51831,7 +51831,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -52150,7 +52150,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -52461,10 +52461,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -52746,10 +52746,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -53036,10 +53036,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -53339,7 +53339,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -53663,7 +53663,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -53990,7 +53990,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -54326,7 +54326,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -54648,7 +54648,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -54971,7 +54971,7 @@
           "error": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/\",\n    \"path\": [],\n    \"message\": \"approval entries look like \\\"tool\\\" or \\\"tool:qualifier\\\"\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -55284,7 +55284,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -55603,7 +55603,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -55914,10 +55914,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -56111,11 +56111,11 @@
                 "type": "optional",
                 "inner": {
                   "type": "string",
-                  "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                  "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
                   "checks": [
                     {
                       "op": "nonblank",
-                      "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                      "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
                       "source": "(s) => s.trim().length > 0"
                     }
                   ]
@@ -56265,10 +56265,10 @@
             {
               "code": "custom",
               "path": ["readyState"],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": null,
@@ -56388,7 +56388,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -56624,11 +56624,11 @@
               "type": "optional",
               "inner": {
                 "type": "string",
-                "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
                 "checks": [
                   {
                     "op": "nonblank",
-                    "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                    "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
                     "source": "(s) => s.trim().length > 0"
                   }
                 ]
@@ -56898,7 +56898,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -57132,11 +57132,11 @@
             "type": "optional",
             "inner": {
               "type": "string",
-              "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+              "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
               "checks": [
                 {
                   "op": "nonblank",
-                  "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                  "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
                   "source": "(s) => s.trim().length > 0"
                 }
               ]
@@ -57403,7 +57403,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -57713,10 +57713,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -57972,10 +57972,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -58250,7 +58250,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].source must be a nonblank builtin or plugin ticket source name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -58533,7 +58533,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -58852,7 +58852,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -59163,10 +59163,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -59322,11 +59322,11 @@
         "type": "optional",
         "inner": {
           "type": "string",
-          "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+          "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
           "checks": [
             {
               "op": "nonblank",
-              "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+              "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
               "source": "(s) => s.trim().length > 0"
             }
           ]
@@ -59345,10 +59345,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": true,
@@ -59358,10 +59358,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 0,
@@ -59371,10 +59371,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 1,
@@ -59384,10 +59384,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": -1,
@@ -59397,10 +59397,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 1.5,
@@ -59410,10 +59410,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 10000000000000000,
@@ -59423,10 +59423,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": "",
@@ -59435,10 +59435,10 @@
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": " ",
@@ -59447,22 +59447,22 @@
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": "x",
@@ -59502,10 +59502,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": [""],
@@ -59515,10 +59515,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {},
@@ -59528,10 +59528,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59543,10 +59543,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59558,10 +59558,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59573,10 +59573,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59589,10 +59589,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         }
       ]
     },
@@ -59600,11 +59600,11 @@
       "path": "tickets.readyState",
       "grammar": {
         "type": "string",
-        "error": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+        "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
         "checks": [
           {
             "op": "nonblank",
-            "error": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+            "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
             "source": "(s) => s.trim().length > 0"
           }
         ]
@@ -59617,10 +59617,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": null,
@@ -59630,10 +59630,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": true,
@@ -59643,10 +59643,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 0,
@@ -59656,10 +59656,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 1,
@@ -59669,10 +59669,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": -1,
@@ -59682,10 +59682,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 1.5,
@@ -59695,10 +59695,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": 10000000000000000,
@@ -59708,10 +59708,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": "",
@@ -59720,10 +59720,10 @@
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": " ",
@@ -59732,22 +59732,22 @@
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
               "code": "custom",
               "path": [],
-              "message": "[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
+              "message": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\")."
             }
           ],
-          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
+          "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]"
         },
         {
           "input": "x",
@@ -59787,10 +59787,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": [""],
@@ -59800,10 +59800,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {},
@@ -59813,10 +59813,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59828,10 +59828,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59843,10 +59843,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59858,10 +59858,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         },
         {
           "input": {
@@ -59874,10 +59874,10 @@
               "expected": "string",
               "code": "invalid_type",
               "path": [],
-              "message": "[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
+              "message": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones."
             }
           ],
-          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
+          "error": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\"). Omitting it would make every ticket from the source eligible, including completed ones.\"\n  }\n]"
         }
       ]
     },
@@ -60017,7 +60017,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyAssignee must be \\\"me\\\" (the owner of the API key) or a user email address (e.g. \\\"person@example.com\\\")\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -60331,7 +60331,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"[tickets].readyAssignee must be \\\"me\\\" (the owner of the API key) or a user email address (e.g. \\\"person@example.com\\\")\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -60636,10 +60636,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -60926,10 +60926,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -61227,7 +61227,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -61539,7 +61539,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -61846,7 +61846,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -62158,7 +62158,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -62465,7 +62465,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -62777,7 +62777,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -63084,7 +63084,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -63396,7 +63396,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -63703,7 +63703,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -64015,7 +64015,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"state must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -64306,10 +64306,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -64596,10 +64596,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -65135,7 +65135,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -65476,7 +65476,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -65784,7 +65784,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -66109,7 +66109,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -66449,7 +66449,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -66798,7 +66798,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -67144,7 +67144,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -67493,7 +67493,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -67837,7 +67837,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -68186,7 +68186,7 @@
           "error": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -68497,10 +68497,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -68787,10 +68787,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -69082,7 +69082,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -69401,7 +69401,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -69712,10 +69712,10 @@
           "output": " "
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": true,
           "defined": true,
-          "output": "�"
+          "output": "\ufeff"
         },
         {
           "input": "x",
@@ -70010,7 +70010,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -70332,7 +70332,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -70655,7 +70655,7 @@
           "error": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[A-Za-z_][A-Za-z0-9_]*$/\",\n    \"path\": [],\n    \"message\": \"must be a nonblank environment variable name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -70996,7 +70996,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -71330,7 +71330,7 @@
           "error": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -71661,7 +71661,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -72035,7 +72035,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"provisioning step name must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -72319,7 +72319,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"provisioning step command must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -72610,7 +72610,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"[workspace.config.runtimeProvisioning] must be a table of named entries\",\n    \"path\": []\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -72939,7 +72939,7 @@
           "error": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -73313,7 +73313,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"install must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -73597,7 +73597,7 @@
           "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [],\n    \"message\": \"preflight must be nonblank\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -73884,7 +73884,7 @@
           "error": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[A-Za-z_][A-Za-z0-9_]*$/\",\n    \"path\": [],\n    \"message\": \"must be a nonblank environment variable name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {
@@ -74210,7 +74210,7 @@
           "error": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[A-Za-z_][A-Za-z0-9_]*$/\",\n    \"path\": [],\n    \"message\": \"must be a nonblank environment variable name\"\n  }\n]"
         },
         {
-          "input": "�",
+          "input": "\ufeff",
           "success": false,
           "issues": [
             {

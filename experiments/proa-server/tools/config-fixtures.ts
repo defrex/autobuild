@@ -379,7 +379,13 @@ export async function checkConfigurationContract() {
 if (import.meta.main) {
   if (process.argv.includes('--write')) {
     const { runtime, corpus } = splitContract()
-    await Bun.write(file, `${JSON.stringify(runtime, null, 2)}\n`)
-    await Bun.write(corpusFile, `${JSON.stringify(corpus, null, 2)}\n`)
+    await Bun.write(
+      file,
+      `${JSON.stringify(runtime, null, 2).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
+    await Bun.write(
+      corpusFile,
+      `${JSON.stringify(corpus, null, 2).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
   } else await checkConfigurationContract()
 }
