@@ -1,0 +1,1750 @@
+{
+  "format": 1,
+  "source": {
+    "config/schema.ts": "4c715ae9a80f41e5e60b3d1ba3baaf5c639e609237b84a8add15543d3ed16824",
+    "config/landing.ts": "3448156ab099cca9282f819cc0f2926243193549c7c6d73b7b7a178a9c519fc2",
+    "config/roles.ts": "e126da778a1102eae56f9afa71a6a3549559edb5bb5df2dacacaf71f9498bc76",
+    "config/reference-metadata.ts": "8e017ee1448fed5b7e99e14a38efc5c3d785f49e630057c7019c24dce4dfe1a3",
+    "connection.ts": "ebebdad022f49a5492ad38dc7baa8051a5a737b51f3aa04846aebd084d815a75",
+    "open-map.ts": "6c90f6bea515812fea3d5d280a7fa5051b9874f9a5cfe2805e1a1e773c1601a0",
+    "zod-issues.ts": "09a5dbe89db0631b0b916a4006b2c662e165e49cfb05026c061711b667cf6646",
+    "events/globs.ts": "46d946374d6e1f6f135f449c90b4807236019e98afe801b3fcbea48c761eba49",
+    "ontology.ts": "b19ab68493f92c35264b964ca078a4c6265f423e6b9dc7d837a03e0fe6a8aae8",
+    "ports/workspace/operator-sandbox.ts": "eca1cab94e88d36d4ec020547501425d2de16352f8aa6abc5c4ed213c5188033",
+    "ports/workspace/provider-capabilities.ts": "47578ab79dc91b8f3c61f91d26f103f977eae081cc522efc866af90414ea3729"
+  },
+  "grammar": {
+    "type": "object",
+    "properties": {
+      "store": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "pipe",
+              "input": {
+                "type": "string"
+              },
+              "transform": "service-url",
+              "source": "(value, ctx) => {\n    try {\n      return normalizeServiceURL(value);\n    } catch (error) {\n      ctx.addIssue({ code: \"custom\", message: error.message });\n      return z.NEVER;\n    }\n  }"
+            }
+          },
+          "strict": true
+        }
+      },
+      "upgrade": {
+        "type": "prefault",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "automatic": {
+              "type": "default",
+              "inner": {
+                "type": "boolean"
+              },
+              "default": true
+            }
+          },
+          "strict": true
+        },
+        "default": {}
+      },
+      "baseBranch": {
+        "type": "default",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "min_length",
+              "minimum": 1
+            }
+          ]
+        },
+        "default": "main"
+      },
+      "capacity": {
+        "type": "default",
+        "inner": {
+          "type": "number",
+          "checks": [
+            {
+              "op": "number_format",
+              "format": "safeint"
+            },
+            {
+              "op": "greater_than",
+              "value": 0,
+              "inclusive": false
+            }
+          ]
+        },
+        "default": 1
+      },
+      "ticketScanIntervalSeconds": {
+        "type": "default",
+        "inner": {
+          "type": "number",
+          "checks": [
+            {
+              "op": "number_format",
+              "format": "safeint"
+            },
+            {
+              "op": "greater_than",
+              "value": 0,
+              "inclusive": false
+            }
+          ]
+        },
+        "default": 60
+      },
+      "forge": {
+        "type": "default",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "nonblank",
+              "error": "forge adapter name must be nonblank",
+              "source": "(value) => value.trim().length > 0"
+            }
+          ]
+        },
+        "default": "github"
+      },
+      "plugins": {
+        "type": "default",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "string",
+            "checks": [
+              {
+                "op": "nonblank",
+                "error": "plugin module specifiers must be nonblank",
+                "source": "(value) => value.trim().length > 0"
+              }
+            ]
+          }
+        },
+        "default": []
+      },
+      "landing": {
+        "type": "default",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "object",
+            "properties": {
+              "into": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "nonblank",
+                      "error": "into must be root, node, or a nonblank node ticket id",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "from": {
+                "type": "optional",
+                "inner": {
+                  "type": "enum",
+                  "values": ["leaf", "node"]
+                }
+              },
+              "label": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "nonblank",
+                      "error": "label must be nonblank (labels match exactly, including case)",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "mode": {
+                "type": "enum",
+                "values": ["auto", "consent"]
+              }
+            },
+            "strict": true
+          }
+        },
+        "default": []
+      },
+      "pr": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "imageHost": {
+              "type": "optional",
+              "inner": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "literal",
+                    "values": ["github-release"]
+                  },
+                  "repository": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "string_format",
+                        "error": "expected exactly one non-blank GitHub repository pair in \"owner/repo\" form",
+                        "format": "regex",
+                        "pattern": "^[^/\\s]+\\/[^/\\s]+$",
+                        "patternDisplay": "/^[^/\\s]+\\/[^/\\s]+$/"
+                      }
+                    ]
+                  },
+                  "releaseId": {
+                    "type": "number",
+                    "checks": [
+                      {
+                        "op": "number_format",
+                        "format": "safeint"
+                      },
+                      {
+                        "op": "greater_than",
+                        "value": 0,
+                        "inclusive": false
+                      }
+                    ]
+                  }
+                },
+                "strict": true
+              }
+            }
+          },
+          "strict": true
+        }
+      },
+      "workspace": {
+        "type": "prefault",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "default",
+              "inner": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "nonblank",
+                    "error": "[workspace].provider must be a nonblank provider name",
+                    "source": "(value) => value.trim().length > 0"
+                  }
+                ]
+              },
+              "default": "git-worktree"
+            },
+            "config": {
+              "type": "map",
+              "label": "[workspace.config]",
+              "keys": "any",
+              "value": {
+                "type": "unknown"
+              }
+            }
+          },
+          "strict": true
+        },
+        "default": {}
+      },
+      "commands": {
+        "type": "map",
+        "label": "[commands]",
+        "keys": "nonempty",
+        "value": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "min_length",
+              "minimum": 1
+            }
+          ]
+        }
+      },
+      "verify": {
+        "type": "steps",
+        "label": "[verify]",
+        "steps": {
+          "type": "default",
+          "inner": {
+            "type": "array",
+            "element": {
+              "type": "string",
+              "checks": [
+                {
+                  "op": "min_length",
+                  "minimum": 1
+                }
+              ]
+            }
+          },
+          "default": []
+        },
+        "table": {
+          "type": "union",
+          "options": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "literal",
+                  "values": ["check"]
+                },
+                "command": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                },
+                "afterReconcile": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
+                },
+                "paths": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "string",
+                      "checks": [
+                        {
+                          "op": "path-glob"
+                        }
+                      ]
+                    },
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "error": "paths must contain at least one repository-relative glob",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                },
+                "always": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "strict": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "literal",
+                  "values": ["agent"]
+                },
+                "skill": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                },
+                "afterReconcile": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
+                },
+                "paths": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "string",
+                      "checks": [
+                        {
+                          "op": "path-glob"
+                        }
+                      ]
+                    },
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "error": "paths must contain at least one repository-relative glob",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                },
+                "always": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "strict": true
+            }
+          ],
+          "discriminator": "kind"
+        },
+        "afterReconcile": true
+      },
+      "finalize": {
+        "type": "steps",
+        "label": "[finalize]",
+        "steps": {
+          "type": "default",
+          "inner": {
+            "type": "array",
+            "element": {
+              "type": "string",
+              "checks": [
+                {
+                  "op": "min_length",
+                  "error": "finalize.steps entries must be nonempty step names",
+                  "minimum": 1
+                }
+              ]
+            }
+          },
+          "default": []
+        },
+        "table": {
+          "type": "union",
+          "options": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "literal",
+                  "values": ["check"]
+                },
+                "command": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              },
+              "strict": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "literal",
+                  "values": ["agent"]
+                },
+                "skill": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          ],
+          "discriminator": "kind"
+        },
+        "afterReconcile": false
+      },
+      "roles": {
+        "type": "map",
+        "label": "[roles]",
+        "keys": "nonempty",
+        "value": {
+          "type": "object",
+          "properties": {
+            "runtime": {
+              "type": "optional",
+              "inner": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "min_length",
+                    "minimum": 1
+                  }
+                ]
+              }
+            },
+            "model": {
+              "type": "optional",
+              "inner": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "min_length",
+                    "minimum": 1
+                  }
+                ]
+              }
+            },
+            "args": {
+              "type": "optional",
+              "inner": {
+                "type": "array",
+                "element": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "extensions": {
+              "type": "optional",
+              "inner": {
+                "type": "array",
+                "element": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "sessionBudgetSeconds": {
+              "type": "optional",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              }
+            },
+            "alternates": {
+              "type": "optional",
+              "inner": {
+                "type": "array",
+                "element": {
+                  "type": "object",
+                  "properties": {
+                    "runtime": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "string",
+                        "checks": [
+                          {
+                            "op": "min_length",
+                            "minimum": 1
+                          }
+                        ]
+                      }
+                    },
+                    "model": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "string",
+                        "checks": [
+                          {
+                            "op": "min_length",
+                            "minimum": 1
+                          }
+                        ]
+                      }
+                    },
+                    "args": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "array",
+                        "element": {
+                          "type": "string",
+                          "checks": [
+                            {
+                              "op": "min_length",
+                              "minimum": 1
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "extensions": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "array",
+                        "element": {
+                          "type": "string",
+                          "checks": [
+                            {
+                              "op": "min_length",
+                              "minimum": 1
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "strict": true
+                }
+              }
+            }
+          },
+          "strict": true
+        }
+      },
+      "policy": {
+        "type": "prefault",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "upgradeDrainSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 900
+            },
+            "sessionBudgetSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3600
+            },
+            "stallRounds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxVerifyAttempts": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxDispatchAttempts": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxSetupAttempts": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxInfrastructureAttempts": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxReconcileAttempts": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 3
+            },
+            "maxReviewRounds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 6
+            },
+            "harvestThreshold": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 5
+            },
+            "janitorFailureAttentionSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 600
+            },
+            "nodeIdleAfterSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 600
+            },
+            "nodeIdlePollSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 120
+            },
+            "janitorBackoffMaxSeconds": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": false
+                  }
+                ]
+              },
+              "default": 300
+            },
+            "harvestMaxDrift": {
+              "type": "default",
+              "inner": {
+                "type": "number",
+                "checks": [
+                  {
+                    "op": "number_format",
+                    "format": "safeint"
+                  },
+                  {
+                    "op": "greater_than",
+                    "value": 0,
+                    "inclusive": true
+                  }
+                ]
+              },
+              "default": 3
+            }
+          },
+          "strict": true
+        },
+        "default": {}
+      },
+      "orchestrator": {
+        "type": "prefault",
+        "inner": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "default",
+              "inner": {
+                "type": "boolean"
+              },
+              "default": false
+            },
+            "sandbox": {
+              "type": "prefault",
+              "inner": {
+                "type": "object",
+                "properties": {
+                  "idleMinutes": {
+                    "type": "default",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        {
+                          "op": "number_format",
+                          "format": "safeint"
+                        },
+                        {
+                          "op": "greater_than",
+                          "value": 0,
+                          "inclusive": false
+                        }
+                      ]
+                    },
+                    "default": 30
+                  },
+                  "environmentVariables": {
+                    "type": "default",
+                    "inner": {
+                      "type": "array",
+                      "element": {
+                        "type": "string",
+                        "checks": [
+                          {
+                            "op": "min_length",
+                            "minimum": 1
+                          }
+                        ]
+                      }
+                    },
+                    "default": []
+                  }
+                },
+                "strict": true
+              },
+              "default": {}
+            },
+            "model": {
+              "type": "optional",
+              "inner": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "min_length",
+                    "minimum": 1
+                  }
+                ]
+              }
+            },
+            "invocationBudgetSeconds": {
+              "type": "pipe",
+              "input": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 240
+              },
+              "transform": "clamp-budget",
+              "source": "(value) => Math.min(value, ORCHESTRATOR_ROUTE_LIMIT_SECONDS)"
+            },
+            "approvals": {
+              "type": "default",
+              "inner": {
+                "type": "array",
+                "element": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "string_format",
+                      "error": "approval entries look like \"tool\" or \"tool:qualifier\"",
+                      "format": "regex",
+                      "pattern": "^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$",
+                      "patternDisplay": "/^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/"
+                    }
+                  ]
+                }
+              },
+              "default": [
+                "builds.control:abort",
+                "builds.control:discard",
+                "builds.answer:revise-spec",
+                "sandbox.publish",
+                "tickets.move:ready"
+              ]
+            },
+            "wake": {
+              "type": "optional",
+              "inner": {
+                "type": "array",
+                "element": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "strict": true
+        },
+        "default": {}
+      },
+      "tickets": {
+        "type": "prefault",
+        "inner": {
+          "type": "pipe",
+          "input": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "optional",
+                "inner": {
+                  "type": "string"
+                }
+              },
+              "source": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "nonblank",
+                    "error": "[tickets].source must be a nonblank builtin or plugin ticket source name",
+                    "source": "(value) => value.trim().length > 0"
+                  }
+                ]
+              },
+              "readyLabels": {
+                "type": "optional",
+                "inner": {
+                  "type": "array",
+                  "element": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                }
+              },
+              "readyState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                  "checks": [
+                    {
+                      "op": "nonblank",
+                      "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                      "source": "(s) => s.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "readyAssignee": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "assignee",
+                      "error": "[tickets].readyAssignee must be \"me\" (the owner of the API key) or a user email address (e.g. \"person@example.com\")",
+                      "source": "(s) => s === \"me\" || s === s.trim() && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(s)"
+                    }
+                  ]
+                }
+              },
+              "teamKey": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              },
+              "claimedState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    },
+                    {
+                      "op": "nonblank",
+                      "error": "state must be nonblank",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "doneState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    },
+                    {
+                      "op": "nonblank",
+                      "error": "state must be nonblank",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "createState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    },
+                    {
+                      "op": "nonblank",
+                      "error": "state must be nonblank",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "triageState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    },
+                    {
+                      "op": "nonblank",
+                      "error": "state must be nonblank",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "proposalState": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    },
+                    {
+                      "op": "nonblank",
+                      "error": "state must be nonblank",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                }
+              },
+              "dir": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "strict": true,
+            "checks": [
+              {
+                "op": "tickets-cross"
+              }
+            ]
+          },
+          "transform": "tickets",
+          "source": "(tickets) => ({\n  ...tickets,\n  readyState: tickets.readyState ?? \"ready\",\n  ...tickets.source === \"hosted\" && tickets.url !== void 0 ? { url: normalizeServiceURL(tickets.url, \"tickets.url\") } : {}\n})"
+        },
+        "default": {
+          "source": "file"
+        }
+      }
+    },
+    "strict": true,
+    "checks": [
+      {
+        "op": "root-cross"
+      }
+    ]
+  },
+  "vercel": {
+    "type": "object",
+    "properties": {
+      "image": {
+        "type": "default",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "vercel-image",
+              "error": "Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters",
+              "source": "(image) => /^vercel\\/sandbox\\/universal(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[0-9a-f]{64})?$/.test(image)"
+            }
+          ]
+        },
+        "default": "vercel/sandbox/universal:latest"
+      },
+      "vcpus": {
+        "type": "default",
+        "inner": {
+          "type": "number",
+          "checks": [
+            {
+              "op": "number_format",
+              "format": "safeint"
+            },
+            {
+              "op": "greater_than",
+              "value": 1,
+              "inclusive": true
+            },
+            {
+              "op": "less_than",
+              "value": 32,
+              "inclusive": true
+            }
+          ]
+        },
+        "default": 4
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "checks": [
+          {
+            "op": "number_format",
+            "format": "safeint"
+          },
+          {
+            "op": "greater_than",
+            "value": 60,
+            "inclusive": true
+          },
+          {
+            "op": "less_than",
+            "value": 86400,
+            "inclusive": true
+          }
+        ]
+      },
+      "operationTimeoutMs": {
+        "type": "default",
+        "inner": {
+          "type": "number",
+          "checks": [
+            {
+              "op": "number_format",
+              "format": "safeint"
+            },
+            {
+              "op": "greater_than",
+              "value": 1000,
+              "inclusive": true
+            },
+            {
+              "op": "less_than",
+              "value": 300000,
+              "inclusive": true
+            }
+          ]
+        },
+        "default": 30000
+      },
+      "snapshotExpirationSeconds": {
+        "type": "optional",
+        "inner": {
+          "type": "number",
+          "checks": [
+            {
+              "op": "number_format",
+              "format": "safeint"
+            },
+            {
+              "op": "greater_than",
+              "value": 300,
+              "inclusive": true
+            },
+            {
+              "op": "less_than",
+              "value": 2592000,
+              "inclusive": true
+            }
+          ]
+        }
+      },
+      "region": {
+        "type": "optional",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "min_length",
+              "minimum": 1
+            }
+          ]
+        }
+      },
+      "failoverRegions": {
+        "type": "default",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "string",
+            "checks": [
+              {
+                "op": "min_length",
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        "default": []
+      },
+      "environmentVariables": {
+        "type": "default",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "string",
+            "checks": [
+              {
+                "op": "string_format",
+                "error": "must be a nonblank environment variable name",
+                "format": "regex",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "patternDisplay": "/^[A-Za-z_][A-Za-z0-9_]*$/"
+              }
+            ]
+          }
+        },
+        "default": []
+      },
+      "provisioning": {
+        "type": "default",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "nonblank",
+                    "error": "provisioning step name must be nonblank",
+                    "source": "(value) => value.trim().length > 0"
+                  }
+                ]
+              },
+              "command": {
+                "type": "string",
+                "checks": [
+                  {
+                    "op": "nonblank",
+                    "error": "provisioning step command must be nonblank",
+                    "source": "(value) => value.trim().length > 0"
+                  }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "default": []
+      },
+      "runtimeProvisioning": {
+        "type": "map",
+        "label": "[workspace.config.runtimeProvisioning]",
+        "keys": "nonblank",
+        "value": {
+          "type": "object",
+          "properties": {
+            "install": {
+              "type": "string",
+              "checks": [
+                {
+                  "op": "nonblank",
+                  "error": "install must be nonblank",
+                  "source": "(value) => value.trim().length > 0"
+                }
+              ]
+            },
+            "preflight": {
+              "type": "string",
+              "checks": [
+                {
+                  "op": "nonblank",
+                  "error": "preflight must be nonblank",
+                  "source": "(value) => value.trim().length > 0"
+                }
+              ]
+            }
+          },
+          "strict": true
+        }
+      },
+      "gitUsernameEnv": {
+        "type": "optional",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "string_format",
+              "error": "must be a nonblank environment variable name",
+              "format": "regex",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "patternDisplay": "/^[A-Za-z_][A-Za-z0-9_]*$/"
+            }
+          ]
+        }
+      },
+      "gitPasswordEnv": {
+        "type": "optional",
+        "inner": {
+          "type": "string",
+          "checks": [
+            {
+              "op": "string_format",
+              "error": "must be a nonblank environment variable name",
+              "format": "regex",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "patternDisplay": "/^[A-Za-z_][A-Za-z0-9_]*$/"
+            }
+          ]
+        }
+      }
+    },
+    "strict": true,
+    "checks": [
+      {
+        "op": "vercel-cross"
+      }
+    ]
+  },
+  "eventTypes": [
+    "build.compatibility-deferred",
+    "build.created",
+    "node.opening",
+    "node.restack-requested",
+    "node.restack-satisfied",
+    "node.parent-distance",
+    "node.parent-requested",
+    "node.parent-accepted",
+    "node.parent-pr-retargeted",
+    "node.parent-completed",
+    "node.parent-cancelled",
+    "node.parent-rejection-cleared",
+    "node.parent-rejected",
+    "node.opened",
+    "node.writer-reserved",
+    "node.item-prepared",
+    "node.item-replayed",
+    "node.item-conflicted",
+    "node.publish-intended",
+    "node.rewritten",
+    "node.writer-settled",
+    "node.contribution-recorded",
+    "node.inventory",
+    "integration.abandoned",
+    "integration.observed",
+    "integration.verification-failed",
+    "integration.prepared",
+    "integration.landing-intended",
+    "integration.landed",
+    "integration.audited",
+    "node.poll-checked",
+    "node.compared",
+    "pr.opened",
+    "build.completed",
+    "runner.runtime-recorded",
+    "runner.attached",
+    "runner.setup-failed",
+    "workspace.provisioned",
+    "workspace.released",
+    "workspace.provision-started",
+    "execution.relaunch-requested",
+    "execution.drain-authorized",
+    "execution.drain-settled",
+    "execution.started",
+    "execution.ended",
+    "infrastructure.failed",
+    "infrastructure.cleanup-attempted",
+    "pr-summary.requested",
+    "pr-summary.attempted",
+    "pr-summary.result",
+    "pr-summary.settled",
+    "finalize.step-started",
+    "publication.requested",
+    "publication.lost",
+    "abort.remote-branch-deleted",
+    "abort.local-branch-deleted",
+    "abort.ticket-returned",
+    "dispatch.failed",
+    "dispatch.comment-posted",
+    "build.pause-requested",
+    "build.resume-requested",
+    "build.abort-requested",
+    "build.discard-requested",
+    "build.janitor-attempt-failed",
+    "build.janitor-failing",
+    "build.janitor-recovered",
+    "landing.application-failed",
+    "landing.decided",
+    "build.hold-requested",
+    "build.land-requested",
+    "landing.command-acknowledged",
+    "landing.native-enable-started",
+    "landing.forge-merged",
+    "landing.native-applied",
+    "build.auto-merge-requested",
+    "build.auto-merge-cancelled",
+    "build.auto-merge-default-observed",
+    "build.paused",
+    "build.resumed",
+    "build.aborted",
+    "spec.imported",
+    "spec.authored",
+    "spec.revised",
+    "session.started",
+    "session.suspended",
+    "session.resumed",
+    "session.resume-fallback",
+    "session.native-handle-recorded",
+    "session.ended",
+    "plan.started",
+    "plan.completed",
+    "plan-review.started",
+    "plan-review.verdict",
+    "implement.started",
+    "implement.completed",
+    "code-review.started",
+    "code-review.verdict",
+    "verify.started",
+    "verify.reconcile-policy-captured",
+    "verify.completed",
+    "finalize.started",
+    "finalize.completed",
+    "finalize.step-completed",
+    "pr-attachment.designated",
+    "pr-attachment.hosted",
+    "pr-attachment.reclaimed",
+    "pr-attachment.reclaim-failed",
+    "pr.auto-merge-enabled",
+    "pr.auto-merge-disabled",
+    "pr.merged",
+    "pr.closed",
+    "pr.conflicted",
+    "reconcile.progress-checked",
+    "target.moved",
+    "restack.prepared",
+    "restack.replayed",
+    "restack.publish-intended",
+    "restack.rewritten",
+    "restack.contended",
+    "restack.completed",
+    "reconcile.started",
+    "reconcile.prepared",
+    "reconcile.contended",
+    "reconcile.replayed",
+    "reconcile.publish-intended",
+    "reconcile.rewritten",
+    "reconcile.completed",
+    "observation.recorded",
+    "escalation.raised",
+    "escalation.answered",
+    "session.build-read-failed",
+    "phase.deferred",
+    "phase.deferral-escalated",
+    "phase.failed",
+    "tickets.migration-recorded",
+    "dispatcher.forge-degraded",
+    "dispatcher.forge-recovered",
+    "change-presence.observed",
+    "dispatcher.ticket-source-dependency-limited",
+    "dispatcher.ticket-source-degraded",
+    "dispatcher.ticket-source-recovered",
+    "harvest.pause-requested",
+    "harvest.resume-requested",
+    "harvest.paused",
+    "harvest.resumed",
+    "harvest.recovery-requested",
+    "harvest.recovery-exhausted",
+    "harvest.started",
+    "harvest.execution.authorized",
+    "harvest.execution.ended",
+    "harvest.execution.started",
+    "harvest.execution.released",
+    "harvest.step.started",
+    "harvest.step.completed",
+    "harvest.session.native-handle-recorded",
+    "harvest.session.suspended",
+    "harvest.session.resumed",
+    "harvest.session.resume-fallback",
+    "harvest.session.started",
+    "harvest.session.ended",
+    "harvest.proposals.submitted",
+    "harvest.review.verdict",
+    "harvest.proposal.id-reserved",
+    "harvest.proposal.filed",
+    "harvest.completed",
+    "harvest.escalated",
+    "harvest.failed",
+    "orchestrator.sandbox.provisioned",
+    "orchestrator.sandbox.resumed",
+    "orchestrator.sandbox.activity",
+    "orchestrator.sandbox.stopped",
+    "orchestrator.sandbox.released",
+    "orchestrator.sandbox.reset",
+    "orchestrator.sandbox.published",
+    "orchestrator.sandbox.publish-failed",
+    "dispatcher.ticket-scan-completed",
+    "dispatcher.upgrade-target-resolved",
+    "dispatcher.target-prepared",
+    "dispatcher.yield-requested",
+    "dispatcher.terminal-released",
+    "dispatcher.takeover",
+    "dispatcher.drain-settled",
+    "dispatcher.drain-deadline",
+    "dispatcher.upgrade-detected",
+    "dispatcher.upgrade-failed",
+    "dispatcher.runtime-rolled-back",
+    "dispatcher.rollback-hold-cleared",
+    "dispatcher.handoff-started",
+    "dispatcher.handoff-completed",
+    "dispatcher.runtime-recorded",
+    "dispatcher.run-started",
+    "dispatcher.stop-requested",
+    "dispatcher.run-stopped",
+    "dispatcher.tick-yielded",
+    "dispatcher.forge-readiness-failed",
+    "dispatcher.config-rejected",
+    "dispatcher.config-publication-failed",
+    "dispatcher.tick-started",
+    "dispatcher.tick-completed",
+    "dispatcher.tick-failed",
+    "dispatcher.runner-settled",
+    "dispatcher.harvest-runner-failed",
+    "dispatcher.upgrade-available",
+    "dispatcher.operator-reported",
+    "dispatcher.config-reloaded",
+    "dispatcher.intake-set",
+    "dispatcher.pause-set",
+    "dispatcher.auto-merge-default-set"
+  ],
+  "defaultWake": [
+    "escalation.raised",
+    "integration.verification-failed",
+    "phase.deferral-escalated",
+    "phase.failed",
+    "infrastructure.failed",
+    "runner.setup-failed",
+    "dispatch.failed",
+    "publication.lost",
+    "finalize.completed",
+    "pr.conflicted",
+    "pr.merged",
+    "pr.closed",
+    "build.completed",
+    "build.aborted",
+    "harvest.escalated",
+    "harvest.failed",
+    "dispatcher.forge-degraded",
+    "dispatcher.forge-recovered",
+    "dispatcher.ticket-source-degraded",
+    "dispatcher.ticket-source-recovered",
+    "dispatcher.tick-failed",
+    "dispatcher.config-rejected",
+    "dispatcher.forge-readiness-failed",
+    "dispatcher.harvest-runner-failed"
+  ],
+  "coreRoles": [
+    "plan",
+    "plan-review",
+    "implement",
+    "code-review",
+    "finalize",
+    "reconcile",
+    "slug",
+    "upgrade",
+    "harvest",
+    "harvest-review"
+  ],
+  "forbiddenEnvironment": [
+    "AB_STORE",
+    "AB_TOKEN",
+    "AB_TICKET_TOKEN",
+    "AB_TICKET_URL",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "LINEAR_API_KEY",
+    "VERCEL_OIDC_TOKEN",
+    "VERCEL_TOKEN",
+    "VERCEL_TEAM_ID",
+    "VERCEL_PROJECT_ID",
+    "AI_GATEWAY_API_KEY"
+  ]
+}
