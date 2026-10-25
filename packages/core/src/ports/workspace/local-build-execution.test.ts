@@ -1,9 +1,12 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { signalProcessGroup } from '../../processes/process-group'
 import { BUILD_RUNNER_OPTIONS_ENV, LocalBuildExecution } from './local-build-execution'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 async function alive(pid: number): Promise<boolean> {
   try {
@@ -128,6 +131,7 @@ await Bun.sleep(60_000)
       entrypoint,
       `
 import { writeFile } from 'node:fs/promises'
+
 const descendant = Bun.spawn(['sleep', '60'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
 let stopping = false
 process.on('SIGTERM', async () => {

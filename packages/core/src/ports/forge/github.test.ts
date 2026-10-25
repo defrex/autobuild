@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   GitHubForge,
   MERGEABILITY_RETRY_DELAYS_MS,
@@ -11,6 +12,8 @@ import {
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 interface ApiCall {
   method: string
@@ -2119,7 +2122,7 @@ test('node push acknowledgement observes a merged review and tolerates provider 
 
 describe('trusted kernel Git credentials', () => {
   test('clears inherited host and repository authorization headers without editing config', async () => {
-    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { rm } = await import('node:fs/promises')
     const { join } = await import('node:path')
     const { tmpdir } = await import('node:os')
     const root = await mkdtemp(join(tmpdir(), 'kernel-headers-'))

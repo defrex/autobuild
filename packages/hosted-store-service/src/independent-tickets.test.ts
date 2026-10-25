@@ -1,4 +1,5 @@
-import { expect, test } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
+import { afterEach, expect, test } from 'bun:test'
 import {
   MemoryBuildStore,
   FakeTicketSource,
@@ -87,7 +88,7 @@ test('tickets and operator tools work before dispatch without service build hist
   }
 })
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -101,6 +102,8 @@ import {
   submitHarvestProposals,
   submitHarvestVerdict,
 } from '@defrex/autobuild/testing'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('a local harvest files proposals and origin blockers through read/create ticket authority only', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'independent-harvest-'))

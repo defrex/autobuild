@@ -1,8 +1,11 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 function alive(pid: number): boolean {
   try {

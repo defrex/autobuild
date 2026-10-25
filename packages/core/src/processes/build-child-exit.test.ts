@@ -1,10 +1,13 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { signalProcessGroup } from './process-group'
 import { BuildChildExitCoordinator, BuildChildShutdown } from './build-child-exit'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 function alive(pid: number): boolean {
   try {
@@ -176,6 +179,7 @@ terminal.terminate(0)
   await writeFile(
     kernelScript,
     `import { writeFileSync } from 'node:fs'
+
 import { LocalBuildExecution } from ${JSON.stringify(executionUrl)}
 const execution = new LocalBuildExecution({
   entrypoint: ${JSON.stringify(buildScript)},

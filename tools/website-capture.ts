@@ -556,6 +556,17 @@ interface BrowserReply {
   data?: string
 }
 
+async function withBrowserTemp<T>(run: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  // Chromium's singleton socket has a short Unix-domain path limit. Own a
+  // short temp directory independently of the potentially long profile name.
+  const root = await mkdtemp(join(tmpdir(), 'ab-chromium-'))
+  try {
+    return await run({ ...process.env, TMPDIR: root, TMP: root, TEMP: root })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
 export async function runRealtimeChromium(
   chromium: string,
   profileDir: string,
@@ -564,142 +575,157 @@ export async function runRealtimeChromium(
   mode: { dumpDom: true; pressEnterWhen?: string; timeoutMs?: number } | { screenshot: string },
   url: string,
 ): Promise<string> {
-  const proc = Bun.spawn(
-    [
-      chromium,
-      '--headless=new',
-      '--no-sandbox',
-      '--disable-gpu',
-      '--hide-scrollbars',
-      '--force-prefers-reduced-motion',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--remote-debugging-port=0',
-      `--user-data-dir=${profileDir}`,
-      'about:blank',
-    ],
-    { stdout: 'ignore', stderr: 'ignore' },
-  )
-  let socket: WebSocket | undefined
-  try {
-    let port: string | undefined
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try {
-        port = (await readFile(join(profileDir, 'DevToolsActivePort'), 'utf8')).split('\n')[0]
-        break
-      } catch {
-        await Bun.sleep(50)
-      }
-    }
-    if (!port) throw Error('Chromium debugging port did not become ready')
-    const target = (await (
-      await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })
-    ).json()) as { webSocketDebuggerUrl: string }
-    const ws = new WebSocket(target.webSocketDebuggerUrl)
-    socket = ws
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve()
-      ws.onerror = () => reject(Error('Chromium debugger failed'))
-    })
-    let sequence = 0
-    const pending = new Map<
-      number,
-      { resolve: (value: BrowserReply) => void; reject: (error: Error) => void }
-    >()
-    ws.onmessage = (event) => {
-      const reply = JSON.parse(String(event.data))
-      const request = pending.get(reply.id)
-      if (!request) return
-      pending.delete(reply.id)
-      if (reply.error) request.reject(Error(JSON.stringify(reply.error)))
-      else request.resolve(reply.result)
-    }
-    const send = (method: string, params: Record<string, unknown> = {}): Promise<BrowserReply> =>
-      new Promise((resolve, reject) => {
-        const id = ++sequence
-        const timeout = setTimeout(() => {
-          pending.delete(id)
-          reject(Error(`Chromium ${method} timed out`))
-        }, 10000)
-        pending.set(id, {
-          resolve: (value) => {
-            clearTimeout(timeout)
-            resolve(value)
-          },
-          reject: (error) => {
-            clearTimeout(timeout)
-            reject(error)
-          },
-        })
-        ws.send(JSON.stringify({ id, method, params }))
-      })
-    await send('Emulation.setDeviceMetricsOverride', {
-      width,
-      height,
-      deviceScaleFactor: 1,
-      mobile: false,
-    })
-    await send('Page.navigate', { url })
-    let dom = ''
-    let keySent = false
-    for (
-      let attempt = 0;
-      attempt < (('dumpDom' in mode ? mode.timeoutMs : undefined) ?? 10000) / 50;
-      attempt++
-    ) {
-      if ('dumpDom' in mode && mode.pressEnterWhen && !keySent) {
-        const ready = await send('Runtime.evaluate', {
-          expression: `Boolean(document.querySelector(${JSON.stringify(mode.pressEnterWhen)}))`,
-          returnByValue: true,
-        })
-        if (ready.result?.value) {
-          await send('Input.dispatchKeyEvent', {
-            type: 'keyDown',
-            text: '\r',
-            unmodifiedText: '\r',
-            key: 'Enter',
-            code: 'Enter',
-            windowsVirtualKeyCode: 13,
-          })
-          await send('Input.dispatchKeyEvent', {
-            type: 'keyUp',
-            key: 'Enter',
-            code: 'Enter',
-            windowsVirtualKeyCode: 13,
-          })
-          keySent = true
+  return withBrowserTemp(async (env) => {
+    const proc = Bun.spawn(
+      [
+        chromium,
+        '--headless=new',
+        '--no-sandbox',
+        '--disable-gpu',
+        '--hide-scrollbars',
+        '--force-prefers-reduced-motion',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--remote-debugging-port=0',
+        `--user-data-dir=${profileDir}`,
+        'about:blank',
+      ],
+      {
+        stdout: 'ignore',
+        stderr: 'ignore',
+        env,
+      },
+    )
+    let socket: WebSocket | undefined
+    try {
+      let port: string | undefined
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          port = (await readFile(join(profileDir, 'DevToolsActivePort'), 'utf8')).split('\n')[0]
+          break
+        } catch {
+          await Bun.sleep(50)
         }
       }
-      const result = await send('Runtime.evaluate', {
-        expression:
-          'document.querySelector(\'meta[name="capture-probe"]\') ? document.documentElement.outerHTML : ""',
-        returnByValue: true,
+      if (!port) throw Error('Chromium debugging port did not become ready')
+      const target = (await (
+        await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })
+      ).json()) as { webSocketDebuggerUrl: string }
+      const ws = new WebSocket(target.webSocketDebuggerUrl)
+      socket = ws
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(Error('Chromium debugger failed'))
       })
-      dom = result.result?.value || ''
-      if (dom) break
-      await Bun.sleep(50)
-    }
-    if (!dom) {
-      const state = await send('Runtime.evaluate', {
-        expression:
-          'JSON.stringify({url: location.href, ready: document.readyState, progress: document.body?.dataset.progress})',
-        returnByValue: true,
+      let sequence = 0
+      const pending = new Map<
+        number,
+        { resolve: (value: BrowserReply) => void; reject: (error: Error) => void }
+      >()
+      ws.onmessage = (event) => {
+        const reply = JSON.parse(String(event.data))
+        const request = pending.get(reply.id)
+        if (!request) return
+        pending.delete(reply.id)
+        if (reply.error) request.reject(Error(JSON.stringify(reply.error)))
+        else request.resolve(reply.result)
+      }
+      const send = (method: string, params: Record<string, unknown> = {}): Promise<BrowserReply> =>
+        new Promise((resolve, reject) => {
+          const id = ++sequence
+          const timeout = setTimeout(() => {
+            pending.delete(id)
+            reject(Error(`Chromium ${method} timed out`))
+          }, 10000)
+          pending.set(id, {
+            resolve: (value) => {
+              clearTimeout(timeout)
+              resolve(value)
+            },
+            reject: (error) => {
+              clearTimeout(timeout)
+              reject(error)
+            },
+          })
+          ws.send(JSON.stringify({ id, method, params }))
+        })
+      await send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: 1,
+        mobile: false,
       })
-      throw Error(`real-time capture produced no probe: ${state.result?.value}`)
+      await send('Page.navigate', { url })
+      let dom = ''
+      let keySent = false
+      for (
+        let attempt = 0;
+        attempt < (('dumpDom' in mode ? mode.timeoutMs : undefined) ?? 10000) / 50;
+        attempt++
+      ) {
+        if ('dumpDom' in mode && mode.pressEnterWhen && !keySent) {
+          const ready = await send('Runtime.evaluate', {
+            expression: `Boolean(document.querySelector(${JSON.stringify(mode.pressEnterWhen)}))`,
+            returnByValue: true,
+          })
+          if (ready.result?.value) {
+            await send('Input.dispatchKeyEvent', {
+              type: 'keyDown',
+              text: '\r',
+              unmodifiedText: '\r',
+              key: 'Enter',
+              code: 'Enter',
+              windowsVirtualKeyCode: 13,
+            })
+            await send('Input.dispatchKeyEvent', {
+              type: 'keyUp',
+              key: 'Enter',
+              code: 'Enter',
+              windowsVirtualKeyCode: 13,
+            })
+            keySent = true
+          }
+        }
+        const result = await send('Runtime.evaluate', {
+          expression:
+            'document.querySelector(\'meta[name="capture-probe"]\') ? document.documentElement.outerHTML : ""',
+          returnByValue: true,
+        })
+        dom = result.result?.value || ''
+        if (dom) break
+        await Bun.sleep(50)
+      }
+      if (!dom) {
+        const state = await send('Runtime.evaluate', {
+          expression:
+            'JSON.stringify({url: location.href, ready: document.readyState, progress: document.body?.dataset.progress})',
+          returnByValue: true,
+        })
+        throw Error(`real-time capture produced no probe: ${state.result?.value}`)
+      }
+      if ('screenshot' in mode) {
+        const shot = await send('Page.captureScreenshot', {
+          format: 'png',
+          captureBeyondViewport: false,
+        })
+        await writeFile(mode.screenshot, Buffer.from(shot.data ?? '', 'base64'))
+      }
+      return dom
+    } finally {
+      // Let Chromium reap its renderers and remove singleton sockets before
+      // the owner removes the profile; killing only the leader can recreate it.
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ id: 0, method: 'Browser.close' }))
+      }
+      const timeout = setTimeout(() => proc.kill(), 5000)
+      try {
+        await proc.exited
+      } finally {
+        clearTimeout(timeout)
+        socket?.close()
+      }
     }
-    if ('screenshot' in mode) {
-      const shot = await send('Page.captureScreenshot', {
-        format: 'png',
-        captureBeyondViewport: false,
-      })
-      await writeFile(mode.screenshot, Buffer.from(shot.data ?? '', 'base64'))
-    }
-    return dom
-  } finally {
-    socket?.close()
-    proc.kill()
-    await proc.exited
-  }
+  })
 }
 
 async function runChromium(
@@ -712,38 +738,46 @@ async function runChromium(
   motion: 'reduce' | 'normal' = 'reduce',
   realTime = false,
 ): Promise<string> {
+  await mkdir(profileDir, { recursive: true })
   if (realTime) return runRealtimeChromium(chromium, profileDir, width, height, mode, url)
-  const proc = Bun.spawn(
-    [
-      chromium,
-      '--headless=new',
-      ...(motion === 'reduce' ? ['--force-prefers-reduced-motion'] : []),
-      '--hide-scrollbars',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-extensions',
-      '--run-all-compositor-stages-before-draw',
-      '--disable-features=PaintHolding',
-      `--user-data-dir=${profileDir}`,
-      '--force-device-scale-factor=1',
-      `--window-size=${width},${height}`,
-      '--virtual-time-budget=5000',
-      ...('dumpDom' in mode ? [] : [`--screenshot=${mode.screenshot}`]),
-      '--dump-dom',
-      url,
-    ],
-    { stdout: 'pipe', stderr: 'pipe', timeout: 90_000 },
-  )
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  if (code !== 0) {
-    throw new Error(`Chromium exited ${code} for ${url}\n${stderr.trim() || '(no stderr)'}`)
-  }
-  return stdout
+  return withBrowserTemp(async (env) => {
+    const proc = Bun.spawn(
+      [
+        chromium,
+        '--headless=new',
+        ...(motion === 'reduce' ? ['--force-prefers-reduced-motion'] : []),
+        '--hide-scrollbars',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--no-first-run',
+        '--disable-extensions',
+        '--run-all-compositor-stages-before-draw',
+        '--disable-features=PaintHolding',
+        `--user-data-dir=${profileDir}`,
+        '--force-device-scale-factor=1',
+        `--window-size=${width},${height}`,
+        '--virtual-time-budget=5000',
+        ...('dumpDom' in mode ? [] : [`--screenshot=${mode.screenshot}`]),
+        '--dump-dom',
+        url,
+      ],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        timeout: 90_000,
+        env,
+      },
+    )
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    if (code !== 0) {
+      throw new Error(`Chromium exited ${code} for ${url}\n${stderr.trim() || '(no stderr)'}`)
+    }
+    return stdout
+  })
 }
 
 async function attempt<T>(label: string, run: (n: number) => Promise<T>): Promise<T> {
@@ -789,18 +823,19 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
     throw new Error(message)
   }
   const files: CaptureFiles = options.files ?? { ...(await buildFiles()) }
-  const profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
   const frames = [...(options.frames ?? discoverFrames(files))]
   const site = serveSite(files, frames)
+  let profileRoot: string | undefined
   const results: Parameters<typeof renderReport>[0][number][] = []
   try {
+    profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
     for (const frame of frames) {
       const frameUrl = (height: number) => `${site.url}/__frame-${frame.id}.html?h=${height}`
       const probe = await attempt(`${frame.id} probe`, async (n) =>
         parseProbe(
           await runChromium(
             chromium,
-            join(profileRoot, `${frame.id}-probe-${n}`),
+            join(profileRoot!, `${frame.id}-probe-${n}`),
             frame.width,
             900,
             { dumpDom: true },
@@ -828,7 +863,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
         await rm(png, { force: true })
         const shotDom = await runChromium(
           chromium,
-          join(profileRoot, `${frame.id}-shot-${n}`),
+          join(profileRoot!, `${frame.id}-shot-${n}`),
           frame.width,
           height,
           { screenshot: png },
@@ -859,7 +894,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
     throw error
   } finally {
     site.stop()
-    await rm(profileRoot, { recursive: true, force: true })
+    if (profileRoot) await rm(profileRoot, { recursive: true, force: true })
   }
 }
 

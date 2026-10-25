@@ -58,8 +58,9 @@ test('real docs client discloses sections, handles Escape and hash entry, and sy
     `${script}</body>`,
   )
   const site = serveSite(files)
-  const profile = await mkdtemp(join(tmpdir(), 'docs-client-'))
+  let profile: string | undefined
   try {
+    profile = await mkdtemp(join(tmpdir(), 'docs-client-'))
     const dom = await runRealtimeChromium(
       chromium,
       profile,
@@ -73,6 +74,6 @@ test('real docs client discloses sections, handles Escape and hash entry, and sy
     expect(result.error).toBe('')
   } finally {
     site.stop()
-    await rm(profile, { recursive: true, force: true })
+    if (profile) await rm(profile, { recursive: true, force: true })
   }
 }, 30000)

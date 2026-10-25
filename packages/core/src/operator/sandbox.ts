@@ -142,6 +142,9 @@ export interface OperatorSandboxConfig {
 }
 
 export interface OperatorSandboxService {
+  /** Dispose local composition resources only; separate from release(identity, repo).
+   * Caller-owned static services retain their lifetime across requests. */
+  dispose?(): Promise<void>
   /** True when both a forge and the provider's sandbox publication
    * capability are present, i.e. `publish` is callable. */
   readonly canPublish: boolean

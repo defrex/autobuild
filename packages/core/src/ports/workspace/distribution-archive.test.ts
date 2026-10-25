@@ -1,7 +1,7 @@
-import { describe, expect, test, mock } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { afterEach } from 'bun:test'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -26,6 +26,8 @@ import {
 import * as gitWorktree from './git-worktree'
 import { GitHubApiError } from '../forge/github-transport'
 import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 /** A scripted registry: version-document URL → status/body, tarball URL → bytes. */
 function registryStub(

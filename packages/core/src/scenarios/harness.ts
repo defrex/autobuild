@@ -445,340 +445,348 @@ export async function makeHarness(opts: {
   processCli?: boolean
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
-  const originPath = join(tmp, 'origin')
-  const configToml = opts.configToml ?? CONFIG_TOML
-  const remote = await initOrigin(originPath, configToml, opts.localGitForge === true)
-  // Git canonicalizes temporary paths on macOS (`/var` → `/private/var`).
-  // Records and every dispatch caller must use that same repository identity.
-  const origin = await realpath(originPath)
-  const remoteUpdater = join(tmp, 'remote-updater')
-  if (opts.localGitForge !== true) await git(['clone', '-q', remote, remoteUpdater], tmp)
+  try {
+    const originPath = join(tmp, 'origin')
+    const configToml = opts.configToml ?? CONFIG_TOML
+    const remote = await initOrigin(originPath, configToml, opts.localGitForge === true)
+    // Git canonicalizes temporary paths on macOS (`/var` → `/private/var`).
+    // Records and every dispatch caller must use that same repository identity.
+    const origin = await realpath(originPath)
+    const remoteUpdater = join(tmp, 'remote-updater')
+    if (opts.localGitForge !== true) await git(['clone', '-q', remote, remoteUpdater], tmp)
 
-  const clock = steppingClock()
-  const ids = sequentialIds()
-  const uuids = sequentialUuids()
-  // `AB_E2E_SNAPSHOTS=off` runs every scenario with every snapshot deleted, the
-  // other arm of the "snapshots change no observable output" proof.
-  const snapshotsOff = process.env.AB_E2E_SNAPSHOTS === 'off'
-  const memory = new MemoryBuildStore({ clock })
-  const store = snapshotsOff ? withoutSnapshots(memory) : memory
-  const adapted = await opts.storeAdapter?.(store)
-  const activeStore = adapted?.store ?? store
-  const config = parseConfig(configToml, 'e2e autobuild.toml')
-  // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
-  // at the harness boundary rather than relying on production wiring.
-  config.roles.default ??= { runtime: 'scripted' }
-  await git(['config', 'user.name', 'ab-e2e'], origin)
-  await git(['config', 'user.email', 'ab-e2e@example.invalid'], origin)
-  await git(['config', 'commit.gpgsign', 'false'], origin)
-  const forge = new FakeForge({
-    gatePresence: opts.gatePresence ?? 'present',
-    ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
-  })
-  const recordPush = forge.pushBranch.bind(forge)
-  forge.pushBranch = async (cwd, branch, sha) => {
-    await recordPush(cwd, branch, sha)
-    await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
-  }
-  forge.rewrite = gitRewrite(spawnExec, false)
-  let selectedForge: Forge =
-    opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin }) : forge
-  let plugins: PluginRegistry | undefined
-  if (opts.pluginForge !== undefined) {
-    plugins = createPluginRegistry()
-    plugins.register({
-      name: 'e2e-forge-plugin',
-      apiVersion: opts.pluginForge.apiVersion ?? '^1.0.0',
-      forges: { [config.forge]: async () => forge },
+    const clock = steppingClock()
+    const ids = sequentialIds()
+    const uuids = sequentialUuids()
+    // `AB_E2E_SNAPSHOTS=off` runs every scenario with every snapshot deleted, the
+    // other arm of the "snapshots change no observable output" proof.
+    const snapshotsOff = process.env.AB_E2E_SNAPSHOTS === 'off'
+    const memory = new MemoryBuildStore({ clock })
+    const store = snapshotsOff ? withoutSnapshots(memory) : memory
+    const adapted = await opts.storeAdapter?.(store)
+    const activeStore = adapted?.store ?? store
+    const config = parseConfig(configToml, 'e2e autobuild.toml')
+    // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
+    // at the harness boundary rather than relying on production wiring.
+    config.roles.default ??= { runtime: 'scripted' }
+    await git(['config', 'user.name', 'ab-e2e'], origin)
+    await git(['config', 'user.email', 'ab-e2e@example.invalid'], origin)
+    await git(['config', 'commit.gpgsign', 'false'], origin)
+    const forge = new FakeForge({
+      gatePresence: opts.gatePresence ?? 'present',
+      ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
     })
-    selectedForge = await createForge({
-      name: config.forge,
-      registry: plugins,
-      env: process.env,
-      repoRoot: origin,
-    })
-  }
-  const tickets = new FakeTicketSource(opts.tickets ?? [])
-  const ticketSource: TicketSource = opts.ticketSource ?? tickets
-  const worktreeRoot = join(tmp, 'worktrees')
-  const workspaces =
-    opts.createWorkspaceProvider === undefined
-      ? new GitWorktreeProvider({ root: worktreeRoot })
-      : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
-
-  const launched: Array<{ slug: string; runner: BuildRunner; instance: string }> = []
-  const cliErrors: string[] = []
-
-  // The script IS the agent (§9): route by skill, hand the handler the real
-  // CLI bound to this turn's ambient env (D8).
-  const script: Script = async (ctx) => {
-    const handler =
-      opts.handlers[ctx.opts.skill] ?? opts.handlers[ctx.opts.skill.replace(/^ab-/, '')]
-    if (handler === undefined) {
-      throw new Error(`no scripted handler for skill "${ctx.opts.skill}"`)
+    const recordPush = forge.pushBranch.bind(forge)
+    forge.pushBranch = async (cwd, branch, sha) => {
+      await recordPush(cwd, branch, sha)
+      await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
     }
-    const result = await handler(makeCli(ctx))
-    return result ?? defaultTurnResult(`${ctx.opts.skill} finished`)
-  }
-  const agents = new ScriptedAgentRunner({ script })
+    forge.rewrite = gitRewrite(spawnExec, false)
+    let selectedForge: Forge =
+      opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin }) : forge
+    let plugins: PluginRegistry | undefined
+    if (opts.pluginForge !== undefined) {
+      plugins = createPluginRegistry()
+      plugins.register({
+        name: 'e2e-forge-plugin',
+        apiVersion: opts.pluginForge.apiVersion ?? '^1.0.0',
+        forges: { [config.forge]: async () => forge },
+      })
+      selectedForge = await createForge({
+        name: config.forge,
+        registry: plugins,
+        env: process.env,
+        repoRoot: origin,
+      })
+    }
+    const tickets = new FakeTicketSource(opts.tickets ?? [])
+    const ticketSource: TicketSource = opts.ticketSource ?? tickets
+    const worktreeRoot = join(tmp, 'worktrees')
+    const workspaces =
+      opts.createWorkspaceProvider === undefined
+        ? new GitWorktreeProvider({ root: worktreeRoot })
+        : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
 
-  function makeCli(ctx: ScriptContext): Cli {
-    // D8, VERBATIM: exactly what the real adapters do — the CLI resolves the
-    // env the turn was launched with, nothing rebuilt by the harness. The
-    // runner re-issues AB_PHASE/AB_SESSION on every continued producer turn
-    // (§10, build-runner.ts executeSession); a harness that hand-advanced
-    // the round here would mask a stale-env adapter (the continued round's
-    // `ab done` would resolve round 1 and be rejected as a D5 second call).
-    const env = resolveCliEnv(ctx.opts.env)
-    const ws = ctx.opts.workspacePath
+    const launched: Array<{ slug: string; runner: BuildRunner; instance: string }> = []
+    const cliErrors: string[] = []
 
-    const run = async (argv: string[]): Promise<string[]> => {
-      let code: number
-      let out: string[]
-      let err: string[]
-      if (opts.processCli === true) {
-        const child = Bun.spawn(['ab', ...argv], {
-          cwd: ws,
-          env: ctx.opts.env,
-          stdout: 'pipe',
-          stderr: 'pipe',
-        })
-        const [exitCode, stdout, stderr] = await Promise.all([
-          child.exited,
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-        ])
-        code = exitCode
-        out = stdout.trimEnd() === '' ? [] : stdout.trimEnd().split('\n')
-        err = stderr.trimEnd() === '' ? [] : stderr.trimEnd().split('\n')
-      } else {
-        out = []
-        err = []
-        code = await runCli(argv, {
-          store: activeStore,
-          env,
-          workspacePath: ws,
-          forge: selectedForge,
+    // The script IS the agent (§9): route by skill, hand the handler the real
+    // CLI bound to this turn's ambient env (D8).
+    const script: Script = async (ctx) => {
+      const handler =
+        opts.handlers[ctx.opts.skill] ?? opts.handlers[ctx.opts.skill.replace(/^ab-/, '')]
+      if (handler === undefined) {
+        throw new Error(`no scripted handler for skill "${ctx.opts.skill}"`)
+      }
+      const result = await handler(makeCli(ctx))
+      return result ?? defaultTurnResult(`${ctx.opts.skill} finished`)
+    }
+    const agents = new ScriptedAgentRunner({ script })
+
+    function makeCli(ctx: ScriptContext): Cli {
+      // D8, VERBATIM: exactly what the real adapters do — the CLI resolves the
+      // env the turn was launched with, nothing rebuilt by the harness. The
+      // runner re-issues AB_PHASE/AB_SESSION on every continued producer turn
+      // (§10, build-runner.ts executeSession); a harness that hand-advanced
+      // the round here would mask a stale-env adapter (the continued round's
+      // `ab done` would resolve round 1 and be rejected as a D5 second call).
+      const env = resolveCliEnv(ctx.opts.env)
+      const ws = ctx.opts.workspacePath
+
+      const run = async (argv: string[]): Promise<string[]> => {
+        let code: number
+        let out: string[]
+        let err: string[]
+        if (opts.processCli === true) {
+          const child = Bun.spawn(['ab', ...argv], {
+            cwd: ws,
+            env: ctx.opts.env,
+            stdout: 'pipe',
+            stderr: 'pipe',
+          })
+          const [exitCode, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ])
+          code = exitCode
+          out = stdout.trimEnd() === '' ? [] : stdout.trimEnd().split('\n')
+          err = stderr.trimEnd() === '' ? [] : stderr.trimEnd().split('\n')
+        } else {
+          out = []
+          err = []
+          code = await runCli(argv, {
+            store: activeStore,
+            env,
+            workspacePath: ws,
+            forge: selectedForge,
+            exec: spawnExec,
+            ids,
+            clock,
+            stdout: (line) => out.push(line),
+            stderr: (line) => err.push(line),
+          })
+        }
+        if (code !== 0) {
+          const message =
+            `ab ${argv.join(' ')} exited ${code} in ${env.phase}@${env.round}: ` +
+            `${err.join('\n') || '(no stderr)'}`
+          cliErrors.push(message)
+          throw new Error(message)
+        }
+        return out
+      }
+      return { run, ws, round: env.round, env, ctx }
+    }
+
+    // Both direct harness runners and injected abDispatch wiring use this one
+    // registry, so capture scenarios cannot accidentally exercise a second fake
+    // pipeline implementation. `plugin-scripted` crosses the real plugin
+    // materialization boundary while reusing the contract-tested scripted fake.
+    const pluginRegistry = createPluginRegistry()
+    pluginRegistry.register({
+      name: 'e2e-runtime-plugin',
+      apiVersion: '^1.0.0',
+      agentRuntimes: {
+        'plugin-scripted': () => ({
+          runner: agents,
+          servesModels: ['plugin/'],
+          defaultModel: 'plugin/default',
+        }),
+      },
+    })
+    const baseRuntimes = opts.createRuntimeRegistry?.(agents) ?? {
+      scripted: { runner: agents, servesModels: [] },
+      claude: { runner: agents, servesModels: ['claude-'] },
+      pi: { runner: agents, servesModels: ['kimi-'] },
+    }
+    const runtimes = await materializePluginRuntimes(baseRuntimes, pluginRegistry, {
+      repoRoot: origin,
+      env: {},
+    })
+    // launchRunner (§3.3, §15.6-C, §15.7): construct a REAL BuildRunner over
+    // the SAME store and the provisioned workspace path; the dispatcher never
+    // runs agents itself.
+    let instances = 0
+    const makeRunner = async (
+      slug: string,
+      instance?: string,
+      sessionEnv?: Record<string, string>,
+    ): Promise<{ runner: BuildRunner; instance: string }> => {
+      const record = await activeStore.getBuild(slug)
+      const workspacePath = openWorkspacePath(await activeStore.getEvents(slug))
+      if (record === null || workspacePath === null) {
+        throw new Error(`launchRunner("${slug}"): no build record or open workspace`)
+      }
+      instances += 1
+      const resolvedInstance = instance ?? `runner-${instances}`
+      return {
+        instance: resolvedInstance,
+        runner: new BuildRunner({
+          store: activeStore.scopeBuild(slug),
+          config,
+          ...(opts.verifyCycleConfig
+            ? { readVerifyPipeline: () => readVerifyPipeline(workspacePath, spawnExec) }
+            : {}),
+          ...(opts.pinnedConfig
+            ? {
+                getConfig: async () => {
+                  const artifact = await activeStore.getArtifact(
+                    slug,
+                    BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+                  )
+                  return composeBuildConfig(
+                    artifact === null ? config : parseEffectiveBuildConfig(artifact),
+                    opts.getConfig?.() ?? config,
+                  )
+                },
+              }
+            : {}),
+          // Two-axis registry (§9): every runtime is backed by the SAME scripted
+          // runner instance, so the `s_1…s_N` session numbering scenarios rely on
+          // is preserved regardless of which runtime a role selects. `scripted`
+          // is the configured default and runs only with its un-named built-in model; `pi`
+          // serves the Kimi family for exact configured-pair validation.
+          runtimes,
+          workspacePath,
+          branch: record.branch ?? `ab/${slug}`,
+          slug,
           exec: spawnExec,
+          forge: selectedForge,
           ids,
           clock,
-          stdout: (line) => out.push(line),
-          stderr: (line) => err.push(line),
+          instance: resolvedInstance,
+          host: 'e2e-host',
+          ...(sessionEnv !== undefined ? { sessionEnv } : {}),
+          // Long lease/heartbeat: liveness is driven by the shared stepping
+          // clock; scenarios advance it explicitly to expire a lease.
+          opts: {
+            heartbeatMs: 3_600_000,
+            leaseTtlMs: 3_600_000,
+            ...(opts.streamSessions === false ? { streamSessions: false } : {}),
+          },
+        }),
+      }
+    }
+    const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
+      if (
+        opts.pinnedConfig &&
+        (await activeStore.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)) === null
+      ) {
+        await activeStore.putArtifact(slug, {
+          kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+          content: effectiveBuildConfigContent(config),
         })
       }
-      if (code !== 0) {
-        const message =
-          `ab ${argv.join(' ')} exited ${code} in ${env.phase}@${env.round}: ` +
-          `${err.join('\n') || '(no stderr)'}`
-        cliErrors.push(message)
-        throw new Error(message)
-      }
-      return out
+      launched.push({ slug, ...(await makeRunner(slug)) })
+      return 'scheduled'
     }
-    return { run, ws, round: env.round, env, ctx }
-  }
 
-  // Both direct harness runners and injected abDispatch wiring use this one
-  // registry, so capture scenarios cannot accidentally exercise a second fake
-  // pipeline implementation. `plugin-scripted` crosses the real plugin
-  // materialization boundary while reusing the contract-tested scripted fake.
-  const pluginRegistry = createPluginRegistry()
-  pluginRegistry.register({
-    name: 'e2e-runtime-plugin',
-    apiVersion: '^1.0.0',
-    agentRuntimes: {
-      'plugin-scripted': () => ({
-        runner: agents,
-        servesModels: ['plugin/'],
-        defaultModel: 'plugin/default',
+    const dispatcher = new Dispatcher({
+      store: activeStore,
+      tickets: ticketSource,
+      workspaces,
+      forge: selectedForge,
+      config: opts.dispatcherConfig?.(structuredClone(config)) ?? config,
+      repo: origin,
+      exec: spawnExec,
+      launchRunner,
+      ...(opts.getConfig ? { getConfig: opts.getConfig } : {}),
+      ids,
+      clock,
+    })
+    const wiring: DispatchWiring = {
+      store: activeStore,
+      tickets: ticketSource,
+      forge: selectedForge,
+      workspaces,
+      buildExecution: new InProcessBuildExecution(async (input) => {
+        const { runner } = await makeRunner(input.slug, input.instance, {
+          AB_STORE: input.storeRef,
+          ...(adapted?.token !== undefined ? { AB_TOKEN: adapted.token } : {}),
+        })
+        await runner.run().catch(async (error) => {
+          await activeStore.putArtifact(
+            input.slug,
+            diagnosticArtifact({
+              instance: input.instance,
+              outcome:
+                error instanceof LeaseHeldError
+                  ? 'lease-held'
+                  : error instanceof SetupFailureError
+                    ? 'setup-failed'
+                    : 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          )
+          throw error
+        })
       }),
-    },
-  })
-  const baseRuntimes = opts.createRuntimeRegistry?.(agents) ?? {
-    scripted: { runner: agents, servesModels: [] },
-    claude: { runner: agents, servesModels: ['claude-'] },
-    pi: { runner: agents, servesModels: ['kimi-'] },
-  }
-  const runtimes = await materializePluginRuntimes(baseRuntimes, pluginRegistry, {
-    repoRoot: origin,
-    env: {},
-  })
-  // launchRunner (§3.3, §15.6-C, §15.7): construct a REAL BuildRunner over
-  // the SAME store and the provisioned workspace path; the dispatcher never
-  // runs agents itself.
-  let instances = 0
-  const makeRunner = async (
-    slug: string,
-    instance?: string,
-    sessionEnv?: Record<string, string>,
-  ): Promise<{ runner: BuildRunner; instance: string }> => {
-    const record = await activeStore.getBuild(slug)
-    const workspacePath = openWorkspacePath(await activeStore.getEvents(slug))
-    if (record === null || workspacePath === null) {
-      throw new Error(`launchRunner("${slug}"): no build record or open workspace`)
+      runtimes,
+      // Scripted agents resolve this ambient value, then invoke runCli against
+      // the injected shared store. It is an identity label, never opened.
+      storeRef: adapted?.storeRef ?? 'memory://e2e',
+      ...(adapted?.token !== undefined ? { token: adapted.token } : {}),
+      ids,
+      uuids,
+      clock,
+      ...(plugins !== undefined ? { plugins } : {}),
     }
-    instances += 1
-    const resolvedInstance = instance ?? `runner-${instances}`
+
     return {
-      instance: resolvedInstance,
-      runner: new BuildRunner({
-        store: activeStore.scopeBuild(slug),
-        config,
-        ...(opts.verifyCycleConfig
-          ? { readVerifyPipeline: () => readVerifyPipeline(workspacePath, spawnExec) }
-          : {}),
-        ...(opts.pinnedConfig
-          ? {
-              getConfig: async () => {
-                const artifact = await activeStore.getArtifact(
-                  slug,
-                  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-                )
-                return composeBuildConfig(
-                  artifact === null ? config : parseEffectiveBuildConfig(artifact),
-                  opts.getConfig?.() ?? config,
-                )
-              },
-            }
-          : {}),
-        // Two-axis registry (§9): every runtime is backed by the SAME scripted
-        // runner instance, so the `s_1…s_N` session numbering scenarios rely on
-        // is preserved regardless of which runtime a role selects. `scripted`
-        // is the configured default and runs only with its un-named built-in model; `pi`
-        // serves the Kimi family for exact configured-pair validation.
-        runtimes,
-        workspacePath,
-        branch: record.branch ?? `ab/${slug}`,
-        slug,
-        exec: spawnExec,
-        forge: selectedForge,
-        ids,
-        clock,
-        instance: resolvedInstance,
-        host: 'e2e-host',
-        ...(sessionEnv !== undefined ? { sessionEnv } : {}),
-        // Long lease/heartbeat: liveness is driven by the shared stepping
-        // clock; scenarios advance it explicitly to expire a lease.
-        opts: {
-          heartbeatMs: 3_600_000,
-          leaseTtlMs: 3_600_000,
-          ...(opts.streamSessions === false ? { streamSessions: false } : {}),
-        },
-      }),
+      tmp,
+      origin,
+      remote,
+      store,
+      clock,
+      ids,
+      forge,
+      forgeAdapter: selectedForge,
+      tickets,
+      workspaces,
+      agents,
+      dispatcher,
+      wiring,
+      config,
+      launched,
+      cliErrors,
+      async advanceRemote(changes: Record<string, string>, message: string): Promise<string> {
+        if (opts.localGitForge === true) {
+          throw new Error('advanceRemote is unavailable for a no-remote local-git harness')
+        }
+        for (const [path, content] of Object.entries(changes)) {
+          await writeFileIn(remoteUpdater, path, content)
+        }
+        const sha = await commitAll(remoteUpdater, message)
+        await git(['push', '-q', 'origin', 'main'], remoteUpdater)
+        return sha
+      },
+      async runLatest(): Promise<BuildState> {
+        const entry = launched.at(-1)
+        if (entry === undefined) throw new Error('runLatest: nothing launched')
+        try {
+          return await entry.runner.run()
+        } finally {
+          // Direct Dispatcher integration bypasses DispatchLoop's execution
+          // supervisor; mirror its exact post-completion lease release here.
+          await activeStore.releaseLease(entry.slug, entry.instance)
+        }
+      },
+      events: (slug) => store.getEvents(slug),
+      cleanup: async () => {
+        try {
+          if (!snapshotsOff) await assertSnapshotEquivalence(store, origin)
+          await activeStore.close()
+          if (activeStore !== store) await store.close()
+          await adapted?.cleanup?.()
+        } finally {
+          await rm(tmp, { recursive: true, force: true })
+        }
+      },
     }
-  }
-  const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
-    if (
-      opts.pinnedConfig &&
-      (await activeStore.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)) === null
-    ) {
-      await activeStore.putArtifact(slug, {
-        kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-        content: effectiveBuildConfigContent(config),
-      })
-    }
-    launched.push({ slug, ...(await makeRunner(slug)) })
-    return 'scheduled'
-  }
-
-  const dispatcher = new Dispatcher({
-    store: activeStore,
-    tickets: ticketSource,
-    workspaces,
-    forge: selectedForge,
-    config: opts.dispatcherConfig?.(structuredClone(config)) ?? config,
-    repo: origin,
-    exec: spawnExec,
-    launchRunner,
-    ...(opts.getConfig ? { getConfig: opts.getConfig } : {}),
-    ids,
-    clock,
-  })
-  const wiring: DispatchWiring = {
-    store: activeStore,
-    tickets: ticketSource,
-    forge: selectedForge,
-    workspaces,
-    buildExecution: new InProcessBuildExecution(async (input) => {
-      const { runner } = await makeRunner(input.slug, input.instance, {
-        AB_STORE: input.storeRef,
-        ...(adapted?.token !== undefined ? { AB_TOKEN: adapted.token } : {}),
-      })
-      await runner.run().catch(async (error) => {
-        await activeStore.putArtifact(
-          input.slug,
-          diagnosticArtifact({
-            instance: input.instance,
-            outcome:
-              error instanceof LeaseHeldError
-                ? 'lease-held'
-                : error instanceof SetupFailureError
-                  ? 'setup-failed'
-                  : 'failed',
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        )
-        throw error
-      })
-    }),
-    runtimes,
-    // Scripted agents resolve this ambient value, then invoke runCli against
-    // the injected shared store. It is an identity label, never opened.
-    storeRef: adapted?.storeRef ?? 'memory://e2e',
-    ...(adapted?.token !== undefined ? { token: adapted.token } : {}),
-    ids,
-    uuids,
-    clock,
-    ...(plugins !== undefined ? { plugins } : {}),
-  }
-
-  return {
-    tmp,
-    origin,
-    remote,
-    store,
-    clock,
-    ids,
-    forge,
-    forgeAdapter: selectedForge,
-    tickets,
-    workspaces,
-    agents,
-    dispatcher,
-    wiring,
-    config,
-    launched,
-    cliErrors,
-    async advanceRemote(changes: Record<string, string>, message: string): Promise<string> {
-      if (opts.localGitForge === true) {
-        throw new Error('advanceRemote is unavailable for a no-remote local-git harness')
-      }
-      for (const [path, content] of Object.entries(changes)) {
-        await writeFileIn(remoteUpdater, path, content)
-      }
-      const sha = await commitAll(remoteUpdater, message)
-      await git(['push', '-q', 'origin', 'main'], remoteUpdater)
-      return sha
-    },
-    async runLatest(): Promise<BuildState> {
-      const entry = launched.at(-1)
-      if (entry === undefined) throw new Error('runLatest: nothing launched')
-      try {
-        return await entry.runner.run()
-      } finally {
-        // Direct Dispatcher integration bypasses DispatchLoop's execution
-        // supervisor; mirror its exact post-completion lease release here.
-        await activeStore.releaseLease(entry.slug, entry.instance)
-      }
-    },
-    events: (slug) => store.getEvents(slug),
-    cleanup: async () => {
-      if (!snapshotsOff) await assertSnapshotEquivalence(store, origin)
-      await activeStore.close()
-      if (activeStore !== store) await store.close()
-      await adapted?.cleanup?.()
-      await rm(tmp, { recursive: true, force: true })
-    },
+  } catch (error) {
+    await rm(tmp, { recursive: true, force: true })
+    throw error
   }
 }
 

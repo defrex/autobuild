@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -8,6 +9,8 @@ import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { Forge } from '../ports/types'
 import { releasePreparedRuntime } from './dispatch-runtime-use'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('real Bun lock and isolated install validate exact registry integrity, then reuse cache offline', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-upgrade-install-'))

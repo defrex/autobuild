@@ -1,8 +1,12 @@
-import { expect, test } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
 import { prepareDispatcherYield } from './dispatch-preflight'
 import { classifyClient } from '../store/remote/compatibility'
 import type { BuildStore } from '../store/types'
 import type { Handoff } from '../kernel/dispatch-upgrade'
+
+const mkdtemp = ownTempDirectories(afterEach)
+
 const handoff: Handoff = {
   run: 'old',
   lineage: 'launcher',
@@ -214,7 +218,7 @@ test('preflight deadline cancels a blocked validation before any yield write', a
 })
 
 test('preflight exits if an unrelated dispatcher supersedes the predecessor before acceptance', async () => {
-  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const { openLocalStore } = await import('../store/local/store')

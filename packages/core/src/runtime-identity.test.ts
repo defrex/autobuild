@@ -1,9 +1,12 @@
-import { expect, test } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from './testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureRuntimeIdentity } from './runtime-identity'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('source identity is captured once and missing metadata is harmless', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-identity-'))
