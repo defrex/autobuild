@@ -84,9 +84,6 @@ const tickCountersSchema = z.strictObject({
   sandboxIdleStops: z.number().int().nonnegative().optional(),
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: z.number().int().nonnegative().optional(),
-  /** Contained sandbox-backend construction failures this tick; re-reported
-   * every tick until the config is repaired. Optional so historical tick
-   * facts replay. */
   /** Historical embedded-runner counter, retained for strict event replay. */
   orchestratorSandboxFailures: z.number().int().nonnegative().optional(),
   harvestStarted: z.number().int().nonnegative(),

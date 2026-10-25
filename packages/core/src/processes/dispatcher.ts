@@ -434,10 +434,6 @@ export interface TickReport {
   sandboxIdleStops: number
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: number
-  /** Contained sandbox-backend construction failures this tick (AUT-584):
-   * deterministic and config-shaped, so it re-reports every tick until the
-   * config is repaired. The affected tick runs with sandbox tools filtered
-   * exactly as when no backend exists. */
 }
 
 export function emptyTickReport(): TickReport {
