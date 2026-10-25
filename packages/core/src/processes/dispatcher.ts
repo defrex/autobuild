@@ -1,3 +1,4 @@
+import { capturedBuildConfig } from './verify-cycle-config'
 import {
   NODE_VERIFICATION_CONTEXT,
   prepareNodeVerificationContext,
@@ -797,7 +798,16 @@ export class Dispatcher {
         revision = artifact.meta.revision
         pinned = parseEffectiveBuildConfig(artifact)
       }
-      return decideNextFromFacts(state, log, composeBuildConfig(pinned, this.deps.config))
+      return decideNextFromFacts(
+        state,
+        log,
+        await capturedBuildConfig(
+          this.store,
+          slug,
+          state,
+          composeBuildConfig(pinned, this.deps.config),
+        ),
+      )
     } catch (error) {
       report.blockedDiagnostics.push(
         `build ${slug} pipeline${revision === undefined ? '' : ` revision ${revision}`} unavailable: pipeline decisions withheld; next tick retries. Restore readable build-branch configuration or use a compatible dispatcher version. ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
@@ -2976,7 +2986,10 @@ export class Dispatcher {
         const config = artifact
           ? composeBuildConfig(parseEffectiveBuildConfig(artifact), this.deps.config)
           : this.deps.config
-        return integrationVerified(candidate, config)
+        return integrationVerified(
+          candidate,
+          await capturedBuildConfig(store, record.slug, candidate, config),
+        )
       }
       const facts = await store.buildFacts(record.slug)
       const decision = await this.decideBuild(record.slug, facts.state, facts.log, report)
@@ -3153,7 +3166,10 @@ export class Dispatcher {
           candidate.status === 'aborted' ||
           candidate.openEscalations.length ||
           candidate.pendingCommands.length ||
-          !integrationVerified(candidate, config)
+          !integrationVerified(
+            candidate,
+            await capturedBuildConfig(store, record.slug, candidate, config),
+          )
         )
           return false
         await this.observeIntegration(record.slug, true)
@@ -5381,9 +5397,14 @@ export class Dispatcher {
     )
       return
     const artifact = await this.store.getArtifact(record.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
-    const config = artifact
-      ? composeBuildConfig(parseEffectiveBuildConfig(artifact), this.deps.config)
-      : this.deps.config
+    const config = await capturedBuildConfig(
+      this.store,
+      record.slug,
+      state,
+      artifact
+        ? composeBuildConfig(parseEffectiveBuildConfig(artifact), this.deps.config)
+        : this.deps.config,
+    )
     if (
       !integrationCurrent(state) ||
       state.integration?.cycle?.config !== integrationConfig(config)

@@ -1,3 +1,4 @@
+import { readVerifyPipeline } from '../config/pipeline-source'
 import { gitRewrite } from '../ports/forge/git-rewrite'
 /**
  * End-to-end harness (SPEC §15.6 as LIVE scenarios, §8.7, §12, §15.7):
@@ -407,6 +408,7 @@ export async function makeHarness(opts: {
   configToml?: string
   /** Force a routing disagreement while retaining the runner's branch config. */
   dispatcherConfig?: (config: Config) => Config
+  verifyCycleConfig?: boolean
   pinnedConfig?: boolean
   getConfig?: () => Config
   /** Forge gate existence is independent from current PR mergeability. */
@@ -622,6 +624,9 @@ export async function makeHarness(opts: {
       runner: new BuildRunner({
         store: activeStore.scopeBuild(slug),
         config,
+        ...(opts.verifyCycleConfig
+          ? { readVerifyPipeline: () => readVerifyPipeline(workspacePath, spawnExec) }
+          : {}),
         ...(opts.pinnedConfig
           ? {
               getConfig: async () => {

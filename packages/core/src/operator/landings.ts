@@ -24,7 +24,11 @@ export async function listOperatorLandings(opts: {
       if (digest.terminal !== undefined) continue
       const facts = await view.buildFacts(record.slug)
       const artifact = facts.state.landing?.decision
-        ? await view.getArtifact(record.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        ? await view.getArtifact(
+            record.slug,
+            facts.state.verify.configPin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+            facts.state.verify.configPin?.artifact.rev,
+          )
         : null
       const expected = artifact ? parseEffectiveBuildConfig(artifact).verify.steps : undefined
       const tree = projectTree(record, facts.state, facts.log.restack, expected)

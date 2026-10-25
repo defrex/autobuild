@@ -387,3 +387,31 @@ export async function resolvePipelineSource(
   }
   return parsePipeline(baseSha, 'base', baseContent, onFailure)
 }
+
+/** Strict execution-side read. Failures block verification rather than falling back. */
+export async function readVerifyPipeline(
+  workspacePath: string,
+  exec: Exec,
+): Promise<PipelineSource & { head: string }> {
+  const run = async (args: string[]) => {
+    const result = await git(args, workspacePath, exec)
+    if (result.exitCode !== 0)
+      throw new Error(`verify config: git ${args.join(' ')}: ${result.stderr}`)
+    return result.stdout.trim()
+  }
+  const head = await run(['rev-parse', '--verify', 'HEAD'])
+  if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('verify config: invalid checkout HEAD')
+  const content = await readFile(join(workspacePath, 'autobuild.toml'), 'utf8')
+  const [committed, working] = await Promise.all([
+    run(['ls-tree', head, '--', 'autobuild.toml']),
+    run(['hash-object', '--', 'autobuild.toml']),
+  ])
+  return {
+    head,
+    meta:
+      committed.split(/\s+/)[2] === working
+        ? { ref: 'branch-head', commit: head }
+        : { ref: 'worktree-dirty' },
+    config: parseConfig(content, `autobuild.toml@${head}`),
+  }
+}

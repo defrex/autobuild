@@ -229,10 +229,15 @@ async function readPinnedConfig(
   store: BuildStore,
   slug: string,
   live: Config,
+  pin?: BuildState['verify']['configPin'],
 ): Promise<PinnedProjection> {
   let artifact: Artifact | null
   try {
-    artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+    artifact = await store.getArtifact(
+      slug,
+      pin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      pin?.artifact.rev,
+    )
   } catch {
     artifact = null
   }
@@ -283,7 +288,7 @@ export async function getOperatorBuild(opts: {
   const { config, repositoryEvents } = await effectiveConfig(opts.store, opts.repo)
   let dashboardRow: DashboardBuild | null = null
   if (!projectsNoDashboardRow(state)) {
-    const pinned = await readPinnedConfig(opts.store, opts.slug, config)
+    const pinned = await readPinnedConfig(opts.store, opts.slug, config, state.verify.configPin)
     const row = projectBuildFromFacts(record, state, facts, config, undefined, pinned.config)
     // Implied by the gate; kept as an explicit check (not an assertion) so the
     // code never lies if `effectiveStatus` and `projectBuild` ever drift.
@@ -410,7 +415,7 @@ async function dashboardFromView(
         (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
     })
     if (projectsNoDashboardRow(facts.state)) continue
-    const pinned = await readPinnedConfig(view, record.slug, config)
+    const pinned = await readPinnedConfig(view, record.slug, config, facts.state.verify.configPin)
     const row = projectBuildFromFacts(
       record,
       facts.state,

@@ -1,7 +1,8 @@
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
@@ -277,7 +278,7 @@ test('build child captures the deposited repository opt-out and skips check and 
         headSha: 'e'.repeat(40),
       },
     })
-    const config = parseConfig(`forge = "local-git"
+    const configToml = `forge = "local-git"
 [roles.default]
 runtime = "pi"
 [tickets]
@@ -294,7 +295,20 @@ command = "check"
 [verify.agent]
 kind = "agent"
 skill = "must-never-launch"
-`)
+`
+    const config = parseConfig(configToml)
+    await writeFile(join(tmp, 'autobuild.toml'), configToml)
+    for (const args of [
+      ['init'],
+      ['config', 'user.email', 'test@example.com'],
+      ['config', 'user.name', 'Test'],
+      ['add', '.'],
+      ['commit', '-m', 'pipeline'],
+    ]) {
+      const result = await spawnExec(['git', ...args], { cwd: tmp })
+      expect(result.exitCode).toBe(0)
+    }
+
     await store.putArtifact(slug, {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
       content: JSON.stringify({
@@ -332,6 +346,7 @@ skill = "must-never-launch"
     const events = await store.getEvents(slug)
     const policy = events.find((event) => event.type === 'verify.reconcile-policy-captured')
     expect(policy?.payload).toEqual({
+      cycle: events.find((event) => event.type === 'verify.config-captured')!.seq,
       reconcileSeq: writes.length,
       steps: [
         { step: 'check', enabled: false, source: 'verify.afterReconcile' },

@@ -20,10 +20,15 @@ agent runs. Verify-entry restack freezes a current base before verification;
 path selection excludes upstream-only paths. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
 are canonicalized before guarded landing even when the target SHA is unchanged.
-Clean replay starts no agent. A clean waiting leaf rewrite preserves prior
-verification; reports retain their actual cycle base/head. Conflicted replay
-runs reconcile and verification, and initial verification cannot be skipped
-through post-reconcile policy.
+Clean replay starts no agent. A clean waiting leaf rewrite preserves completed
+verification when build-owned config is unchanged, even when replay replaces
+the pin commit's ancestry. Reports retain their actual cycle base/head.
+Changed config still starts a fresh verification cycle while waiting. Before
+running further verification steps, cycles also require known pin ancestry;
+a future cycle captures fresh config from its checkout. Configuration
+supersession is separate from replay and reconcile. Conflicted replay runs
+reconcile and verification, and initial verification cannot be skipped through
+post-reconcile policy.
 
 Nodes observe parent movement durably but restack only on demand: before a
 complete nonempty node verifies; before landing if its parent moved; when queued
