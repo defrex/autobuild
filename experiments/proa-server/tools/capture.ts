@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { withCaptureSeed, type SeedEvidence } from './capture-seed'
 import type { BuildStore } from '../../../packages/core/src/store/types'
 import { build, project, root } from './verify'
+import { runExtendedBrowserProof } from './browser-extended-proof'
 import {
   checkRoutes,
   checkFrameMatrix,
@@ -278,7 +279,10 @@ export async function captureFrames(
           ...(local ? {} : { errorReason: 'BlockedByClient' }),
         })
       }
-      if (r.method === 'Runtime.exceptionThrown' || r.method === 'Network.loadingFailed')
+      if (
+        r.method === 'Runtime.exceptionThrown' ||
+        (r.method === 'Network.loadingFailed' && !r.params.canceled)
+      )
         errors.push(JSON.stringify(r))
       if (
         r.method === 'Network.responseReceived' &&
@@ -287,6 +291,11 @@ export async function captureFrames(
           auth &&
           r.params.response.status === 403 &&
           r.params.response.url === `${auth.refusalOrigin}/auth/dev-session`
+        ) &&
+        !(
+          auth &&
+          r.params.response.status === 409 &&
+          r.params.response.url === `${origin}/controls`
         )
       )
         errors.push(`HTTP ${r.params.response.status}: ${r.params.response.url}`)
@@ -352,12 +361,14 @@ export async function captureFrames(
           ? 'prepareHappyScenario'
           : 'prepareScenario'
       const projectId = auth?.seed?.producers.find((p) => p.producer === scenario)?.project
-      const detail = auth?.seed?.detail
+      const detail = auth?.seed?.controls?.[frame.id] ?? auth?.seed?.detail
       const route =
-        frame.state === 'detail' ? `/builds/${detail?.slug ?? 'detail-case'}` : frame.route
+        frame.state === 'detail' || frame.state.startsWith('control-')
+          ? `/builds/${detail?.slug ?? 'detail-case'}`
+          : frame.route
       const query =
         projectId && !['sign-in', 'refused'].includes(frame.state)
-          ? `?${new URLSearchParams({ project: projectId })}`
+          ? `?${new URLSearchParams({ project: frame.state.startsWith('control-') ? detail!.project : projectId })}`
           : ''
       await send('Page.navigate', {
         url: (frame.state === 'refused' && auth ? auth.refusalOrigin : origin) + route + query,
@@ -382,6 +393,64 @@ export async function captureFrames(
         await evaluate("document.querySelectorAll('details').forEach(node=>node.open=true)")
       if (frame.state === 'open')
         await evaluate("document.querySelector('#account-trigger').click()")
+      if (frame.state === 'control-confirmation') {
+        await evaluate(`document.querySelector('button[value="confirm-abort"]').click()`)
+        for (let i = 0; i < 100; i++) {
+          if (
+            await evaluate(`Boolean(document.querySelector('[data-control-form="confirmation"]'))`)
+          )
+            break
+          await Bun.sleep(30)
+        }
+      }
+      if (frame.state === 'control-refusal' && auth?.store && detail) {
+        await auth.store.append(detail.slug, {
+          actor: { kind: 'human', user: 'other@example.com' },
+          type: 'escalation.answered',
+          payload: {
+            id: `${detail.slug}-question`,
+            answer: 'Answered elsewhere',
+            resolution: 'guidance',
+          },
+        })
+        await evaluate(
+          `document.querySelector('#answer-text').value='Keep this draft after the refusal';document.querySelector('button[value="guidance"]').click()`,
+        )
+        for (let i = 0; i < 100; i++) {
+          if (await evaluate(`Boolean(document.querySelector('[data-control-error]'))`)) break
+          await Bun.sleep(30)
+        }
+      }
+      if (frame.state === 'control-refusal' || frame.state === 'control-confirmation') {
+        await Bun.sleep(2400)
+        const preserved =
+          frame.state === 'control-refusal'
+            ? await evaluate(
+                `Boolean(document.querySelector('[data-control-error]')) && document.querySelector('#answer-text')?.value==='Keep this draft after the refusal'`,
+              )
+            : await evaluate(
+                `Boolean(document.querySelector('[data-control-form="confirmation"]'))`,
+              )
+        if (!preserved) throw Error(`Polling erased ${frame.state}`)
+        if (frame.state === 'control-refusal' && auth?.store && detail) {
+          await auth.store.append(detail.slug, {
+            actor: { kind: 'kernel' },
+            type: 'build.paused',
+            payload: {},
+          })
+          let refreshed = false
+          for (let i = 0; i < 150; i++) {
+            refreshed = Boolean(
+              await evaluate(
+                `Boolean(document.querySelector('button[value="resume"]')) && !document.querySelector('button[value="pause"]') && Boolean(document.querySelector('[data-control-error]')) && document.querySelector('#answer-text')?.value==='Keep this draft after the refusal'`,
+              ),
+            )
+            if (refreshed) break
+            await Bun.sleep(40)
+          }
+          if (!refreshed) throw Error('Refusal froze live action availability or lost its draft')
+        }
+      }
       const result = await evaluate(
         `(${probe.toString()})(${JSON.stringify(palette(reference, frame.theme))},${JSON.stringify(frame.state)},${JSON.stringify(frame.theme)})`,
       )
@@ -435,7 +504,8 @@ export async function captureFrames(
         route: route + query,
         scenario,
         project: projectId,
-        build: frame.state === 'detail' ? detail?.slug : undefined,
+        build:
+          frame.state === 'detail' || frame.state.startsWith('control-') ? detail?.slug : undefined,
         seed: auth?.seed,
         png,
         probe: result,
@@ -564,6 +634,266 @@ export async function captureFrames(
         await Bun.sleep(50)
       }
       if (!streamed) throw Error('Live transcript suffix did not refresh in five seconds')
+      // Drive the native forms in Chromium in both script modes. No synthetic
+      // mutation endpoint is used: every click submits the rendered form.
+      const formProof: unknown[] = []
+      const outerHtml = async () => {
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const doc = await send('DOM.getDocument', { depth: -1 })
+            return (
+              (await send('DOM.getOuterHTML', { nodeId: doc.root.nodeId })) as unknown as {
+                outerHTML: string
+              }
+            ).outerHTML
+          } catch (error) {
+            if (attempt === 9 || !String(error).includes('node')) throw error
+            await Bun.sleep(30)
+          }
+        }
+        throw Error('Browser document unavailable')
+      }
+      const click = async (selector: string) => {
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const doc = await send('DOM.getDocument', { depth: -1 })
+            const found = await send('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector })
+            const nodeId = found.nodeIds[0]
+            if (!nodeId) throw Error(`Missing browser control: ${selector}`)
+            await send('DOM.scrollIntoViewIfNeeded', { nodeId })
+            const box = (await send('DOM.getBoxModel', { nodeId })) as unknown as {
+              model: { content: number[] }
+            }
+            const points = box.model.content
+            const x = (points[0]! + points[2]!) / 2
+            const y = (points[1]! + points[5]!) / 2
+            await send('Input.dispatchMouseEvent', {
+              type: 'mousePressed',
+              x,
+              y,
+              button: 'left',
+              clickCount: 1,
+            })
+            await send('Input.dispatchMouseEvent', {
+              type: 'mouseReleased',
+              x,
+              y,
+              button: 'left',
+              clickCount: 1,
+            })
+            return
+          } catch (error) {
+            if (attempt === 9 || !String(error).includes('node')) throw error
+            // A real poll or navigation can retire a CDP node between reads.
+            await Bun.sleep(30)
+          }
+        }
+      }
+      for (const mode of ['js', 'nojs']) {
+        await send('Emulation.setScriptExecutionDisabled', { value: mode === 'nojs' })
+        for (const action of [
+          'pause',
+          'cancel-pause',
+          'resume',
+          'abort',
+          'discard',
+          'guidance',
+          'retry',
+          'dismiss',
+        ]) {
+          const fixture = auth.seed.controls[`proof-${mode}-${action}`]!
+          const before = (await auth.store.getEvents(fixture.slug)).length
+          await send('Page.navigate', {
+            url: `${origin}/builds/${fixture.slug}?${new URLSearchParams({ project: fixture.project })}`,
+          })
+          let loaded = false
+          for (let i = 0; i < 100; i++) {
+            if (
+              (await outerHtml()).includes(`<h1>${fixture.slug}</h1>`) &&
+              (mode === 'nojs' || (await evaluate(`document.readyState==='complete'`)))
+            ) {
+              loaded = true
+              break
+            }
+            await Bun.sleep(30)
+          }
+          if (!loaded) throw Error(`Browser proof did not load ${fixture.slug}`)
+          if (mode === 'js') await evaluate('window.__controlDocument=document')
+          if (action === 'guidance') {
+            await click('#answer-text')
+            await send('Input.insertText', { text: 'Continue with the approved plan.' })
+            if (mode === 'js') {
+              await Bun.sleep(2400)
+              if (
+                !(await evaluate(
+                  `document.querySelector('#answer-text').value==='Continue with the approved plan.' && document.activeElement.id==='answer-text' && document.activeElement.selectionStart==='Continue with the approved plan.'.length`,
+                ))
+              )
+                throw Error('Polling lost the guidance draft')
+            }
+          }
+          if (action === 'abort' || action === 'discard') {
+            await click(`button[value="confirm-${action}"]`)
+            for (let i = 0; i < 100; i++) {
+              if ((await outerHtml()).includes('name="confirmed"')) break
+              await Bun.sleep(30)
+            }
+            if ((await auth.store.getEvents(fixture.slug)).length !== before)
+              throw Error(`Destructive intent written before confirmation: ${mode} ${action}`)
+          }
+          await click(`button[value="${action}"]`)
+          let delta = [] as Awaited<ReturnType<BuildStore['getEvents']>>
+          for (let i = 0; i < 100; i++) {
+            delta = (await auth.store.getEvents(fixture.slug)).slice(before)
+            if (delta.length) break
+            await Bun.sleep(30)
+          }
+          const expected = ['guidance', 'retry', 'dismiss'].includes(action)
+            ? 'escalation.answered'
+            : `build.${action === 'cancel-pause' ? 'resume' : action}-requested`
+          if (!delta.some((event) => event.type === expected))
+            throw Error(`Browser control did not write ${expected}: ${mode} ${action}`)
+          if (
+            delta.some(
+              (event) =>
+                event.actor.kind !== 'human' ||
+                event.actor.user !== 'operator@example.com' ||
+                'via' in event.actor,
+            )
+          )
+            throw Error(`Browser identity mismatch: ${mode} ${action}`)
+          if (mode === 'js') {
+            for (let i = 0; i < 100; i++) {
+              if (await evaluate(`Boolean(document.querySelector('[data-control-notice]'))`)) break
+              await Bun.sleep(30)
+            }
+            if (!(await evaluate(`Boolean(document.querySelector('[data-control-notice]'))`)))
+              throw Error(`Enhanced control did not render acknowledgment: ${action}`)
+            if (!(await evaluate('document===window.__controlDocument')))
+              throw Error(`Control reloaded document: ${action}`)
+            if (action === 'pause') {
+              await auth.store.append(fixture.slug, {
+                actor: { kind: 'kernel' },
+                type: 'build.paused',
+                payload: {},
+              })
+              let refreshed = false
+              for (let i = 0; i < 150; i++) {
+                refreshed = Boolean(
+                  await evaluate(
+                    `Boolean(document.querySelector('button[value="resume"]')) && !document.querySelector('button[value="cancel-pause"]') && !document.querySelector('[data-control-notice]')`,
+                  ),
+                )
+                if (refreshed) break
+                await Bun.sleep(40)
+              }
+              if (!refreshed) throw Error('Pause acknowledgment froze live controls before Resume')
+              if (!(await evaluate('document===window.__controlDocument')))
+                throw Error('Pause acknowledgment reloaded the document')
+              await auth.store.append(fixture.slug, {
+                actor: { kind: 'agent', role: 'implement', session: 'capture-later-question' },
+                type: 'escalation.raised',
+                payload: {
+                  id: 'capture-later-question',
+                  source: 'agent',
+                  phase: 'implement',
+                  refs: [],
+                  question: 'A later question',
+                },
+              })
+              let answerVisible = false
+              for (let i = 0; i < 150; i++) {
+                answerVisible = Boolean(
+                  await evaluate(`Boolean(document.querySelector('[data-control-form="answer"]'))`),
+                )
+                if (answerVisible) break
+                await Bun.sleep(40)
+              }
+              if (!answerVisible)
+                throw Error('A later escalation did not reveal its live answer form')
+            }
+          }
+          formProof.push({
+            mode,
+            action,
+            events: delta.map((event) => event.type),
+            identity: 'operator@example.com',
+            ...(mode === 'js' && action === 'pause' ? { acknowledgedPauseOffersResume: true } : {}),
+          })
+        }
+      }
+      const extendedProof = await runExtendedBrowserProof({
+        fixtures: auth.seed.extendedControls,
+        store: auth.store,
+        origin,
+        driver: {
+          scripts: async (enabled) => {
+            await send('Emulation.setScriptExecutionDisabled', { value: !enabled })
+          },
+          navigate: async (url) => {
+            await send('Page.navigate', { url })
+          },
+          click,
+          html: outerHtml,
+          evaluate,
+          type: async (selector, text) => {
+            await click(selector)
+            await send('Input.insertText', { text })
+          },
+        },
+      })
+      await Bun.write(
+        join(output, 'browser-extended-proof.json'),
+        JSON.stringify(extendedProof, null, 2),
+      )
+      const admissionFixture = auth.seed.controls['proof-js-pause']!
+      const cookieHeader = issued.headers
+        .getSetCookie()
+        .filter((line) => !line.includes('Max-Age=0'))
+        .map((line) => line.split(';')[0])
+        .join('; ')
+      const formHtml = await (
+        await fetch(
+          `${origin}/builds/${admissionFixture.slug}?${new URLSearchParams({ project: admissionFixture.project })}`,
+          { headers: { cookie: cookieHeader } },
+        )
+      ).text()
+      const csrf = formHtml.match(/name="csrf" value="([^"]+)"/)?.[1]
+      if (!csrf) throw Error('Browser CSRF field missing')
+      const beforeAdmission = (await auth.store.getEvents(admissionFixture.slug)).length
+      for (const [name, originHeader, token, projectId, expected] of [
+        ['csrf', origin, 'wrong', admissionFixture.project, 403],
+        ['origin', 'https://foreign.invalid', csrf, admissionFixture.project, 403],
+        ['project', origin, csrf, auth.seed.producers[0]!.project, 404],
+      ] as const) {
+        const response = await fetch(`${origin}/controls`, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: {
+            cookie: cookieHeader,
+            origin: originHeader,
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            csrf: token,
+            project: projectId,
+            slug: admissionFixture.slug,
+            action: 'cancel-pause',
+          }),
+        })
+        if (response.status !== expected)
+          throw Error(`Browser ${name} boundary returned ${response.status}, expected ${expected}`)
+        if ((await auth.store.getEvents(admissionFixture.slug)).length !== beforeAdmission)
+          throw Error(`Browser ${name} refusal mutated state`)
+        formProof.push({ boundary: name, status: response.status, unchanged: true })
+      }
+      await Bun.write(
+        join(output, 'browser-control-proof.json'),
+        JSON.stringify(formProof, null, 2),
+      )
+      await send('Emulation.setScriptExecutionDisabled', { value: false })
+      await send('Page.navigate', { url: origin + path })
+      await Bun.sleep(500)
       await Bun.sleep(4200)
       await send('Emulation.setScriptExecutionDisabled', { value: true })
       await send('Page.navigate', { url: origin + path })
