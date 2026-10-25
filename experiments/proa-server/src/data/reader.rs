@@ -7,7 +7,10 @@ use super::{
     reducers::{Accumulator, Scope as ReduceScope},
 };
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -53,7 +56,7 @@ pub struct DataReader {
     postgres: PostgresReader,
     blobs: BlobReader,
     cache: Mutex<HashMap<Key, Arc<Mutex<Cached>>>>,
-    queries: Mutex<Vec<QueryRead>>,
+    queries: Mutex<VecDeque<QueryRead>>,
 }
 impl DataReader {
     pub async fn connect(config: DataConfig) -> Result<Self, DataError> {
@@ -63,14 +66,14 @@ impl DataReader {
             postgres,
             blobs,
             cache: Mutex::new(HashMap::new()),
-            queries: Mutex::new(Vec::new()),
+            queries: Mutex::new(VecDeque::new()),
         })
     }
     pub fn postgres(&self) -> &PostgresReader {
         &self.postgres
     }
     pub async fn query_counts(&self) -> Vec<QueryRead> {
-        self.queries.lock().await.clone()
+        self.queries.lock().await.iter().cloned().collect()
     }
     pub async fn clear_cache(&self) {
         self.cache.lock().await.clear();
@@ -96,7 +99,12 @@ impl DataReader {
         // This lock covers fetching and folding: concurrent polls cannot fold the same suffix.
         let mut cached = entry.lock().await;
         let events = self.postgres.events(repo, scope, cached.cursor).await?;
-        self.queries.lock().await.push(QueryRead {
+        let mut queries = self.queries.lock().await;
+        // Test/diagnostic evidence is bounded independently of long-lived accumulators.
+        if queries.len() == 1024 {
+            queries.pop_front();
+        }
+        queries.push_back(QueryRead {
             project: repo.into(),
             scope: match scope {
                 Scope::Build(id) => format!("build:{id}"),
@@ -106,6 +114,7 @@ impl DataReader {
             after: cached.cursor,
             rows: events.len(),
         });
+        drop(queries);
         if !events.is_empty() {
             cached.advance(&events)?;
         }

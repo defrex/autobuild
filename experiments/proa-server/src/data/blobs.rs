@@ -58,6 +58,10 @@ impl BlobReader {
                     ))
                     .force_path_style(force_path_style.unwrap_or(false));
                 if let Some(endpoint) = endpoint {
+                    let url = reqwest::Url::parse(&endpoint).map_err(|_| DataError::Blob)?;
+                    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                        return Err(DataError::Blob);
+                    }
                     builder = builder.endpoint_url(endpoint);
                 }
                 Ok(Self::S3 {
@@ -172,6 +176,22 @@ mod tests {
     fn prefix_matches_typescript() {
         assert_eq!(blob_path("//a///b/", "hash"), "a/b/hash");
         assert_eq!(blob_path("/", "hash"), "hash");
+    }
+    #[test]
+    fn invalid_s3_endpoint_fails_before_startup() {
+        let config = BlobConfig::S3 {
+            bucket: "bucket".into(),
+            region: "region".into(),
+            access_key_id: "test".into(),
+            secret_access_key: "test".into(),
+            endpoint: Some("invalid endpoint".into()),
+            session_token: None,
+            force_path_style: None,
+        };
+        assert!(matches!(
+            BlobReader::new(config, String::new()),
+            Err(DataError::Blob)
+        ));
     }
     #[test]
     fn vercel_get_auth_matches_pinned_sdk() {
