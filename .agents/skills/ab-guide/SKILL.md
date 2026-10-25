@@ -312,7 +312,28 @@ The distinctions that change an administrator's answer:
   notice, and restoring a valid file resumes reload. Scoped phase CLI processes
   still read the build worktree's branch-owned file. Dispatcher merge readiness,
   resume, and execution recovery use the runner's pinned commands, verify, and
-  finalize configuration; builds without a pin retain the live fallback.
+  finalize configuration through the cycle capture's exact artifact revision.
+  At every verify-cycle entry, after restack or reconcile settles, the runner
+  reads `autobuild.toml` from the execution checkout at resolved `HEAD` (including
+  detached integration heads). `verify.config-captured` cites an immutable
+  `verify-cycle-config` artifact revision, checkout head, build-owned content
+  identity and truthful source metadata. Dirty worktree bytes carry
+  `worktree-dirty` without a commit. A settled stage boundary rechecks the
+  build-owned sections and the known source commit's ancestry. A change or
+  non-ancestor source records `verify.config-superseded` and starts a fresh cycle
+  before constructing any further member. Already launched siblings settle first.
+  A waiting leaf with completed verification retains its receipts after a clean
+  rewrite when build-owned config is unchanged, even when the rewrite replaces
+  the pin commit's ancestry. Changed config still supersedes while waiting; a
+  future verification cycle always captures fresh config before running steps.
+  Old pass/skip receipts cannot satisfy that cycle, and supersession creates no
+  failure or failure-budget charge. Unchanged config on a descendant head retains
+  its pin; every new cycle still rereads the checkout. Read, parse and Git evidence
+  failures block verification as infrastructure failures. Recovery and readiness
+  read the capture's exact revision, so a concurrent deployment reload cannot
+  replace its build-owned sections. Historical streams capture before further
+  verification. Deployment-owned reloads remain live; environments are not
+  re-provisioned.
 - **Workspaces** are provisioned per build and remain the locally reachable
   execution context for that build.
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
@@ -602,8 +623,9 @@ For example, set `afterReconcile = false` in `[verify]` and
 
 The kernel freezes the resolved ordered policy in
 `verify.reconcile-policy-captured` at the next engine action after reconcile
-completion. Live configuration changes apply at that boundary; a cycle already
-started keeps its policy through recovery. Historical cycles already started
+completion. A cycle already started keeps its policy through recovery.
+Configuration supersession starts a fresh cycle and captures a new policy for
+its configured universe, retaining the original reconcile identity. Historical cycles already started
 without a captured policy retain the rerun-all behavior. Initial verification
 and verification after subsequent code review always use ordinary applicability.
 Policy exclusion precedes plan selection and paths, including `always = true`.
@@ -740,6 +762,13 @@ logs; an explicit empty list is valid only when all steps are optional. The
 selection from the exact plan completion approved by `plan-review` is
 authoritative. A spec restart replaces it with the newly approved plan; a
 reconcile reuses it.
+
+If the approved selection later names any step absent from the cycle's pinned
+configured universe, the entire selection falls back to all configured optional
+steps. The kernel records one observation per cycle and plan revision naming
+the unknown steps. Mandatory steps, path applicability and post-reconcile policy
+still apply. A valid selection continues to skip genuinely omitted optional
+steps. Strict validation when depositing a new plan is unchanged.
 
 Cross-field rules the validator actually enforces — each is an **error**:
 

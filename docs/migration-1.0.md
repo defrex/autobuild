@@ -45,7 +45,8 @@ build finishes with the old merge standard. Drain old work before switching
 versions if retaining old execution behavior is required. Simultaneous old and
 new writers are not a supported migration strategy.
 
-Execution pipeline configuration stays pinned to the build; live dispatcher
+Execution pipeline configuration stays owned by the build and is re-pinned
+from its checkout at each verify cycle; live dispatcher
 landing policy is separate. A recorded readiness decision retains its rule
 snapshot despite configuration edits; a new candidate receives a new decision.
 Explicit consent persists through replay and re-verification until hold or
