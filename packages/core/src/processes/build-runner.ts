@@ -1,3 +1,8 @@
+import {
+  capturedBuildConfig,
+  refreshVerifyCycle,
+  type VerifyPipelineReader,
+} from './verify-cycle-config'
 import { verifyMemberKey } from '../kernel/verify-stage-state'
 import { contextDirectory } from '../context-directory'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
@@ -192,6 +197,8 @@ export interface BuildRunnerDeps {
   /** Current dispatcher snapshot. It is sampled once for setup and once for
    * each engine/action boundary; omission preserves static runner callers. */
   getConfig?: () => Config | Promise<Config>
+  /** Execution checkout reader; supplied by production composition, omitted by static embeddings. */
+  readVerifyPipeline?: VerifyPipelineReader
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
@@ -917,7 +924,9 @@ export class BuildRunner {
   }
 
   private async captureConfig(): Promise<Config> {
-    const config = (await this.deps.getConfig?.()) ?? this.deps.config
+    const deployment = (await this.deps.getConfig?.()) ?? this.deps.config
+    const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+    const config = await capturedBuildConfig(this.deps.store, this.deps.slug, state, deployment)
     this.boundaryConfig = config
     this.boundaryResolver = createRuntimeResolver(
       this.deps.runtimes,
@@ -1190,12 +1199,46 @@ export class BuildRunner {
   async step(): Promise<Decision> {
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       return { kind: 'wait', reason: 'mixed-version' }
-    const config = await this.captureConfig()
     const { store, slug } = this.deps
     await this.settleLocalReconcile()
     await completeAutomaticReconcile(store, slug)
+    const config = await this.captureConfig()
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
+    if (
+      this.deps.readVerifyPipeline &&
+      ([
+        'run-check',
+        'run-agent-verify',
+        'evaluate-verify',
+        'skip-verify',
+        'run-verify-stage',
+        'capture-reconcile-policy',
+        'record-verify-selection-drift',
+      ].includes(decision.kind) ||
+        (decision.kind === 'run-phase' && decision.phase === 'finalize') ||
+        (decision.kind === 'wait' &&
+          decision.reason === 'awaiting-pr' &&
+          (facts.state.verify.configPin !== undefined ||
+            (facts.state.kind === 'node' && integrationCurrent(facts.state)))))
+    ) {
+      if (
+        await refreshVerifyCycle({
+          store,
+          slug,
+          state: facts.state,
+          deployment: config,
+          read: this.deps.readVerifyPipeline,
+          retainCompletedVerification:
+            facts.state.kind !== 'node' &&
+            decision.kind === 'wait' &&
+            decision.reason === 'awaiting-pr',
+          exec: this.deps.exec,
+          workspacePath: this.deps.workspacePath,
+        })
+      )
+        return this.step()
+    }
     if (await deferMixedVersion(store, slug, KERNEL))
       return { kind: 'wait', reason: 'mixed-version' }
     if (this.recovery) {
@@ -1223,6 +1266,18 @@ export class BuildRunner {
     }
     try {
       switch (decision.kind) {
+        case 'record-verify-selection-drift':
+          await store.appendIfCurrent(slug, facts.state.lastSeq, {
+            actor: KERNEL,
+            type: 'observation.recorded',
+            payload: {
+              id: this.deps.ids('obs'),
+              kind: 'followup',
+              summary: decision.summary,
+              files: ['autobuild.toml'],
+            },
+          })
+          return decision
         case 'restart-execution':
           return decision
         case 'run-verify-stage':
@@ -1248,6 +1303,7 @@ export class BuildRunner {
             actor: KERNEL,
             type: 'verify.reconcile-policy-captured',
             payload: {
+              ...(facts.state.verify.configPin ? { cycle: facts.state.verify.cycleSince } : {}),
               reconcileSeq: decision.reconcileSeq,
               steps: config.verify.steps.map((step) => {
                 const override = config.verify.stepConfigs[step]?.afterReconcile
@@ -2256,6 +2312,12 @@ export class BuildRunner {
           }
           return
         }
+        if (
+          decision.members.some(
+            (member) => !initial.members.some((first) => first.step === member.step),
+          )
+        )
+          return
         const members = await Promise.all(
           decision.members.map((member) =>
             member.kind === 'evaluate-verify' ? this.resolveVerify(member) : member,
@@ -2386,6 +2448,10 @@ export class BuildRunner {
   private async runCheck(decision: RunCheckDecision): Promise<void> {
     const { store, slug, exec, workspacePath } = this.deps
     const { step, command, attempt } = decision
+    const current = (await readBuildFacts(store, slug)).value.state
+    const memberKey = verifyMemberKey(step, attempt)
+    if (current.verifyStage.outcomes[memberKey] || current.verifyStage.cancellations[memberKey])
+      return
     const evidence = await this.verifyEvidence()
     if (!this.recovery)
       await store.append(slug, {

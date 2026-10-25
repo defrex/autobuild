@@ -234,7 +234,7 @@ export function reloadBehavior(path: string): string {
         ? 'Dispatcher restart required; startup adapters retain their configuration.'
         : 'Mixed: see individual fields for dispatcher reload behavior.'
   const owned = BUILD_OWNED_CONFIG_PATHS.some((prefix) => parts[0] === prefix)
-  return `${dispatcher}${owned ? ' Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch.' : ''} A running invocation keeps its captured values.`
+  return `${dispatcher}${owned ? ' Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch.' : ''} A running invocation keeps its captured values.`
 }
 export function schemaFields(
   schema: z.ZodType,
