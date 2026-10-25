@@ -587,8 +587,9 @@ finalize and its post-steps, an observed target move also schedules a restack.
 For a node-targeted leaf, published finalize-step commits also schedule one
 waiting restack, even when the target SHA is unchanged, so guarded landing
 preserves one canonical build identity.
-Clean waiting restacks retain existing verification; conflicts use reconcile and
-its captured post-reconcile policy. A conflict before initial verification cannot
+Clean waiting restacks retain existing verification when build-owned config is
+unchanged (§16.1), including when replay replaces the pin commit's ancestry.
+Conflicts use reconcile and its captured post-reconcile policy. A conflict before initial verification cannot
 skip initial checks through that policy.
 
 
@@ -3166,6 +3167,11 @@ every actionable build on its first tick rather than waiting for the sweep;
 lease claiming stays the exclusivity gate, so a genuinely live old runner
 wins harmlessly.
 
+Verification's current result boundary also advances on `verify.config-captured`
+and `verify.config-superseded` (§16.1). These facts do not change reconcile
+identity or its policy snapshot; replay gates still refer to the code/reconcile
+boundary. Superseded receipts remain historical evidence.
+
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 
 Walking the happy path exposed a gap in the grammar: `finalize` creates the
@@ -3632,7 +3638,7 @@ decide where a build's effective configuration is composed from:
 
 | Class | Sections | Source at deposit |
 |---|---|---|
-| Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
+| Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The execution checkout at each verification cycle; launch deposits use the branch head or recorded workspace base until a cycle capture exists. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
 | Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
@@ -3650,11 +3656,33 @@ because attributing worktree bytes to a commit that has not been shown to carry
 them would be false provenance. A base-branch change to `[verify]`, `[finalize]`, `[commands]`, or
 the workspace provisioning after a build's base was cut does not change that
 build's verify universe, finalize steps, commands, or provisioning; a build
-that publishes such a change to its own branch picks it up at its next launch.
+that receives such a change in its execution checkout picks it up at the next settled verify boundary.
 A live reload delivers only deployment-owned sections to active builds, so the
 artifact deposited on reload changes only those sections. In-flight
 environments are never re-provisioned; a fresh build from the new base is the
 path for a changed provisioning definition.
+
+At every verify-cycle entry, after restack or reconcile settles, the runner
+reads `autobuild.toml` from the execution checkout at resolved `HEAD` (including
+detached integration heads). `verify.config-captured` cites an immutable
+`verify-cycle-config` artifact revision, checkout head, build-owned content
+identity and truthful source metadata. Dirty worktree bytes carry
+`worktree-dirty` without a commit. A settled stage boundary rechecks the
+build-owned sections and the known source commit's ancestry. A change or
+non-ancestor source records `verify.config-superseded` and starts a fresh cycle
+before constructing any further member. Already launched siblings settle first.
+A waiting leaf with completed verification retains its receipts after a clean
+rewrite when build-owned config is unchanged, even when the rewrite replaces
+the pin commit's ancestry. Changed config still supersedes while waiting; a
+future verification cycle always captures fresh config before running steps.
+Old pass/skip receipts cannot satisfy that cycle, and supersession creates no
+failure or failure-budget charge. Unchanged config on a descendant head retains
+its pin; every new cycle still rereads the checkout. Read, parse and Git evidence
+failures block verification as infrastructure failures. Recovery and readiness
+read the capture's exact revision, so a concurrent deployment reload cannot
+replace its build-owned sections. Historical streams capture before further
+verification. Deployment-owned reloads remain live; environments are not
+re-provisioned.
 
 Three configurable narrowing mechanisms govern which verify steps run, all
 resolving to the ordinary `skipped` outcome so exclusions stay queryable:
@@ -3667,7 +3695,12 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
   validated at deposit. The selection paired with the approving review
   verdict is authoritative; `always = true` steps can never be deselected.
   Missing metadata means all configured steps, so historical builds keep
-  their behavior.
+  their behavior. If the approved selection later names any step absent from
+  the cycle's pinned configured universe, the entire selection falls back to
+  all configured optional steps. The kernel records one observation per cycle
+  and plan revision naming the unknown steps. Mandatory steps, paths and
+  post-reconcile policy still apply. A valid selection continues to skip
+  genuinely omitted optional steps. Strict new-plan validation is unchanged.
 - **Path applicability.** A step may declare positive changed-path selectors,
   evaluated by the kernel immediately before the step on every verify cycle,
   diffing `HEAD` against the build's durable base (promoted by a completed
@@ -3687,8 +3720,9 @@ For example, set `afterReconcile = false` in `[verify]` and
 
 The kernel freezes the resolved ordered policy in
 `verify.reconcile-policy-captured` at the next engine action after reconcile
-completion. Live configuration changes apply at that boundary; a cycle already
-started keeps its policy through recovery. Historical cycles already started
+completion. A cycle already started keeps its policy through recovery.
+Configuration supersession starts a fresh cycle and captures a new policy for
+its configured universe, retaining the original reconcile identity. Historical cycles already started
 without a captured policy retain the rerun-all behavior. Initial verification
 and verification after subsequent code review always use ordinary applicability.
 Policy exclusion precedes plan selection and paths, including `always = true`.
