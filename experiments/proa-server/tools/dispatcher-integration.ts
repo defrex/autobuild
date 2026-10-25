@@ -142,6 +142,7 @@ export async function dispatcherIntegration(
         ...environment,
         AB_POSTGRES_URL: roleUrl(readRole),
         PROA_POSTGRES_WRITE_URL: roleUrl(writeRole),
+        AB_STORE_SECRET: 'isolated-dispatcher-machine-secret',
         PORT: String(port),
         PROA_HOST: '127.0.0.1',
         PROA_AUTH_URL: origin,
@@ -191,7 +192,7 @@ export async function dispatcherIntegration(
     const readState = async () => reduceBuild(await activeStore.getEvents(slug))
     assert.equal((await readState()).status, 'running')
     const page = await fetch(
-      `${origin}/builds/${encodeURIComponent(slug)}?project=${encodeURIComponent(h.origin)}`,
+      `${origin}/dashboard/builds/${encodeURIComponent(slug)}?project=${encodeURIComponent(h.origin)}`,
       { headers: { cookie } },
     )
     const html = await page.text()

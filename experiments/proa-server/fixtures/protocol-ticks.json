@@ -1,0 +1,994 @@
+{
+  "sources": {
+    "packages/core/src/store/repo-tick.ts": "e3f914a574db714364364b01f8be12ee3ce94803e449ea85438709912a9dfe03",
+    "packages/core/src/events/repository.ts": "2c83a11aababe189a2d132bf634ddbcea38890ddd010806841a7bab853beb86f",
+    "packages/core/src/ports/forge-telemetry.ts": "f1124819196d45310b296d5bd1f6829bc0846dd1b81e6ac3143bb2f3395f94e1",
+    "packages/core/src/processes/dispatcher.ts": "e28050c2489b1fafaca7a4e2cab91b779f546840b00dd01cedc49a6103269378",
+    "experiments/proa-server/tools/protocol-tick-fixtures.ts": "76453665687c69b0839e39764b8da192f88c2dee178f9e19debfb89091d56094"
+  },
+  "cases": [
+    {
+      "id": "quiet",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": 0,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0
+        }
+      },
+      "events": [],
+      "oracle": { "accepted": [] }
+    },
+    {
+      "id": "completed",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": 0,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0
+        }
+      },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-completed",
+          "payload": {
+            "run": "owner",
+            "queued": 0,
+            "counters": {
+              "merged": 0,
+              "closed": 0,
+              "conflicted": 0,
+              "abandoned": 0,
+              "discarded": 0,
+              "janitorFailed": 0,
+              "recovered": 0,
+              "dispatchFailed": 0,
+              "resumed": 0,
+              "swept": 0,
+              "settled": 0,
+              "provisioning": 0,
+              "dispatched": 0,
+              "authored": 0,
+              "bounced": 0,
+              "claimRaces": 0,
+              "invalidTickets": 0,
+              "creationWithheld": 0,
+              "dependencyCheckFailed": 0,
+              "dependencyBlocked": 0,
+              "harvestStarted": 0,
+              "harvestResumed": 0,
+              "harvestCompleted": 0,
+              "harvestEscalated": 0,
+              "harvestFailed": 0,
+              "sandboxIdleStops": 0,
+              "sandboxSettleFailures": 0,
+              "orchestratorSandboxFailures": 0
+            },
+            "janitorDiagnostics": [],
+            "ticketDiagnostics": [],
+            "dependencyDiagnostics": []
+          }
+        }
+      ],
+      "oracle": {
+        "accepted": [
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-started",
+            "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+          },
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-completed",
+            "payload": {
+              "run": "owner",
+              "queued": 0,
+              "counters": {
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "creationWithheld": 0,
+                "dependencyBlocked": 0,
+                "dependencyCheckFailed": 0,
+                "settled": 0,
+                "provisioning": 0,
+                "sandboxIdleStops": 0,
+                "sandboxSettleFailures": 0,
+                "orchestratorSandboxFailures": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              },
+              "janitorDiagnostics": [],
+              "ticketDiagnostics": [],
+              "dependencyDiagnostics": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "failed",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "accepted": [
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-started",
+            "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+          },
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-failed",
+            "payload": { "run": "owner", "error": "failure" }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-failed",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "tick finish requires start and terminal boundaries"
+        }
+      }
+    },
+    {
+      "id": "start-only",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "tick finish requires start and terminal boundaries"
+        }
+      }
+    },
+    {
+      "id": "too-many",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "tick finish requires start and terminal boundaries"
+        }
+      }
+    },
+    {
+      "id": "wrong-order",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "invalid tick finish boundaries" } }
+    },
+    {
+      "id": "wrong-outcome",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-completed",
+          "payload": {
+            "run": "owner",
+            "queued": 0,
+            "counters": {
+              "merged": 0,
+              "closed": 0,
+              "conflicted": 0,
+              "abandoned": 0,
+              "discarded": 0,
+              "janitorFailed": 0,
+              "recovered": 0,
+              "dispatchFailed": 0,
+              "resumed": 0,
+              "swept": 0,
+              "settled": 0,
+              "provisioning": 0,
+              "dispatched": 0,
+              "authored": 0,
+              "bounced": 0,
+              "claimRaces": 0,
+              "invalidTickets": 0,
+              "creationWithheld": 0,
+              "dependencyCheckFailed": 0,
+              "dependencyBlocked": 0,
+              "harvestStarted": 0,
+              "harvestResumed": 0,
+              "harvestCompleted": 0,
+              "harvestEscalated": 0,
+              "harvestFailed": 0,
+              "sandboxIdleStops": 0,
+              "sandboxSettleFailures": 0,
+              "orchestratorSandboxFailures": 0
+            },
+            "janitorDiagnostics": [],
+            "ticketDiagnostics": [],
+            "dependencyDiagnostics": []
+          }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "invalid tick finish boundaries" } }
+    },
+    {
+      "id": "wrong-holder",
+      "holder": "foreign",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "invalid tick finish boundaries" } }
+    },
+    {
+      "id": "error-mismatch",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "other" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "tick error mismatch" } }
+    },
+    {
+      "id": "counter-mismatch",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": 0,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0
+        }
+      },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-completed",
+          "payload": {
+            "run": "owner",
+            "queued": 0,
+            "counters": {
+              "merged": 1,
+              "closed": 0,
+              "conflicted": 0,
+              "abandoned": 0,
+              "discarded": 0,
+              "janitorFailed": 0,
+              "recovered": 0,
+              "dispatchFailed": 0,
+              "resumed": 0,
+              "swept": 0,
+              "settled": 0,
+              "provisioning": 0,
+              "dispatched": 0,
+              "authored": 0,
+              "bounced": 0,
+              "claimRaces": 0,
+              "invalidTickets": 0,
+              "creationWithheld": 0,
+              "dependencyCheckFailed": 0,
+              "dependencyBlocked": 0,
+              "harvestStarted": 0,
+              "harvestResumed": 0,
+              "harvestCompleted": 0,
+              "harvestEscalated": 0,
+              "harvestFailed": 0,
+              "sandboxIdleStops": 0,
+              "sandboxSettleFailures": 0,
+              "orchestratorSandboxFailures": 0
+            },
+            "janitorDiagnostics": [],
+            "ticketDiagnostics": [],
+            "dependencyDiagnostics": []
+          }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "tick counters mismatch" } }
+    },
+    {
+      "id": "unknown-event",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "not-a-type",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "unknown repository event type \"not-a-type\" — known types: tickets.migration-recorded, dispatcher.forge-degraded, dispatcher.forge-recovered, change-presence.observed, dispatcher.ticket-source-dependency-limited, dispatcher.ticket-source-degraded, dispatcher.ticket-source-recovered, harvest.pause-requested, harvest.resume-requested, harvest.paused, harvest.resumed, harvest.recovery-requested, harvest.recovery-exhausted, harvest.started, harvest.execution.authorized, harvest.execution.ended, harvest.execution.started, harvest.execution.released, harvest.step.started, harvest.step.completed, harvest.session.native-handle-recorded, harvest.session.suspended, harvest.session.resumed, harvest.session.resume-fallback, harvest.session.started, harvest.session.ended, harvest.proposals.submitted, harvest.review.verdict, harvest.proposal.id-reserved, harvest.proposal.filed, harvest.completed, harvest.escalated, harvest.failed, orchestrator.sandbox.provisioned, orchestrator.sandbox.resumed, orchestrator.sandbox.activity, orchestrator.sandbox.stopped, orchestrator.sandbox.released, orchestrator.sandbox.reset, orchestrator.sandbox.published, orchestrator.sandbox.publish-failed, dispatcher.ticket-scan-completed, dispatcher.upgrade-target-resolved, dispatcher.target-prepared, dispatcher.yield-requested, dispatcher.terminal-released, dispatcher.takeover, dispatcher.drain-settled, dispatcher.drain-deadline, dispatcher.upgrade-detected, dispatcher.upgrade-failed, dispatcher.runtime-rolled-back, dispatcher.rollback-hold-cleared, dispatcher.handoff-started, dispatcher.handoff-completed, dispatcher.runtime-recorded, dispatcher.run-started, dispatcher.stop-requested, dispatcher.run-stopped, dispatcher.tick-yielded, dispatcher.forge-readiness-failed, dispatcher.config-rejected, dispatcher.config-publication-failed, dispatcher.tick-started, dispatcher.tick-completed, dispatcher.tick-failed, dispatcher.runner-settled, dispatcher.harvest-runner-failed, dispatcher.upgrade-available, dispatcher.operator-reported, dispatcher.config-reloaded, dispatcher.intake-set, dispatcher.pause-set, dispatcher.auto-merge-default-set"
+        }
+      }
+    },
+    {
+      "id": "invalid-actor",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "kernel" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "actor kind \"kernel\" may not emit \"dispatcher.tick-failed\" (allowed: dispatcher)"
+        }
+      }
+    },
+    {
+      "id": "via",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher", "via": "operator" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": { "rejected": { "status": 422, "message": "only human actors may carry via" } }
+    },
+    {
+      "id": "payload",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        { "actor": { "kind": "dispatcher" }, "type": "dispatcher.tick-failed", "payload": {} }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "invalid payload for \"dispatcher.tick-failed\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"run\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"error\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "start-optional-time",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "accepted": [
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-started",
+            "payload": { "run": "owner" }
+          },
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-failed",
+            "payload": { "run": "owner", "error": "failure" }
+          }
+        ]
+      }
+    },
+    {
+      "id": "invalid-start-time",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "wrong" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 422,
+          "message": "invalid payload for \"dispatcher.tick-started\": [\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"datetime\",\n    \"pattern\": \"/^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d(?::[0-5]\\\\d(?:\\\\.\\\\d+)?)?(?:Z))$/\",\n    \"path\": [\n      \"startedAt\"\n    ],\n    \"message\": \"Invalid ISO datetime\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "invalid-completion",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"error\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "unknown-completion",
+      "holder": "owner",
+      "completion": { "outcome": "other" },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"outcome\",\n    \"options\": [\n      \"completed\",\n      \"failed\"\n    ],\n    \"path\": [\n      \"outcome\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'completed' | 'failed'\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "null-completion",
+      "holder": "owner",
+      "completion": null,
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received null\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "missing-counters",
+      "holder": "owner",
+      "completion": { "outcome": "completed" },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"counters\"\n    ],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "null-counters",
+      "holder": "owner",
+      "completion": { "outcome": "completed", "counters": null },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"counters\"\n    ],\n    \"message\": \"Invalid input: expected object, received null\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "extra-counter",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": 0,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0,
+          "extra": 1
+        }
+      },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [\n      \"counters\"\n    ],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "bad-counter",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": -1,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0
+        }
+      },
+      "events": [],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": true,\n    \"path\": [\n      \"counters\",\n      \"merged\"\n    ],\n    \"message\": \"Too small: expected number to be >=0\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "id": "compatibility",
+      "holder": "owner",
+      "completion": { "outcome": "failed", "error": "failure" },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" },
+          "compatibility": { "writerVersion": "1.0.0-beta.0", "classification": "advisory" }
+        }
+      ],
+      "oracle": {
+        "rejected": {
+          "status": 500,
+          "message": "event compatibility classification disagrees with catalog"
+        }
+      }
+    },
+    {
+      "id": "forge-failed",
+      "holder": "owner",
+      "completion": {
+        "outcome": "failed",
+        "error": "failure",
+        "forgeRequests": {
+          "total": 1,
+          "restPrimary": 1,
+          "restNotModified": 0,
+          "graphql": 0,
+          "unattributed": 0,
+          "builds": [{ "build": "build", "requests": 1 }],
+          "complete": true
+        }
+      },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-failed",
+          "payload": { "run": "owner", "error": "failure" }
+        }
+      ],
+      "oracle": {
+        "accepted": [
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-started",
+            "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+          },
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-failed",
+            "payload": { "run": "owner", "error": "failure" }
+          }
+        ]
+      }
+    },
+    {
+      "id": "forge-completed",
+      "holder": "owner",
+      "completion": {
+        "outcome": "completed",
+        "counters": {
+          "merged": 0,
+          "closed": 0,
+          "conflicted": 0,
+          "abandoned": 0,
+          "discarded": 0,
+          "janitorFailed": 0,
+          "recovered": 0,
+          "dispatchFailed": 0,
+          "resumed": 0,
+          "swept": 0,
+          "settled": 0,
+          "provisioning": 0,
+          "dispatched": 0,
+          "authored": 0,
+          "bounced": 0,
+          "claimRaces": 0,
+          "invalidTickets": 0,
+          "creationWithheld": 0,
+          "dependencyCheckFailed": 0,
+          "dependencyBlocked": 0,
+          "harvestStarted": 0,
+          "harvestResumed": 0,
+          "harvestCompleted": 0,
+          "harvestEscalated": 0,
+          "harvestFailed": 0,
+          "sandboxIdleStops": 0,
+          "sandboxSettleFailures": 0,
+          "orchestratorSandboxFailures": 0,
+          "forgeRequests": {
+            "total": 1,
+            "restPrimary": 1,
+            "restNotModified": 0,
+            "graphql": 0,
+            "unattributed": 0,
+            "builds": [{ "build": "build", "requests": 1 }],
+            "complete": true
+          }
+        }
+      },
+      "events": [
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-started",
+          "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          "actor": { "kind": "dispatcher" },
+          "type": "dispatcher.tick-completed",
+          "payload": {
+            "run": "owner",
+            "queued": 0,
+            "counters": {
+              "merged": 0,
+              "closed": 0,
+              "conflicted": 0,
+              "abandoned": 0,
+              "discarded": 0,
+              "janitorFailed": 0,
+              "recovered": 0,
+              "dispatchFailed": 0,
+              "resumed": 0,
+              "swept": 0,
+              "settled": 0,
+              "provisioning": 0,
+              "dispatched": 0,
+              "authored": 0,
+              "bounced": 0,
+              "claimRaces": 0,
+              "invalidTickets": 0,
+              "creationWithheld": 0,
+              "dependencyCheckFailed": 0,
+              "dependencyBlocked": 0,
+              "harvestStarted": 0,
+              "harvestResumed": 0,
+              "harvestCompleted": 0,
+              "harvestEscalated": 0,
+              "harvestFailed": 0,
+              "sandboxIdleStops": 0,
+              "sandboxSettleFailures": 0,
+              "orchestratorSandboxFailures": 0,
+              "forgeRequests": {
+                "total": 1,
+                "restPrimary": 1,
+                "restNotModified": 0,
+                "graphql": 0,
+                "unattributed": 0,
+                "builds": [{ "build": "build", "requests": 1 }],
+                "complete": true
+              }
+            },
+            "janitorDiagnostics": [],
+            "ticketDiagnostics": [],
+            "dependencyDiagnostics": []
+          }
+        }
+      ],
+      "oracle": {
+        "accepted": [
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-started",
+            "payload": { "run": "owner", "startedAt": "2026-01-01T00:00:00.000Z" }
+          },
+          {
+            "actor": { "kind": "dispatcher" },
+            "type": "dispatcher.tick-completed",
+            "payload": {
+              "run": "owner",
+              "queued": 0,
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 1,
+                  "restNotModified": 0,
+                  "graphql": 0,
+                  "total": 1,
+                  "unattributed": 0,
+                  "builds": [{ "build": "build", "requests": 1 }],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "creationWithheld": 0,
+                "dependencyBlocked": 0,
+                "dependencyCheckFailed": 0,
+                "settled": 0,
+                "provisioning": 0,
+                "sandboxIdleStops": 0,
+                "sandboxSettleFailures": 0,
+                "orchestratorSandboxFailures": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              },
+              "janitorDiagnostics": [],
+              "ticketDiagnostics": [],
+              "dependencyDiagnostics": []
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -605,3 +605,298 @@ which the walker excludes, reduced the isolated 30-test file from about four
 seconds to 157 ms without changing assertions or timeouts. Manual setup now
 exports `CARGO_TARGET_DIR` into `.ab/` and puts its executable there too. The
 automated gate already uses a shared cache outside all worktrees.
+## JSON machine branch: negotiate before extracting
+
+The native protocol checkpoint uses a separate Axum router constructor from the
+Proa browser branch. Machine requests need their release/protocol decision before
+bearer authentication, indirect ownership before body parsing, and JSON for
+unknown methods and failures. A fallback request handler makes that ordering
+explicit; typed Axum body/path extractors can otherwise answer with their own
+text or status before the protocol gate runs. Browser cookie/origin middleware
+must stay outside this branch when the normal server is eventually merged.
+No Proa page or normal-server routing changed in this checkpoint.
+
+The request future must own its authorization header before awaiting a database
+read: borrowing the full `Request<Body>` across that await makes the future
+non-Send and prevents Axum's Handler implementation. A second practical pitfall
+is the conformance clock: freeze stored timestamps through a private test control
+channel, but measure held reads with Tokio's monotonic clock. Serializing the
+whole HTTP response behind clock synchronization deadlocks a held read waiting
+for a subsequent append; serialize only synchronization and request start.
+
+Reproduce with `bun tools/protocol-integration.ts`. The native proof uses two Rust
+processes and a TypeScript writer over isolated PostgreSQL/S3 services. It records
+sanitized checkpoint evidence under `.ab/proa-protocol-store/`, explicitly without
+claiming the complete shared BuildStore suite or rendered dashboard integration.
+
+## Strict producer schemas and shared snapshot bytes
+
+The machine write interpreter now covers every producer payload schema, with
+named Rust checks for refinements and transformations that JSON Schema cannot
+express. Corpus additions for optional fields, whitespace, provider/native-handle
+branches, URLs and filenames caught two concrete differences: regex end/newline
+handling and Zod URL trimming before normalization. The full native HTTP proof
+compares normalized accepted writes and exact refusal text, not just booleans.
+Compatibility stamping belongs after static/catalog validation and before SQL.
+Ordinary CAS validates even when its expected head is stale; initial build
+creation publishes its record and first fact in one transaction. Deferred SQL
+constraint triggers prove commit failures roll both back, including repository
+change position and sequence visibility.
+
+Snapshot interoperability also depends on physical encoding. The TypeScript
+PostgreSQL adapter explicitly serializes snapshot state, and Bun.SQL binds that
+as a JSONB string envelope; reads unwrap that layer. Writing an ordinary JSONB
+object can look right in Rust while a later TypeScript writer changes the
+representation. Mixed Rust/TypeScript races exposed this. Rust now writes the
+same envelope and reads both it and direct legacy objects, with scalar strings,
+null and escaped NUL tested in both directions. This was a missing Rust encoding
+convention, not a TypeScript scalar-state bug. Presence remains independent of
+journal creation, and its clock rollback/expiry probes leave event sequences and
+repository change positions untouched.
+
+
+## Artifact publication and fenced tick observations
+
+Blob upload and SQL publication are separate boundaries. Rust writes complete
+raw S3 objects through the configured official SDK and Vercel objects through
+the pinned SDK's evidenced request shape; it never base64-encodes the provider
+body. All wire artifacts decode before any upload, and uploads finish before
+the scope row lock is acquired. SQL then allocates revisions, substitutes exact
+two-key negative references only in payload, validates the event, prunes managed
+kinds once per batch, and commits metadata plus its event together. Failed
+validation or deferred commit can leave an immutable orphan blob, but cannot
+consume visible revisions, timestamps or sequence numbers. Deleting an orphan
+as compensation would risk another writer already referencing the same hash.
+
+Conditional deposits differ from ordinary conditional appends: after decoding
+and uploading they compare under the lock before event validation. A stale
+invalid event therefore returns null. Invalid-event rollback tests must send raw
+HTTP: RemoteBuildStore validates producer writes locally before making a request,
+which can otherwise make a test pass without exercising the Rust transaction.
+Mixed Rust/TypeScript writers and a fresh Rust process prove the shared SQL
+metadata and provider bytes, rather than a process-local object map.
+
+Repository ticks use the same repository row lock and live-lease fence. Begin
+and finish record observations without renewing the lease or heartbeat; quiet
+finishes leave the journal/change position untouched. Boundary events and
+telemetry become visible atomically, including under deferred commit failure.
+The wire tick schema strips compatibility while the direct core validator can
+reject incompatible metadata: HTTP oracles must compare the actual wire path.
+
+These checkpoint proofs still do not establish full BuildStore conformance.
+Ticket assets, streams, reducer values, delegation, production router mounting,
+the entire unchanged contract, historical clients and isolated dispatch/reader
+evidence remain required. Rendering the dispatch result on the Builds page
+remains deferred to node integration after file-131 under ruling esc_6370a20b.
+
+A final raw-text probe exposed JSON numeric semantics. Rust's default serde
+parser preserved `9007199254740993` while JavaScript rounded it, rounded
+`0.9999999999999999` up to one, and refused `1e400` where JavaScript accepted
+Infinity before unknown metadata serialized it to null. Comparing both responses
+with `response.json()` hid the large-integer difference; SQL JSON text and raw
+response text exposed it.
+
+Request parsing now retains raw numeric lexemes until correctly rounded f64
+conversion, then uses ECMAScript shortest formatting. Nonfinite numbers remain
+numeric through schema validation, so typed numbers reject them with Zod's exact
+Infinity diagnostics while accepted unknown values become null at serialization.
+The safe parser also preserves duplicate-key semantics and JavaScript's integer
+property order, which affects strict-schema refusal ordering.
+
+Enabling serde arbitrary precision introduces a separate trap: its ordinary
+Value deserializer reserves a private object key as a number marker. A legal
+user object carrying that key was silently converted into a scalar. Explicit
+raw-object parsing and a JSON/JSONB FromSql wrapper preserve such objects on both
+request and database read paths. The production read-only reader uses that same
+wrapper without changing its transactions. Regression proof covers 83 parser
+oracles, 218 raw Zod cases and 204 native HTTP comparisons including stored JSON,
+private-marker objects, decimal rounding, overflow and underflow.
+
+## Ticket pins, stream close and native values
+
+Ticket assets use the existing shared table and advisory lock key, so native and
+TypeScript writers share revisions even before a repository journal exists.
+Tombstones retain older manifests and blobs; build pins resolve their recorded
+revision after replacement or removal. Snapshot pins add a separate integrity
+boundary: gzip manifests (including concatenated members), chunk digests, file
+sizes and ticket identity must validate before a read exposes bytes. Hosted
+readable IDs are an optional projection over canonical storage keys; absence of
+the independently migrated ticket extension must not break build record reads.
+Deployment request/response ceilings need a manifest response preflight before
+publication, otherwise a refused response can hide a committed asset revision.
+
+Streams keep the TypeScript JSONB string envelope for chunk parts, including
+property order inside custom data. A row lock owns each chunk sequence. Close
+reads and uploads without holding a transaction, then locks and rechecks the
+chunk prefix before publishing its artifact and lifecycle together. A real
+TypeScript append held inside a database trigger proved the race: close prepared
+older bytes, waited behind the append, then reassembled after that append was
+acknowledged. Failed uploads and deferred commit failures leave neither a closed
+record nor consumed revisions/sequences. Creation prunes only older closed chunk
+logs, retaining the newest closed stream and every open stream.
+
+The AI SDK is also a state machine, not just a list of allowed part names.
+Malformed defined parts are dropped; runtime processing errors stop the current
+message segment while later start segments can still progress. Partial tool JSON
+can legally materialize lone UTF-16 units from ASCII escape text. A Rust String
+cannot represent those values. Typed raw fragments therefore carry the exact
+encoded document alongside its inspection projection; no magic placeholder key
+can collide with user data. Blob bytes preserve the SDK's escaped strings and
+keys without lossy replacement.
+
+Named values replay one authoritative event prefix in a read-only repeatable-read
+transaction. They do not trust client-written public snapshots or private caches.
+The unchanged shared suite is invoked through the real remote client, with a new
+migrated database and blob prefix per factory, injected clock/retention, bounded
+child cleanup and asserted test/factory counts. A green route smoke test cannot
+replace this evidence.
+
+
+## Native authority and production routing
+
+Delegated credentials require two independent checks: authentic signed claims and
+fresh durable lifecycle facts. They do not inherit a fixed token expiry or their
+parent project's later credential revocation. Registration, anchor, execution,
+session and runner suspension/release semantics instead decide each request.
+Build suspension and harvest suspension differ. Authority guards also sometimes
+clone and parse a request before its producer schema; moving them after schema
+validation changes observable refusals, including source server errors.
+
+Fetch header semantics matter at this boundary. HTTP obs-text is Latin1, and
+repeated Authorization or release identity fields join with comma-space. Reading
+only the first duplicate can accept a credential the TypeScript service rejects.
+Signed payload verification uses its original encoded segment, not a re-encoded
+object. Base64url token decoding is deliberately separate from canonical artifact
+base64 validation.
+
+The normal router selects the machine branch using the full URI before browser
+cookie, origin and Proa middleware. Both branches retain independent gates;
+unknown browser paths cannot acquire machine authority through a browser cookie.
+Public protocol health bypasses backend I/O. Deferred read/write pools still
+preflight every first or replacement connection, while readiness probes the
+configured schema with a bounded wait. Production has no open-authority switch.
+
+Dispatch evidence reads the exact generated build through the existing Rust
+DataReader listing, reduced build state and ordered events, including a fresh
+reader after restart. Per ruling esc_6370a20b, rendering that dispatched build on
+the sibling Builds page remains a node integration check after file-131; shell
+captures cannot substitute for it.
+
+The scalar-string checkpoint exposed a real JavaScript/Rust boundary. JavaScript
+JSON accepts escaped lone UTF-16 units; serde String cannot retain them. Lossy
+replacement is unsafe for authority: PostgreSQL TEXT lookup can resolve the
+replacement row while in-memory write comparisons must keep the original units.
+
+## Lossless request, token and envelope values
+
+The protocol now uses JsString code units and an ordered JsJson tree through
+request validation, token claims, write preparation, responses, snapshot/stream
+string envelopes, assets and SDK document assembly. Checked serde conversion is
+explicit; replacement belongs only to source-specified UTF8/URL/PG TEXT
+boundaries. Malformed HTTP UTF8 is replacement-decoded before JSON parsing, with
+one leading BOM removed. Limits count the decoded UTF8 text, including expansion
+of malformed bytes, rather than blindly counting the original request bytes.
+
+General JSON parsing, cloning, equality, serialization and disposal use heap work
+stacks. Valid nested data in a field that schema stripping later discards must not
+terminate a worker. Pure tests use a 64 KiB thread, and real HTTP checks retain
+source parity through 8192 nested arrays. The partial-tool parser remains a
+separate policy: prototype filtering and JSON repair do not belong to general
+JSON.parse.
+
+PostgreSQL TEXT parameters use replacement encoding only at binding. JSONB
+parameters preserve exact JSON escapes and let the server own rejection and
+transaction ordering. Snapshots, stream chunks and ticket manifests have JSONB
+string envelopes, so escaped lone units can survive storage. Stream close and
+snapshot reads retain those values through their actual output bytes. Lease
+expiry additionally needs JavaScript TimeClip and expanded-year ISO text before
+PostgreSQL parses it; sending a native binary timestamp can accept a date the
+source rejects. Node-writer release compares its holder in SQL, unlike execution
+lease release's JavaScript comparison. Both distinctions have HTTP regressions.
+
+`tools/protocol-utf16-diagnostic.ts` now runs equality regressions for the original
+Unicode failures; the old known-divergence report remains historical evidence.
+The full maintained gate includes independent Unicode schema/producer/token/date
+oracles and native mutation, stream, asset, reducer and SQL-error comparisons.
+
+A separate confirmed read-side gap remains. The TypeScript adapter's json()
+helper also unwraps legacy JSONB string envelopes in event actor/payload/
+compatibility, artifact metadata and build tickets. Raw event reads currently
+expose some as literal strings, and persisted serde reducer/lifecycle facts
+cannot yet retain an unpaired unit decoded from such an envelope. A future fact
+with wrapped payload `{"x":"\\ud800"}` demonstrates the difference. The next
+increment must carry the lossless model through these reads and facts; the
+successful direct-JSONB scalar domain is not the entire shared-storage domain.
+The standalone read-envelope diagnostic records this remaining scope explicitly,
+rather than treating the green endpoint matrix as full conformance.
+
+
+## Legacy JSONB envelopes require typed replay as well as typed HTTP reads
+
+The read-side gap recorded above is now covered end to end. The source adapter
+unwraps one JSON text layer at specific columns; a JSONB string can therefore
+carry an escaped lone surrogate into a known event, even though a direct JSONB
+object cannot store it. Native event, artifact and ticket reads now apply that
+column-specific conversion and the source's outer-value truthiness. They preserve
+inner strings after one parse and report Bun-compatible original-code-unit errors
+for malformed inner JSON. Snapshots and stream chunks use the same parser.
+
+All 42 named reducers now execute on typed persisted values. Permissive stored
+payload projection remains separate from strict producer validation. Original
+UTF16 dictionary keys survive build/repository accumulators, compound log/read
+facts, restack aliases, named arguments and delegation facts. A lone-surrogate
+session and a U+FFFD session remain distinct through issuance, authorization,
+termination and verify-step deferral settlement. No replacement-key alias or
+scalar reducer fallback is used.
+
+The expanded actual HTTP proof covers 99 comparisons, including the original
+four failures. Independent generated source oracles cover 4,103 persisted payload
+cases, 25,112 replay cases across every named reducer and 1,342 JSON parsing
+cases. The existing scalar replay corpus is also checked through the typed path.
+The legacy diagnostic CLI now runs equality assertions; sanitized evidence is
+`.ab/proa-protocol-read-envelopes/read-envelopes.json`. These proofs supplement,
+not substitute for, the unchanged shared contract, authenticated dispatch and
+production reader checks in the maintained gate. The Builds-page rendering check
+remains deferred to node integration after file-131 by the approved ruling.
+
+
+## Review round 2: presence authority, retention and route grammar
+
+Delegated operator-presence GET must fail before reading any presence rows.
+Repository ownership alone is insufficient. The native handler now refuses all
+four delegated build/harvest kinds with the actual source's exact 403 text.
+The source's POST authorization takes a different earlier path: build grants
+receive `write outside delegated resource`, harvest grants receive
+`write outside delegated harvest run`, and malformed harvest JSON fails parsing
+before that denial. The review's claim that POST uses the GET-specific text was
+not borne out by the actual source service. Regression evidence preserves these
+source outcomes, instruments zero source presence lookups/mutations and compares
+unchanged native presence rows. This avoids fixing the GET leak by introducing
+a new refusal-text divergence.
+
+Production retention now parses AB_ARTIFACT_RETENTION_MAX_REVISIONS with the
+source positiveInt semantics and passes it into the machine Store. Mixed-writer
+checks seed 205 revisions and verify both a small bound (2) and an override above
+the default (500); a Rust write no longer prunes revisions the configured source
+writer retains. Invalid values fail startup configuration. Very large accepted
+JavaScript integers retain every realizable revision rather than overflowing a
+native SQL offset.
+
+Route decoding has two stages: the resource ID stays one decoded segment; generic
+family operations join and re-split the decoded tail. Repository special routes
+and top-level streams inspect the original decoded segments. The repository
+existence gate now precedes unsupported reducer-values methods, so a missing repo
+gets the source unknown-repo error. For an existing resource, valueRoute explicitly
+returns the abbreviated `no route: GET reducer-values`; the review's proposed
+pathname wording differs from that source implementation. Actual source/native
+regressions cover both outcomes and encoded-tail operations without changing
+product protocol or client sources.
+
+## Reconcile: machine namespaces and browser build detail
+
+The machine protocol owns every `/builds/*` request, including requests accepting
+HTML. Browser detail moved to `/dashboard/builds/:slug`; dashboard links and all
+capture variants use that path. Cookie authentication, SSR and live refresh remain
+on the browser branch. The seeded capture asserts both JSON machine refusal and
+rendered detail HTML, alongside the router regression. The upstream live dashboard
+and its 24-frame matrix coexist with the full native protocol gate.

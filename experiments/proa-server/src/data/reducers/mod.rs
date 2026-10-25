@@ -108,3 +108,11 @@ pub(crate) fn max(v: &mut Value, key: &str, n: &Value) {
 pub(crate) fn compatibility() -> Value {
     json!({"unknownFacts":0,"decisiveFacts":0,"lastSeq":0,"decisiveBoundary":0,"types":[],"writerVersions":[],"legacyVersionUnavailable":false,"decisiveTypes":[],"decisiveWriterVersions":[],"decisiveLegacyVersionUnavailable":false})
 }
+
+pub mod build_lossless;
+pub mod lossless;
+
+mod repository_attention_lossless;
+mod repository_harvest_lossless;
+pub mod repository_lossless;
+mod repository_upgrades_lossless;

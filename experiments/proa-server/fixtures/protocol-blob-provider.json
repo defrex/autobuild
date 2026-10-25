@@ -1,0 +1,187 @@
+{
+  "sources": {
+    "packages/postgres-store/src/vercel.ts": "4c6b8bad893ee6c00e882c400e4f0fb353a1c5c8b5a1da4bc6d1ba0bc7a59b19",
+    "packages/postgres-store/src/s3.ts": "7f9b25aeff8aab40d80d93ab1512a5585920d53a7ae9b5a3cb684c56d780e7e4",
+    "packages/postgres-store/node_modules/@vercel/blob/dist/index.js": "49c3427b1f3a04c7d473a4e1e33064dbd9c3459330236078ebad5af6ce4fa162",
+    "packages/postgres-store/node_modules/@vercel/blob/dist/chunk-YYMLUMXS.js": "26f2117c463494a728fe664a071db6106cde4f85d5226dd33b215909cc838047"
+  },
+  "sdk": "@vercel/blob@2.8.0",
+  "cases": [
+    {
+      "id": "token/public/0",
+      "auth": "token",
+      "access": "public",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer vercel_blob_rw_fixture_secret",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "public",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": []
+      }
+    },
+    {
+      "id": "token/public/4",
+      "auth": "token",
+      "access": "public",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [0, 255, 128, 10],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer vercel_blob_rw_fixture_secret",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "public",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": [0, 255, 128, 10]
+      }
+    },
+    {
+      "id": "token/private/0",
+      "auth": "token",
+      "access": "private",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer vercel_blob_rw_fixture_secret",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "private",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": []
+      }
+    },
+    {
+      "id": "token/private/4",
+      "auth": "token",
+      "access": "private",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [0, 255, 128, 10],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer vercel_blob_rw_fixture_secret",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "private",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": [0, 255, 128, 10]
+      }
+    },
+    {
+      "id": "oidc/public/0",
+      "auth": "oidc",
+      "access": "public",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer fixture-oidc",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "public",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": []
+      }
+    },
+    {
+      "id": "oidc/public/4",
+      "auth": "oidc",
+      "access": "public",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [0, 255, 128, 10],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer fixture-oidc",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "public",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": [0, 255, 128, 10]
+      }
+    },
+    {
+      "id": "oidc/private/0",
+      "auth": "oidc",
+      "access": "private",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer fixture-oidc",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "private",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": []
+      }
+    },
+    {
+      "id": "oidc/private/4",
+      "auth": "oidc",
+      "access": "private",
+      "prefix": "//a b///snow-雪/",
+      "hash": "0123abcd",
+      "bytes": [0, 255, 128, 10],
+      "request": {
+        "method": "PUT",
+        "target": "/?pathname=a+b%2Fsnow-%E9%9B%AA%2F0123abcd",
+        "headers": {
+          "authorization": "Bearer fixture-oidc",
+          "x-vercel-blob-store-id": "fixture",
+          "x-api-version": "12",
+          "x-vercel-blob-access": "private",
+          "x-add-random-suffix": "0",
+          "x-allow-overwrite": "1",
+          "x-api-blob-request-attempt": "0"
+        },
+        "body": [0, 255, 128, 10]
+      }
+    }
+  ]
+}

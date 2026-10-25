@@ -22,7 +22,7 @@ pub fn link(project: &str, slug: Option<&str>) -> String {
         .finish();
     match slug {
         Some(slug) => format!(
-            "/builds/{}?{query}",
+            "/dashboard/builds/{}?{query}",
             url::form_urlencoded::byte_serialize(slug.as_bytes()).collect::<String>()
         ),
         None => format!("/?{query}"),
