@@ -36,12 +36,22 @@ The kernel has selected this step. Do not inspect Git or decide applicability.
    to corresponding committed Builds/menu reference screenshots at desktop/phone
    in both grounds. Inspect actual pixels for hierarchy, typography, shell/menu
    composition, spacing, clipping and missing content. Check palette tokens,
-   Atkinson Hyperlegible Next and JetBrains Mono only, no horizontal overflow at
-   390px, and required route/state content. The approved scaffold intentionally
+   Atkinson Hyperlegible Next and JetBrains Mono for all interface text (labels,
+   controls, headings, state vocabulary, ids and timings), no horizontal overflow
+   at 390px, and required route/state content. Platform fallback glyphs are
+   permitted solely to faithfully render stored or producer-authored content
+   (such as escalation questions, transcripts and titles) whose characters are
+   absent from both ANSI faces, such as CJK and emoji. This exception does not
+   permit fallback faces for interface text. Preserve stored content verbatim;
+   do not delete or transliterate it to satisfy typography checks. The approved
+   scaffold intentionally
    has neutral proa/server identity and placeholder paragraphs instead of the
    reference's synthetic accounts/build rows; do not demand fake data.
 5. Append criterion-by-criterion observations and explicit visual PASS or FAIL to
    verify-report.md, naming every frame inspected and any guidance applied.
+   The capture report must list every frame and content region using fallback
+   faces, identify the fallback faces and unsupported characters, and confirm
+   that each use meets the stored or producer-authored content condition above.
    On ANY probe/capture/visual failure run `ab verdict fail --report <report>`;
    create a failure report in context scratch if capture failed before producing
    one. Never attach passing evidence on failure.
