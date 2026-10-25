@@ -17,6 +17,7 @@ import * as old9 from '../../../packages/hosted-store-service/src/compatibility-
 import * as old12 from '../../../packages/hosted-store-service/src/compatibility-fixtures/tickets-v0.12'
 import * as old13 from '../../../packages/hosted-store-service/src/compatibility-fixtures/tickets-v0.13'
 import { ticketOperationInputs } from './ticket-protocol-fixtures'
+import type { HostedTicketOperation } from '../../../packages/core/src/ports/tickets/remote-protocol'
 
 const file = resolve(import.meta.dir, '../fixtures/ticket-http.json')
 const sources = [
@@ -26,8 +27,20 @@ const sources = [
   'packages/hosted-store-service/src/compatibility-fixtures/tickets-v0.13.ts',
   'packages/core/src/ports/tickets/fake.ts',
 ]
+export interface TicketHttpFixtureCase {
+  version: string
+  supported: boolean
+  capabilities: Record<string, string>
+  operation: HostedTicketOperation
+  request: { context: { teamKey: string }; input: unknown }
+  headers: Record<string, string>
+  status: number
+  body: unknown
+  sourceCalls: number
+  historicalDecode?: boolean
+}
 export async function ticketHttpContract() {
-  const cases: unknown[] = []
+  const cases: TicketHttpFixtureCase[] = []
   for (const version of [AUTOBUILD_VERSION, '0.9.0', '0.12.0', '0.13.0', 'invalid']) {
     const supported = classifyClient(version, supportedClientRange()) === 'supported'
     for (const capabilities of [
@@ -41,7 +54,7 @@ export async function ticketHttpContract() {
       for (const [operation, input] of Object.entries(ticketOperationInputs)) {
         const source = new FakeTicketSource([
           {
-            ref: { source: 'file', id: 'ENG-1' },
+            ref: { source: 'database', id: 'ENG-1', title: 'Ticket' },
             kind: 'work',
             revision: 'seed',
             title: 'Ticket',
@@ -49,9 +62,15 @@ export async function ticketHttpContract() {
             state: 'ready',
             resolved: false,
             labels: [],
-            blockedBy: [],
           },
         ])
+        // Match the real database adapter's empty-comment get shape. This
+        // exercises the independent comments capability in the recorded corpus.
+        const get = source.get.bind(source)
+        source.get = async (id) => {
+          const ticket = await get(id)
+          return ticket === null ? null : { ...ticket, comments: [] }
+        }
         let sourceCalls = 0
         const server = createTicketServer({
           secret: 'offline-fixture',
@@ -73,11 +92,12 @@ export async function ticketHttpContract() {
         }
         for (const [name, value] of Object.entries(capabilities))
           headers[`x-autobuild-ticket-${name}`] = value
+        const request = { context: { teamKey: 'ENG' }, input }
         const response = await server.fetch(
           new Request(`https://fixture/tickets/${operation}`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+            body: JSON.stringify(request),
           }),
         )
         const body: unknown = await response.json()
@@ -105,8 +125,14 @@ export async function ticketHttpContract() {
         cases.push({
           version,
           supported,
-          capabilities,
-          operation,
+          capabilities: Object.fromEntries(
+            Object.entries(capabilities).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+          operation: operation as HostedTicketOperation,
+          request,
+          headers,
           status: response.status,
           body,
           sourceCalls,

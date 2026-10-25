@@ -1,5 +1,5 @@
 /** Maintained native read-transport parity against actual TypeScript handlers.
- * This checkpoint does not claim grants, legacy config or connect parity.
+ * Includes released ticket version/capability replay and registration-bound grants/policy.
  */
 import { SQL } from 'bun'
 import { parseConfig } from '../../../packages/core/src/config/load'
@@ -26,6 +26,7 @@ import { withDataServices } from './data-services'
 import { withProtocolDatabase } from './protocol-harness'
 import { buildProtocolExecutables, startProtocolServer } from './protocol-server-harness'
 import { cachePath } from './verify'
+import { replayTicketCompatibility } from './ticket-compatibility-replay'
 
 const policy = {
   version: 1,
@@ -44,6 +45,7 @@ const lifecycle = { triage: 'triage', ready: 'ready', doing: 'doing', done: 'don
 
 export async function ticketProtocolReadIntegration(executable: string) {
   let assertions = 0
+  let compatibilityReplay: { refused: number; projections: number } | undefined
   await withDataServices(async (admin, environment) =>
     withProtocolDatabase(admin, environment, async (env) => {
       const sql = new SQL(env.AB_POSTGRES_URL!, { max: 4 })
@@ -89,7 +91,18 @@ export async function ticketProtocolReadIntegration(executable: string) {
         const oracle = createTicketServer({
           secret,
           clock,
-          policy: policies,
+          policy: {
+            get: async (selected) => {
+              if (!(await projects.has(selected)))
+                throw new MachineAuthError(403, 'project not registered')
+              return policies.get(selected)
+            },
+            put: async (selected, value, writer) => {
+              if (!(await projects.has(selected)))
+                throw new MachineAuthError(403, 'project not registered')
+              await policies.put(selected, value, writer)
+            },
+          },
           grants,
           auth: createMachineAuth({ secret, clock, credentials, projects }),
           sourceFor: async (context, principal) => {
@@ -148,6 +161,56 @@ export async function ticketProtocolReadIntegration(executable: string) {
           input: unknown,
           context: unknown = { teamKey: 'client-must-not-override-policy' },
         ) => JSON.stringify({ context, input })
+        const compatibilityRepo = 'https://github.com/proa/ticket-compatibility'
+        await projects.add(compatibilityRepo, 'ticket proof')
+        await policies.put(compatibilityRepo, policy, 'ticket proof')
+        const compatibilitySource = new PostgresTicketSource(
+          sql,
+          { repo: compatibilityRepo, teamKey: 'ENG', lifecycle },
+          lifecycle,
+        )
+        await compatibilitySource.create(
+          { title: 'Ticket', body: 'Body\n', labels: [] },
+          { state: 'ready' },
+        )
+        const compatibilityCredential = await credentials.issue(compatibilityRepo, 'ticket proof')
+        const beforeCompatibility = await compatibilitySource.listReady({})
+        expectedSource = compatibilitySource
+        const compatibility = await replayTicketCompatibility(
+          compatibilityCredential.token,
+          (row, init) => native!.fetch(`${native!.url}/tickets/${row.operation}`, init),
+          (row, init) => oracle.fetch(new Request(`http://oracle/tickets/${row.operation}`, init)),
+        )
+        assert.deepEqual(
+          await compatibilitySource.listReady({}),
+          beforeCompatibility,
+          'version refusals never mutate seeded tickets',
+        )
+        expectedSource = source
+        compatibilityReplay = compatibility
+        assertions += compatibility.refused + compatibility.projections
+        for (const selector of [
+          'ssh://git@GITHUB.COM/proa/ticket-reads',
+          'git://GITHUB.COM/proa/ticket-reads',
+        ]) {
+          await compare('get', request({ id: first.ref.id }, { teamKey: 'ENG', repo: selector }))
+          await compare('states', request({}, { teamKey: 'ENG', repo: selector }))
+        }
+        const removedPolicyRepo = 'https://github.com/proa/ticket-policy-removed'
+        await projects.add(removedPolicyRepo, 'ticket proof')
+        await projects.remove(removedPolicyRepo, 'ticket proof')
+        for (const selector of [
+          'https://github.com/proa/ticket-policy-never-registered',
+          removedPolicyRepo,
+        ]) {
+          for (const input of [null, policy])
+            await compare(
+              'policy',
+              request(input, { teamKey: 'ENG', repo: selector }),
+              { authorization: `Bearer ${adminToken}` },
+              403,
+            )
+        }
         await compare('states', request({}))
         const listing = await compare('list-ready', request({}))
         assert.equal(listing.tickets.length, 2, 'absent state is unfiltered')
@@ -598,7 +661,9 @@ export async function ticketProtocolReadIntegration(executable: string) {
   )
   return {
     assertions,
+    compatibilityReplay,
     checks: [
+      'all recorded refused-version/capability cases and admitted read projections replay against native HTTP; frozen decoders retained',
       'states/get/list/dependencies match real TypeScript handler over shared PostgreSQL',
       'nullable get, unfiltered listing, alias lookup, ordered duplicate dependencies and all independent capability combinations',
       'project/admin admission, cross-project/internal refusal and authorization before JSON parsing',

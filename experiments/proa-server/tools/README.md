@@ -464,12 +464,18 @@ This is a request-validation oracle only; it does not establish native ticket
 HTTP behavior, historical response compatibility or durable connect parity.
 
 `bun tools/ticket-http-fixtures.ts` checks actual TypeScript ticket-handler
-responses over a seeded in-memory TicketSource. The corpus covers every ticket
-operation, independent capability headers, unknown capability values and release
-refusals before source construction. Frozen historical decoders are replayed when
-their release line remains admitted; outside the release window the oracle
-records the version refusal instead. This evidence does not prove PostgreSQL,
-native HTTP parity or browser connect behavior. Use `--write` to refresh.
+responses over a seeded in-memory TicketSource (`--write` explicitly refreshes).
+The corpus records each request, identity headers and capability masks for every
+ticket operation, including unknown capability values and release refusals.
+The maintained `ticket-protocol-integration.ts` replays every recorded refused
+case against native HTTP with exact status/body comparison. Every admitted
+get/list projection is compared both to its recorded body and the real TypeScript
+handler over an equivalent PostgreSQL seed. Only the generated revision value is
+normalized, preserving its presence/type and all other fields. Frozen decoders
+validate native projections when their release line is admitted; retired clients
+receive the recorded version refusal. The fixture freshness check alone makes
+no persistence or native parity claim; the database/HTTP replay supplies those
+proofs and reports its refusal/projection counts in the gate output.
 
 `connect-fixtures.ts` pins the TypeScript repository normalizer and its accepted
 and refused identity forms. `connect-persistence-integration.ts` runs a native
