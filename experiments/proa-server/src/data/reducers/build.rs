@@ -83,7 +83,11 @@ impl BuildAcc {
                 self.state["pinnedAssets"] = p.get("assets").cloned().unwrap_or(json!([]));
             }
             "node.parent-accepted" if self.state["kind"] == "node" => {
-                copy(&mut self.state, &p["next"], "target");
+                if p["next"]["target"].is_null() {
+                    remove(&mut self.state, "target");
+                } else {
+                    copy(&mut self.state, &p["next"], "target");
+                }
                 self.state["baseBranch"] = p["next"]["branch"].clone();
                 remove(&mut self.state, "nodeComparison");
                 if self.state.get("integration").is_some() {
@@ -763,10 +767,10 @@ impl BuildAcc {
                     remove(entry, "authorization");
                 }
             }
-            "execution.drain-settled" => {
-                if self.state["drainingExecutions"][id]["correlation"] == p["correlation"] {
-                    remove(&mut self.state["drainingExecutions"][id], "authorization");
-                }
+            "execution.drain-settled"
+                if self.state["drainingExecutions"][id]["correlation"] == p["correlation"] =>
+            {
+                remove(&mut self.state["drainingExecutions"][id], "authorization");
             }
             _ => {}
         }
@@ -846,10 +850,8 @@ impl BuildAcc {
             "integration.landing-intended" => s["intent"] = p.clone(),
             "integration.landed" => s["landing"] = p.clone(),
             "integration.audited" => s["audit"] = p.clone(),
-            "integration.abandoned" => {
-                if s["intent"]["id"] == p["id"] {
-                    remove(s, "intent");
-                }
+            "integration.abandoned" if s["intent"]["id"] == p["id"] => {
+                remove(s, "intent");
             }
             _ => {}
         }

@@ -180,16 +180,15 @@ pub fn fold(acc: &mut Value, event: &Value) {
                 }
             }
         }
-        "dispatcher.handoff-completed" => {
+        "dispatcher.handoff-completed"
             if present(state, "handoff")
                 && same(&state["handoff"]["payload"], p)
                 && state["outstanding"].as_object().unwrap().is_empty()
                 && (!present(state, "request")
                     || state["request"]["payload"]["successor"] == p["successor"])
-                && !present(state, "completed")
-            {
-                state["completed"] = event.clone();
-            }
+                && !present(state, "completed") =>
+        {
+            state["completed"] = event.clone();
         }
         _ => {}
     }
