@@ -327,6 +327,7 @@ mod tests {
         (
             AppState {
                 auth: Arc::new(auth),
+                data: None,
             },
             list,
         )
@@ -629,6 +630,7 @@ mod failure_tests {
             );
             let state = AppState {
                 auth: Arc::new(auth),
+                data: None,
             };
             let response = routes::router(state.clone())
                 .oneshot(
