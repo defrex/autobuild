@@ -1,5 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { build, project, root } from './verify'
 import { checkRoutes, checkFrameMatrix, frames, palette, probe } from './capture-cases'
@@ -20,10 +21,17 @@ export async function capture() {
   const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
     '\n',
   )
-  if (config.database.driver !== 'none' || /sqlx|postgres|oauth|session|DATABASE_URL/i.test(source))
+  if (config.database.driver !== 'none' || /sqlx|postgres|DATABASE_URL/i.test(source))
+    throw Error('Unsupported database capability; add a seed adapter; see tools/README.md')
+  if (
+    !source.includes('x-proa-dev-capability') ||
+    !source.includes('ConnectInfo') ||
+    !source.includes('PROA_DEV_AUTH')
+  )
     throw Error(
-      'Data/auth capability requires seed adapter and server-issued loopback development session; see tools/README.md',
+      'Auth capture requires the supported server-issued loopback development session capability',
     )
+  const capability = randomBytes(32).toString('hex')
   const binary = await build(true)
   const output = await mkdtemp(join(root, '.ab/proa-frames-'))
   console.log(`Evidence: ${output}`)
@@ -42,11 +50,51 @@ export async function capture() {
       PROA_HOST: '127.0.0.1',
       PORT: String(port),
       RUST_LOG: 'info',
+      PROA_AUTH_URL: `http://127.0.0.1:${port}`,
+      GITHUB_CLIENT_ID: 'capture-id',
+      GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
+      PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
+      AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+      PROA_ENV: 'development',
+      PROA_DEV_AUTH: 'true',
+      PROA_DEV_AUTH_EMAIL: 'operator@example.com',
+      PROA_DEV_AUTH_CAPABILITY: capability,
     },
     stdout: Bun.file(join(output, 'server.log')),
     stderr: Bun.file(join(output, 'server-errors.log')),
   })
-  const stopServer = () => server.kill()
+  const refusalReservation = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(),
+  })
+  const refusalPort = refusalReservation.port!
+  refusalReservation.stop(true)
+  const refusalOrigin = `http://127.0.0.1:${refusalPort}`
+  const refusalServer = Bun.spawn([binary], {
+    cwd: runtime,
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      PROA_HOST: '127.0.0.1',
+      PORT: String(refusalPort),
+      PROA_AUTH_URL: refusalOrigin,
+      GITHUB_CLIENT_ID: 'capture-id',
+      GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
+      PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
+      AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+      PROA_ENV: 'development',
+      PROA_DEV_AUTH: 'true',
+      PROA_DEV_AUTH_EMAIL: 'refused@example.com',
+      PROA_DEV_AUTH_CAPABILITY: capability,
+    },
+    stdout: Bun.file(join(output, 'refusal-server.log')),
+    stderr: Bun.file(join(output, 'refusal-server-errors.log')),
+  })
+  const stopServer = () => {
+    server.kill()
+    refusalServer.kill()
+  }
   process.once('SIGTERM', stopServer)
   process.once('SIGINT', stopServer)
   const origin = `http://127.0.0.1:${port}`
@@ -55,7 +103,7 @@ export async function capture() {
     for (let i = 0; i < 200; i++) {
       if (server.exitCode !== null) throw Error('Server exited before readiness')
       try {
-        if ((await fetch(`${origin}/readyz`)).ok) {
+        if ((await fetch(`${origin}/readyz`)).ok && (await fetch(`${refusalOrigin}/readyz`)).ok) {
           ready = true
           break
         }
@@ -63,19 +111,23 @@ export async function capture() {
       await Bun.sleep(50)
     }
     if (!ready) throw Error('Server readiness timeout')
-    for (const path of ['/health', '/readyz', '/index.md', '/static/styles.css'])
+    for (const path of ['/health', '/readyz', '/sign-in', '/static/styles.css'])
       if (!(await fetch(origin + path)).ok) throw Error(`Response smoke failed: ${path}`)
-    return await captureFrames(origin, output)
+    return await captureFrames(origin, output, { capability, refusalOrigin })
   } finally {
-    server.kill()
-    await server.exited
+    stopServer()
+    await Promise.all([server.exited, refusalServer.exited])
     await rm(runtime, { recursive: true, force: true })
     process.removeListener('SIGTERM', stopServer)
     process.removeListener('SIGINT', stopServer)
   }
 }
 
-export async function captureFrames(origin: string, output: string) {
+export async function captureFrames(
+  origin: string,
+  output: string,
+  auth?: { capability: string; refusalOrigin: string },
+) {
   checkFrameMatrix(frames)
   let browser: ReturnType<typeof Bun.spawn> | undefined
   let socket: WebSocket | undefined
@@ -158,7 +210,20 @@ export async function captureFrames(origin: string, output: string) {
           void send('Fetch.fulfillRequest', { requestId: r.params.requestId, responseCode: 204 })
           return
         }
-        const local = r.params.request.url.startsWith(`${origin}/`)
+        const local =
+          r.params.request.url.startsWith(`${origin}/`) ||
+          Boolean(auth && r.params.request.url.startsWith(`${auth.refusalOrigin}/`))
+        if (auth && r.params.request.url === `${auth.refusalOrigin}/auth/dev-session`) {
+          void send('Fetch.continueRequest', {
+            requestId: r.params.requestId,
+            method: 'POST',
+            headers: [
+              ...Object.entries(r.params.request.headers).map(([name, value]) => ({ name, value })),
+              { name: 'x-proa-dev-capability', value: auth.capability },
+            ],
+          })
+          return
+        }
         if (!local) errors.push(`External request: ${r.params.request.url}`)
         void send(local ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
           requestId: r.params.requestId,
@@ -167,7 +232,15 @@ export async function captureFrames(origin: string, output: string) {
       }
       if (r.method === 'Runtime.exceptionThrown' || r.method === 'Network.loadingFailed')
         errors.push(JSON.stringify(r))
-      if (r.method === 'Network.responseReceived' && r.params.response.status >= 400)
+      if (
+        r.method === 'Network.responseReceived' &&
+        r.params.response.status >= 400 &&
+        !(
+          auth &&
+          r.params.response.status === 403 &&
+          r.params.response.url === `${auth.refusalOrigin}/auth/dev-session`
+        )
+      )
         errors.push(`HTTP ${r.params.response.status}: ${r.params.response.url}`)
     }
     for (const method of [
@@ -201,14 +274,38 @@ export async function captureFrames(origin: string, output: string) {
         features: [{ name: 'prefers-color-scheme', value: frame.theme }],
       })
       await send('Page.addScriptToEvaluateOnNewDocument', {
-        source: `localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)})`,
+        source: `window.__captureFrame=${JSON.stringify(frame.id)};localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)})`,
       })
-      await send('Page.navigate', { url: origin + frame.route })
+      await send('Network.clearBrowserCookies')
+      if (auth && (frame.state === 'closed' || frame.state === 'open')) {
+        const issued = await fetch(`${origin}/auth/dev-session`, {
+          method: 'POST',
+          headers: { 'x-proa-dev-capability': auth.capability },
+          redirect: 'manual',
+        })
+        if (issued.status !== 303) throw Error('Development issuer refused capture identity')
+        for (const line of issued.headers.getSetCookie()) {
+          if (line.includes('Max-Age=0')) continue
+          const [pair] = line.split(';')
+          const at = pair!.indexOf('=')
+          await send('Network.setCookie', {
+            name: pair!.slice(0, at),
+            value: pair!.slice(at + 1),
+            url: origin,
+            httpOnly: true,
+            sameSite: 'Lax',
+            path: '/',
+          })
+        }
+      }
+      await send('Page.navigate', {
+        url: (frame.state === 'refused' && auth ? auth.refusalOrigin : origin) + frame.route,
+      })
       let loaded = false
       for (let i = 0; i < 200; i++) {
         if (
           await evaluate(
-            "document.readyState === 'complete' && Boolean(document.querySelector('#account-trigger'))",
+            `window.__captureFrame === ${JSON.stringify(frame.id)} && document.readyState === 'complete' && Boolean(document.querySelector('${frame.state === 'sign-in' || frame.state === 'refused' ? '[data-page="sign-in"]' : '#account-trigger'}'))`,
           )
         ) {
           loaded = true
@@ -218,7 +315,7 @@ export async function captureFrames(origin: string, output: string) {
       }
       if (!loaded) throw Error('Page readiness timeout')
       await evaluate(
-        `document.documentElement.dataset.theme=${JSON.stringify(frame.theme)};document.fonts.ready`,
+        `document.documentElement.dataset.theme=${JSON.stringify(frame.theme)};Promise.all([document.fonts.load('16px "Atkinson Hyperlegible Next"'),document.fonts.load('16px "JetBrains Mono"')]).then(()=>document.fonts.ready)`,
       )
       if (frame.state === 'open')
         await evaluate("document.querySelector('#account-trigger').click()")
@@ -254,12 +351,61 @@ export async function captureFrames(origin: string, output: string) {
       const bytes = decodePng(shot.data)
       await Bun.write(png, bytes)
       inventory.push({ ...frame, png, probe: result, fonts: [...fonts] })
+      if (auth && frame.state === 'open') {
+        const behavior = await evaluate(`(() => {
+          const trigger = document.querySelector('#account-trigger');
+          const panel = document.querySelector('#account-panel');
+          const opposite = ${JSON.stringify(frame.theme === 'light' ? 'dark' : 'light')};
+          panel.querySelector('[data-choice="' + opposite + '"]').click();
+          if (document.documentElement.dataset.theme !== opposite || localStorage.getItem('proa-theme') !== opposite || !panel.hidden || document.activeElement !== trigger) return false;
+          trigger.click();
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          if (!panel.hidden || document.activeElement !== trigger) return false;
+          trigger.click(); document.body.click();
+          return panel.hidden && trigger.getAttribute('aria-expanded') === 'false';
+        })()`)
+        if (!behavior) throw Error('Theme/disclosure behavior failed under CSP')
+      }
+    }
+    if (auth) {
+      const issued = await fetch(`${origin}/auth/dev-session`, {
+        method: 'POST',
+        headers: { 'x-proa-dev-capability': auth.capability },
+        redirect: 'manual',
+      })
+      const line = issued.headers
+        .getSetCookie()
+        .find((c) => c.startsWith('proa-session=') && !c.includes('Max-Age=0'))!
+      const pair = line.split(';')[0]!
+      await send('Network.clearBrowserCookies')
+      await send('Network.setCookie', {
+        name: 'proa-session',
+        value: pair.slice(pair.indexOf('=') + 1),
+        url: origin,
+        httpOnly: true,
+        sameSite: 'Lax',
+      })
+      await send('Page.navigate', { url: origin })
+      for (let i = 0; i < 100; i++) {
+        if (await evaluate("Boolean(document.querySelector('[data-sign-out]'))")) break
+        await Bun.sleep(50)
+      }
+      await evaluate(
+        "document.querySelector('#account-trigger').click(); document.querySelector('[data-sign-out] button').click()",
+      )
+      for (let i = 0; i < 100; i++) {
+        if (await evaluate("Boolean(document.querySelector('[data-page=sign-in]'))")) break
+        await Bun.sleep(50)
+      }
+      const replay = await fetch(origin, { headers: { cookie: pair }, redirect: 'manual' })
+      if (replay.status !== 307) throw Error('Logout did not revoke the copied session')
+      if (errors.length) throw Error(errors.join('; '))
     }
     if (inventory.length !== frames.length) throw Error('Incomplete frame matrix')
     await Bun.write(join(output, 'inventory.json'), JSON.stringify(inventory, null, 2))
     await Bun.write(
       join(output, 'verify-report.md'),
-      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: none. Auth: none.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
+      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: none. Auth: server-issued loopback development sessions; real refused issuance, public sign-in, protected Builds and account menu.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
     )
     return output
   } finally {
