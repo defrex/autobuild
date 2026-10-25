@@ -8,12 +8,21 @@ import type { Config } from '../../../packages/core/src/config/schema'
 import { parseConfig } from '../../../packages/core/src/config/load'
 import { buildReducer } from '../../../packages/core/src/kernel/reducer'
 import { dashboardFactsReducer } from '../../../packages/core/src/cli/dashboard/facts'
+import { enrichIntegrationRows } from '../../../packages/core/src/cli/dashboard/integration-row'
 import { projectBuild } from '../../../packages/core/src/cli/dashboard/model'
 import { landingPolicyDisplay } from '../../../packages/core/src/cli/dashboard/landing-display'
 import { displayText, cellWidth, splitCells } from '../../../packages/core/src/cli/dashboard/cells'
 import type { AbEvent } from '../../../packages/core/src/events/catalog'
 import type { BuildRecord, StreamRecord } from '../../../packages/core/src/store/types'
-import { experiment, root, readCorpus, gzipCorpus, sources } from './fixture-core'
+import {
+  experiment,
+  root,
+  readCorpus,
+  gzipCorpus,
+  sources,
+  witnessEvent,
+  schemas,
+} from './fixture-core'
 
 export const configuration = parseConfig(`
 [tickets]
@@ -68,6 +77,68 @@ export function generateProjection() {
     ]),
   )
   const clock = '2026-10-24T12:00:00.000Z'
+  const treeCases = [
+    [
+      ['root', 'node', null],
+      ['nested', 'node', 'root'],
+      ['child', 'work', 'nested'],
+      ['root-work', 'work', null],
+      ['orphan', 'work', 'missing'],
+    ],
+    [
+      ['cycle-a', 'node', 'cycle-b'],
+      ['cycle-b', 'node', 'cycle-a'],
+    ],
+  ].map((definitions) =>
+    definitions.map(([slug, kind, parent]) => {
+      const record: BuildRecord = {
+        slug: slug!,
+        repo: 'tree',
+        createdAt: clock,
+        updatedAt: clock,
+        ticket: { source: 'file', id: slug!, title: slug! },
+      }
+      const created = witnessEvent('build', 'build.created', schemas.build['build.created'])
+      const attached = witnessEvent('build', 'runner.attached', schemas.build['runner.attached'])
+      const events = [
+        {
+          ...created,
+          build: slug,
+          seq: 1,
+          payload: {
+            ...(created.payload as object),
+            kind,
+            repo: 'tree',
+            baseBranch: 'main',
+            ...(parent
+              ? { target: { build: parent, ticket: { source: 'file', id: parent } } }
+              : {}),
+          },
+        },
+        { ...attached, build: slug, seq: 2 },
+      ] as unknown as AbEvent[]
+      if (slug === 'root') {
+        const observed = witnessEvent(
+          'build',
+          'integration.observed',
+          schemas.build['integration.observed'],
+        )
+        events.push({
+          ...observed,
+          build: slug,
+          seq: 3,
+          payload: {
+            ...(observed.payload as object),
+            openChildren: ['nested'],
+            contributions: [],
+            diagnostics: [],
+            children: [{ source: 'file', id: 'nested', title: 'title unavailable' }],
+          },
+        } as unknown as AbEvent)
+      }
+      return { record, events, expected: projectionOutcome(record, events) }
+    }),
+  )
   return {
     manifest: {
       format: 1,
@@ -94,8 +165,21 @@ export function generateProjection() {
           boundaries: fixture.boundaries,
           unreadable: fixture.rustUnreadable,
           expected: projectionOutcome(record, events),
+          checkpoints: (fixture.boundaries ?? [events.length]).map((end) => ({
+            end,
+            expected: projectionOutcome(record, events.slice(0, end)),
+          })),
         }
       }),
+    treeCases,
+    treeEnriched: treeCases.map((entries) =>
+      enrichIntegrationRows(
+        entries
+          .map((e) => e.expected.row)
+          .filter((row): row is NonNullable<typeof row> => row != null),
+        entries.map((e) => e.record),
+      ),
+    ),
     sessionCases: corpus.fixtures
       .filter(
         (fixture) =>

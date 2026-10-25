@@ -51,6 +51,58 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
             fixture["id"]
         );
     }
+    for (tree_index, tree) in corpus["treeCases"].as_array().unwrap().iter().enumerate() {
+        let mut rows = Vec::new();
+        for fixture in tree.as_array().unwrap() {
+            let events = fixture["events"].as_array().unwrap();
+            let mut state = proa_server::data::reducers::Accumulator::new(
+                proa_server::data::reducers::Scope::Build,
+            );
+            state.advance(events).unwrap();
+            let mut restack = proa_server::dashboard::restack::RestackFacts::default();
+            restack.advance(events);
+            let row = proa_server::dashboard::model::project(
+                &fixture["record"],
+                &state.finish()["build"],
+                &fixture["expected"]["facts"],
+                &restack.finish(),
+                &corpus["config"],
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(row, fixture["expected"]["row"]);
+            rows.push(row);
+        }
+        let records = tree
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|fixture| fixture["record"].clone())
+            .collect::<Vec<_>>();
+        proa_server::dashboard::integration::enrich(&mut rows, &records);
+        assert_eq!(
+            serde_json::to_value(&rows).unwrap(),
+            corpus["treeEnriched"][tree_index]
+        );
+        proa_server::data::dashboard::order_rows(&mut rows);
+        assert_eq!(rows.len(), tree.as_array().unwrap().len());
+        let unique: std::collections::HashSet<_> = rows
+            .iter()
+            .map(|row| row["slug"].as_str().unwrap())
+            .collect();
+        assert_eq!(unique.len(), rows.len());
+        for row in &rows {
+            if let Some(parent) = row["collectionIdentity"]["targetBuild"].as_str() {
+                if let Some(parent_index) = rows.iter().position(|r| r["slug"] == parent) {
+                    let child_index = rows.iter().position(|r| r["slug"] == row["slug"]).unwrap();
+                    if row["depth"].as_u64().unwrap() > 0 {
+                        assert!(parent_index < child_index);
+                    }
+                }
+            }
+        }
+    }
     let mut mismatches = Vec::new();
     for fixture in corpus["fixtures"].as_array().unwrap() {
         let events = fixture["events"].as_array().unwrap();
@@ -95,10 +147,41 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
             );
         }
         let mut chunked = DashboardFacts::default();
+        let mut state = proa_server::data::reducers::Accumulator::new(
+            proa_server::data::reducers::Scope::Build,
+        );
+        let mut restack = proa_server::dashboard::restack::RestackFacts::default();
         let mut cursor = 0;
-        for end in fixture["boundaries"].as_array().unwrap() {
-            let end = end.as_u64().unwrap() as usize;
-            chunked.advance(&events[cursor..end]);
+        for checkpoint in fixture["checkpoints"].as_array().unwrap() {
+            let end = checkpoint["end"].as_u64().unwrap() as usize;
+            let suffix = &events[cursor..end];
+            chunked.advance(suffix);
+            if fixture["unreadable"].is_null() {
+                state.advance(suffix).unwrap();
+                restack.advance(suffix);
+                let row = proa_server::dashboard::model::project(
+                    &fixture["record"],
+                    &state.finish()["build"],
+                    &chunked.finish(),
+                    &restack.finish(),
+                    &corpus["config"],
+                    None,
+                    None,
+                );
+                assert_eq!(
+                    serde_json::to_value(row).unwrap(),
+                    checkpoint["expected"]["row"],
+                    "prefix {} at {}",
+                    fixture["id"],
+                    end
+                );
+            }
+            assert_eq!(
+                chunked.finish(),
+                checkpoint["expected"]["facts"],
+                "prefix facts {}",
+                fixture["id"]
+            );
             cursor = end;
         }
         chunked.advance(&events[cursor..]);

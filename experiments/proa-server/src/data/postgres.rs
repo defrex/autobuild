@@ -315,6 +315,46 @@ impl PostgresReader {
         Ok(result)
     }
 
+    pub async fn build_streams(&self, repo: &str, slug: &str) -> Result<Vec<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        Self::assert_scope(&tx, repo, Scope::Build(slug)).await?;
+        let rows=tx.query("SELECT s.* FROM streams s JOIN builds b ON b.slug=s.build WHERE b.repo=$1 AND s.build=$2 AND s.scope_kind='build' ORDER BY s.created_at,s.id", &[&repo,&slug]).await.map_err(|_|DataError::Query)?;
+        let result=rows.iter().map(|row| {
+            let mut value=json!({"id":row.get::<_,String>("id"),"scope":{"kind":"build","build":slug},"label":row.get::<_,String>("label"),"format":row.get::<_,String>("format"),"status":row.get::<_,String>("status"),"createdAt":timestamp(row,"created_at")});
+            if let Some(outcome)=row.get::<_,Option<String>>("outcome") {value["outcome"]=json!(outcome);}
+            if let Some(kind)=row.get::<_,Option<String>>("artifact_kind") {value["artifact"]=json!({"kind":kind,"revision":row.get::<_,Option<i64>>("artifact_revision"),"blobRef":row.get::<_,Option<String>>("artifact_blob_ref")});}
+            value
+        }).collect();
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        Ok(result)
+    }
+    pub async fn stream_chunks(
+        &self,
+        repo: &str,
+        slug: &str,
+        stream: &str,
+        after: i64,
+    ) -> Result<Vec<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        Self::assert_scope(&tx, repo, Scope::Build(slug)).await?;
+        let rows=tx.query("SELECT c.seq,c.ts,c.parts FROM stream_chunks c JOIN streams s ON s.id=c.stream JOIN builds b ON b.slug=s.build WHERE b.repo=$1 AND s.build=$2 AND s.id=$3 AND s.scope_kind='build' AND c.seq>$4 ORDER BY c.seq", &[&repo,&slug,&stream,&after]).await.map_err(|_|DataError::Query)?;
+        let result=rows.iter().map(|row|json!({"stream":stream,"seq":row.get::<_,i64>("seq"),"parts":row.get::<_,Value>("parts")})).collect();
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        Ok(result)
+    }
+
     pub async fn sessions(&self, repo: &str) -> Result<Vec<Value>, DataError> {
         let mut client = self.client().await?;
         let tx = client

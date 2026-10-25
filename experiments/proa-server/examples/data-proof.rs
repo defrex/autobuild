@@ -32,6 +32,15 @@ async fn main() -> anyhow::Result<()> {
             "builds" => reader.postgres().builds(repo).await.map(|v| json!(v)),
             "sessions" => reader.postgres().sessions(repo).await.map(|v| json!(v)),
             "project" => reader.project_builds(repo).await.map(|v| json!(v)),
+            "detail" => reader.detail_snapshot(repo, id).await,
+            "dashboard" => reader
+                .dashboard_snapshot(Some(repo))
+                .await
+                .map(|value| json!(value)),
+            "stream" => reader
+                .stream_text(repo, id, command["stream"].as_str().unwrap_or_default())
+                .await
+                .map(|value| json!(value)),
             "counts" => Ok(json!(reader.query_counts().await)),
             "clear" => {
                 reader.clear_cache().await;

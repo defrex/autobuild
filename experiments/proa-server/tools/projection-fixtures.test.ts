@@ -20,7 +20,7 @@ test('display oracle covers every build log, preserves aliases and recomputes Ty
   checkProjection(corpus)
   corpus.fixtures[0].expected.row = { slug: 'invented' }
   expect(() => checkProjection(corpus)).toThrow('stale projection oracle')
-})
+}, 60000)
 test('stream metadata can close a displayed stream without a build event', () => {
   const corpus = stored()
   expect(

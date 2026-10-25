@@ -289,3 +289,150 @@ pub fn project(
     }
     (row, detail)
 }
+
+/// Recompute collection text over already-read rows; no event replay or store reads.
+pub fn enrich(rows: &mut [Value], records: &[Value]) {
+    let source = rows.to_vec();
+    for row in rows {
+        if row["integrationRow"].is_null() || row["collectionIdentity"].is_null() {
+            continue;
+        }
+        let identity = &row["collectionIdentity"];
+        let live = |id: &Value, child_source: &Value, claims: &Value| -> Option<&Value> {
+            source
+                .iter()
+                .filter(|child| {
+                    let m = &child["collectionIdentity"];
+                    !m.is_null()
+                        && m["repo"] == identity["repo"]
+                        && m["targetBuild"] == row["slug"]
+                        && (array(claims).iter().any(|claim| claim == &child["slug"])
+                            || (m["targetSource"] == identity["source"]
+                                && m["targetId"] == identity["id"]
+                                && (if m["id"].is_null() {
+                                    &child["slug"] == id
+                                } else {
+                                    &m["source"] == child_source && &m["id"] == id
+                                })))
+                        && !["queued", "done", "aborted"]
+                            .iter()
+                            .any(|status| m["status"] == *status)
+                })
+                .max_by(|a, b| {
+                    super::cells::compare(
+                        a["collectionIdentity"]["createdAt"]
+                            .as_str()
+                            .unwrap_or_default(),
+                        b["collectionIdentity"]["createdAt"]
+                            .as_str()
+                            .unwrap_or_default(),
+                    )
+                    .then(super::cells::compare(
+                        a["slug"].as_str().unwrap_or_default(),
+                        b["slug"].as_str().unwrap_or_default(),
+                    ))
+                })
+        };
+        let detail = &row["integrationDetail"];
+        let building = array(&row["integrationRow"]["openChildren"])
+            .iter()
+            .filter(|id| {
+                let child = array(&detail["children"])
+                    .iter()
+                    .find(|c| &c["id"] == *id && c["landed"] != true);
+                let src = child
+                    .and_then(|c| c.get("source"))
+                    .unwrap_or(&identity["source"]);
+                live(id, src, child.map(|c| &c["claims"]).unwrap_or(&Value::Null)).is_some()
+            })
+            .count();
+        let mut children = Vec::<Value>::new();
+        for child in array(&detail["children"]) {
+            let active = if child["landed"] == true {
+                None
+            } else {
+                live(&child["id"], &child["source"], &child["claims"])
+            };
+            let historical = records.iter().find(|r| {
+                r["repo"] == identity["repo"]
+                    && array(&child["builds"]).iter().any(|b| b == &r["slug"])
+            });
+            let mut next = child.clone();
+            if let Some(record) = historical {
+                if child["id"] == record["slug"] {
+                    if let Some(id) = record["ticket"].get("id") {
+                        next["id"] = id.clone();
+                    }
+                    if let Some(src) = record["ticket"].get("source") {
+                        next["source"] = src.clone();
+                    }
+                }
+            }
+            if child["title"] == "title unavailable" {
+                if let Some(title) = active
+                    .and_then(|r| r["collectionIdentity"].get("title"))
+                    .or_else(|| historical.and_then(|r| r["ticket"].get("title")))
+                {
+                    next["title"] = title.clone();
+                }
+            }
+            next["state"] = if child["landed"] == true {
+                json!("landed")
+            } else {
+                active
+                    .and_then(|r| r["collectionIdentity"].get("phase"))
+                    .cloned()
+                    .unwrap_or(json!("queued"))
+            };
+            if let Some(previous) = children
+                .iter_mut()
+                .find(|p| p["source"] == next["source"] && p["id"] == next["id"])
+            {
+                let mut preferred = if previous["landed"] != true {
+                    previous.clone()
+                } else {
+                    next.clone()
+                };
+                if preferred["title"] == "title unavailable" {
+                    preferred["title"] = if previous["title"] != "title unavailable" {
+                        previous["title"].clone()
+                    } else {
+                        next["title"].clone()
+                    };
+                }
+                let builds: BTreeSet<_> = array(&previous["builds"])
+                    .iter()
+                    .chain(array(&next["builds"]))
+                    .filter_map(Value::as_str)
+                    .collect();
+                preferred["builds"] = json!(builds);
+                *previous = preferred;
+            } else {
+                children.push(next);
+            }
+        }
+        children.sort_by(|a, b| {
+            a["landed"]
+                .as_bool()
+                .cmp(&b["landed"].as_bool())
+                .then(super::cells::compare(
+                    a["source"].as_str().unwrap_or_default(),
+                    b["source"].as_str().unwrap_or_default(),
+                ))
+                .then(super::cells::compare(
+                    a["id"].as_str().unwrap_or_default(),
+                    b["id"].as_str().unwrap_or_default(),
+                ))
+        });
+        if !detail.is_null() {
+            row["integrationDetail"]["children"] = json!(children);
+        }
+        if row["integrationRow"]["children"]["known"] == true {
+            row["integrationRow"]["children"]["building"] = json!(building);
+            row["integrationRow"]["children"]["queued"] =
+                json!(array(&row["integrationRow"]["openChildren"])
+                    .len()
+                    .saturating_sub(building));
+        }
+    }
+}

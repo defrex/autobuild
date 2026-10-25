@@ -115,6 +115,7 @@ export async function build(capture = false): Promise<string> {
         ['cargo', 'test', '--locked'],
         ['proa', 'test', '--locked'],
         ['bun', 'tools/data-integration.ts'],
+        ['bun', 'tools/data-dashboard-integration.ts'],
       ]
   commands.push([
     'proa',

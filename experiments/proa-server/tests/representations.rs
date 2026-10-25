@@ -151,7 +151,7 @@ async fn health_and_shell() {
     for marker in [
         "data-shell=",
         "account-trigger",
-        "No build data connected yet.",
+        "No data store configured.",
         "/static/styles.css",
         "/static/theme-init.js",
         "/static/shell.js",

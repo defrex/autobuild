@@ -28,8 +28,8 @@ The TypeScript producer creates a uniquely named database/SELECT-only role, writ
 all three event and artifact scopes through the actual store, and invokes the native
 Rust reader. Cleanup closes clients and removes only that run's database, role,
 server and directory, including failure paths. Startup/teardown are bounded.
-No forge or live sandbox runner is needed. Capture alone remains offline and does
-not provision either service.
+No forge or live sandbox runner is needed. Seeded capture provisions both services
+in isolated loopback resources, with a SELECT-only Rust role.
 The proa-rust gate runs `bun test tools` from the experiment directory before
 Rust checks, so negative capture fixtures, route coverage and pipeline regressions
 are enforced for every applicable build. Capture-build mode only exports the
@@ -64,12 +64,17 @@ cases with every HTML route/state, 1440/390 widths and light/dark grounds. Suppl
 explicit seeded identifiers for parameterized routes, never guessed ids.
 
 Data contract: the native configured reader and the deliberately unconfigured shell
-are distinct modes. Proa's generated database layer remains `database.driver=none`;
-the native reader is initialized separately before binding. Current pages read no
-data, so capture starts in an isolated cwd with no inherited database/blob credentials
-and renders the unchanged shell. Source inventory rejects page-level data reads until a seeded data capture
-contract is supplied; auth uses the development issuer described below. The full gate's data proof is separate
-from pixel capture and never invents browser records.
+are distinct modes. Proa's generated database driver remains `none`: the native
+read-only adapter owns the SQL reads. `capture-seed.ts` imports both real root
+scenario producers and replays records, ordered events and exact artifact revisions
+into dedicated isolated projects before starting Rust. It adds nested nodes,
+root leaves, an unreadable neighbor, stored detail/frame and closed/live transcript
+cases. The printed inventory binds every frame to a project, build and producer,
+with source hashes, timestamp shifts, replay counts and artifact inventories.
+`sql-evidence.json` records actual native suffix reads and immutable downloads.
+Capture checks no-JS DOM snapshots, same-document event refresh within five seconds,
+live transcript suffixes and retained disclosures. Server and browser processes,
+databases, SELECT-only roles and S3 directories are cleaned on failure too.
 
 Corpus generation: `bun tools/generate-fixtures.ts` from the experiment executes
 scenario/compatibility producers, captures per-store logs and validates every event
@@ -109,5 +114,5 @@ The display projection has a separate offline oracle under
 `bun tools/projection-fixtures.ts --write`; check freshness without writing with
 `bun tools/projection-fixtures.ts`. It imports the TypeScript projection only
 at generation/check time. The native `projection_parity` test compares retained
-facts, projected rows, session stream metadata and Unicode cells. This is a
-projection foundation; it does not establish live page or seeded capture coverage.
+facts, projected rows, session stream metadata and Unicode cells. The full Rust gate also runs `data-dashboard-integration.ts`, which checks the
+real producer replay against native project/detail, stream and blob reads.

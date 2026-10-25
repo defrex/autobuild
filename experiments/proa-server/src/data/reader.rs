@@ -69,11 +69,20 @@ pub enum BuildRead {
     Readable { slug: String, value: Value },
     Unreadable { slug: String, error: String },
 }
+#[derive(Default)]
+struct StreamText {
+    cursor: i64,
+    text: String,
+}
+type StreamKey = (String, String, String);
+type StreamEntry = Arc<Mutex<StreamText>>;
 pub struct DataReader {
     postgres: PostgresReader,
     blobs: BlobReader,
     cache: Mutex<HashMap<Key, Arc<Mutex<Cached>>>>,
     queries: Mutex<VecDeque<QueryRead>>,
+    artifacts: Mutex<VecDeque<(String, Vec<u8>)>>,
+    streams: Mutex<HashMap<StreamKey, StreamEntry>>,
 }
 impl DataReader {
     pub async fn connect(config: DataConfig) -> Result<Self, DataError> {
@@ -84,6 +93,8 @@ impl DataReader {
             blobs,
             cache: Mutex::new(HashMap::new()),
             queries: Mutex::new(VecDeque::new()),
+            artifacts: Mutex::new(VecDeque::new()),
+            streams: Mutex::new(HashMap::new()),
         })
     }
     pub fn postgres(&self) -> &PostgresReader {
@@ -94,6 +105,7 @@ impl DataReader {
     }
     pub async fn clear_cache(&self) {
         self.cache.lock().await.clear();
+        self.streams.lock().await.clear();
     }
     async fn read(&self, repo: &str, scope: Scope<'_>) -> Result<(Value, Value, i64), DataError> {
         let (key, reduce_scope) = match scope {
@@ -137,6 +149,12 @@ impl DataReader {
             after: cached.cursor,
             rows: events.len(),
         });
+        if let Some(query) = queries.back() {
+            tracing::debug!(
+                "suffix-read {}",
+                serde_json::to_string(query).unwrap_or_default()
+            );
+        }
         drop(queries);
         if !events.is_empty() {
             cached.advance(&events)?;
@@ -181,6 +199,59 @@ impl DataReader {
         }
         Ok(result)
     }
+    pub async fn stream_text(&self, repo: &str, slug: &str, id: &str) -> Result<String, DataError> {
+        let key = (repo.to_owned(), slug.to_owned(), id.to_owned());
+        let entry = self
+            .streams
+            .lock()
+            .await
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(StreamText::default())))
+            .clone();
+        let mut cached = entry.lock().await;
+        let chunks = self
+            .postgres
+            .stream_chunks(repo, slug, id, cached.cursor)
+            .await?;
+        let mut evidence = self.queries.lock().await;
+        if evidence.len() == 1024 {
+            evidence.pop_front();
+        }
+        evidence.push_back(QueryRead {
+            project: repo.into(),
+            scope: format!("stream:{id}"),
+            after: cached.cursor,
+            rows: chunks.len(),
+        });
+        if let Some(query) = evidence.back() {
+            tracing::debug!(
+                "suffix-read {}",
+                serde_json::to_string(query).unwrap_or_default()
+            );
+        }
+        drop(evidence);
+        for chunk in chunks {
+            let seq = chunk["seq"].as_i64().ok_or(DataError::Query)?;
+            if seq <= cached.cursor {
+                return Err(DataError::Query);
+            }
+            for part in crate::dashboard::model::array(&chunk["parts"]) {
+                match part["type"].as_str().unwrap_or_default() {
+                    "text-delta" | "reasoning-delta" => cached
+                        .text
+                        .push_str(part["delta"].as_str().unwrap_or_default()),
+                    "text-end" | "reasoning-end" => cached.text.push('\n'),
+                    "tool-output-available" => {
+                        cached.text.push_str(&part["output"].to_string());
+                        cached.text.push('\n');
+                    }
+                    _ => {}
+                }
+            }
+            cached.cursor = seq;
+        }
+        Ok(cached.text.clone())
+    }
     /// None means missing metadata; MissingBlob means metadata pointed at a missing object.
     pub async fn artifact(
         &self,
@@ -193,7 +264,47 @@ impl DataReader {
             return Ok(None);
         };
         let reference = metadata["blobRef"].as_str().ok_or(DataError::Blob)?;
-        self.blobs.get(reference).await.map(Some)
+        let mut cache = self.artifacts.lock().await;
+        let key = format!("{repo}:{}:{reference}", scope.name());
+        if let Some((_, bytes)) = cache.iter().find(|(k, _)| k == &key) {
+            return Ok(Some(bytes.clone()));
+        }
+        let bytes = self.blobs.get(reference).await?;
+        let mut queries = self.queries.lock().await;
+        if queries.len() == 1024 {
+            queries.pop_front();
+        }
+        queries.push_back(QueryRead {
+            project: repo.into(),
+            scope: format!(
+                "artifact:{kind}@{}:{}",
+                metadata["revision"],
+                match scope {
+                    Scope::Build(id) | Scope::Session(id) => id,
+                    Scope::Repository => repo,
+                }
+            ),
+            after: metadata["revision"].as_i64().unwrap_or(0),
+            rows: bytes.len(),
+        });
+        if let Some(query) = queries.back() {
+            tracing::debug!(
+                "suffix-read {}",
+                serde_json::to_string(query).unwrap_or_default()
+            );
+        }
+        drop(queries);
+
+        if bytes.len() <= 8 * 1024 * 1024 {
+            while cache.len() >= 128
+                || cache.iter().map(|(_, b)| b.len()).sum::<usize>() + bytes.len()
+                    > 64 * 1024 * 1024
+            {
+                cache.pop_front();
+            }
+            cache.push_back((key, bytes.clone()));
+        }
+        Ok(Some(bytes))
     }
 }
 
