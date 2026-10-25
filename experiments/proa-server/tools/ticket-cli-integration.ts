@@ -76,6 +76,10 @@ export async function ticketCliIntegration(
     const oracle = createTicketServer({
       secret,
       auth,
+      policy: {
+        get: (repo) => policies.get(repo),
+        put: (repo, value, writer) => policies.put(repo, value, writer),
+      },
       sourceFor: async (context, principal) => {
         const repo = context.repo ?? ('repo' in principal ? principal.repo : undefined)
         if (!repo || !(await projects.has(repo)))
@@ -102,7 +106,6 @@ export async function ticketCliIntegration(
     try {
       for (const repo of repos) {
         await projects.add(repo, actor)
-        await policies.put(repo, policy, actor)
         await backing.ensureRepo(repo)
       }
       native = Bun.spawn([executable], {
@@ -169,8 +172,6 @@ export async function ticketCliIntegration(
         Object.assign(cliEnv, {
           AB_STORE: endpoint,
           AB_TOKEN: token,
-          AB_TICKET_URL: endpoint,
-          AB_TICKET_TOKEN: token,
           XDG_CONFIG_HOME: join(runtime, 'user-config'),
         })
         sides.push({ checkout, repo, endpoint, token, cliEnv })
@@ -221,6 +222,9 @@ export async function ticketCliIntegration(
         return nativeResult
       }
       await compare(['create', 'First', '--body', '$DIR/body.md', '--labels', 'one,two', '--json'])
+      for (const repo of repos)
+        assert.deepEqual(await policies.get(repo), policy, 'CLI published complete hosted policy')
+      assertions += 2
       await compare(['create', 'Blocker', '--body', '$DIR/body.md', '--json'])
       await compare(['show', 'ENG-1', '--json'])
       await compare(['list', '--state', 'triage', '--json'])
@@ -269,7 +273,7 @@ export async function ticketCliIntegration(
         cliHandlers: true,
         normalRustServer: true,
         assetByteEquality: true,
-        policyPublication: false,
+        policyPublication: true,
         checks: [
           'real CLI parser/handlers with hosted HTTP source and isolated git/config',
           'creation/show/list/states/moves/blockers/guarded success and stale refusal/state creation',
