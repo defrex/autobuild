@@ -1,3 +1,4 @@
+import { strict as assert } from 'node:assert'
 import { resolve } from 'node:path'
 import { MemoryBuildStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
 import { createStoreServer } from '../../../packages/hosted-store-service/src/remote-store-server'
@@ -120,6 +121,84 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
         body: await response.json(),
       })
     }
+// Presence is a separate operator boundary for every delegated kind, before
+// lookup or mutation. POST keeps the source's generic mutation gate (and
+// harvest malformed-JSON precedence); only GET reaches its presence refusal.
+for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-phase'] as const) {
+  const store = new MemoryBuildStore()
+  let accesses = 0
+  store.listOperatorPresence = async () => {
+    accesses++
+    throw new Error('presence lookup reached')
+  }
+  store.upsertOperatorPresence = async () => {
+    accesses++
+    throw new Error('presence mutation reached')
+  }
+  const delegation = {
+    kind,
+    repo,
+    id: kind.startsWith('build') ? 'own' : 'run',
+    anchor: 1,
+    ...(kind.endsWith('phase') ? { session: 'session' } : {}),
+    ...(kind.startsWith('harvest')
+      ? { execution: 'execution', ...(kind.endsWith('runner') ? { leaseHolder: 'holder' } : {}) }
+      : {}),
+  }
+  const server = createStoreServer({
+    store,
+    auth: {
+      authenticate: async () => ({ kind: 'delegated', repo, user: 'delegated', delegation }),
+    },
+  })
+  for (const [method, raw] of [
+    ['GET', ''],
+    ['POST', '{'],
+    [
+      'POST',
+      JSON.stringify({
+        id: 'operator',
+        host: 'private-host',
+        pid: 42,
+        startedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    ],
+  ] as const) {
+    const path = `/repos/${encodeURIComponent(repo)}/operator-presence`
+    const response = await server.fetch(
+      new Request(`http://store${path}`, {
+        method,
+        headers: {
+          authorization: 'Bearer injected',
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+        ...(method === 'GET' ? {} : { body: raw }),
+      }),
+    )
+    const body = await response.json()
+    if (method === 'GET') {
+      assert.equal(response.status, 403)
+      assert.deepEqual(body, {
+        kind: 'auth',
+        error: 'operator presence requires repository operator authority',
+      })
+    } else if (kind.startsWith('build')) {
+      assert.equal(response.status, 403)
+      assert.deepEqual(body, { kind: 'auth', error: 'write outside delegated resource' })
+    } else if (raw !== '{') {
+      assert.equal(response.status, 403)
+      assert.deepEqual(body, { kind: 'auth', error: 'write outside delegated harvest run' })
+    } else {
+      assert.equal(response.status, 500)
+      assert.equal(body.kind, 'internal')
+      assert.match(body.error, /^JSON Parse error:/)
+    }
+    assert.equal(accesses, 0, 'delegated presence must not touch the store')
+    cases.push({ kind, delegation, path, method, raw, status: response.status, body })
+  }
+}
 const output = new URL('../fixtures/protocol-delegation-authority.json', import.meta.url)
 const format = Bun.spawnSync(
   [

@@ -436,6 +436,7 @@ async fn production_readiness_reports_unreachable_storage_while_health_stays_liv
                 force_path_style: Some(true),
             },
             prefix: "routing-test".into(),
+            artifact_retention_max_revisions: None,
         })
         .unwrap(),
     ));

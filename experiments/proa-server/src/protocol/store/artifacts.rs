@@ -151,7 +151,12 @@ impl Store {
                 "maxRevisions must be a positive integer, got 0",
             ));
         }
-        let offset = i64::try_from(self.max_revisions).map_err(|_| ProtocolError::internal())?;
+        // A JS Number may be a positive integer beyond i64/usize. Such a
+        // bound cannot prune any realizable journal; do not turn it into a
+        // native conversion error after publishing a valid configuration.
+        let Ok(offset) = i64::try_from(self.max_revisions) else {
+            return Ok(());
+        };
         tx.execute(&format!("DELETE FROM {table} WHERE {key}=$1 AND kind=$2 AND revision IN (SELECT revision FROM {table} WHERE {key}=$1 AND kind=$2 ORDER BY revision DESC OFFSET $3)",table=table(scope),key=scope.event_key()),&[&scope.id(),&kind,&offset]).await.map_err(ProtocolError::query)?;
         Ok(())
     }

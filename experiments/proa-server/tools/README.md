@@ -169,7 +169,9 @@ channel synchronizes each request's clock without freezing monotonic waits.
 Open machine authority and clock control exist only in the test example, never
 as switches in the normal executable. The test harness forwards the shared
 constructor retention option; newest-revision pruning runs inside the locked
-deposit transaction, and session artifacts remain exempt.
+deposit transaction, and session artifacts remain exempt. Production also reads
+`AB_ARTIFACT_RETENTION_MAX_REVISIONS`; the aggregate’s retention environment proof
+checks mixed Rust/TypeScript writers with limits 2 and 500.
 
 The proofs cover project credentials in both language directions (including
 actual TypeScript credential CLI issuance), immediate invalidation, authenticated
@@ -301,3 +303,15 @@ part of the maintained gate. The existing 15,053 scalar replay cases also exerci
 the typed kernels. PostgreSQL columns are decoded explicitly: the source helper
 unwraps event actor/payload/compatibility, artifact metadata and build ticket,
 whereas direct columns such as repository tick are not blanket-unwrapped.
+
+
+The aggregate also checks route-tail parity against the actual source service:
+resource IDs remain single decoded segments, while the generic build/repository/
+session operation tail is joined and re-split. Original-segment repository special
+routes and top-level stream addressing retain their distinct grammar. The route
+proof includes 71 comparisons, including missing-repository reducer-values GET
+and exact fallback errors. Delegation coverage includes 24 presence regressions:
+delegated GET is refused before presence lookup, with the source's exact text;
+POST retains the source's earlier mutation authorization and JSON-parse errors.
+These results are recorded in `routeParity`, `retentionEnvironment` and the
+authority proof's `presenceRefusals` in the family report.

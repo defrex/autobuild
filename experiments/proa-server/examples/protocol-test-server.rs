@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let config = proa_server::data::config::DataConfig::from_env()
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| anyhow::anyhow!("missing test storage configuration"))?;
+    store.max_revisions = config.artifact_retention_max_revisions.unwrap_or(200);
     store.blobs = Some(Arc::new(proa_server::data::blobs::BlobReader::new(
         config.blobs,
         config.prefix,

@@ -29,6 +29,7 @@ type AuthorityRow = {
 export async function proveProtocolDelegationAuthority(executable: string) {
   let comparisons = 0
   const failures: unknown[] = []
+  const presenceRefusals: unknown[] = []
   await withDataServices(async (admin, environment) =>
     withProtocolDatabase(admin, environment, async (baseEnv) => {
       const secret = 'native-authority-proof'
@@ -119,7 +120,7 @@ export async function proveProtocolDelegationAuthority(executable: string) {
               'x-autobuild-version': AUTOBUILD_VERSION,
               'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
             },
-            body: row.raw,
+            ...(row.method === 'GET' ? {} : { body: row.raw }),
           })
           const actual = { status: response.status, body: await response.json() }
           const expected = { status: row.status, body: row.body }
@@ -407,6 +408,118 @@ export async function proveProtocolDelegationAuthority(executable: string) {
           clock,
           auth: createMachineAuth({ secret, credentials, projects, store, clock }),
         })
+        // The real service auth resolves the same valid lifecycle grants.
+        // GET uses the source's dedicated refusal before presence lookup. POST
+        // preserves its earlier generic mutation gate, including harvest JSON
+        // parsing errors; every path must leave presence records untouched.
+        await store.upsertOperatorPresence(repo, {
+          id: 'private-operator',
+          host: 'private-host',
+          pid: 42,
+          startedAt: clock().toISOString(),
+        })
+        const beforePresence =
+          await sql`SELECT * FROM operator_presence WHERE repo=${repo} ORDER BY id`
+        let presenceAccesses = 0
+        const listPresence = store.listOperatorPresence.bind(store),
+          upsertPresence = store.upsertOperatorPresence.bind(store)
+        store.listOperatorPresence = async () => {
+          presenceAccesses++
+          throw new Error('delegated presence lookup reached')
+        }
+        store.upsertOperatorPresence = async () => {
+          presenceAccesses++
+          throw new Error('delegated presence mutation reached')
+        }
+        try {
+          for (const kind of [
+            'build-runner',
+            'build-phase',
+            'harvest-runner',
+            'harvest-phase',
+          ] as const) {
+            const delegation = {
+              kind,
+              repo,
+              id: kind.startsWith('build') ? 'own' : 'run',
+              anchor: kind === 'build-runner' ? 1 : kind === 'harvest-phase' ? 3 : 2,
+              ...(kind.endsWith('phase') ? { session: 'session' } : {}),
+              ...(kind.startsWith('harvest')
+                ? {
+                    execution: 'execution',
+                    ...(kind === 'harvest-runner' ? { leaseHolder: 'holder' } : {}),
+                  }
+                : {}),
+            }
+            for (const [method, raw] of [
+              ['GET', ''],
+              ['POST', '{'],
+              [
+                'POST',
+                JSON.stringify({
+                  id: 'private-operator',
+                  host: 'changed-host',
+                  pid: 99,
+                  startedAt: clock().toISOString(),
+                }),
+              ],
+            ] as const) {
+              const path = `/repos/${encodeURIComponent(repo)}/operator-presence`
+              const init = {
+                method,
+                headers: {
+                  authorization: `Bearer ${mintToken(secret, { version: 2, delegation })}`,
+                  'content-type': 'application/json',
+                  'x-autobuild-version': AUTOBUILD_VERSION,
+                  'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
+                },
+                ...(method === 'GET' ? {} : { body: raw }),
+              }
+              const actual: Response = await server.fetch(`${server.url}${path}`, init),
+                expected = await oracle.fetch(new Request(`http://oracle${path}`, init))
+              const expectedWire = { status: expected.status, body: await expected.json() }
+              if (method === 'GET')
+                assert.deepEqual(expectedWire, {
+                  status: 403,
+                  body: {
+                    kind: 'auth',
+                    error: 'operator presence requires repository operator authority',
+                  },
+                })
+              else if (kind.startsWith('build'))
+                assert.deepEqual(expectedWire, {
+                  status: 403,
+                  body: { kind: 'auth', error: 'write outside delegated resource' },
+                })
+              else if (raw !== '{')
+                assert.deepEqual(expectedWire, {
+                  status: 403,
+                  body: { kind: 'auth', error: 'write outside delegated harvest run' },
+                })
+              else {
+                assert.equal(expectedWire.status, 500)
+                assert.equal(expectedWire.body.kind, 'internal')
+                assert.match(expectedWire.body.error, /^JSON Parse error:/)
+              }
+              assert.deepEqual(
+                { status: actual.status, body: await actual.json() },
+                expectedWire,
+                `${kind} native ${method} presence`,
+              )
+              presenceRefusals.push({ kind, method, malformed: raw === '{', ...expectedWire })
+              comparisons++
+            }
+          }
+          assert.equal(presenceAccesses, 0, 'source refuses before presence lookup or mutation')
+          assert.deepEqual(
+            await sql`SELECT * FROM operator_presence WHERE repo=${repo} ORDER BY id`,
+            beforePresence,
+            'native refusals leave every presence field unchanged',
+          )
+        } finally {
+          store.listOperatorPresence = listPresence
+          store.upsertOperatorPresence = upsertPresence
+        }
         const emptyRepo = 'https://github.com/acme/registered-no-journal'
         await projects.add(emptyRepo, 'proof')
         for (const delegation of [
@@ -457,7 +570,9 @@ export async function proveProtocolDelegationAuthority(executable: string) {
   assert.deepEqual(failures, [], `native authority mismatches: ${failures.length}`)
   return {
     comparisons,
+    presenceRefusals,
     checks: [
+      'all four delegated kinds refuse operator presence GET with exact operator-authority text and preserve source POST generic/malformed-JSON precedence without presence lookup or mutation',
       'positive harvest labels/artifacts/leases/events/deposits match a separate authoritative TypeScript oracle',
       'all four delegated kinds enforce raw authorization before body validation across own/other/foreign/missing builds, node writers, repository mutations, sessions and global streams',
     ],

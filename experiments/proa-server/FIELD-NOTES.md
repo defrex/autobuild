@@ -618,3 +618,36 @@ The legacy diagnostic CLI now runs equality assertions; sanitized evidence is
 not substitute for, the unchanged shared contract, authenticated dispatch and
 production reader checks in the maintained gate. The Builds-page rendering check
 remains deferred to node integration after file-131 by the approved ruling.
+
+
+## Review round 2: presence authority, retention and route grammar
+
+Delegated operator-presence GET must fail before reading any presence rows.
+Repository ownership alone is insufficient. The native handler now refuses all
+four delegated build/harvest kinds with the actual source's exact 403 text.
+The source's POST authorization takes a different earlier path: build grants
+receive `write outside delegated resource`, harvest grants receive
+`write outside delegated harvest run`, and malformed harvest JSON fails parsing
+before that denial. The review's claim that POST uses the GET-specific text was
+not borne out by the actual source service. Regression evidence preserves these
+source outcomes, instruments zero source presence lookups/mutations and compares
+unchanged native presence rows. This avoids fixing the GET leak by introducing
+a new refusal-text divergence.
+
+Production retention now parses AB_ARTIFACT_RETENTION_MAX_REVISIONS with the
+source positiveInt semantics and passes it into the machine Store. Mixed-writer
+checks seed 205 revisions and verify both a small bound (2) and an override above
+the default (500); a Rust write no longer prunes revisions the configured source
+writer retains. Invalid values fail startup configuration. Very large accepted
+JavaScript integers retain every realizable revision rather than overflowing a
+native SQL offset.
+
+Route decoding has two stages: the resource ID stays one decoded segment; generic
+family operations join and re-split the decoded tail. Repository special routes
+and top-level streams inspect the original decoded segments. The repository
+existence gate now precedes unsupported reducer-values methods, so a missing repo
+gets the source unknown-repo error. For an existing resource, valueRoute explicitly
+returns the abbreviated `no route: GET reducer-values`; the review's proposed
+pathname wording differs from that source implementation. Actual source/native
+regressions cover both outcomes and encoded-tail operations without changing
+product protocol or client sources.

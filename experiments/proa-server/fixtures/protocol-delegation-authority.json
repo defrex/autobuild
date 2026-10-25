@@ -21168,5 +21168,224 @@
       "error": "resource unavailable: unknown resource or wrong project",
       "kind": "not-found"
     }
+  },
+  {
+    "kind": "build-runner",
+    "delegation": {
+      "kind": "build-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "GET",
+    "raw": "",
+    "status": 403,
+    "body": {
+      "error": "operator presence requires repository operator authority",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "build-runner",
+    "delegation": {
+      "kind": "build-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated resource",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "build-runner",
+    "delegation": {
+      "kind": "build-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{\"id\":\"operator\",\"host\":\"private-host\",\"pid\":42,\"startedAt\":\"2026-01-01T00:00:00.000Z\"}",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated resource",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "build-phase",
+    "delegation": {
+      "kind": "build-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1,
+      "session": "session"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "GET",
+    "raw": "",
+    "status": 403,
+    "body": {
+      "error": "operator presence requires repository operator authority",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "build-phase",
+    "delegation": {
+      "kind": "build-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1,
+      "session": "session"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated resource",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "build-phase",
+    "delegation": {
+      "kind": "build-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "own",
+      "anchor": 1,
+      "session": "session"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{\"id\":\"operator\",\"host\":\"private-host\",\"pid\":42,\"startedAt\":\"2026-01-01T00:00:00.000Z\"}",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated resource",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "harvest-runner",
+    "delegation": {
+      "kind": "harvest-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "execution": "execution",
+      "leaseHolder": "holder"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "GET",
+    "raw": "",
+    "status": 403,
+    "body": {
+      "error": "operator presence requires repository operator authority",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "harvest-runner",
+    "delegation": {
+      "kind": "harvest-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "execution": "execution",
+      "leaseHolder": "holder"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{",
+    "status": 500,
+    "body": {
+      "error": "JSON Parse error: Expected '}'",
+      "kind": "internal"
+    }
+  },
+  {
+    "kind": "harvest-runner",
+    "delegation": {
+      "kind": "harvest-runner",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "execution": "execution",
+      "leaseHolder": "holder"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{\"id\":\"operator\",\"host\":\"private-host\",\"pid\":42,\"startedAt\":\"2026-01-01T00:00:00.000Z\"}",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated harvest run",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "harvest-phase",
+    "delegation": {
+      "kind": "harvest-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "session": "session",
+      "execution": "execution"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "GET",
+    "raw": "",
+    "status": 403,
+    "body": {
+      "error": "operator presence requires repository operator authority",
+      "kind": "auth"
+    }
+  },
+  {
+    "kind": "harvest-phase",
+    "delegation": {
+      "kind": "harvest-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "session": "session",
+      "execution": "execution"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{",
+    "status": 500,
+    "body": {
+      "error": "JSON Parse error: Expected '}'",
+      "kind": "internal"
+    }
+  },
+  {
+    "kind": "harvest-phase",
+    "delegation": {
+      "kind": "harvest-phase",
+      "repo": "https://github.com/acme/a",
+      "id": "run",
+      "anchor": 1,
+      "session": "session",
+      "execution": "execution"
+    },
+    "path": "/repos/https%3A%2F%2Fgithub.com%2Facme%2Fa/operator-presence",
+    "method": "POST",
+    "raw": "{\"id\":\"operator\",\"host\":\"private-host\",\"pid\":42,\"startedAt\":\"2026-01-01T00:00:00.000Z\"}",
+    "status": 403,
+    "body": {
+      "error": "write outside delegated harvest run",
+      "kind": "auth"
+    }
   }
 ]

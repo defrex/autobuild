@@ -167,6 +167,18 @@ async fn authorize(
             _ => None,
         };
         delegation::authorize_resource(&state.store, principal, scope, method).await?;
+        if method == "GET"
+            && path.len() == 3
+            && path[0] == "repos"
+            && path[2] == "operator-presence"
+            && matches!(principal, Principal::Delegated(_))
+        {
+            return Err(ProtocolError::new(
+                403,
+                "auth",
+                "operator presence requires repository operator authority",
+            ));
+        }
         if let Some(scope) = scope {
             delegation::mutation_needs_body(principal, scope, method, path, raw_path)?;
         }
@@ -448,6 +460,13 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 .await?,
         ));
     }
+    if parts.len() == 3 && parts[0] == "repos" && parts[2] == "sessions" && method != "GET" {
+        return Err(ProtocolError::new(
+            404,
+            "not-found",
+            format!("no route: {method} /repos/:repo/sessions"),
+        ));
+    }
     if parts.len() == 3 && parts[0] == "repos" && parts[2] == "operator-presence" {
         return match method.as_str() {
             "GET" => Ok(reply(
@@ -471,6 +490,107 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             )),
         };
     }
+    if parts.len() >= 5 && parts[0] == "repos" && parts[2] == "tickets" && parts[4] == "assets" {
+        let rest = parts[5..].join("/");
+        let tail: Vec<&str> = if rest.is_empty() {
+            vec![]
+        } else {
+            rest.split('/').collect()
+        };
+        return asset_route(&state, req, parts[1], parts[3], &tail).await;
+    }
+    if method == "GET"
+        && parts.len() == 3
+        && parts[0] == "repos"
+        && parts[2] == "ticket-asset-limits"
+    {
+        return Ok(reply(200, asset_limits(&state)));
+    }
+    // These repository routes inspect original decoded segments, before the
+    // source adapter joins and re-splits the generic family tail.
+    if parts.len() == 3 && parts[0] == "repos" && parts[2] == "build-digests" {
+        if method != "GET" {
+            return Err(ProtocolError::new(
+                404,
+                "not-found",
+                format!("no route: {method} /repos/:repo/build-digests"),
+            ));
+        }
+        let supports_audit =
+            identity::client_supports_integration_audit_pending(version.as_deref());
+        let mut digests = state.store.repo_build_digests_lossless(parts[1]).await?;
+        if !supports_audit {
+            for digest in digests.as_array_mut().unwrap() {
+                digest
+                    .as_object_mut()
+                    .unwrap()
+                    .retain(|(k, _)| !k.eq_str("integrationAuditPending"));
+            }
+        }
+        let mut response = reply_js(200, digests);
+        response.headers_mut().insert(
+            "x-autobuild-catalog-identity",
+            identity::ServiceIdentity::current()
+                .catalog_identity
+                .parse()
+                .map_err(|_| ProtocolError::internal())?,
+        );
+        return Ok(response);
+    }
+    if method == "GET" && parts.len() == 3 && parts[0] == "repos" {
+        if parts[2] == "change-position" {
+            return Ok(reply(
+                200,
+                json!({"position":state.store.change_position(parts[1]).await?}),
+            ));
+        }
+        if parts[2] == "builds" {
+            return Ok(reply_js(
+                200,
+                state
+                    .store
+                    .list_builds_lossless(Some(&super::js_value::JsString::from(parts[1])))
+                    .await?,
+            ));
+        }
+        if parts[2] == "sessions" {
+            return Ok(reply_js(
+                200,
+                state.store.list_sessions_lossless(parts[1]).await?,
+            ));
+        }
+    }
+    let rest = parts.get(2..).unwrap_or(&[]).join("/");
+    if let Some(scope @ Scope::Repo(_)) = scope {
+        let store_gated = matches!(
+            format!("{method} {rest}").as_str(),
+            "GET events"
+                | "POST events"
+                | "GET high-water"
+                | "GET state-events"
+                | "POST deposits"
+                | "POST artifacts"
+                | "GET artifacts"
+                | "GET artifact-list"
+                | "POST tick/begin"
+                | "POST tick/finish"
+                | "POST lease/claim"
+                | "POST lease/heartbeat"
+                | "POST lease/release"
+                | "POST streams"
+                | "POST reducer-values"
+        );
+        if !store_gated && state.store.get_record_lossless(scope).await?.is_null() {
+            return Err(ProtocolError::missing("repo", scope.id()));
+        }
+    }
+    // Keep the resource id as one segment. Embedded slashes in the decoded
+    // operation tail are separators in the TypeScript family route grammar.
+    let mut route_parts: Vec<&str> = parts.iter().take(2).copied().collect();
+    if parts.len() > 2 {
+        route_parts.extend(rest.split('/'));
+    }
+    let parts = route_parts;
     if method == "POST" && parts.len() == 4 && parts[0] == "repos" && parts[2] == "tick" {
         let repo = parts[1];
         if parts[3] == "begin" {
@@ -502,16 +622,6 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     .await?,
             ));
         }
-    }
-    if parts.len() >= 5 && parts[0] == "repos" && parts[2] == "tickets" && parts[4] == "assets" {
-        return asset_route(&state, req, parts[1], parts[3], &parts[5..]).await;
-    }
-    if method == "GET"
-        && parts.len() == 3
-        && parts[0] == "repos"
-        && parts[2] == "ticket-asset-limits"
-    {
-        return Ok(reply(200, asset_limits(&state)));
     }
     if method == "GET"
         && parts.len() >= 3
@@ -582,35 +692,6 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             }
             return Ok(response);
         }
-    }
-    if parts.len() == 3 && parts[0] == "repos" && parts[2] == "build-digests" {
-        if method != "GET" {
-            return Err(ProtocolError::new(
-                404,
-                "not-found",
-                format!("no route: {method} /repos/:repo/build-digests"),
-            ));
-        }
-        let supports_audit =
-            identity::client_supports_integration_audit_pending(version.as_deref());
-        let mut digests = state.store.repo_build_digests_lossless(parts[1]).await?;
-        if !supports_audit {
-            for digest in digests.as_array_mut().unwrap() {
-                digest
-                    .as_object_mut()
-                    .unwrap()
-                    .retain(|(k, _)| !k.eq_str("integrationAuditPending"));
-            }
-        }
-        let mut response = reply_js(200, digests);
-        response.headers_mut().insert(
-            "x-autobuild-catalog-identity",
-            identity::ServiceIdentity::current()
-                .catalog_identity
-                .parse()
-                .map_err(|_| ProtocolError::internal())?,
-        );
-        return Ok(response);
     }
     if let Some(scope) = scope {
         if parts.get(2) == Some(&"streams") {
@@ -804,34 +885,6 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 200,
                 state.store.repo_state_events_lossless(scope.id()).await?,
             ));
-        }
-        if method == "GET" && parts.len() == 3 && parts[0] == "repos" {
-            match parts[2] {
-                "change-position" => {
-                    return Ok(reply(
-                        200,
-                        json!({"position":state.store.change_position(scope.id()).await?}),
-                    ))
-                }
-                "builds" => {
-                    return Ok(reply_js(
-                        200,
-                        state
-                            .store
-                            .list_builds_lossless(Some(&super::js_value::JsString::from(
-                                scope.id(),
-                            )))
-                            .await?,
-                    ))
-                }
-                "sessions" => {
-                    return Ok(reply_js(
-                        200,
-                        state.store.list_sessions_lossless(scope.id()).await?,
-                    ))
-                }
-                _ => {}
-            }
         }
         if method == "POST"
             && parts.len() == 4

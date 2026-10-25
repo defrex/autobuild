@@ -34,6 +34,7 @@ impl AppState {
             // connection preflights before use, and production never uses Open.
             let data = Arc::new(DataReader::deferred(config.clone())?);
             let mut store = Store::deferred(&config.database_url, Arc::new(chrono::Utc::now))?;
+            store.max_revisions = config.artifact_retention_max_revisions.unwrap_or(200);
             store.blobs = Some(Arc::new(BlobReader::new(config.blobs, config.prefix)?));
             (
                 Some(data),

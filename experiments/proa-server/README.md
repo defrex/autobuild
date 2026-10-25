@@ -148,6 +148,9 @@ S3: `AB_BLOB_BACKEND=s3`, `AB_S3_BUCKET`, `AB_S3_REGION`,
 `AB_BLOB_BACKEND=vercel`, `AB_VERCEL_BLOB_ACCESS=public|private`, and either
 `BLOB_READ_WRITE_TOKEN` or both `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`.
 `AB_BLOB_PREFIX` is shared by both backends and normalized exactly as in TypeScript.
+`AB_ARTIFACT_RETENTION_MAX_REVISIONS` sets the positive integer revision bound
+for managed artifact kinds (default 200), using the TypeScript configuration
+parser’s trimming and Number conversion. Invalid values fail configuration.
 See [the pinned provider contract](BLOB-CONTRACT.md).
 
 The library exposes project/build/session metadata, scoped artifact bytes, and
