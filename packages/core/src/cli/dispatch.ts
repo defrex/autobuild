@@ -1,4 +1,5 @@
 import { capturedBuildConfig } from '../processes/verify-cycle-config'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { recordRuntimeRollback } from './dispatch-handoff'
 import { syncRollbackRetention } from './dispatch-runtime-use'
@@ -3100,6 +3101,15 @@ class DispatchLoop {
     })
   }
 
+  /** A parked publication is durable work for a later tick, not a failed guest. */
+  private async settleEndedPublication(slug: string): Promise<void> {
+    try {
+      await this.settlePendingPublication(slug)
+    } catch (error) {
+      if (!(error instanceof ForgeRequestDeferred)) throw error
+    }
+  }
+
   private async recordInfrastructureFailure(input: {
     slug: string
     instance: string
@@ -3276,7 +3286,7 @@ class DispatchLoop {
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
               await this.repoView.releaseLease(slug, instance)
-              if (!this.retirement) await this.settlePendingPublication(slug)
+              if (!this.retirement) await this.settleEndedPublication(slug)
             }
           },
           async (error) => {
@@ -3312,6 +3322,11 @@ class DispatchLoop {
     } catch (error) {
       if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
         this.activeBuildRuns.delete(slug)
+      }
+      if (error instanceof ForgeRequestDeferred) {
+        if (leaseClaimed) await this.repoView.releaseLease(slug, instance)
+        await this.repoView.refreshBuild(slug)
+        return 'already-active'
       }
       if (leaseClaimed) {
         // The runner appended through its own handle: take the delta.

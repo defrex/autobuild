@@ -117,6 +117,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   // Only the dispatcher releases workspaces and settles publications (§15.7);
   // the kernel never destroys one, so it never records a loss.
   'publication.lost': ['dispatcher'],
+  'publication.retry-scheduled': ['kernel', 'dispatcher'],
+  'publication.retry-exhausted': ['kernel', 'dispatcher'],
   'abort.remote-branch-deleted': ['dispatcher'],
   'abort.local-branch-deleted': ['dispatcher'],
   'abort.ticket-returned': ['dispatcher'],
@@ -260,10 +262,11 @@ export function validateEventWrite(input: {
       (escalation.source !== 'policy' ||
         (escalation.policyCause !== 'infrastructure-failure-limit' &&
           escalation.policyCause !== 'dispatch-failure-limit' &&
-          escalation.policyCause !== 'execution-no-progress'))
+          escalation.policyCause !== 'execution-no-progress' &&
+          escalation.policyCause !== 'publication-retry-limit'))
     ) {
       throw new EventValidationError(
-        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress may be raised outside the kernel',
+        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress or policy/publication-retry-limit may be raised outside the kernel',
       )
     }
     if (escalation.source === 'policy' && escalation.policyCause === undefined) {
