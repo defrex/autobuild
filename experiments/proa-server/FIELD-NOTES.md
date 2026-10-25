@@ -120,3 +120,74 @@ this integration follow-up for future Rust gates. The generated cache is not a
 project deliverable. Two other initial root-suite failures (capture timeout under
 load, fixture inheriting AB_CONTEXT_DIR from the build session) both passed their
 targeted rerun with AB_CONTEXT_DIR cleared; the latter is obs_27a18ba5.
+
+## 2026-10-24 — automated verification gates and cache investigation
+
+Verified with Rust 1.99.1 (58cf8f9c3), Proa CLI 0.1.3, Bun 1.4.4,
+Tailwind 4.3.1 and local /usr/bin/chromium. The new tools/verify.ts runs
+Proa formatting/lint, Cargo formatting/clippy/tests, linked Proa tests and a
+linked build with --artifact-out. It preserves accessibility/performance checks.
+The real server, local fonts and stylesheet produced all eight Builds/menu
+frames (1440/390, light/dark); deterministic probes and visual inspection passed.
+No database or auth exists, so this proves unsigned placeholder pages only.
+
+Negative checks in an isolated disposable Git worktree:
+
+- Changing `pub struct Config {` to `pub struct Config{` made **Proa fmt return
+  zero**, with no diagnostics. It checks Proa formatting, not all ordinary Rust
+  formatting. Cargo fmt --check returned 1. Added Cargo's check to the gate.
+- An unused Rust function made cargo clippy --locked --all-targets -- -D warnings
+  exit 101 with dead-code diagnostics.
+- An intentionally failing isolated Rust test made cargo test exit 101.
+- Changing build.command to ["false"] made proa build --locked --artifact-out
+  fail with exit 1: custom non-Cargo commands are unsupported by the linked
+  pipeline. It did not create a successful export.
+- Chromium fixture pages independently rejected forbidden RGB color, serif
+  face, overflow, missing heading, external request, missing asset and page
+  exception. Their browser profiles were removed after failure.
+
+The first gate passed. Cargo reported 13.33s for clippy and 15.31s for ordinary
+Rust tests. Linked tests use separate descriptor/final targets for each test
+root (cold pairs 26.83/17.90s, 26.60/19.45s, 28.94/20.04s). The locked linked
+release build reported 49.56/37.37s, descriptor/final 0/279 artifacts reused.
+An initial --offline capture build used another namespace and took
+47.73/35.21s, also 0/279 reused. A subsequent same-worktree offline capture
+reported 0.07/0.06s and **279/279 reused in both stages**. Each invocation
+exports a distinct executable before releasing the flock lock; concurrent gate
+and capture runs serialized, with distinct exports. Shared dependency artifacts
+never serve directly as the capture executable.
+
+**Measured limitation: cross-worktree linked reuse.** The second
+worktree at the exact same commit, sharing the identical absolute
+CARGO_TARGET_DIR, reused ordinary Cargo dependencies (clippy 0.22s; tests 1.47s).
+But its first linked test rebuilt dependencies, taking 26.20/19.84s and reporting
+**descriptor 0/248 Cargo artifacts reused; final 0/248 reused**. Stopped that
+proof run after obtaining the first complete linked-test result rather than
+repeating the remaining cold test roots. This is not warm reuse across builds.
+
+Installed Proa 0.1.3 lifecycle.rs selects package.id from Cargo metadata, puts
+that absolute path-bearing ID in InvocationSpec.roots, hashes the invocation,
+and places descriptor-target-policy-v4-sidecar-v10-persistent-v1 under that
+hash. Its final-target/rsjs-final/wrapper-v6 is similarly invocation-separated.
+rsjs_ir 0.2.0 build.rs canonically encodes RequestedRootTarget.package. Thus a
+new worktree path gets a new linked namespace despite sharing CARGO_TARGET_DIR.
+Also --offline is an invocation identity input, explaining the separate initial
+capture namespace. The source confirms the observed cold rebuild; a stable
+cache directory alone does not provide linked cross-worktree reuse.
+
+Operator guidance for implement round 1 accepts partial reuse: ordinary Cargo
+dependency reuse satisfies the intent of avoiding a cold dependency graph on
+every build. Keep the shared CARGO_TARGET_DIR, pinned toolchain and linked builds;
+do not patch Proa or move builds to a fixed checkout. The measured linked rebuild
+(roughly 20–26 seconds per stage) is an accepted Proa 0.1.3 limitation to revisit
+on a later Proa upgrade.
+
+Capture implementation details: probes inspect only painted text/borders (zero
+width borders and inherited colors on textless elements are not painted).
+Chromium's implicit Other-type /favicon.ico request is fulfilled with 204;
+explicit image and application asset requests still fail on errors. LocalStorage
+theme selection happens before navigation scripts; setting documentElement at
+new-document injection time throws because it does not exist yet. The real
+server starts in a temporary cwd with a link to worktree public assets, so
+repository .env files cannot supply production/auth settings through dotenvy's
+ancestor search. Capture performs no GitHub or other external page requests.

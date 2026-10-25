@@ -174,8 +174,12 @@ Autobuild's own chain: this repository's choices, not defaults.
 | 7 | ui-app | agent | captures operator web-app frames and judges them against the design |
 | 8 | ui-website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
 | 9 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
+| 10 | proa-rust | check | runs the Proa experiment's tooling tests, Rust checks and linked build |
+| 11 | ui-proa | agent | captures the Proa experiment's pages and judges them against its ANSI reference |
 
-Steps 5 to 9 are optional and path-scoped. Integration covers core, the Postgres store and the hosted packages; the others run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
+Steps 5 to 11 are optional and path-scoped. Integration covers core, the Postgres store and the hosted packages; the other agent steps run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website`, `verify-docs` and `verify-ui-proa`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
+
+The two Proa gates apply only to changes in `experiments/proa-server/`, the repository-local `verify-ui-proa` skill or its discovery link. Their prerequisites, commands, capture contract and cache limitations are documented in the `experiments/proa-server/tools/README.md`. These gates are this repository's experiment configuration, not product defaults.
 
 A plan for a docs change like this page selects lint, types, unit, build, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.
 

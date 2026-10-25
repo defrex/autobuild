@@ -20,6 +20,7 @@ lint = "bun run check"
 typecheck = "bun run typecheck"
 test = "bun run test"
 build = "bun run check:build"
+proa-rust = "bun experiments/proa-server/tools/verify.ts"
 # Integration tests need a real PostgreSQL; local builds use the host's own.
 test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun run test:integration"
 
@@ -32,7 +33,7 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # use isolated temporary directories, and integration alone uses PostgreSQL on
 # 5432 (its deploy rehearsal uses a unique schema, temporary consumer and
 # ephemeral ports).
-# All deterministic checks precede agents. Keep ui-tui separate from ui-app:
+# Existing deterministic checks precede the dashboard and docs agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
 # ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
 # .ab/docs-verify-report.md are distinct. Browser profiles and website HTTP
@@ -44,6 +45,8 @@ steps = [
   ["unit", "build", "integration"],
   "ui-tui",
   ["ui-app", "ui-website", "docs"],
+  "proa-rust",
+  "ui-proa",
 ]
 
 [verify.lint]
@@ -105,6 +108,17 @@ paths = ["packages/website/**", "docs/**", "design/website/**", "tools/website-c
 kind = "agent"
 skill = "verify-docs"
 paths = ["packages/core/src/**", "packages/hosted-dispatcher/src/**", "packages/hosted-store-service/src/**", "packages/hosted-store-service/app/**", "packages/postgres-store/src/**", "packages/vercel-sandbox/src/**", "packages/website/**", "bin/**", "skills/**", "templates/**", "SPEC.md", "README.md", "docs/**"]
+
+# Repository-local Rust experiment gates.
+[verify.proa-rust]
+kind = "check"
+command = "proa-rust"
+paths = ["experiments/proa-server/**", ".agents/skills/verify-ui-proa/**", ".claude/skills/verify-ui-proa"]
+
+[verify.ui-proa]
+kind = "agent"
+skill = "verify-ui-proa"
+paths = ["experiments/proa-server/**", ".agents/skills/verify-ui-proa/**", ".claude/skills/verify-ui-proa"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.
