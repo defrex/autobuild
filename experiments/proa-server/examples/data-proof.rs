@@ -42,6 +42,10 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map(|value| json!(value)),
             "counts" => Ok(json!(reader.query_counts().await)),
+            "reset-counts" => {
+                reader.reset_query_counts().await;
+                Ok(Value::Null)
+            }
             "clear" => {
                 reader.clear_cache().await;
                 Ok(Value::Null)

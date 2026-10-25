@@ -47,6 +47,7 @@ pub struct PostgresReader {
     url: String,
     tls: MakeRustlsConnect,
     next: AtomicUsize,
+    metadata_reads: Mutex<std::collections::VecDeque<super::reader::QueryRead>>,
 }
 struct Connection {
     client: Client,
@@ -112,6 +113,7 @@ impl PostgresReader {
             url: url.to_owned(),
             tls,
             next: AtomicUsize::new(0),
+            metadata_reads: Mutex::new(Default::default()),
         };
         result.preflight().await?;
         Ok(result)
@@ -206,6 +208,52 @@ impl PostgresReader {
         tx.commit().await.map_err(|_| DataError::Query)
     }
 
+    pub async fn reset_metadata_counts(&self) {
+        self.metadata_reads.lock().await.clear();
+    }
+    pub async fn metadata_counts(&self) -> Vec<super::reader::QueryRead> {
+        self.metadata_reads.lock().await.iter().cloned().collect()
+    }
+    async fn metadata_read(&self, repo: &str, scope: &str, rows: usize) {
+        let read = super::reader::QueryRead {
+            project: repo.into(),
+            scope: format!("metadata:{scope}"),
+            after: 0,
+            rows,
+        };
+        tracing::debug!(
+            "suffix-read {}",
+            serde_json::to_string(&read).unwrap_or_default()
+        );
+        let mut reads = self.metadata_reads.lock().await;
+        if reads.len() == 1024 {
+            reads.pop_front();
+        }
+        reads.push_back(read);
+    }
+    /// One indexed discovery query returns only new/changed records. The durable
+    /// event cursor, not timestamps, detects appends even with a backdated clock.
+    pub async fn changed_builds(&self, repo: &str, known: &Value) -> Result<Vec<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let rows = tx.query("SELECT b.slug,b.ticket,b.branch,b.created_at,b.updated_at,(SELECT COALESCE(MAX(seq),0) FROM events WHERE build=b.slug) AS event_seq, false AS deleted FROM builds b LEFT JOIN jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) ON k.slug=b.slug WHERE b.repo=$1 AND (k.slug IS NULL OR b.updated_at <> k.updated::timestamptz OR EXISTS(SELECT 1 FROM events e WHERE e.build=b.slug AND e.seq>k.seq)) UNION ALL SELECT k.slug,NULL::jsonb,NULL::text,now(),now(),0::bigint,true FROM jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) WHERE NOT EXISTS(SELECT 1 FROM builds b WHERE b.repo=$1 AND b.slug=k.slug) ORDER BY 4,1", &[&repo,known]).await.map_err(|_|DataError::Query)?;
+        let result = rows.iter().map(|row| {
+            if row.get::<_,bool>("deleted") {return json!({"slug":row.get::<_,String>("slug"),"deleted":true});}
+            let mut record = json!({"slug":row.get::<_,String>("slug"),"repo":repo,"createdAt":timestamp(row,"created_at"),"updatedAt":timestamp(row,"updated_at"),"eventSeq":row.get::<_,i64>("event_seq")});
+            if let Some(ticket) = row.get::<_,Option<Value>>("ticket") {record["ticket"]=ticket;}
+            if let Some(branch) = row.get::<_,Option<String>>("branch") {record["branch"]=json!(branch);}
+            record
+        }).collect();
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "build-discovery", rows.len())
+            .await;
+        Ok(result)
+    }
     pub async fn projects(&self) -> Result<Vec<Value>, DataError> {
         let mut client = self.client().await?;
         let tx = client
@@ -218,6 +266,7 @@ impl PostgresReader {
             .await.map_err(|_| DataError::Query)?;
         let result = rows.iter().map(|row| json!({ "repo": row.get::<_, String>("repo"), "addedAt": timestamp(row, "ts"), "addedBy": row.get::<_, String>("actor") })).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read("registry", "projects", rows.len()).await;
         Ok(result)
     }
 
@@ -327,10 +376,42 @@ impl PostgresReader {
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "builds", rows.len()).await;
         Ok(result)
     }
 
-    pub async fn build_streams(&self, repo: &str, slug: &str) -> Result<Vec<Value>, DataError> {
+    pub async fn build_record(&self, repo: &str, slug: &str) -> Result<Option<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let rows = tx
+            .query(
+                "SELECT ticket,branch,created_at,updated_at FROM builds WHERE repo=$1 AND slug=$2",
+                &[&repo, &slug],
+            )
+            .await
+            .map_err(|_| DataError::Query)?;
+        let result=rows.first().map(|row|{
+            let mut value=json!({"slug":slug,"repo":repo,"createdAt":timestamp(row,"created_at"),"updatedAt":timestamp(row,"updated_at")});
+            if let Some(ticket)=row.get::<_,Option<Value>>("ticket"){value["ticket"]=ticket;}
+            if let Some(branch)=row.get::<_,Option<String>>("branch"){value["branch"]=json!(branch);}
+            value
+        });
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, &format!("build-record:{slug}"), rows.len())
+            .await;
+        Ok(result)
+    }
+    pub async fn build_streams(
+        &self,
+        repo: &str,
+        slug: &str,
+        closed: &[String],
+    ) -> Result<Vec<Value>, DataError> {
         let mut client = self.client().await?;
         let tx = client
             .build_transaction()
@@ -339,7 +420,7 @@ impl PostgresReader {
             .await
             .map_err(|_| DataError::Query)?;
         Self::assert_scope(&tx, repo, Scope::Build(slug)).await?;
-        let rows=tx.query("SELECT s.* FROM streams s JOIN builds b ON b.slug=s.build WHERE b.repo=$1 AND s.build=$2 AND s.scope_kind='build' ORDER BY s.created_at,s.id", &[&repo,&slug]).await.map_err(|_|DataError::Query)?;
+        let rows=tx.query("SELECT s.* FROM streams s JOIN builds b ON b.slug=s.build WHERE b.repo=$1 AND s.build=$2 AND s.scope_kind='build' AND NOT(s.id=ANY($3)) ORDER BY s.created_at,s.id", &[&repo,&slug,&closed]).await.map_err(|_|DataError::Query)?;
         let result=rows.iter().map(|row| {
             let mut value=json!({"id":row.get::<_,String>("id"),"scope":{"kind":"build","build":slug},"label":row.get::<_,String>("label"),"format":row.get::<_,String>("format"),"status":row.get::<_,String>("status"),"createdAt":timestamp(row,"created_at")});
             if let Some(outcome)=row.get::<_,Option<String>>("outcome") {value["outcome"]=json!(outcome);}
@@ -347,6 +428,8 @@ impl PostgresReader {
             value
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, &format!("streams:{slug}"), rows.len())
+            .await;
         Ok(result)
     }
     pub async fn stream_chunks(
@@ -393,6 +476,7 @@ impl PostgresReader {
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "sessions", rows.len()).await;
         Ok(result)
     }
 
@@ -422,6 +506,18 @@ impl PostgresReader {
             "createdAt": timestamp(row, "created_at"),
         }));
         tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(
+            repo,
+            &format!(
+                "artifact:{kind}:{}",
+                match scope {
+                    Scope::Build(id) | Scope::Session(id) => id,
+                    Scope::Repository => repo,
+                }
+            ),
+            rows.len(),
+        )
+        .await;
         Ok(result)
     }
 }

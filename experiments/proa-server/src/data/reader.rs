@@ -78,12 +78,15 @@ struct StreamText {
 }
 type StreamKey = (String, String, String);
 type StreamEntry = Arc<Mutex<StreamText>>;
+type StreamMetadataEntries = HashMap<(String, String), Arc<Mutex<Vec<Value>>>>;
 pub struct DataReader {
     postgres: PostgresReader,
     blobs: BlobReader,
     cache: Mutex<HashMap<Key, Arc<Mutex<Cached>>>>,
     queries: Mutex<VecDeque<QueryRead>>,
-    artifacts: Mutex<VecDeque<(String, Vec<u8>)>>,
+    artifacts: super::artifact_cache::ArtifactCache,
+    pub(super) dashboards: Mutex<HashMap<String, Arc<Mutex<super::dashboard::DashboardIndex>>>>,
+    stream_metadata: Mutex<StreamMetadataEntries>,
     streams: Mutex<HashMap<StreamKey, StreamEntry>>,
 }
 impl DataReader {
@@ -95,7 +98,9 @@ impl DataReader {
             blobs,
             cache: Mutex::new(HashMap::new()),
             queries: Mutex::new(VecDeque::new()),
-            artifacts: Mutex::new(VecDeque::new()),
+            artifacts: Default::default(),
+            dashboards: Default::default(),
+            stream_metadata: Default::default(),
             streams: Mutex::new(HashMap::new()),
         })
     }
@@ -103,11 +108,19 @@ impl DataReader {
         &self.postgres
     }
     pub async fn query_counts(&self) -> Vec<QueryRead> {
-        self.queries.lock().await.iter().cloned().collect()
+        let mut reads: Vec<_> = self.queries.lock().await.iter().cloned().collect();
+        reads.extend(self.postgres.metadata_counts().await);
+        reads
+    }
+    pub async fn reset_query_counts(&self) {
+        self.queries.lock().await.clear();
+        self.postgres.reset_metadata_counts().await;
     }
     pub async fn clear_cache(&self) {
         self.cache.lock().await.clear();
         self.streams.lock().await.clear();
+        self.dashboards.lock().await.clear();
+        self.stream_metadata.lock().await.clear();
     }
     async fn read(&self, repo: &str, scope: Scope<'_>) -> Result<(Value, Value, i64), DataError> {
         let (key, reduce_scope) = match scope {
@@ -202,6 +215,36 @@ impl DataReader {
         }
         Ok(result)
     }
+    pub async fn build_streams(&self, repo: &str, slug: &str) -> Result<Vec<Value>, DataError> {
+        let entry = self
+            .stream_metadata
+            .lock()
+            .await
+            .entry((repo.into(), slug.into()))
+            .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
+            .clone();
+        let mut records = entry.lock().await;
+        let closed: Vec<String> = records
+            .iter()
+            .filter(|v| v["status"] == "closed")
+            .filter_map(|v| v["id"].as_str().map(str::to_owned))
+            .collect();
+        let changed = self.postgres.build_streams(repo, slug, &closed).await?;
+        for value in changed {
+            if let Some(old) = records.iter_mut().find(|v| v["id"] == value["id"]) {
+                *old = value;
+            } else {
+                records.push(value);
+            }
+        }
+        records.sort_by(|a, b| {
+            a["createdAt"]
+                .as_str()
+                .cmp(&b["createdAt"].as_str())
+                .then(a["id"].as_str().cmp(&b["id"].as_str()))
+        });
+        Ok(records.clone())
+    }
     pub async fn stream_text(&self, repo: &str, slug: &str, id: &str) -> Result<String, DataError> {
         let key = (repo.to_owned(), slug.to_owned(), id.to_owned());
         let entry = self
@@ -267,46 +310,47 @@ impl DataReader {
             return Ok(None);
         };
         let reference = metadata["blobRef"].as_str().ok_or(DataError::Blob)?;
-        let mut cache = self.artifacts.lock().await;
-        let key = format!("{repo}:{}:{reference}", scope.name());
-        if let Some((_, bytes)) = cache.iter().find(|(k, _)| k == &key) {
-            return Ok(Some(bytes.clone()));
-        }
-        let bytes = self.blobs.get(reference).await?;
-        let mut queries = self.queries.lock().await;
-        if queries.len() == 1024 {
-            queries.pop_front();
-        }
-        queries.push_back(QueryRead {
-            project: repo.into(),
-            scope: format!(
-                "artifact:{kind}@{}:{}",
-                metadata["revision"],
-                match scope {
-                    Scope::Build(id) | Scope::Session(id) => id,
-                    Scope::Repository => repo,
-                }
-            ),
-            after: metadata["revision"].as_i64().unwrap_or(0),
-            rows: bytes.len(),
-        });
-        if let Some(query) = queries.back() {
-            tracing::debug!(
-                "suffix-read {}",
-                serde_json::to_string(query).unwrap_or_default()
-            );
-        }
-        drop(queries);
-
-        if bytes.len() <= 8 * 1024 * 1024 {
-            while cache.len() >= 128
-                || cache.iter().map(|(_, b)| b.len()).sum::<usize>() + bytes.len()
-                    > 64 * 1024 * 1024
-            {
-                cache.pop_front();
+        let key = format!(
+            "{repo}:{}:{}:{reference}",
+            scope.name(),
+            match scope {
+                Scope::Build(id) | Scope::Session(id) => id,
+                Scope::Repository => repo,
             }
-            cache.push_back((key, bytes.clone()));
-        }
+        );
+        let bytes = self
+            .artifacts
+            .load(key, || async {
+                let bytes = self.blobs.get(reference).await?;
+
+                let mut queries = self.queries.lock().await;
+                if queries.len() == 1024 {
+                    queries.pop_front();
+                }
+                queries.push_back(QueryRead {
+                    project: repo.into(),
+                    scope: format!(
+                        "artifact:{kind}@{}:{}",
+                        metadata["revision"],
+                        match scope {
+                            Scope::Build(id) | Scope::Session(id) => id,
+                            Scope::Repository => repo,
+                        }
+                    ),
+                    after: metadata["revision"].as_i64().unwrap_or(0),
+                    rows: bytes.len(),
+                });
+                if let Some(query) = queries.back() {
+                    tracing::debug!(
+                        "suffix-read {}",
+                        serde_json::to_string(query).unwrap_or_default()
+                    );
+                }
+                drop(queries);
+
+                Ok(bytes)
+            })
+            .await?;
         Ok(Some(bytes))
     }
 }

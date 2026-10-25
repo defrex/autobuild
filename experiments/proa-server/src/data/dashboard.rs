@@ -14,6 +14,12 @@ pub struct Snapshot {
     pub settings: Value,
     pub error: Option<String>,
 }
+#[derive(Default)]
+pub(super) struct DashboardIndex {
+    records: Vec<Value>,
+    states: HashMap<String, Result<(Value, Value, i64), DataError>>,
+    pinned: HashMap<String, (i64, Option<Value>)>,
+}
 impl Snapshot {
     pub fn unavailable(error: &str) -> Self {
         Self {
@@ -31,6 +37,29 @@ fn decode_config(bytes: &[u8]) -> Result<Value, DataError> {
         return Err(DataError::Blob);
     }
     Ok(value)
+}
+fn projected(
+    record: &Value,
+    state: &Value,
+    facts: &Value,
+    config: &Value,
+    streams: Option<&[Value]>,
+    pinned: Option<&Value>,
+) -> Value {
+    let slug = record["slug"].as_str().unwrap_or_default();
+    let row = model::project(
+        record,
+        &state["build"],
+        model::ProjectionFacts {
+            dashboard: &facts["dashboard"],
+            restack: &facts["restack"],
+            deferral: &facts["deferral"],
+        },
+        config,
+        streams,
+        pinned,
+    );
+    row.unwrap_or_else(||json!({"slug":slug,"status":state["build"]["status"],"hidden":true,"kind":if state["build"]["kind"]=="node"{"integration"}else{"work"},"target":state["build"]["target"]["ticket"]["id"].as_str().or(state["build"]["baseBranch"].as_str()),"landing":state["build"]["landing"],"autoMerge":crate::dashboard::landing::auto_merge(&state["build"]),"collectionIdentity":{"repo":record["repo"],"source":record["ticket"]["source"],"id":record["ticket"]["id"],"targetBuild":state["build"]["target"]["build"],"targetSource":state["build"]["target"]["ticket"]["source"],"targetId":state["build"]["target"]["ticket"]["id"],"title":record["ticket"]["title"],"status":state["build"]["status"],"createdAt":record["createdAt"]},"steps":[]}))
 }
 impl DataReader {
     pub async fn dashboard_snapshot(&self, selected: Option<&str>) -> Result<Snapshot, DataError> {
@@ -61,7 +90,60 @@ impl DataReader {
         let Some(repo) = snapshot.project.as_deref() else {
             return Ok(snapshot);
         };
-        let records = self.postgres().builds(repo).await?;
+        let entry = self
+            .dashboards
+            .lock()
+            .await
+            .entry(repo.into())
+            .or_insert_with(|| {
+                std::sync::Arc::new(tokio::sync::Mutex::new(DashboardIndex::default()))
+            })
+            .clone();
+        let mut index = entry.lock().await;
+        let known = Value::Array(
+            index
+                .records
+                .iter()
+                .map(|r| {
+                    let seq = if index
+                        .states
+                        .contains_key(r["slug"].as_str().unwrap_or_default())
+                    {
+                        r["eventSeq"].clone()
+                    } else {
+                        json!(-1)
+                    };
+                    json!({"slug":r["slug"],"seq":seq,"updated":r["updatedAt"]})
+                })
+                .collect(),
+        );
+        let changed = self.postgres().changed_builds(repo, &known).await?;
+        for record in changed {
+            let slug = record["slug"].as_str().ok_or(DataError::Query)?.to_owned();
+            if record["deleted"] == true {
+                index.records.retain(|r| r["slug"] != slug);
+                index.states.remove(&slug);
+                index.pinned.remove(&slug);
+                continue;
+            }
+            let state = self.build_display(repo, &slug).await;
+            // Transient backend errors retry next poll; deterministic decode failures
+            // remain isolated until explicit cache clear/restart.
+            if state
+                .as_ref()
+                .is_err_and(|e| !matches!(e, DataError::Decode { .. }))
+            {
+                index.states.remove(&slug);
+            } else {
+                index.states.insert(slug.clone(), state);
+            }
+            if let Some(old) = index.records.iter_mut().find(|r| r["slug"] == slug) {
+                *old = record;
+            } else {
+                index.records.push(record);
+            }
+        }
+        let records = index.records.clone();
         if records.is_empty() {
             return Ok(snapshot);
         }
@@ -81,44 +163,10 @@ impl DataReader {
         let mut entries = Vec::new();
         for record in &records {
             let slug = record["slug"].as_str().ok_or(DataError::Query)?;
-            let result = self.build_display(repo, slug).await;
-            match result {
-                Err(error) => entries.push(
-                    json!({"slug":slug,"status":"unreadable","error":error.to_string(),"steps":[]}),
-                ),
-                Ok((state, facts, _)) => {
-                    let pinned = self
-                        .artifact(
-                            repo,
-                            Scope::Build(slug),
-                            "build-runner-effective-config",
-                            None,
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|b| decode_config(&b).ok());
-                    let streams = match self.postgres().build_streams(repo, slug).await {
-                        Ok(value) => value,
-                        Err(error) => {
-                            entries.push(json!({"slug":slug,"status":"unreadable","error":error.to_string(),"steps":[]}));
-                            continue;
-                        }
-                    };
-                    let row = model::project(
-                        record,
-                        &state["build"],
-                        model::ProjectionFacts {
-                            dashboard: &facts["dashboard"],
-                            restack: &facts["restack"],
-                            deferral: &facts["deferral"],
-                        },
-                        &config,
-                        Some(&streams),
-                        pinned.as_ref(),
-                    );
-                    entries.push(row.unwrap_or_else(||json!({"slug":slug,"status":state["build"]["status"],"hidden":true,"kind":if state["build"]["kind"]=="node"{"integration"}else{"work"},"target":state["build"]["target"]["ticket"]["id"].as_str().or(state["build"]["baseBranch"].as_str()),"landing":state["build"]["landing"],"autoMerge":crate::dashboard::landing::auto_merge(&state["build"]),"collectionIdentity":{"repo":record["repo"],"source":record["ticket"]["source"],"id":record["ticket"]["id"],"targetBuild":state["build"]["target"]["build"],"targetSource":state["build"]["target"]["ticket"]["source"],"targetId":state["build"]["target"]["ticket"]["id"],"title":record["ticket"]["title"],"status":state["build"]["status"],"createdAt":record["createdAt"]},"steps":[]})));
-                }
+            match index.states.get(slug) {
+                Some(Ok((state,facts,_)))=>entries.push(projected(record,state,facts,&config,None,None)),
+                Some(Err(error))=>entries.push(json!({"slug":slug,"status":"unreadable","error":error.to_string(),"steps":[]})),
+                None=>entries.push(json!({"slug":slug,"status":"unreadable","error":"Build read failed; retrying.","steps":[]})),
             }
         }
         let parents: HashMap<String, String> = entries
@@ -150,6 +198,49 @@ impl DataReader {
             .into_iter()
             .filter(|r| visible.contains(r["slug"].as_str().unwrap_or_default()))
             .collect();
+        for row in &mut snapshot.rows {
+            let slug = row["slug"].as_str().unwrap_or_default().to_owned();
+            let Some(Ok((state, facts, cursor))) = index.states.get(&slug).cloned() else {
+                continue;
+            };
+            if !index
+                .pinned
+                .get(&slug)
+                .is_some_and(|(version, _)| *version == cursor)
+            {
+                let pinned = self
+                    .artifact(
+                        repo,
+                        Scope::Build(&slug),
+                        "build-runner-effective-config",
+                        None,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| decode_config(&bytes).ok());
+                index.pinned.insert(slug.clone(), (cursor, pinned));
+            }
+            let streams = match self.build_streams(repo, &slug).await {
+                Ok(value) => value,
+                Err(error) => {
+                    *row = json!({"slug":slug,"status":"unreadable","error":error.to_string(),"steps":[]});
+                    continue;
+                }
+            };
+            let record = records
+                .iter()
+                .find(|r| r["slug"] == slug)
+                .ok_or(DataError::Query)?;
+            *row = projected(
+                record,
+                &state,
+                &facts,
+                &config,
+                Some(&streams),
+                index.pinned.get(&slug).and_then(|(_, v)| v.as_ref()),
+            );
+        }
         crate::dashboard::integration::enrich(&mut snapshot.rows, &records);
         order_rows(&mut snapshot.rows);
         Ok(snapshot)
@@ -166,14 +257,12 @@ impl DataReader {
         }
         let record = self
             .postgres()
-            .builds(repo)
+            .build_record(repo, slug)
             .await?
-            .into_iter()
-            .find(|r| r["slug"] == slug)
             .ok_or(DataError::MissingScope { scope: "build" })?;
         let (state, facts, cursor) = self.build_display(repo, slug).await?;
         let build = &state["build"];
-        let streams = self.postgres().build_streams(repo, slug).await?;
+        let streams = self.build_streams(repo, slug).await?;
         let mut sessions =
             detail::project_sessions(array(&facts["dashboard"]["sessionEvents"]), Some(&streams));
         for session in &mut sessions {

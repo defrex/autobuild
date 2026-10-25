@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { buildCreatedWrite } from '../../../packages/core/src/store/contract'
 import { withCaptureSeed } from './capture-seed'
 import { buildNative, bridge } from './data-integration'
 
@@ -107,6 +108,89 @@ export async function dashboardIntegration() {
       assert.equal(
         restarted.sessions.find((s: { id: string }) => s.id === 'detail-session').text.text,
         session.text.text,
+      )
+      // Match a mature project: 509 hidden builds and 5,090 stream records.
+      // Actual TS writes, not fabricated Rust snapshots. Warm once, then prove
+      // per-build reads and returned metadata do not grow with hidden history.
+      for (let n = 0; n < 509; n++) {
+        const historical = `history-${n}`
+        const created = buildCreatedWrite()
+        created.payload.repo = project
+        await store.createBuild({ slug: historical, repo: project, created })
+        await store.append(historical, {
+          actor: { kind: 'dispatcher' },
+          type: 'build.completed',
+          payload: { outcome: 'discarded' },
+        })
+        for (let i = 0; i < 10; i++) {
+          const stream = await store.createStream(
+            { kind: 'build', build: historical },
+            `session:old-${i}`,
+          )
+          await store.closeStream(stream.id, 'completed')
+        }
+      }
+      await read(0, { op: 'dashboard' })
+      await read(0, { op: 'reset-counts' })
+      const idleStarted = performance.now()
+      for (let i = 0; i < 3; i++) await read(0, { op: 'dashboard' })
+      const idle = await read(0, { op: 'counts' })
+      assert(
+        !idle.some((r: { scope: string }) => r.scope.includes('history-')),
+        'hidden history was read again',
+      )
+      assert.equal(
+        idle.filter((r: { scope: string }) => r.scope === 'metadata:build-discovery').length,
+        3,
+      )
+      assert(
+        idle
+          .filter((r: { scope: string }) => r.scope === 'metadata:build-discovery')
+          .every((r: { rows: number }) => r.rows === 0),
+      )
+      assert(
+        !idle.some((r: { scope: string }) => r.scope.includes('build-runner-effective-config')),
+        'pinned metadata repeated on idle poll',
+      )
+      assert(
+        idle
+          .filter((r: { scope: string }) => r.scope === 'metadata:streams:detail-case')
+          .every((r: { rows: number }) => r.rows === 0),
+        'closed stream metadata replayed',
+      )
+      const idleMs = performance.now() - idleStarted
+      await store.append(slug, {
+        actor: { kind: 'agent', role: 'implement', session: 'detail-session' },
+        type: 'observation.recorded',
+        payload: { id: 'scale-live', kind: 'followup', summary: 'Scale live append' },
+      })
+      const scaleStarted = performance.now()
+      await read(0, { op: 'dashboard' })
+      const fresh = await read(0, { op: 'detail' })
+      assert(fresh.state.observations.some((o: { id: string }) => o.id === 'scale-live'))
+      assert(performance.now() - scaleStarted < 5000, 'mature project update exceeded five seconds')
+      const liveMs = performance.now() - scaleStarted
+      const newlyCreated = buildCreatedWrite()
+      newlyCreated.payload.repo = project
+      await store.createBuild({ slug: 'discovered-later', repo: project, created: newlyCreated })
+      await store.append('root-node', {
+        actor: { kind: 'dispatcher' },
+        type: 'build.completed',
+        payload: { outcome: 'discarded' },
+      })
+      const discovered = await read(0, { op: 'dashboard' })
+      assert(
+        discovered.rows.some((r: { slug: string }) => r.slug === 'discovered-later'),
+        'new build was missed by delta discovery',
+      )
+      assert(
+        discovered.rows.some(
+          (r: { slug: string; status: string }) => r.slug === 'root-node' && r.status === 'done',
+        ),
+        'terminal ancestor of live node was lost',
+      )
+      console.log(
+        `Mature-project proof: 509 hidden builds / 5090 streams; three idle polls ${idleMs.toFixed(0)}ms; live update ${liveMs.toFixed(0)}ms; metadata queries instrumented`,
       )
       console.log(
         'Dashboard TS-write/Rust-read proof passed: project isolation, unreadable neighbor, artifacts, closed/live transcripts, idle suffixes, concurrent readers, stream-only closure, immutable blobs and reader restart',
