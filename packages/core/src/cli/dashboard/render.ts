@@ -302,6 +302,25 @@ function rightPinnedLine(prefix: string, flexible: string, right: string, width:
   return truncate(`${prefix}${left}${gap}${right}`, width)
 }
 
+/** Preserve lifecycle, then destination, then identity as space tightens. */
+function buildHeader(
+  prefix: string,
+  slug: string,
+  destination: string,
+  right: string,
+  width: number,
+  status: string,
+): string {
+  const pinned = visibleLength(right) > width ? truncate(status, width) : right
+  const available = Math.max(0, width - visibleLength(pinned) - 1)
+  const identityPrefix = truncate(prefix, available)
+  const target = truncate(destination, Math.max(0, available - visibleLength(identityPrefix)))
+  const identityBudget = Math.max(0, available - visibleLength(target))
+  const identity = truncate(slug, Math.max(0, identityBudget - visibleLength(identityPrefix)))
+  const left = `${identityPrefix}${identity}${target}`
+  return `${left}${' '.repeat(Math.max(0, width - visibleLength(left) - visibleLength(pinned)))}${pinned}`
+}
+
 function reviewRoundCeilingText(build: DashboardBuild): string | undefined {
   if (build.reviewRoundCeilings === undefined) return undefined
   const values = [
@@ -375,19 +394,27 @@ function renderBuild(
 
   // The slug is the sole flexible segment; narrow frames truncate it before
   // the right-pinned lifecycle status.
-  const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
+  const destination = build.integrationRow?.destination ?? build.target
+  const suffix = build.integrationRow?.parentDistance ?? build.targetDistance ?? '+?'
+  const target = destination
+    ? ` → ${displayText(destination)}${suffix ? ` ${paint(suffix, 'dim', color)}` : ''}`
+    : ''
+  const lines = [
+    buildHeader(
+      leftPrefix,
+      paint(build.slug, 'bold', color),
+      target,
+      rightStr,
+      width,
+      paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color),
+    ),
+  ]
   if (build.integrationRow) {
     const row = build.integrationRow
     const { bar, counts } = integrationProgress(row, color)
     lines.push(
       ...packLines(
-        [
-          paint(`integration → ${row.destination}`, 'bold', color),
-          bar,
-          ...(row.parentDistance ? [paint(row.parentDistance, 'dim', color)] : []),
-          ...counts,
-          ...(row.verified ? [paint('· verified', 'green', color)] : []),
-        ],
+        [bar, ...counts, ...(row.verified ? [paint('· verified', 'green', color)] : [])],
         width,
         '  ',
       ),
@@ -404,13 +431,6 @@ function renderBuild(
         lines.push(paint(`  ! ${line}`, row.alert.tone, color))
     return lines
   }
-  if (build.target)
-    lines.push(
-      truncate(
-        `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
-        width,
-      ),
-    )
   if (build.tree && (build.kind === 'integration' || build.tree.consent)) {
     const tree = build.tree
     for (const text of [
@@ -735,7 +755,7 @@ function detailBody(
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
   if (build.target && !build.integrationDetail)
     body.push(
-      `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.integration ? ` · ${build.integration}` : ''}`,
+      `  ${build.kind ?? treeVocabulary.work} · ${treeVocabulary.target} ${build.target}${build.targetDistance ? ` ${build.targetDistance}` : ''}${build.integration ? ` · ${build.integration}` : ''}`,
     )
   if (
     !build.integrationDetail &&
@@ -771,7 +791,10 @@ function detailBody(
     body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
     field(handPushedLabel, handPushedText(detail.handPushedCommits))
     field('Branch', `${detail.branch} · restack ${detail.restack}`)
-    if (detail.parentDistance) field('Parent', detail.parentDistance.replace(/^parent /, ''))
+    field(
+      'Parent',
+      `${build.integrationRow.destination}${detail.parentDistance ? ` ${detail.parentDistance}` : ''}`,
+    )
     for (const path of detail.conflictFiles ?? []) field('Conflict', path)
     body.push(
       ...packLines(
