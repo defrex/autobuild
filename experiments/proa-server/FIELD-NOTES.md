@@ -253,3 +253,114 @@ protected pages use same-origin. The capture's real form submission plus copied
 cookie replay check guards this behavior. Public sign-in has no monospace text,
 so capture explicitly loads both local font faces before checking their availability;
 rendered-font probes still verify the faces actually used on each page.
+
+## Rust data access alongside Proa DataLoader
+
+The native `data` library now initializes from the TypeScript store's environment
+contract before the HTTP listener binds. It checks migration version 17 and its
+checksum with SELECT, reads in read-only transactions, and never migrates or uses
+snapshot answers. A bounded four-connection pool allows unrelated scope reads to
+proceed independently. Build/session metadata and facts are filtered by repository.
+Blob bytes are fetched by content hash through the official AWS SDK or Vercel GET;
+no native writer is exposed.
+
+Proa's `DataLoader` / `cx.load_typed(...)` shares keyed work within one request.
+Each response should still get one `DataResolver::request_scope(...)`. Our
+`DataReader` lives longer: the database identity is fixed by its connection, and
+project/scope keys own serialized accumulator/cursor advances across requests.
+A restart or cache eviction replays facts. Request-local sharing alone cannot avoid
+whole-log reads on the next poll. The current shell uses neither reader in a page;
+this library is the boundary for later dashboard work.
+
+The real TypeScript-store/S3rver producer and native Rust process passed binary
+artifact reads in build/repository/session scopes, active-project discovery,
+foreign-project filtering, explicit/latest revisions, and distinct absent-metadata
+versus absent-object results. Query instrumentation measured N=2 initial build rows,
+M=1 appended row, and zero rows on the next poll. Concurrent callers returned equal
+states without double folds; a fresh process replay returned the same value.
+Table data, column definitions, constraints and indexes remained unchanged under
+Rust reads with a SELECT-only role. Schema version 999 refused both the reader
+bridge and actual HTTP-server startup, naming expected 17 and found 999.
+The full gate supplies its own loopback S3 service and uniquely named database/role;
+it also intentionally fails a Rust child and checks resource cleanup.
+
+Operator rulings `esc_a5644697` and `esc_f213ee9f` resolve the compatibility seam:
+classify negative logs mechanically against each scope's current catalog. Preserve
+the TypeScript answer as evidence, but require Rust decoding failure for any unknown
+event name. Assert the classification itself so no known-only log escapes strict
+field parity. An unreadable build leaves healthy neighbors usable; repository or
+session failures remain local to their own scope. This is deliberately stricter
+than the TypeScript advisory-event compatibility path, not a guessed partial state.
+
+
+Provider inspection for the native blob reader: the pinned TypeScript
+`@vercel/blob` 2.8.0 `dist/index.js` `get` and
+`dist/chunk-YYMLUMXS.js` `resolveBlobAuth` / `constructBlobUrl` send GET directly to
+`https://{storeId}.{public|private}.blob.vercel-storage.com/{pathname}` with
+`authorization: Bearer {token}` for either access mode. The read/write token's
+fourth underscore-delimited segment supplies the store id; OIDC uses the
+configured store id with an optional `store_` prefix removed. This SDK performs
+no OIDC exchange for GET: the OIDC token itself is the bearer. GET has no
+`x-api-version` header. A 404 returns null; other unsuccessful responses throw;
+304 has no stream. The store adapter does not request conditional reads or
+cache bypass. Prefix normalization removes empty slash-separated components.
+Native GET wire tests cover bearer authentication, binary bodies, missing objects
+and preserved authorization failures. S3 interoperability uses the real signed
+TypeScript and Rust SDK clients against S3rver 3.7.1; that local subset is not a
+claim about every AWS behavior. A credentialed disposable Vercel store was not
+available; the pinned SDK implementation and local wire proof are recorded in
+[BLOB-CONTRACT.md](BLOB-CONTRACT.md).
+
+Provider contracts consulted:
+[AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
+[Vercel SDK get](https://vercel.com/docs/vercel-blob/using-blob-sdk#get), and
+[S3rver 3.7.1 lifecycle](https://github.com/jamhall/s3rver/blob/v3.7.1/README.md).
+
+
+Linked-build finding: the initial PostgreSQL native-TLS connector introduced
+`libcrypto.so.3`. Proa 0.1.3 refuses that non-system dependency when freezing an
+immutable launch snapshot. Switching to `tokio-postgres-rustls` with native trust
+roots removes both libcrypto/libssl links while preserving URL sslmode and certificate
+validation. The real-store proof passes after this change; no Proa patch or disabled
+linked build is needed.
+
+Current corpus inventory: 33 producer files executed 725 tests, with two explicitly
+provider-gated skips. The corpus preserves 19,408 source cases/provenance aliases
+as 5,868 distinct scope/log fixtures: 4,330 build, 1,409 repository and 129 session.
+All 219 catalog names have decoding witnesses (134 build, 74 repository, 11 session).
+Ten unknown-type cases retain TS answers and assert scoped Rust unreadability;
+39 deliberately invalid TS histories preserve the oracle error outcome, and 16
+causally incomplete standalone witnesses are decoding-only. Freshness covers 820
+source/dependency inputs. Lossless deterministic gzip is about 2.8 MiB, alongside
+268 KiB of decoding schemas and a readable 110 KiB manifest; identical logs retain
+all original producer identities as aliases. Generation completed with the current
+producer code, then its non-mutating freshness check passed.
+
+The clean repository unit run passed 8,153 tests with 49 skips and zero failures.
+The initial run exposed a corpus self-test instrumentation leak, now fixed by full
+prototype/reducer restoration. The separately known inherited AB_CONTEXT_DIR routing
+test issue remains outside this build; the clean run removed only that variable.
+Rust default/union validation caches and exact-equality fast paths keep the broader
+17,616-case development parity stress run practical (about 102 seconds before the
+last redundant-validator optimization); final-gate timings remain in its ignored
+build evidence directory. Extra generated additive-field histories verified raw
+repository journals and opaque session fields against TypeScript. The server
+never loads oracle answers: only the generated event schema catalog is embedded.
+
+
+## Review round 2: unreadable streams and disconnected backends
+
+An unreadable append-only stream now retains its deterministic scoped decode error
+in the process cache. Further polls issue no event query, even after new facts are
+appended. Cache clear or process restart replays once and rediscovers the failure;
+the failed batch never publishes partial state or advances its successful cursor.
+The integration proof polls an unknown build through repeated project reads, then
+checks unchanged query instrumentation after an extra append. Repository, session
+and known-malformed build failures also retain their error without further reads.
+
+Closed PostgreSQL pool slots reconnect under the slot lock on subsequent reads.
+Replacement connections use the same TLS settings and SELECT-only schema preflight;
+a failed reconnect leaves the slot retryable, and a changed schema marker refuses
+reuse. The real-store test terminates all four reader backends, verifies all four
+PIDs are replaced, retains the healthy build's accumulator/cursor, and checks schema
+refusal again after disconnection. No query is transparently retried mid-transaction.
