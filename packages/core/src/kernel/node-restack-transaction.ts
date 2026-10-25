@@ -221,7 +221,7 @@ export async function runNodeTransaction(
   }
   const active = node!.active!
   if (active.operation !== 'restack')
-    throw new Error('recover reserved node landing before restacking')
+    throw new Error('recover reserved node merge before restacking')
   if (
     active.merges.some((proof) => proof.build || proof.missing.length) &&
     state.answeredEscalations.some(

@@ -1,7 +1,7 @@
 ---
 title: "Forges"
 group: "reference"
-description: "Choose GitHub or local git and implement safe code publication and landing."
+description: "Choose GitHub or local git and implement safe code publication and merge."
 label: "Forges"
 order: 9
 ---
@@ -12,7 +12,7 @@ order: 9
 
 The forge publishes code and represents pull requests.
 
-- **The kernel owns the forge.** Pushes, PRs, comments, landing and merge happen in deterministic code.
+- **The kernel owns the forge.** Pushes, PRs, comments, merge and merge happen in deterministic code.
 - **Agents only commit locally.** They never push or see forge credentials.
 - **Publication is exact.** The branch head read back from the forge must equal the intended SHA.
 
@@ -53,7 +53,7 @@ Origin mode and Vercel Sandbox need an exported token. Never forward kernel cred
 | Pull requests: write | opening and updating PRs |
 | Metadata, Administration: read | readiness checks |
 
-A classic token on a private repository needs the `repo` scope instead. Validation doesn't guarantee a merge: branch protection, required checks, merge settings and permissions can still defer landing.
+A classic token on a private repository needs the `repo` scope instead. Validation doesn't guarantee a merge: branch protection, required checks, merge settings and permissions can still defer merge.
 
 ### Local git
 
@@ -71,7 +71,7 @@ Needs only Git and a writable repository.
 
 - **Pull requests** are JSON records under private `refs/autobuild/` refs, linking to local branch refs.
 - **Publication** confirms the local branch; nothing is uploaded.
-- **Landing** makes a head-guarded squash commit with compare-and-swap ref updates, waiting while the checked-out destination has unsafe local changes.
+- **Merge** makes a head-guarded squash commit with compare-and-swap ref updates, waiting while the checked-out destination has unsafe local changes.
 
 It can't serve remote sandboxes; use GitHub there.
 
@@ -104,7 +104,7 @@ An adapter must provide:
 
 - idempotent PR creation
 - exact-SHA publication confirmation, never inferred from ancestry or a push response
-- guarded landing and comments
+- guarded merge and comments
 - every capability it advertises
 
 Reconciliation needs the optional `Forge.rewrite` group: immutable exact-SHA archives, branch snapshots and head-guarded replacement. Report lease mismatches separately and preserve unknown work. Without it, reconciliation fails with an actionable refusal, never an ordinary push.

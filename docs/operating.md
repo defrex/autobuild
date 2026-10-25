@@ -1,14 +1,14 @@
 ---
 title: "Working with your operator agent"
 group: "guides"
-description: "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you."
+description: "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you."
 label: "Working with your operator agent"
 order: 6
 ---
 
 # Working with your operator agent
 
-Your operator agent keeps work moving through `ab` or MCP. Under your instructions it writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers bounded escalations, pauses or aborts work, and authorizes landing.
+Your operator agent keeps work moving through `ab` or MCP. Under your instructions it writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers bounded escalations, pauses or aborts work, and authorizes merge.
 
 - **You own** goals, scope, tradeoffs and authority, and you run the dispatcher and upgrades.
 - **The agent never** starts, stops or restarts dispatch; it reports dispatcher trouble to you.
@@ -27,11 +27,11 @@ Autobuild ships no agent memory. Keep goals, decisions, constraints and monitor 
 
 ## Give steering that sticks
 
-Give the agent your scope, priorities, acceptance boundaries, escalation thresholds and landing authority. For example:
+Give the agent your scope, priorities, acceptance boundaries, escalation thresholds and merge authority. For example:
 
-> Keep this change API-compatible. Prioritize the retry budget over diagnostics. You may answer questions already settled by this spec, but ask me about scope changes and before granting landing consent.
+> Keep this change API-compatible. Prioritize the retry budget over diagnostics. You may answer questions already settled by this spec, but ask me about scope changes and before granting merge consent.
 
-Agree on boundaries before the agent acts: moving a ticket to ready can start a build immediately, and granting consent can let it land once gates pass.
+Agree on boundaries before the agent acts: moving a ticket to ready can start a build immediately, and granting consent can let it merge once gates pass.
 
 The agent answers questions your instructions settle and escalates ambiguous goals, scope or compatibility tradeoffs, consequential or destructive choices, missing authority or access, and dispatcher trouble.
 
@@ -66,7 +66,7 @@ until you end or hand off the role. `wait` does not heartbeat or carry registrat
 identity: a separate unflagged diagnostic wait/watch must never replace the
 standing monitor or supply its resume cursor. MCP presence is deferred.
 
-- **Default filter:** actionable attention only, such as escalations and ready landings awaiting consent. Add `--event` globs for routine lifecycle events.
+- **Default filter:** actionable attention only, such as escalations and ready merges awaiting consent. Add `--event` globs for routine lifecycle events.
 - **Starts now:** a fresh watch ignores history, so check current status too.
 - **Resumable:** pass the opaque cursor from the JSON output back with `--since` to receive events recorded while away. The final JSON line always carries one.
 - **Duration:** 30 minutes by default; `--timeout 0` keeps it open.
@@ -103,29 +103,29 @@ bun ab resume my-build
 - **`pause --all`** holds queued work, turns intake off and requests pauses on running builds.
 - **`resume --all`** releases the hold, turns intake on and resumes cleanly paused builds.
 
-Intake off only stops new ticket claims; a repository pause also holds queued builds. Neither withdraws landing consent; use `hold`.
+Intake off only stops new ticket claims; a repository pause also holds queued builds. Neither withdraws merge consent; use `hold`.
 
-## Authorize landing
+## Authorize merge
 
-Ordered landing rules choose automatic authorization or explicit consent. With no matching rule, leaves default to auto and integration nodes to consent. Verification, checks, protection and merge gates still apply.
+Ordered merge rules choose automatic authorization or explicit consent. With no matching rule, leaves default to auto and integration nodes to consent. Verification, checks, protection and merge gates still apply.
 
 ```
-bun ab land my-build
+bun ab merge my-build
 bun ab hold my-build
 ```
 
-- **`land`** requires a ready build, clears its hold and grants consent to land into its destination.
-- **`hold`** suppresses landing and revokes consent, even before the build is ready.
+- **`merge`** requires a ready build, clears its hold and grants consent to merge into its destination.
+- **`hold`** suppresses merge and revokes consent, even before the build is ready.
 - **Persistence:** consent survives head changes, restacks, verification and re-finalization until a hold or completion. Accepted node reparenting revokes it.
 
 ## Choose an operator surface
 
 Every surface reads the same durable state; [Operator surfaces](operator-surfaces.md) covers remote access.
 
-| Surface | Progress, escalations, pause/resume | Landing consent and hold |
+| Surface | Progress, escalations, pause/resume | Merge consent and hold |
 |---|---|---|
-| Terminal dashboard (`bun ab dispatch`) | Yes | Keys `l` (land) and `o` (hold) |
-| Hosted web app | Yes, plus sessions and transcripts | Land/Hold on a landing awaiting consent |
+| Terminal dashboard (`bun ab dispatch`) | Yes | Keys `l` (merge) and `o` (hold) |
+| Hosted web app | Yes, plus sessions and transcripts | Merge/Hold on a merge awaiting consent |
 | CLI and MCP operator tools | Yes | Yes |
 
 ## An example session

@@ -217,7 +217,7 @@ export async function auditIntegrationLanding(
       if (fetched.exitCode !== 0) throw new Error('integration audit commit unavailable')
     }
     const tree = await deps.exec(['git', 'rev-parse', `${sha}^{tree}`], { cwd: deps.workspacePath })
-    if (tree.exitCode !== 0) throw new Error('integration landing tree audit pending')
+    if (tree.exitCode !== 0) throw new Error('integration merge tree audit pending')
     trees.push(tree.stdout.trim())
   }
   const intent = state.integration?.intent
@@ -230,7 +230,7 @@ export async function auditIntegrationLanding(
         { cwd: deps.workspacePath },
       )
     : undefined
-  if (messages && messages.exitCode !== 0) throw new Error('landing identity audit pending')
+  if (messages && messages.exitCode !== 0) throw new Error('merge identity audit pending')
   const landedIdentities = messages
     ? messages.stdout.split('\0').flatMap((message) => buildTrailers(message))
     : []
@@ -247,7 +247,7 @@ export async function auditIntegrationLanding(
           id,
           phase: 'verify:integration',
           source: 'agent',
-          question: `Integration result requires attention: verified ${landing.head} (${trees[0]}), landed ${landing.landed} (${trees[1]}). Missing or duplicate identities: ${missing.join(', ') || 'none'}. The shared parent has not been rewritten.`,
+          question: `Integration result requires attention: verified ${landing.head} (${trees[0]}), merged ${landing.landed} (${trees[1]}). Missing or duplicate identities: ${missing.join(', ') || 'none'}. The shared parent has not been rewritten.`,
         },
       })
   }

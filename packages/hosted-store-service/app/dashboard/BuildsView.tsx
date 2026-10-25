@@ -14,6 +14,9 @@ import {
   pauseResumeHelp,
   buildActionAvailability,
   landingPolicyDisplay,
+  mergeVocabulary,
+  mergeSummary,
+  mergedChildren,
   type DashboardBuild,
   repositoryActionAvailability,
   type DashboardHarvest,
@@ -584,6 +587,7 @@ function BuildRow({
         )}
         {
           <span className="tokens">
+            {!row.integrationRow && <span>{mergeSummary(row)}</span>}
             {row.pr && (
               <a
                 className="pr"
@@ -611,7 +615,10 @@ function BuildRow({
               row.integrationRow.children.total ? (
                 <>
                   <span className="ok">
-                    {row.integrationRow.children.landed}/{row.integrationRow.children.total} landed
+                    {mergedChildren(
+                      row.integrationRow.children.landed,
+                      row.integrationRow.children.total,
+                    )}
                   </span>
                   {row.integrationRow.children.building > 0 && (
                     <span className="live"> · {row.integrationRow.children.building} building</span>
@@ -850,7 +857,7 @@ function BuildDetail({
         )}
         {!build.integrationDetail && (
           <span>
-            <span className="k">landing </span>
+            <span className="k">{mergeVocabulary.label} </span>
             {landingPolicyDisplay(build.landing)}
           </span>
         )}
@@ -967,7 +974,7 @@ function BuildDetail({
                   <span>
                     <span className="k">Progress </span>
                     {counts.known
-                      ? `${counts.landed}/${counts.total} landed · ${counts.building} building · ${counts.queued} queued`
+                      ? `${mergedChildren(counts.landed, counts.total)} · ${counts.building} building · ${counts.queued} queued`
                       : 'children unknown'}
                   </span>
                 </div>
@@ -1001,7 +1008,7 @@ function BuildDetail({
               </section>
               <section className="section">
                 <h3>
-                  Children · {open} open · {detail.children.length - open} landed
+                  Children · {open} open · {detail.children.length - open} {mergeVocabulary.merged}
                   {!detail.membershipKnown && ' · membership unknown'}
                 </h3>
                 {detail.children.map((child) => (
@@ -1052,7 +1059,7 @@ function BuildDetail({
                 ))}
               </section>
               <section className="section" style={{ overflowWrap: 'anywhere' }}>
-                <h3>Landing</h3>
+                <h3>{mergeVocabulary.title}</h3>
                 <p>{displayText(detail.landing)}</p>
               </section>
             </>
@@ -1294,8 +1301,11 @@ export function LandingSignoff({
   onControl: BuildsViewProps['onRowBuildControl']
 }) {
   return (
-    <section className="signoff landing" aria-label={`Landing consent for ${slug}`}>
-      <p>Landing awaits consent. Land releases this build; Hold keeps it waiting.</p>
+    <section
+      className="signoff landing"
+      aria-label={`${mergeVocabulary.title} consent for ${slug}`}
+    >
+      <p>{mergeVocabulary.consent}</p>
       <div className="controls">
         <button
           type="button"
@@ -1303,7 +1313,7 @@ export function LandingSignoff({
           disabled={pending}
           onClick={() => onControl(slug, 'land')}
         >
-          Land
+          {mergeVocabulary.title}
         </button>
         <button
           type="button"

@@ -51,14 +51,14 @@ test('detail orders all children and names expected checks, destination and defa
   expect(d.children.map((c) => [c.id, c.state])).toEqual([
     ['OPEN', 'queued'],
     ['QUEUED', 'queued'],
-    ['LANDED', 'landed'],
+    ['LANDED', 'merged'],
   ])
   expect(d.destination).toBe('main (the configured base branch)')
   expect(d.verifySteps).toEqual([
     { step: 'lint', outcome: 'pending' },
     { step: 'unit', outcome: 'pending' },
   ])
-  expect(d.verification).toContain('once every child has landed')
+  expect(d.verification).toContain('once every child has merged')
   expect(d.landing).toContain('default rule')
   const s = state()
   s.target = { ticket: { source: 'fake', id: 'PARENT' }, build: 'parent' }
@@ -112,7 +112,7 @@ test('legacy facts recover contribution titles from completed records and acknow
   expect(enriched.integrationDetail?.children.find((c) => c.landed)).toMatchObject({
     id: 'OLD',
     title: 'Completed title',
-    state: 'landed',
+    state: 'merged',
   })
   expect(enriched.integrationDetail?.children[0]?.title).toBe('title unavailable')
   s.integration!.observation!.diagnostics = ['partial scan']
@@ -172,7 +172,7 @@ test('verification binds outcomes to cycle/head/parent and exposes repair and co
       rule: { default: true },
     },
   }
-  expect(detail(s).landing).toContain('press l, or ab land node')
+  expect(detail(s).landing).toContain('press l, or ab merge node')
   s.nodeComparison.headSha = 'moved'
   expect(detail(s).verifySteps.every((s) => s.outcome === 'pending')).toBe(true)
   s.nodeComparison.headSha = 'head'
@@ -190,7 +190,7 @@ test('prospective policy retains label uncertainty and hold retains rule explana
   expect(detail(s).landing).toContain('held — default rule')
 })
 
-test('a recorded landing snapshot explains auto and holds independently of changed live policy', () => {
+test('a recorded merge snapshot explains auto and holds independently of changed live policy', () => {
   const s = state()
   s.landing = {
     decision: {

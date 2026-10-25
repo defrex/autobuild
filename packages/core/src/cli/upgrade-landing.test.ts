@@ -21,7 +21,7 @@ async function fixture(text = source) {
   await writeFile(join(root, 'autobuild.toml'), text)
   return root
 }
-describe('landing policy upgrade', () => {
+describe('merge policy upgrade', () => {
   test.each([true, false, undefined])(
     'preserves the old default %s and is idempotent',
     async (enabled) => {
@@ -70,7 +70,7 @@ describe('landing policy upgrade', () => {
       ],
     )
   })
-  test('preserves explicit empty rules byte for byte without journal access', async () => {
+  test('renames explicit empty rules preserving surrounding bytes without journal access', async () => {
     const text = `landing = [] # explicit fallback\n${source}`
     const targetRepo = await fixture(text)
     expect(
@@ -81,8 +81,10 @@ describe('landing policy upgrade', () => {
           throw new Error('must not open')
         },
       }),
-    ).toEqual({ changed: false })
-    expect(await readFile(join(targetRepo, 'autobuild.toml'), 'utf8')).toBe(text)
+    ).toEqual({ changed: true, legacyDefault: undefined })
+    expect(await readFile(join(targetRepo, 'autobuild.toml'), 'utf8')).toBe(
+      text.replace('landing =', 'merge ='),
+    )
   })
   test('unavailable journal fails without changing configuration', async () => {
     const targetRepo = await fixture()
@@ -112,4 +114,32 @@ describe('landing policy upgrade', () => {
     })
     expect(opened).toEqual(['https://store.example'])
   })
+})
+
+test.each(['landing', '"landing"', "'landing'"])(
+  'renames %s policy headers without journal access or changes to comments and strings',
+  async (key) => {
+    const text = `${source}\n# [[merge]] stays in comments\n[[${key}]] # policy\nmode = "consent"\nlabel = "merge"\n[[${key}]]\nfrom = "node"\nmode = "auto"\n`
+    const targetRepo = await fixture(text)
+    const opts = {
+      targetRepo,
+      exec: spawnExec,
+      openStore: () => {
+        throw new Error('must not open')
+      },
+    }
+    expect(await migrateLandingPolicy(opts)).toEqual({ changed: true, legacyDefault: undefined })
+    const result = await readFile(join(targetRepo, 'autobuild.toml'), 'utf8')
+    expect(result).toBe(
+      text.replaceAll(`[[${key}]]`, '[[merge]]').replace('# [[merge]] stays', '# [[merge]] stays'),
+    )
+    expect(await migrateLandingPolicy(opts)).toEqual({ changed: false })
+  },
+)
+test('dual keys and unsupported escaped spellings leave original bytes intact', async () => {
+  for (const text of [`merge = []\nlanding = []\n${source}`, `"merge\\u0069ng" = []\n${source}`]) {
+    const targetRepo = await fixture(text)
+    await expect(migrateLandingPolicy({ targetRepo, exec: spawnExec })).rejects.toThrow()
+    expect(await readFile(join(targetRepo, 'autobuild.toml'), 'utf8')).toBe(text)
+  }
 })

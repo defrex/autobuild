@@ -35,7 +35,7 @@ for (const scenario of [
     }
     const h = await makeHarness({
       localGitForge: true,
-      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+      configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers,
       tickets: [
         { ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' },
@@ -142,7 +142,7 @@ for (const trailerFlag of [undefined, false]) {
     const { DISPATCHER } = await import('../events/envelope')
     const h = await makeHarness({
       localGitForge: true,
-      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+      configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers: happyHandlers(),
       tickets: [
         { ...readyTicket('NODE', { title: 'Empty node' }), kind: 'node' },
@@ -152,7 +152,7 @@ for (const trailerFlag of [undefined, false]) {
     })
     try {
       await git(
-        ['commit', '--allow-empty', '-m', 'external queue landing without identity'],
+        ['commit', '--allow-empty', '-m', 'external queue merge without identity'],
         h.origin,
       )
       const sha = await git(['rev-parse', 'HEAD'], h.origin)
@@ -241,7 +241,7 @@ for (const blocked of [false, true]) {
     const reads: string[] = []
     const h = await makeHarness({
       localGitForge: true,
-      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+      configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers: happyHandlers(),
       tickets: [
         {
@@ -337,14 +337,14 @@ for (const blocked of [false, true]) {
   })
 }
 
-test('a trailerless work landing survives node replay and subsequent squash transport to root', async () => {
+test('a trailerless work merge survives node replay and subsequent squash transport to root', async () => {
   const { git } = await import('./harness')
   const { DISPATCHER } = await import('../events/envelope')
   const h = await makeHarness({
     localGitForge: true,
     handlers: happyHandlers(),
     tickets: [
-      { ...readyTicket('NODE', { title: 'Node with foreign landing' }), kind: 'node' },
+      { ...readyTicket('NODE', { title: 'Node with foreign merge' }), kind: 'node' },
       readyTicket('BLOCK', { state: 'Done' }),
       {
         ...readyTicket('DEP', { title: 'Node dependent', state: 'In Progress' }),
@@ -363,7 +363,7 @@ test('a trailerless work landing survives node replay and subsequent squash tran
     const base = await h.forgeAdapter.remoteBranchSha!(node.branch!)
     const tree = await git(['rev-parse', `${base}^{tree}`], h.origin)
     const landing = await git(
-      ['commit-tree', tree, '-p', base, '-m', 'external trailerless landing'],
+      ['commit-tree', tree, '-p', base, '-m', 'external trailerless merge'],
       h.origin,
     )
     await git(['update-ref', `refs/heads/${node.branch}`, landing], h.origin)

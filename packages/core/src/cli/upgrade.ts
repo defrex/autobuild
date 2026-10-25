@@ -558,7 +558,9 @@ export async function abUpgrade(opts: {
   })
   if (landing.changed)
     stdout(
-      `Landing policy migrated: legacy default ${landing.legacyDefault ? 'ON → leaf auto' : 'OFF → leaf consent'}; nodes consent. Configure [[landing]] rules to change it.`,
+      landing.legacyDefault === undefined
+        ? 'Merge policy migrated: renamed deprecated landing to merge; rule values and order preserved.'
+        : `Merge policy migrated: legacy default ${landing.legacyDefault ? 'ON → leaf auto' : 'OFF → leaf consent'}; nodes consent. Configure [[merge]] rules to change it.`,
     )
   await migrateLegacyAgentSkills(targetRepo)
 

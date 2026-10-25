@@ -133,7 +133,7 @@ describe('runCli — routing and exit codes', () => {
       'ab pause <slug>',
       'ab resume <slug>',
       'ab hold <slug>',
-      'ab land <slug>',
+      'ab merge <slug>',
       'ab answer <slug>',
       'ab answer <slug> [<text>] --review-round-ceiling <n>',
       'ab answer <slug> [<text>] --dismiss',

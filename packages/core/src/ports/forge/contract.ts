@@ -265,7 +265,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       })
     })
 
-    test('getPrState discriminates a merged PR with its independently observed landing SHA', async () => {
+    test('getPrState discriminates a merged PR with its independently observed merge SHA', async () => {
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
@@ -280,7 +280,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       })
     })
 
-    test('identity-aware squash exposes the actual landed trailer when inspection is supported', async () => {
+    test('identity-aware squash exposes the actual merged trailer when inspection is supported', async () => {
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)

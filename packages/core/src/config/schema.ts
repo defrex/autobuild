@@ -1057,7 +1057,8 @@ export const configRootSchema = z.strictObject({
         .refine((value) => value.trim().length > 0, 'plugin module specifiers must be nonblank'),
     )
     .default([]),
-  landing: z.array(landingRuleSchema).default([]),
+  merge: z.array(landingRuleSchema).optional(),
+  landing: z.array(landingRuleSchema).optional(),
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
   commands: commandsSchema,
@@ -1093,7 +1094,8 @@ documentFields(configRootSchema, {
     'Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names.',
   plugins:
     'Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes.',
-  landing: 'Ordered landing rules; the first matching rule controls consent.',
+  merge: 'Ordered merge rules; the first matching rule controls consent.',
+  landing: 'Deprecated alias for merge. Do not declare both keys.',
   pr: 'Pull request review image hosting configuration.',
   workspace: 'Workspace provider selector and provider-specific configuration.',
   commands: 'Named shell commands used by setup and deterministic checks.',
@@ -1133,7 +1135,20 @@ export const TOP_LEVEL_KEYS = Object.keys(configRootSchema.shape)
  * because validation failures are feedback to whoever edits the file (D6
  * discipline applied to config).
  */
-export const configSchema = configRootSchema.superRefine((config, ctx) => {
+const normalizedConfigSchema = configRootSchema.transform((input, ctx) => {
+  if (input.merge !== undefined && input.landing !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['merge'],
+      message: 'merge and deprecated landing cannot both be declared',
+    })
+    return z.NEVER
+  }
+  const { merge, landing, ...rest } = input
+  return { ...rest, landing: merge ?? landing ?? [] }
+})
+
+export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => {
   for (const kind of ['verify', 'finalize'] as const) {
     const section = config[kind]
     if (!section) continue

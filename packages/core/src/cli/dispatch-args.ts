@@ -32,7 +32,7 @@ export function parseDispatchArgs(
     throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
   }
   if (sawAutoMerge || sawNoAutoMerge) {
-    throw new Error(`Auto-merge flags are retired; configure [[landing]] policy — ${usage}`)
+    throw new Error(`Auto-merge flags are retired; configure [[merge]] policy — ${usage}`)
   }
 
   const interval = stringFlag(parsed, 'interval')

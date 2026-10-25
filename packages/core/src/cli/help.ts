@@ -148,8 +148,8 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '  Up/Down   Select the global, Harvest, or a build row.',
       '  h         Toggle harvesting when the global row is selected.',
       '  i         Toggle intake when the global row is selected.',
-      '  l         Land the selected ready build.',
-      '  o         Hold the selected landing.',
+      '  l         Merge the selected ready build.',
+      '  o         Hold the selected merge.',
       '  p         On the global row, pause every pausable build and turn intake',
       '            off. On a build, pause or cancel a pending pause; on Harvest,',
       '            resume or acknowledge the run.',
@@ -199,7 +199,7 @@ names a same-source node; --no-target clears it to the baseBranch root.
 Targets cannot form cycles, and nodes with targeting tickets cannot become work.
 tree shows all tickets nested by target, including completed work and empty nodes;
 --json returns {root, children} with recursive {ticket, children} entries.
-These fields describe intent; dispatch and landing behavior are unchanged.`,
+These fields describe intent; dispatch and merge behavior are unchanged.`,
       '--state overrides [tickets].createState (or the provider default) for that',
       'create only; it is passed through unchanged and validated by the source.',
       'update partially replaces editable fields: omitted fields survive, --labels',
@@ -250,8 +250,8 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       '',
       'Report the durable ticket-intake setting and repository-wide pause from',
       'the same journal projection used by dispatch and the dashboard.',
-      'The defaults are intake on and repository pause off. Landing policy is',
-      'configured with [[landing]] rules in autobuild.toml.',
+      'The defaults are intake on and repository pause off. Merge policy is',
+      'configured with [[merge]] rules in autobuild.toml.',
       '',
       '--json emits one bare object for scripts. --store overrides AB_STORE, which',
       'overrides the repository-local .autobuild store. This sessionless command',
@@ -259,13 +259,13 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
     ]),
   },
   {
-    name: 'landings',
+    name: 'merges',
     audience: 'human',
-    summary: 'List ready landings awaiting consent.',
+    summary: 'List ready merges awaiting consent.',
     detail: page([
-      'Usage: ab landings [--json] [--store <ref>]',
-      'Shows ready consent and held landings with effective target, branch, verification and node children.',
-      'Use ab land <slug> to consent or ab hold <slug> to withdraw consent. Land rechecks readiness.',
+      'Usage: ab merges [--json] [--store <ref>]',
+      'Shows ready consent and held merges with effective target, branch, verification and node children.',
+      'Use ab merge <slug> to consent or ab hold <slug> to withdraw consent. Merge rechecks readiness.',
       'Source ancestry is available separately through ab ticket tree or MCP tickets.tree.',
     ]),
   },
@@ -353,7 +353,7 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       'integration.verification-failed (failed node verification), build.janitor-failing, build.compatibility-deferred,',
       'node.item-conflicted, conflicted restack.replayed, derived build.consent-ready and',
       'build.merge-decision (a current actionable merge-gate deferral or unsafe forge outcome).',
-      'Consent and held ready landings use only build.consent-ready, once per readiness episode.',
+      'Consent and held ready merges use only build.consent-ready, once per readiness episode.',
       'Unready or stale consent candidates stay silent; one merge gate decision per build/PR.',
       'Repository: harvest.escalated, harvest.recovery-exhausted, dispatcher.config-rejected, dispatcher.forge-readiness-failed,',
       'dispatcher.config-reloaded with restartRequired, abnormal dispatcher.run-stopped,',
@@ -421,9 +421,9 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       'error before waiting begins.',
       '',
       'Conditions (--for, repeatable): blocked, paused, running, done, aborted, terminal (done',
-      'or aborted), pr=open, pr=merged, pr=closed, consent, node-landed, restack-conflicted, pr=conflicted, phase=<phase> (a core phase —',
+      'or aborted), pr=open, pr=merged, pr=closed, consent, node-merged, restack-conflicted, pr=conflicted, phase=<phase> (a core phase —',
       'plan, plan-review, implement, code-review, finalize, reconcile — or verify:<step>), and',
-      'attention (an open escalation, failed node verification, consent readiness, a node landing or restack conflict,',
+      'attention (an open escalation, failed node verification, consent readiness, a node merge or restack conflict,',
       'or a build waiting for a merge decision). Merge attention',
       'requires a current actionable gate deferral or an unsafe forge outcome;',
       'armed pending consent, routine outcomes and self-healing failures stay silent.',
@@ -591,7 +591,7 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       'the next spec revision. Leaves require an open escalation and restart from plan.',
       'Idle collecting or verification-failed nodes need no escalation: they recollect',
       'and verify again, even on the same head. Active work, pause, pending controls and',
-      'landing intent refuse node revision. Non-conforming bodies are refused before anything is',
+      'merge intent refuse node revision. Non-conforming bodies are refused before anything is',
       'recorded. Retrying an interrupted revision completes the exact body authorized by',
       'the earlier recorded answer, not a newly supplied body.',
       '',
@@ -628,15 +628,14 @@ These fields describe intent; dispatch and landing behavior are unchanged.`,
       'and nodes without an open branch are refused. This command is sessionless.',
     ]),
   },
-  ...(['hold', 'land'] as const).map((name) => ({
+  ...(['hold', 'merge'] as const).map((name) => ({
     name,
     audience: 'human' as const,
-    summary:
-      name === 'hold' ? 'Hold a landing and withdraw consent.' : 'Consent to a ready landing.',
+    summary: name === 'hold' ? 'Hold a merge and withdraw consent.' : 'Consent to a ready merge.',
     detail: page([
       `Usage: ab ${name} <slug> [--store <ref>]`,
       '',
-      'Landing consent survives restacks and verification; hold persists until land.',
+      'Merge consent survives restacks and verification; hold persists until merge.',
       'These sessionless controls never bypass merge gates.',
     ]),
   })),
@@ -843,7 +842,8 @@ export function renderTopLevelHelp(): string {
 }
 
 export function renderCommandHelp(command: string): string {
-  const entry = ENTRY_BY_NAME.get(command === 'update' ? 'upgrade' : command)
+  const canonical = command === 'land' ? 'merge' : command === 'landings' ? 'merges' : command
+  const entry = ENTRY_BY_NAME.get(canonical === 'update' ? 'upgrade' : canonical)
   if (entry === undefined) {
     throw new Error(`unknown help command "${command}"`)
   }

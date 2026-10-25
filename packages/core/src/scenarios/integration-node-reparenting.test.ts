@@ -304,7 +304,7 @@ test('lifecycle, revision and forge refusals leave mixed ticket patches and node
       },
     })
     await expect(updateTicketTarget(ctx, 'A', { target: null, title: 'Changed' })).rejects.toThrow(
-      'landing',
+      'merging',
     )
     expect((await h.tickets.get('A'))!.revision).toBe(revision)
     expect(ofType(await h.events(a.slug), 'node.parent-requested')).toHaveLength(0)

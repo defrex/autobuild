@@ -65,7 +65,7 @@ export function projectIntegrationDetail(
       state:
         c.builds?.some((b) => contributions.has(b)) &&
         !(c.source === membershipSource && open.has(c.id))
-          ? 'landed'
+          ? 'merged'
           : 'queued',
     }))
   for (const id of open)
@@ -84,7 +84,7 @@ export function projectIntegrationDetail(
         id: contribution,
         builds: [contribution],
         title: 'title unavailable',
-        state: 'landed',
+        state: 'merged',
         landed: true,
       })
   children.sort(
@@ -137,11 +137,11 @@ export function projectIntegrationDetail(
     verification: failed.length
       ? `${failed.join(', ')} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`
       : !integrationComplete(state)
-        ? `pending — runs on the node head against ${row.destination} once every child has landed`
+        ? `pending — runs on the node head against ${row.destination} once every child has merged`
         : current && integrationCycleVerified(state)
           ? 'verified on the current node head and destination'
           : 'pending on the current node head and destination',
     verifySteps,
-    landing: `${mode} — ${nodeLandingRuleDisplay(state, config.landing)}${landingReady(state, restack) && mode === 'consent' && state.landing?.command?.kind !== 'land' ? ` — press l, or ab land ${record.slug}` : ''}`,
+    landing: `${mode} — ${nodeLandingRuleDisplay(state, config.landing)}${landingReady(state, restack) && mode === 'consent' && state.landing?.command?.kind !== 'land' ? ` — press l, or ab merge ${record.slug}` : ''}`,
   }
 }

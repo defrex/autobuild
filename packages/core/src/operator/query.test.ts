@@ -1204,7 +1204,7 @@ test('operator integration counts agree with terminal polling without completed 
       terminal.builds
         .find((b) => b.slug === 'node')!
         .integrationDetail?.children.find((c) => c.landed),
-    ).toMatchObject({ id: 'LANDED', title: 'Completed contribution', state: 'landed' })
+    ).toMatchObject({ id: 'LANDED', title: 'Completed contribution', state: 'merged' })
     const expanded = await getOperatorBuild({ store, repo: REPO, slug: 'node', now: clock() })
     expect(expanded.dashboardRow?.integrationDetail).toEqual(
       operator.model.builds.find((b) => b.slug === 'node')?.integrationDetail,

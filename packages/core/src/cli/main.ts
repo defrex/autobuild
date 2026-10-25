@@ -112,6 +112,8 @@ export const SESSIONLESS_COMMANDS = new Set([
   'dispatch',
   'builds',
   'landings',
+  'merges',
+  'merge',
   'build',
   'watch',
   'wait',
@@ -265,8 +267,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         resume: 'resume requested',
         abort: 'abort requested',
         discard: 'discard requested',
-        hold: 'landing hold requested',
-        land: 'landing consent requested',
+        hold: 'merge hold requested',
+        land: 'merge consent requested',
         'auto-merge-on': 'auto-merge requested',
         'auto-merge-off': 'auto-merge cancelled',
       }
@@ -458,6 +460,10 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     return 0
   }
   if (helpRequest?.kind === 'command') {
+    if (helpRequest.command === 'land' || helpRequest.command === 'landings')
+      stderr(
+        `ab ${helpRequest.command} is deprecated; use ab ${helpRequest.command === 'land' ? 'merge' : 'merges'}`,
+      )
     stdout(renderCommandHelp(helpRequest.command))
     return 0
   }
@@ -783,11 +789,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return 0
     }
 
+    case 'merges':
     case 'landings': {
-      const usage = 'usage: ab landings [--json] [--store <ref>]'
+      if (command === 'landings') stderr('ab landings is deprecated; use ab merges')
+      const usage = 'usage: ab merges [--json] [--store <ref>]'
       const parsed = parseArgs(rest, { json: 'boolean', store: 'value' }, usage)
       if (parsed.positionals.length) throw new Error(usage)
-      if (!deps.exec) throw new Error('ab landings needs an exec seam')
+      if (!deps.exec) throw new Error('ab merges needs an exec seam')
       await abLandings({
         targetRepo: deps.workspacePath,
         env: deps.processEnv ?? {},
@@ -1096,20 +1104,22 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'hold':
+    case 'merge':
     case 'land': {
+      if (command === 'land') stderr('ab land is deprecated; use ab merge')
       const usage = `usage: ab ${command} <slug> [--store <ref>]`
       const parsed = parseArgs(rest, { store: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
       await runBuildControl(
         deps,
         parsed.positionals[0]!,
-        { kind: command },
+        { kind: command === 'merge' ? 'land' : command },
         stringFlag(parsed, 'store'),
       )
       return 0
     }
     case 'auto-merge':
-      throw new Error('ab auto-merge is retired; use ab hold, ab land, and [[landing]] policy')
+      throw new Error('ab auto-merge is retired; use ab hold, ab merge, and [[merge]] policy')
 
     case 'answer': {
       const usage =
