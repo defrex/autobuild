@@ -276,3 +276,191 @@ mod wire_tests {
         ));
     }
 }
+
+/// Content-addressed upload adapter. SQL publication happens only after a
+/// complete provider success; errors omit provider bodies and credentials.
+pub struct BlobWriter {
+    backend: BlobReader,
+    vercel: Option<(String, String, String)>,
+}
+impl BlobWriter {
+    pub fn new(config: BlobConfig, prefix: String) -> Result<Self, DataError> {
+        let vercel = match &config {
+            BlobConfig::Vercel { access, auth } => {
+                let store = match auth {
+                    VercelAuth::Token(token) => token.split('_').nth(3).unwrap_or("").to_owned(),
+                    VercelAuth::Oidc { store_id, .. } => store_id
+                        .strip_prefix("store_")
+                        .unwrap_or(store_id)
+                        .to_owned(),
+                };
+                Some((
+                    access.clone(),
+                    store,
+                    "https://blob.vercel-storage.com".to_owned(),
+                ))
+            }
+            _ => None,
+        };
+        Ok(Self {
+            backend: BlobReader::new(config, prefix)?,
+            vercel,
+        })
+    }
+    pub async fn put(&self, bytes: &[u8]) -> Result<String, DataError> {
+        use sha2::{Digest, Sha256};
+        let hash = format!("{:x}", Sha256::digest(bytes));
+        match &self.backend {
+            BlobReader::S3 {
+                client,
+                bucket,
+                prefix,
+            } => {
+                client
+                    .put_object()
+                    .bucket(bucket)
+                    .key(blob_path(prefix, &hash))
+                    .body(aws_sdk_s3::primitives::ByteStream::from(bytes.to_vec()))
+                    .send()
+                    .await
+                    .map_err(|_| DataError::Blob)?;
+            }
+            BlobReader::Vercel {
+                client,
+                token,
+                prefix,
+                ..
+            } => {
+                let (access, store, origin) = self.vercel.as_ref().ok_or(DataError::Blob)?;
+                let mut url = reqwest::Url::parse(origin).map_err(|_| DataError::Blob)?;
+                url.set_path("/");
+                url.query_pairs_mut()
+                    .append_pair("pathname", &blob_path(prefix, &hash));
+                let response = client
+                    .put(url)
+                    .bearer_auth(token)
+                    .header("x-api-version", "12")
+                    .header("x-vercel-blob-store-id", store)
+                    .header("x-vercel-blob-access", access)
+                    .header("x-add-random-suffix", "0")
+                    .header("x-allow-overwrite", "1")
+                    .body(bytes.to_vec())
+                    .send()
+                    .await
+                    .map_err(|_| DataError::Blob)?;
+                if !response.status().is_success() {
+                    return Err(DataError::Blob);
+                }
+                let value: serde_json::Value =
+                    response.json().await.map_err(|_| DataError::Blob)?;
+                if ![
+                    "url",
+                    "downloadUrl",
+                    "pathname",
+                    "contentType",
+                    "contentDisposition",
+                ]
+                .iter()
+                .all(|key| value[*key].is_string())
+                {
+                    return Err(DataError::Blob);
+                }
+                if value["pathname"] != blob_path(prefix, &hash) {
+                    return Err(DataError::Blob);
+                }
+            }
+        }
+        Ok(hash)
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use axum::{
+        body::Bytes,
+        extract::{Query, State},
+        http::HeaderMap,
+        routing::put,
+        Json, Router,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    #[tokio::test]
+    async fn vercel_upload_contract_covers_token_and_oidc_without_download_origin() {
+        for oidc in [false, true] {
+            let token = if oidc {
+                "test-oidc-secret"
+            } else {
+                "vercel_blob_rw_storeid_secret"
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let seen = Arc::new(tokio::sync::Mutex::new(false));
+            let handler_seen = seen.clone();
+            let router=Router::new().route("/",put(move |State(seen):State<Arc<tokio::sync::Mutex<bool>>>,Query(query):Query<HashMap<String,String>>,headers:HeaderMap,body:Bytes|async move{
+                assert_eq!(headers["authorization"],format!("Bearer {token}"));
+                assert_eq!(headers["x-api-version"],"12");
+                assert_eq!(headers["x-vercel-blob-store-id"],"storeid");
+                assert_eq!(headers["x-vercel-blob-access"],"private");
+                assert_eq!(headers["x-add-random-suffix"],"0");
+                assert_eq!(headers["x-allow-overwrite"],"1");
+                assert_eq!(body.as_ref(),b"operator artifact\n");
+                assert_eq!(query.len(),1);
+                assert!(query["pathname"].starts_with("audit/prefix/"));
+                *seen.lock().await=true;
+                Json(json!({"url":"https://provider.invalid/object","downloadUrl":"https://provider.invalid/object?download=1","pathname":query["pathname"],"contentType":"application/octet-stream","contentDisposition":"attachment"}))
+            })).with_state(handler_seen);
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let auth = if oidc {
+                VercelAuth::Oidc {
+                    token: token.into(),
+                    store_id: "store_storeid".into(),
+                }
+            } else {
+                VercelAuth::Token(token.into())
+            };
+            let mut writer = BlobWriter::new(
+                BlobConfig::Vercel {
+                    access: "private".into(),
+                    auth,
+                },
+                "//audit///prefix/".into(),
+            )
+            .unwrap();
+            writer.vercel.as_mut().unwrap().2 = format!("http://{address}");
+            let hash = writer.put(b"operator artifact\n").await.unwrap();
+            assert_eq!(hash.len(), 64);
+            assert!(*seen.lock().await);
+            server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn failed_upload_cannot_return_a_publishable_hash_and_hides_provider_text() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = Router::new().route(
+            "/",
+            put(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "credential=secret-provider-body",
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut writer = BlobWriter::new(
+            BlobConfig::Vercel {
+                access: "private".into(),
+                auth: VercelAuth::Token("vercel_blob_rw_store_secret".into()),
+            },
+            String::new(),
+        )
+        .unwrap();
+        writer.vercel.as_mut().unwrap().2 = format!("http://{address}");
+        let error = writer.put(b"artifact").await.unwrap_err();
+        assert!(!error.to_string().contains("secret"));
+        server.abort();
+    }
+}

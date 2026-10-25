@@ -8,6 +8,7 @@ pub struct DataConfig {
     pub prefix: String,
 }
 
+#[derive(Clone)]
 pub enum BlobConfig {
     S3 {
         bucket: String,
@@ -24,6 +25,7 @@ pub enum BlobConfig {
     },
 }
 
+#[derive(Clone)]
 pub enum VercelAuth {
     Token(String),
     Oidc { token: String, store_id: String },

@@ -144,12 +144,14 @@ impl DataReader {
             }
         }
         let records = index.records.clone();
-        if records.is_empty() {
-            return Ok(snapshot);
-        }
         let repository = self.repository(repo).await?;
         let facts = &repository["repositoryReadFacts"];
         snapshot.settings = facts["settings"].clone();
+        snapshot.settings["harvest"] = facts["harvest"].clone();
+        snapshot.settings["dismissedThrough"] = facts["dismissedThrough"].clone();
+        if records.is_empty() {
+            return Ok(snapshot);
+        }
         let reference = &facts["status"]["effectiveConfig"];
         let Some(kind) = reference["kind"].as_str() else {
             snapshot.error = Some("Effective configuration unavailable for this project.".into());

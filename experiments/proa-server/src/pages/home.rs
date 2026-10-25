@@ -36,6 +36,7 @@ pub struct HomePage {
     roots: Vec<usize>,
     summary: String,
     markdown: String,
+    controls: super::controls::ControlState,
 }
 #[derive(Clone)]
 struct RowView {
@@ -91,6 +92,10 @@ struct StepView {
     running: String,
 }
 impl HomePage {
+    pub fn with_controls(mut self, controls: super::controls::ControlState) -> Self {
+        self.controls = controls;
+        self
+    }
     pub fn new(snapshot: Snapshot) -> Self {
         let rows: Vec<RowView> = snapshot
             .rows
@@ -236,6 +241,7 @@ impl HomePage {
             roots,
             summary,
             markdown: lines.join("\n\n"),
+            controls: super::controls::ControlState::default(),
         }
     }
 }
@@ -435,11 +441,15 @@ impl<L: DataLoader> WebRenderSync<L> for HomePage {
         html_sync!{
             <main class="page" data-page="builds" data-live="dashboard">
                 <h1 class="sr-only">"Builds"</h1>
-                {if s.settings.is_object() {Some(html_sync!{
-                    <div class="control-line" data-controls>
-                        <span>"Intake "{if s.settings["drained"]==true{"OFF"}else{"ON"}}</span>
-                        <span>"Harvest "{if s.settings["harvestPaused"]==true{"OFF"}else{"ON"}}</span>
-                    </div>
+                {if s.settings.is_object() {Some(super::controls::RepositoryControls {
+                    state: &self.controls,
+                    project: s.project.as_deref().unwrap_or_default(),
+                    intake: s.settings["intake"] != false,
+                    harvest: s.settings["harvest"]["paused"] != true,
+                    harvest_state: &s.settings["harvest"],
+                    dismissed_through: s.settings["dismissedThrough"].as_i64().unwrap_or(0),
+                    pause: s.rows.iter().any(|r|r["status"]=="running"),
+                    resume: s.rows.iter().any(|r|r["status"]=="paused"),
                 })}else{None}}
                 <p class="slack">
                     {s.error.as_deref().unwrap_or(if s.projects.is_empty(){"No projects configured."}else if s.rows.is_empty(){"No active builds."}else{self.summary.as_str()})}
@@ -488,7 +498,7 @@ impl DataLoader for SnapshotLoader {
         Ok(LoadValue::typed(snapshot))
     }
 }
-async fn load(state: AppState, project: Option<String>) -> Snapshot {
+pub(crate) async fn load(state: AppState, project: Option<String>) -> Snapshot {
     let resolver =
         proa_stream::DataResolver::request_scope(Arc::new(SnapshotLoader { state, project }));
     let cx = proa_core::SendWebContext::with_loader_buffer(RenderBuffer::new(), resolver);
@@ -503,7 +513,8 @@ pub async fn handler(
     axum::Extension(viewer): axum::Extension<crate::auth::Viewer>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let page = HomePage::new(load(state, selection.project).await);
+    let page = HomePage::new(load(state, selection.project).await)
+        .with_controls(super::controls::ControlState::signed_in(viewer.clone()));
     let project = page.snapshot.project.clone();
     let builds_href = project
         .as_deref()

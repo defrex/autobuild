@@ -18,6 +18,7 @@ pub async fn refresh(
     State(state): State<AppState>,
     Query(query): Query<Refresh>,
     headers: HeaderMap,
+    axum::Extension(viewer): axum::Extension<crate::auth::Viewer>,
 ) -> Response {
     let Some(reader) = state.data else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Data store unavailable").into_response();
@@ -54,8 +55,14 @@ pub async fn refresh(
     }
     let mut cx = WebContext::new();
     let result = match page {
-        Page::Detail(value) => BuildPage::new(value).render(&mut cx),
-        Page::Dashboard(snapshot) => HomePage::new(snapshot).render(&mut cx),
+        Page::Detail(value) => BuildPage::new(value)
+            .with_controls(crate::pages::controls::ControlState::signed_in(
+                viewer.clone(),
+            ))
+            .render(&mut cx),
+        Page::Dashboard(snapshot) => HomePage::new(snapshot)
+            .with_controls(crate::pages::controls::ControlState::signed_in(viewer))
+            .render(&mut cx),
     };
     if result.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Render failed").into_response();

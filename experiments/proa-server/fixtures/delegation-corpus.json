@@ -1,0 +1,678 @@
+{
+  "format": 1,
+  "sourceHash": "7a5c54991cb3ad89a1b03c7b1f271d5fcc0ff2f158a7560a750f23d6f60b7ce5",
+  "fixtures": [
+    {
+      "scenario": {
+        "id": "admin-build-runner",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "build-runner",
+          "id": "build"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 200,
+      "body": {
+        "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJhY21lL3dpZGdldHMiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJidWlsZCIsImFuY2hvciI6M319.ccRGR6ketpO0gcD0DvSF1Wn3ZYcW55dfNacPpM_3EBk"
+      }
+    },
+    {
+      "scenario": {
+        "id": "admin-build-phase",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "build-phase",
+          "id": "build",
+          "session": "phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 200,
+      "body": {
+        "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJhY21lL3dpZGdldHMiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImJ1aWxkIiwiYW5jaG9yIjozLCJzZXNzaW9uIjoicGhhc2UifX0.QEQGYjl13gmZbRVPVzvbHq1lBEqQ217ga51gwPakSzM"
+      }
+    },
+    {
+      "scenario": {
+        "id": "internal-refused",
+        "principal": {
+          "kind": "internal",
+          "user": "operator",
+          "repo": "acme/widgets"
+        },
+        "target": {
+          "kind": "build-runner",
+          "id": "build"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "operator authority cannot delegate machine credentials"
+      }
+    },
+    {
+      "scenario": {
+        "id": "foreign-project",
+        "principal": {
+          "kind": "internal",
+          "user": "operator",
+          "repo": "foreign/repo"
+        },
+        "target": {
+          "kind": "build-runner",
+          "id": "build"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "wrong project"
+      }
+    },
+    {
+      "scenario": {
+        "id": "runner-narrows",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "build-runner",
+            "id": "build",
+            "anchor": 2
+          }
+        },
+        "target": {
+          "kind": "build-phase",
+          "id": "build",
+          "session": "phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 200,
+      "body": {
+        "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJhY21lL3dpZGdldHMiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImJ1aWxkIiwiYW5jaG9yIjozLCJzZXNzaW9uIjoicGhhc2UifX0.QEQGYjl13gmZbRVPVzvbHq1lBEqQ217ga51gwPakSzM"
+      }
+    },
+    {
+      "scenario": {
+        "id": "runner-cannot-widen",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "build-runner",
+            "id": "build",
+            "anchor": 2
+          }
+        },
+        "target": {
+          "kind": "build-runner",
+          "id": "build"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "delegation cannot widen authority"
+      }
+    },
+    {
+      "scenario": {
+        "id": "phase-cannot-delegate",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "build-phase",
+            "id": "build",
+            "anchor": 3
+          }
+        },
+        "target": {
+          "kind": "build-phase",
+          "id": "build",
+          "session": "phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "delegation cannot widen authority"
+      }
+    },
+    {
+      "scenario": {
+        "id": "session-predates",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "build-runner",
+            "id": "build",
+            "anchor": 4
+          }
+        },
+        "target": {
+          "kind": "build-phase",
+          "id": "build",
+          "session": "phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "session predates runner authority"
+      }
+    },
+    {
+      "scenario": {
+        "id": "missing-session",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "build-phase",
+          "id": "build",
+          "session": "missing"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": []
+      },
+      "status": 404,
+      "body": {
+        "kind": "auth",
+        "error": "lifecycle binding unavailable"
+      }
+    },
+    {
+      "scenario": {
+        "id": "terminal-build",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "build-runner",
+          "id": "build"
+        },
+        "ended": true
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:01:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 4,
+        "sessions": {
+          "id:phase": {
+            "starts": [3],
+            "endings": []
+          }
+        },
+        "terminals": [
+          {
+            "seq": 4,
+            "at": "2026-09-02T00:00:00.000Z"
+          }
+        ]
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "lifecycle binding ended"
+      }
+    },
+    {
+      "scenario": {
+        "id": "admin-harvest-runner",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "harvest-runner",
+          "id": "run",
+          "repo": "acme/widgets",
+          "execution": "execution",
+          "leaseHolder": "dispatcher"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": []
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 200,
+      "body": {
+        "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJhY21lL3dpZGdldHMiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6InJ1biIsImFuY2hvciI6MiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJkaXNwYXRjaGVyIn19.C1LvrBkFbjAbFt6nYy2z_KKrkAtxSEdw5mn1gEVgPDA"
+      }
+    },
+    {
+      "scenario": {
+        "id": "harvest-wrong-holder",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "harvest-runner",
+          "id": "run",
+          "repo": "acme/widgets",
+          "execution": "execution",
+          "leaseHolder": "wrong"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": []
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "harvest holder does not own the repository lease"
+      }
+    },
+    {
+      "scenario": {
+        "id": "harvest-phase-without-execution",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "harvest-phase",
+          "id": "run",
+          "repo": "acme/widgets",
+          "session": "harvest-phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": []
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "lifecycle binding ended"
+      }
+    },
+    {
+      "scenario": {
+        "id": "harvest-runner-narrows",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "harvest-runner",
+            "id": "run",
+            "anchor": 2,
+            "execution": "execution",
+            "leaseHolder": "dispatcher"
+          }
+        },
+        "target": {
+          "kind": "harvest-phase",
+          "id": "run",
+          "repo": "acme/widgets",
+          "session": "harvest-phase"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": []
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 200,
+      "body": {
+        "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJhY21lL3dpZGdldHMiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoicnVuIiwiYW5jaG9yIjozLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJzZXNzaW9uIjoiaGFydmVzdC1waGFzZSJ9fQ.3T-uBr9ZN2MtJ6KY3gHub5fig935RfoILagit3CYLJE"
+      }
+    },
+    {
+      "scenario": {
+        "id": "harvest-suspended",
+        "principal": {
+          "kind": "delegated",
+          "repo": "acme/widgets",
+          "user": "delegated",
+          "delegation": {
+            "repo": "acme/widgets",
+            "kind": "harvest-runner",
+            "id": "run",
+            "anchor": 2,
+            "execution": "execution",
+            "leaseHolder": "dispatcher"
+          }
+        },
+        "target": {
+          "kind": "harvest-phase",
+          "id": "run",
+          "repo": "acme/widgets",
+          "session": "harvest-phase"
+        },
+        "suspended": true
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 4,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": [
+                {
+                  "seq": 4,
+                  "at": "2026-09-02T00:00:00.000Z"
+                }
+              ],
+              "suspended": true
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 403,
+      "body": {
+        "kind": "auth",
+        "error": "lifecycle binding ended"
+      }
+    },
+    {
+      "scenario": {
+        "id": "harvest-stale-authorization",
+        "principal": {
+          "kind": "admin",
+          "user": "owner"
+        },
+        "target": {
+          "kind": "harvest-runner",
+          "id": "run",
+          "repo": "acme/widgets",
+          "execution": "old",
+          "leaseHolder": "dispatcher"
+        }
+      },
+      "secret": "delegation-native-oracle",
+      "now": "2026-09-02T00:00:00.000Z",
+      "repo": "acme/widgets",
+      "leaseHolder": "dispatcher",
+      "facts": {
+        "lastSeq": 3,
+        "runs": {
+          "id:run": true
+        },
+        "sessions": {
+          "id:run": {
+            "id:harvest-phase": {
+              "starts": [3],
+              "endings": []
+            }
+          }
+        },
+        "authorizations": {
+          "id:run": {
+            "id:execution": {
+              "seq": 2,
+              "leaseHolder": "dispatcher"
+            }
+          }
+        },
+        "releases": {},
+        "endings": {}
+      },
+      "status": 404,
+      "body": {
+        "kind": "auth",
+        "error": "lifecycle binding unavailable"
+      }
+    }
+  ]
+}
