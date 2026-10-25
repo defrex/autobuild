@@ -167,6 +167,32 @@ export async function connectIntegration(
       )
       assert.equal(noSession.status, 401)
       assert.deepEqual(await noSession.json(), { error: 'sign in required' })
+      for (const [method, contentType, body, status, error] of [
+        ['GET', '', undefined, 405, 'method not allowed'],
+        ['POST', 'text/plain', '{}', 400, 'application/json required'],
+        ['POST', 'application/json', '{', 400, 'invalid JSON'],
+        ['POST', 'application/json', 'null', 400, 'invalid request'],
+        ['POST', 'application/json', '{}', 404, 'unknown connection route'],
+        [
+          'POST',
+          'application/json',
+          '{"code":"A"}',
+          400,
+          'enter the ten-character connection code',
+        ],
+        ['POST', 'application/json', ' '.repeat(8193), 413, 'request too large'],
+      ] as const) {
+        const refused = await fetch(`${origin}/connect/v1/browser/lookup`, {
+          method,
+          headers: { cookie, origin, 'content-type': contentType },
+          ...(body === undefined ? {} : { body }),
+          redirect: 'manual',
+        })
+        assert.equal(refused.status, status)
+        assert.deepEqual(await refused.json(), { error })
+        assert.equal(refused.headers.get('cache-control'), 'no-store')
+        assert.equal(refused.headers.get('referrer-policy'), 'no-referrer')
+      }
       const pending = await api('/connect/v1/requests', {
         repo,
         credentialId: randomBytes(16).toString('hex'),
@@ -284,6 +310,34 @@ export async function connectIntegration(
         ),
       )
       assert.equal(new ProjectCredentials(cliEnv).load(origin, repo), undefined)
+      const expiredMessages: string[] = []
+      await abConnect(origin, {
+        ...options,
+        print: (message) => expiredMessages.push(message),
+        browser: async (url: string) => {
+          const code = new URL(url).searchParams.get('code')!
+          await sql`UPDATE project_connections SET expires_at=now()-interval '1 second' WHERE code=${code}`
+        },
+      })
+      assert.ok(expiredMessages.includes('Connection expired; local configuration unchanged.'))
+      assert.equal(new ProjectCredentials(cliEnv).load(origin, repo), undefined)
+      const cancellation = new AbortController(),
+        cancelledMessages: string[] = []
+      let cancelledCode: string | undefined
+      await abConnect(origin, {
+        ...options,
+        signal: cancellation.signal,
+        print: (message) => cancelledMessages.push(message),
+        browser: async (url: string) => {
+          cancelledCode = new URL(url).searchParams.get('code')!
+          cancellation.abort()
+        },
+      })
+      assert.ok(cancelledMessages.includes('Connection cancelled; local configuration unchanged.'))
+      assert.equal(new ProjectCredentials(cliEnv).load(origin, repo), undefined)
+      const cancelled =
+        await sql`SELECT status FROM project_connections WHERE code=${cancelledCode!}`
+      assert.equal(cancelled[0].status, 'denied')
       // Revoked browser admission is checked freshly on the next JSON operation.
       const account = await fetch(`${origin}/connect`, { headers: { cookie } })
       const logoutCsrf = (await account.text()).match(/name="csrf" value="([^"]+)"/)?.[1]
@@ -315,6 +369,9 @@ export async function connectIntegration(
         normalServer: true,
         cliApproval: true,
         cliDenial: true,
+        cliExpiry: true,
+        cliCancellation: true,
+        browserErrors: true,
         subprocessStatus: true,
         sharedCredential: true,
         disconnectRevocation: true,
