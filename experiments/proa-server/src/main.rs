@@ -3,10 +3,9 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-mod app;
-mod auth;
+use proa_server::{app, auth};
 mod components;
-mod config;
+use proa_server::config;
 mod endpoints;
 mod error;
 mod layouts;
@@ -22,9 +21,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let config = config::Config::from_env()?;
     let dev = config.auth.dev.is_some();
-    let state = app::AppState {
-        auth: std::sync::Arc::new(auth::Auth::new(config.auth)),
-    };
+    let state = app::AppState::from_env(config.auth).await?;
     let app = routes::router(state);
     let listener = TcpListener::bind(config.address).await?;
     tracing::info!(address = %listener.local_addr()?, "Proa site listening");
