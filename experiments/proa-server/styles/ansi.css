@@ -426,9 +426,7 @@ a.btn {
   padding: 16px 0;
   border-bottom: 1px solid var(--rule);
 }
-.build-row:not([data-depth="0"]) {
-  padding-left: 24px;
-}
+
 .build-id {
   color: var(--blue);
   font-family: var(--mono);
@@ -546,9 +544,50 @@ a.btn {
 .project-switch select:focus-visible {
   outline: 2px solid var(--blue);
 }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.tree-children {
+  padding-inline-start: 24px;
+}
+.build-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 600px) {
-  .project-switch {
-    order: 3;
-    flex-basis: 100%;
+  .build-row {
+    gap: 4px 12px;
+  }
+  .build-row .build-id {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .build-row .build-body {
+    display: contents;
+  }
+  .build-row .build-title {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .build-row .build-status {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .build-row .build-meta {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .build-row .steps {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+  .build-row .diagnostic,
+  .build-row .question,
+  .build-row [data-step-reason] {
+    grid-column: 1 / -1;
   }
 }

@@ -297,13 +297,20 @@ pub fn transcript_text(raw: &str) -> String {
         }
         return out.join("\n\n");
     }
-    if let Some(messages) = value.as_array() {
+    if let Some(messages) = value
+        .as_array()
+        .filter(|messages| messages.iter().all(|message| message["parts"].is_array()))
+    {
         return messages
             .iter()
             .map(|m| {
                 array(&m["parts"])
                     .iter()
-                    .filter_map(|p| p["text"].as_str())
+                    .map(|part| {
+                        part["text"].as_str().map(str::to_owned).unwrap_or_else(|| {
+                            serde_json::to_string_pretty(part).unwrap_or_default()
+                        })
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             })

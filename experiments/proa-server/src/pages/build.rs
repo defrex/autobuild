@@ -22,6 +22,7 @@ pub struct BuildPage {
 }
 struct Artifacts<'a>(&'a Value);
 struct Sessions<'a>(&'a Value);
+struct StreamStatus<'a>(&'a Value);
 struct FrameView {
     value: Value,
     src: String,
@@ -76,10 +77,21 @@ impl<L: DataLoader> WebRenderSync<L> for Artifacts<'_> {
             html_sync! {
                 <section data-artifact={text(&a["kind"])}>
                     <h2>{text(&a["kind"])}</h2>
-                    <pre class="prose">
+                    <pre class="prose" data-store-text>
                         {a["text"].as_str().unwrap_or_else(||text(&a["error"]))}
                     </pre>
                 </section>
+            }
+            .render(cx)?;
+        }
+        Ok(())
+    }
+}
+impl<L: DataLoader> WebRenderSync<L> for StreamStatus<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        if self.0["stream"].is_string() {
+            html_sync! {
+                <span data-session-stream>" / stream "{text(&self.0["streamStatus"])}</span>
             }
             .render(cx)?;
         }
@@ -97,8 +109,9 @@ impl<L: DataLoader> WebRenderSync<L> for Sessions<'_> {
                         {text(&s["status"])}
                         " · "
                         {text(&s["runtime"])}
+                        {StreamStatus(s)}
                     </summary>
-                    <pre class="prose">
+                    <pre class="prose" data-store-text>
                         {s["text"]["text"].as_str().unwrap_or_else(||text(&s["text"]["error"]))}
                     </pre>
                 </details>
@@ -144,16 +157,16 @@ impl<L: DataLoader> WebRenderSync<L> for BuildPage {
                 {Artifacts(&v["artifacts"])}
                 <section data-findings>
                     <h2>"Review findings"</h2>
-                    <pre class="prose">{self.findings.as_str()}</pre>
+                    <pre class="prose" data-store-text>{self.findings.as_str()}</pre>
                 </section>
                 <section data-verify>
                     <h2>"Verify results"</h2>
-                    <pre class="prose">{self.verify.as_str()}</pre>
+                    <pre class="prose" data-store-text>{self.verify.as_str()}</pre>
                     {Frames(&self.frames)}
                 </section>
                 <section data-observations>
                     <h2>"Observations"</h2>
-                    <pre class="prose">{self.observations.as_str()}</pre>
+                    <pre class="prose" data-store-text>{self.observations.as_str()}</pre>
                 </section>
                 <section data-sessions>
                     <h2>"Session feed"</h2>

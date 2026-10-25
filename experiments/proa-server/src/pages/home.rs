@@ -32,6 +32,8 @@ pub fn link(project: &str, slug: Option<&str>) -> String {
 pub struct HomePage {
     pub snapshot: Snapshot,
     rows: Vec<RowView>,
+    branch_indices: Vec<Vec<usize>>,
+    roots: Vec<usize>,
     summary: String,
     markdown: String,
 }
@@ -52,7 +54,7 @@ struct StepView {
 }
 impl HomePage {
     pub fn new(snapshot: Snapshot) -> Self {
-        let rows = snapshot
+        let rows: Vec<RowView> = snapshot
             .rows
             .iter()
             .map(|row| {
@@ -96,6 +98,21 @@ impl HomePage {
                 }
             })
             .collect();
+        let mut children = vec![Vec::new(); rows.len()];
+        let mut roots = Vec::new();
+        let mut stack = Vec::<usize>::new();
+        for (index, row) in rows.iter().enumerate() {
+            let depth = row.row["depth"].as_u64().unwrap_or(0) as usize;
+            while stack.len() > depth {
+                stack.pop();
+            }
+            if let Some(parent) = stack.last() {
+                children[*parent].push(index);
+            } else {
+                roots.push(index);
+            }
+            stack.push(index);
+        }
         let summary = format!(
             "{} builds · {} needs you",
             snapshot.rows.len(),
@@ -123,13 +140,22 @@ impl HomePage {
         Self {
             snapshot,
             rows,
+            branch_indices: children,
+            roots,
             summary,
             markdown: lines.join("\n\n"),
         }
     }
 }
 struct Reasons<'a>(&'a Value);
-struct Rows<'a>(&'a HomePage);
+struct Rows<'a> {
+    page: &'a HomePage,
+    indices: &'a [usize],
+}
+struct RowNode<'a> {
+    page: &'a HomePage,
+    index: usize,
+}
 pub struct Steps<'a>(&'a [StepView]);
 pub struct Questions<'a>(pub &'a Value);
 impl<L: DataLoader> WebRenderSync<L> for Steps<'_> {
@@ -170,7 +196,7 @@ impl<L: DataLoader> WebRenderSync<L> for Questions<'_> {
     fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
         for question in array(self.0) {
             html_sync! {
-                <p class="question">"! "{text(question)}</p>
+                <p class="question" data-store-text>"! "{text(question)}</p>
             }
             .render(cx)?;
         }
@@ -179,40 +205,61 @@ impl<L: DataLoader> WebRenderSync<L> for Questions<'_> {
 }
 impl<L: DataLoader> WebRenderSync<L> for Rows<'_> {
     fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
-        for view in &self.0.rows {
-            let row = &view.row;
-            let slug = text(&row["slug"]);
-            html_sync! {
-                <article class="build-row" data-build={slug} data-depth={view.depth.as_str()}>
-                    <a class="build-id" href={view.href.as_str()}>
-                        {row["ticketId"].as_str().unwrap_or(slug)}
+        for index in self.indices {
+            RowNode {
+                page: self.page,
+                index: *index,
+            }
+            .render(cx)?;
+        }
+        Ok(())
+    }
+}
+impl<L: DataLoader> WebRenderSync<L> for RowNode<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        let view = &self.page.rows[self.index];
+
+        let row = &view.row;
+        let slug = text(&row["slug"]);
+        html_sync! {
+            <article class="build-row" data-build={slug} data-depth={view.depth.as_str()}>
+                <a class="build-id" href={view.href.as_str()}>
+                    {row["ticketId"].as_str().unwrap_or(slug)}
+                </a>
+                <div class="build-body">
+                    <a class="build-title" href={view.href.as_str()}>
+                        {row["collectionIdentity"]["title"].as_str().unwrap_or(slug)}
                     </a>
-                    <div class="build-body">
-                        <a class="build-title" href={view.href.as_str()}>
-                            {row["collectionIdentity"]["title"].as_str().unwrap_or(slug)}
-                        </a>
-                        <p class="build-meta">
-                            <span class="m">{slug}</span>
-                            " · "
-                            {text(&row["kind"])}
-                            " · target "
-                            {text(&row["target"])}
-                            " · landing "
-                            {text(&view.landing)}
-                        </p>
-                        <ol class="steps" aria-label="Pipeline steps">{Steps(&view.steps)}</ol>
-                        {Reasons(&row["steps"])}
-                        <p class="diagnostic">
-                            {text(&row["dispatch"])}
-                            {text(&row["abortProgress"])}
-                            {text(&row["error"])}
-                        </p>
-                        {Questions(&row["blockers"])}
-                    </div>
-                    <span class="build-status m" data-status={text(&row["status"])}>
-                        {text(&row["status"])}
-                    </span>
-                </article>
+                    <p class="build-meta">
+                        <span class="m">{slug}</span>
+                        " · "
+                        {text(&row["kind"])}
+                        " · target "
+                        {text(&row["target"])}
+                        " · landing "
+                        {text(&view.landing)}
+                    </p>
+                    <ol class="steps" aria-label="Pipeline steps">{Steps(&view.steps)}</ol>
+                    {Reasons(&row["steps"])}
+                    <p class="diagnostic" data-store-text>
+                        {text(&row["dispatch"])}
+                        {text(&row["abortProgress"])}
+                        {text(&row["error"])}
+                    </p>
+                    {Questions(&row["blockers"])}
+                </div>
+                <span class="build-status m" data-status={text(&row["status"])}>
+                    {text(&row["status"])}
+                </span>
+            </article>
+        }
+        .render(cx)?;
+
+        if !self.page.branch_indices[self.index].is_empty() {
+            html_sync! {
+                <div class="tree-children" data-tree-children>
+                    {Rows{page:self.page,indices:&self.page.branch_indices[self.index]}}
+                </div>
             }
             .render(cx)?;
         }
@@ -234,14 +281,14 @@ impl<L: DataLoader> WebRenderSync<L> for HomePage {
                 <p class="slack">
                     {s.error.as_deref().unwrap_or(if s.projects.is_empty(){"No projects configured."}else if s.rows.is_empty(){"No active builds."}else{self.summary.as_str()})}
                 </p>
-                <div data-build-list>{Rows(&self)}</div>
+                <div data-build-list>{Rows{page:&self,indices:&self.roots}}</div>
                 <p class="legend">
                     <span data-state="done">"[x] done"</span>
-                    "　"
+                    " "
                     <span data-state="current">"[>] happening now"</span>
-                    "　"
+                    " "
                     <span data-state="provisional">"[~] in progress or retried"</span>
-                    "　"
+                    " "
                     <span class="slack">"[ ] not started"</span>
                 </p>
                 <p class="slack" data-live-status role="status"></p>
@@ -328,7 +375,7 @@ impl<L: DataLoader> WebRenderSync<L> for Reasons<'_> {
         for step in array(self.0) {
             if let Some(reason) = step["reason"].as_str() {
                 html_sync! {
-                    <p class="slack" data-step-reason>{reason}</p>
+                    <p class="slack" data-step-reason data-store-text>{reason}</p>
                 }
                 .render(cx)?;
             }

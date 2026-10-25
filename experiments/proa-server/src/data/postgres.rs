@@ -74,6 +74,21 @@ fn timestamp(row: &Row, name: &str) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+fn stream_parts(raw: Value) -> Result<Value, DataError> {
+    // The TypeScript adapter accepts driver-decoded JSON and JSONB strings.
+    let value = match raw {
+        Value::String(text) => serde_json::from_str(&text).map_err(|_| DataError::Query)?,
+        value => value,
+    };
+    if !value.as_array().is_some_and(|parts| {
+        parts
+            .iter()
+            .all(|part| part["type"].as_str().is_some_and(|kind| !kind.is_empty()))
+    }) {
+        return Err(DataError::Query);
+    }
+    Ok(value)
+}
 impl PostgresReader {
     pub async fn connect(url: &str) -> Result<Self, DataError> {
         // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
@@ -350,7 +365,13 @@ impl PostgresReader {
             .map_err(|_| DataError::Query)?;
         Self::assert_scope(&tx, repo, Scope::Build(slug)).await?;
         let rows=tx.query("SELECT c.seq,c.ts,c.parts FROM stream_chunks c JOIN streams s ON s.id=c.stream JOIN builds b ON b.slug=s.build WHERE b.repo=$1 AND s.build=$2 AND s.id=$3 AND s.scope_kind='build' AND c.seq>$4 ORDER BY c.seq", &[&repo,&slug,&stream,&after]).await.map_err(|_|DataError::Query)?;
-        let result=rows.iter().map(|row|json!({"stream":stream,"seq":row.get::<_,i64>("seq"),"parts":row.get::<_,Value>("parts")})).collect();
+        let result = rows
+            .iter()
+            .map(|row| {
+                let parts = stream_parts(row.get::<_, Value>("parts"))?;
+                Ok(json!({"stream":stream,"seq":row.get::<_,i64>("seq"),"parts":parts}))
+            })
+            .collect::<Result<Vec<_>, DataError>>()?;
         tx.commit().await.map_err(|_| DataError::Query)?;
         Ok(result)
     }
@@ -408,6 +429,14 @@ impl PostgresReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stream_jsonb_strings_and_decoded_arrays_have_the_same_parts() {
+        let parts = json!([{"type":"text-delta","id":"text","delta":"Readable"}]);
+        assert_eq!(stream_parts(parts.clone()).unwrap(), parts);
+        assert_eq!(stream_parts(json!(parts.to_string())).unwrap(), parts);
+        assert!(stream_parts(json!("malformed")).is_err());
+        assert!(stream_parts(json!({"type":"text-delta"})).is_err());
+    }
     #[test]
     fn refuses_unknown_versions_and_modified_schema() {
         for version in [0, SCHEMA_VERSION - 1, SCHEMA_VERSION + 1] {

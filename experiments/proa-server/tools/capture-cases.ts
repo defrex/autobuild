@@ -197,3 +197,14 @@ export function probe(colors: string[], state: string, theme: string) {
     height: Math.max(900, document.documentElement.scrollHeight),
   }
 }
+
+// User-authored multilingual/emoji content needs platform glyphs outside the two
+// interface faces. This never permits a fallback for interface labels or spacing.
+export function dataFontFallback(family: string, text: string, storeText: boolean): boolean {
+  if (!storeText) return false
+  if (family === 'Noto Sans CJK JP')
+    return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)
+  if (family === 'Noto Color Emoji')
+    return /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(text)
+  return false
+}

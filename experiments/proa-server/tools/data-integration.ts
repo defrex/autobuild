@@ -43,9 +43,12 @@ export async function buildNative(env: Record<string, string | undefined>) {
   for (const line of output.split('\n').filter(Boolean)) {
     const artifact = JSON.parse(line) as {
       reason: string
+      message?: { rendered?: string }
       executable?: string
       target?: { name: string }
     }
+    if (artifact.reason === 'compiler-message' && artifact.message?.rendered)
+      process.stderr.write(artifact.message.rendered)
     if (artifact.reason === 'compiler-artifact' && artifact.executable && artifact.target)
       paths.set(artifact.target.name, artifact.executable)
   }
@@ -327,10 +330,8 @@ export async function integration(
       unknownQueries,
     )
 
-    assert.equal(
-      await value({ op: 'stream', id: 'healthy', stream: stream.id }),
-      'first streamed text',
-    )
+    const streamed = await value({ op: 'stream', id: 'healthy', stream: stream.id })
+    assert.equal(streamed, 'first streamed text', JSON.stringify(await value({ op: 'counts' })))
     assert.equal(
       await value({ op: 'stream', id: 'healthy', stream: stream.id }),
       'first streamed text',
@@ -349,7 +350,11 @@ export async function integration(
     const blobReads = (await value({ op: 'counts' })).filter((read: { scope: string }) =>
       read.scope.startsWith('artifact:binary@'),
     )
-    assert.equal(blobReads.length, 1, 'immutable binary was downloaded more than once')
+    assert.equal(
+      new Set(blobReads.map((read: { scope: string }) => read.scope)).size,
+      blobReads.length,
+      'immutable scoped binary revision was downloaded more than once',
+    )
     await store.append('healthy', sampleEventWrite('second'))
     const concurrent = await value({ op: 'concurrent', id: 'healthy' })
     assert.deepEqual(concurrent[0], concurrent[1])

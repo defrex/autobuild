@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os'
 import { withCaptureSeed, type SeedEvidence } from './capture-seed'
 import type { BuildStore } from '../../../packages/core/src/store/types'
 import { build, project, root } from './verify'
-import { checkRoutes, checkFrameMatrix, frames, palette, probe } from './capture-cases'
+import {
+  checkRoutes,
+  checkFrameMatrix,
+  frames,
+  palette,
+  probe,
+  dataFontFallback,
+} from './capture-cases'
 
 interface Reply {
   result: { value: ReturnType<typeof probe> & boolean }
@@ -374,14 +381,31 @@ export async function captureFrames(
         nodeId: doc.root.nodeId,
         selector: 'body *',
       })
+      const fontContexts = (await evaluate(
+        `Array.from(document.querySelectorAll('body *'),el=>({store:!!el.closest('[data-store-text]'),text:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(''),storedDescendants:Array.from(el.querySelectorAll('[data-store-text]')).map(n=>n.textContent).join('')}))`,
+      )) as unknown as { store: boolean; text: string; storedDescendants: string }[]
       const fonts = new Set<string>()
-      for (const nodeId of nodes.nodeIds) {
+      const dataFallbacks: { family: string; text: string }[] = []
+      for (const [index, nodeId] of nodes.nodeIds.entries()) {
         const usage = await send('CSS.getPlatformFontsForNode', { nodeId })
         for (const font of usage.fonts)
           if (font.glyphCount) {
             fonts.add(font.familyName)
-            if (!['Atkinson Hyperlegible Next', 'JetBrains Mono'].includes(font.familyName))
-              result.failures.push(`Rendered fallback face: ${font.familyName}`)
+            if (!['Atkinson Hyperlegible Next', 'JetBrains Mono'].includes(font.familyName)) {
+              const context = fontContexts[index]!
+              if (dataFontFallback(font.familyName, context.text, context.store))
+                dataFallbacks.push({ family: font.familyName, text: context.text })
+              // Chromium also reports child glyphs against their containing block.
+              // Every descendant is checked separately; this only avoids rejecting
+              // its duplicate aggregate when the wrapper paints no direct text.
+              else if (
+                context.text.trim() ||
+                !dataFontFallback(font.familyName, context.storedDescendants, true)
+              )
+                result.failures.push(
+                  `Rendered fallback face: ${font.familyName} (${context.store ? 'store' : 'interface'}: ${context.text.slice(0, 160)})`,
+                )
+            }
           }
       }
       if (!fonts.size || !result.textElements)
@@ -407,6 +431,7 @@ export async function captureFrames(
         png,
         probe: result,
         fonts: [...fonts],
+        dataFallbacks,
       })
       if (auth && frame.state === 'open') {
         const behavior = await evaluate(`(() => {
@@ -444,7 +469,12 @@ export async function captureFrames(
       })
       await send('Page.navigate', { url: origin })
       for (let i = 0; i < 100; i++) {
-        if (await evaluate("Boolean(document.querySelector('[data-sign-out]'))")) break
+        if (
+          await evaluate(
+            "document.readyState==='complete' && Boolean(document.querySelector('[data-sign-out]'))",
+          )
+        )
+          break
         await Bun.sleep(50)
       }
       await evaluate(
@@ -546,7 +576,7 @@ export async function captureFrames(
       if (!source.outerHTML.includes('Stored spec') || !source.outerHTML.includes('data-sessions'))
         throw Error('No-JS detail DOM incomplete')
       await send('Page.navigate', {
-        url: origin + `/?${new URLSearchParams({ project: detail.project })}`,
+        url: `${origin}/?${new URLSearchParams({ project: detail.project })}`,
       })
       await Bun.sleep(500)
       const listDoc = await send('DOM.getDocument', { depth: -1 })

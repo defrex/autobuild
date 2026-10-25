@@ -413,3 +413,39 @@ machinery. No decorative component was added to claim adoption.
 Linked RSJS builds detect edits while linking and stop with RSJS0001 rather than
 combine stale descriptors with changed source. Freeze `src/` for the linked gate
 and capture. Ordinary Cargo checks alone do not exercise this safeguard.
+
+The live-stream SQL proof caught a real cross-language decoding seam: the TS
+Postgres adapter can store `stream_chunks.parts` as a JSONB string containing the
+serialized parts array. Rust now accepts that representation and decoded JSONB
+arrays, then validates the part types before advancing its independent cursor.
+The real TS-write/Rust-read proof passes with both idle suffix reads and new text.
+
+Proa 0.3.0's macro expansion panicked on a nested conditional render beside a
+Unicode middle-dot literal (`end byte index ... is not a char boundary`). Moving
+the optional stream-status rendering into a small synchronous component avoids
+that expansion path without changing the markup or disabling checks. The font
+probe also caught ideographic legend spaces selecting a CJK fallback; ordinary
+spaces and CSS gap retain the shipped font coverage.
+
+The required mixed producer contains Japanese and emoji in stored escalation and
+warning text. Requiring only the two Latin interface faces for those glyphs would
+mean corrupting the producer's data. Capture therefore records narrowly scoped
+fallback usage for marked store text: Japanese scripts may use Noto Sans CJK JP,
+and emoji may use Noto Color Emoji. All interface labels, ASCII content, spacing
+and declared CSS font families retain the original strict two-face checks. The
+allowance has negative cases for interface emoji, ordinary English, ideographic
+spacing and arbitrary replacement faces. Per-frame inventory records the exact
+stored text and fallback family for review.
+
+Final linked/native gates passed. The complete 24-frame capture at 1440 and 390
+in both grounds passed palette/font/overflow probes, same-document event and
+transcript updates within five seconds, no-JS snapshots and auth/menu behavior.
+Every PNG was opened: nested tree indentation, wrapping steps, unfilled status
+words, full escalation text, scoped frame and readable session transcripts held
+at both widths. Its actual SQL trace recorded 135 reads, including 109 idle
+suffix reads returning zero rows; one appended build event and one stream chunk
+each returned one new row. Seven scoped immutable blobs were fetched once each.
+Chromium also reports descendant glyphs against containing blocks; the font
+probe checks the actual marked text separately and avoids duplicate aggregate
+rejections for textless wrappers. The logout proof now waits for complete page
+load before clicking sign-out, preserving strict network-error checks.

@@ -29,6 +29,7 @@ export interface ReplayEvidence {
   repositoryArtifacts: { kind: string; revision: number }[]
 }
 export interface SeedEvidence {
+  adapterHash: string
   completedBeforeServerStart: true
   database: string
   loopback: true
@@ -253,7 +254,7 @@ export async function withCaptureSeed<T>(
         created.payload.repo = project
         created.payload.kind = kind
         if (parent)
-          created.payload.target = { build: parent, ticket: { source: 'file', id: 'NODE-1' } }
+          created.payload.target = { build: parent, ticket: { source: 'file', id: parent } }
         await store.createBuild({
           slug: name,
           repo: project,
@@ -267,7 +268,7 @@ export async function withCaptureSeed<T>(
       createdWrite.payload.repo = project
       createdWrite.payload.target = {
         build: 'nested-node',
-        ticket: { source: 'file', id: 'NODE-2' },
+        ticket: { source: 'file', id: 'nested-node' },
       }
       await store.createBuild({
         slug,
@@ -382,6 +383,9 @@ export async function withCaptureSeed<T>(
       readerUrl.username = role
       readerUrl.password = password
       const evidence: SeedEvidence = {
+        adapterHash: createHash('sha256')
+          .update(readFileSync(import.meta.filename))
+          .digest('hex'),
         completedBeforeServerStart: true,
         database,
         loopback: true,
