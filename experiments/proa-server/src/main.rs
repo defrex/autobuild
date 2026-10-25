@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-mod app;
+use proa_server::app;
 mod components;
 mod config;
 mod endpoints;
@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let config = config::Config::from_env()?;
-    let state = app::AppState;
+    let state = app::AppState::from_env().await?;
     let app = routes::router(state);
     let listener = TcpListener::bind(config.address).await?;
     tracing::info!(address = %listener.local_addr()?, "Proa site listening");

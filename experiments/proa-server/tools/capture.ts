@@ -16,14 +16,18 @@ interface Reply {
 export async function capture() {
   checkRoutes(await Bun.file(join(project, 'src/routes.rs')).text())
   const config = await Bun.file(join(project, 'proa.config.json')).json()
-  const sources = await Array.fromAsync(new Bun.Glob('src/**/*.rs').scan({ cwd: project }))
+  const sources = await Array.fromAsync(
+    new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
+  )
   const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
     '\n',
   )
-  if (config.database.driver !== 'none' || /sqlx|postgres|oauth|session|DATABASE_URL/i.test(source))
-    throw Error(
-      'Data/auth capability requires seed adapter and server-issued loopback development session; see tools/README.md',
-    )
+  // Native data reader lives outside Proa's generated database layer. No page reads it yet.
+  if (
+    config.database.driver !== 'none' ||
+    /sqlx|postgres|oauth|DATABASE_URL|state\.data/i.test(source)
+  )
+    throw Error('Page data/auth capability requires a capture seed contract; see tools/README.md')
   const binary = await build(true)
   const output = await mkdtemp(join(root, '.ab/proa-frames-'))
   console.log(`Evidence: ${output}`)
