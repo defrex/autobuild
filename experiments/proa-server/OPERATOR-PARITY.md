@@ -33,6 +33,16 @@ ticket-attribution contract requires a maintainer product-design decision.
 Build and repository facts retain human identity and optional transport `via`;
 session facts name the signed user and never carry `via`.
 
+## First follow-up conformance case
+
+Before exposing session creation, align `PostgresWriter::create_session` operator
+normalization with TypeScript `normalizeOperator` / ECMAScript `String.trim`.
+It currently uses Rust `str::trim`, which differs for U+FEFF and U+0085. Add
+TypeScript-generated normalization cases (including empty-after-trim and preserved
+non-whitespace) and assert the signed user matches the stored owner/creation actor.
+The current native creation proof uses ordinary email identities and does not
+cover this difference. This is remaining work within this build, not a scope waiver.
+
 ## Remaining completion gates
 
 - Wire and replay the real HTTP API: identity admission before auth, project
