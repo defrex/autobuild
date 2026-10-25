@@ -40,8 +40,9 @@ pins Rust resolution; use `--locked` for builds and tests.
 
 Default binding is `127.0.0.1:3000`. Set `PORT=4567` to change the port and
 `PROA_HOST=::1` to change the IP address. Invalid/zero ports fail explicitly.
-`GET /health` returns JSON with status and the crate version. `/readyz` is the
-scaffold readiness endpoint. `/` is Builds; `/index.md` and Markdown content
+`GET /health` returns the public BuildStore protocol health response, including
+release/protocol identity, without contacting storage. `/readyz` checks the
+configured storage schema (503 when unavailable), or reports ready without storage. `/` is Builds; `/index.md` and Markdown content
 negotiation expose its textual representation. Assets are under `/static/`.
 
 ```sh
@@ -135,7 +136,9 @@ Proa's development reload injection.
 With no database/blob environment the server starts its offline shell. To initialize
 `AppState.data`, set `AB_POSTGRES_URL` (or `DATABASE_URL`) and the blob variables used
 by the TypeScript service. Partial configuration fails. Schema version 17 and its
-checksum are checked before the listener binds; unknown versions refuse startup.
+checksum are checked before each initial or replacement connection is used.
+Unknown versions refuse data operations and readiness without blocking public
+health. The explicit reader evidence executable retains eager startup preflight.
 The reader performs SELECTs in read-only transactions and never initializes schema,
 writes events or reads snapshots.
 
@@ -171,11 +174,14 @@ Closed PostgreSQL pool connections reconnect on subsequent reads and pass the sa
 read-only schema preflight before reuse. A disconnect during a query can still
 fail that request; subsequent polls retry with a replacement connection.
 
-The remote BuildStore implementation is in staged development under
-`src/protocol/`. Its native checkpoint server currently proves identity,
-project credentials, all event catalogs, records, leases, snapshots, operator
-presence, artifact deposits, ticket assets/pins, stream lifecycles, reducer
-values and fenced repository ticks independently of the
-browser router. It is not yet a complete hosted-store replacement. See
+The remote BuildStore implementation under `src/protocol/` is mounted on the
+normal server alongside the browser router. The five machine namespaces use
+release negotiation and bearer authority; browser paths retain cookie and origin
+protection. Configured storage requires a nonblank `AB_STORE_SECRET` for signed
+runner/phase credentials; project credentials remain database-backed. Backend
+connections open lazily and preflight before use, so public health remains
+available during a database outage. Without storage configuration, machine paths
+fail closed. Open authority and injected clocks exist only in private test
+examples. Acceptance work is still in progress; this is a nonshipping experiment. See
 [the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
 for fixture generation, isolated proofs, evidence and remaining coverage.

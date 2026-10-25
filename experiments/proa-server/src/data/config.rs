@@ -2,12 +2,14 @@
 //! Secrets deliberately have no Debug implementation.
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct DataConfig {
     pub database_url: String,
     pub blobs: BlobConfig,
     pub prefix: String,
 }
 
+#[derive(Clone)]
 pub enum BlobConfig {
     S3 {
         bucket: String,
@@ -24,6 +26,7 @@ pub enum BlobConfig {
     },
 }
 
+#[derive(Clone)]
 pub enum VercelAuth {
     Token(String),
     Oidc { token: String, store_id: String },

@@ -80,6 +80,14 @@ impl DataReader {
             queries: Mutex::new(VecDeque::new()),
         })
     }
+    pub fn deferred(config: DataConfig) -> Result<Self, DataError> {
+        Ok(Self {
+            postgres: PostgresReader::deferred(&config.database_url)?,
+            blobs: BlobReader::new(config.blobs, config.prefix)?,
+            cache: Mutex::new(HashMap::new()),
+            queries: Mutex::new(VecDeque::new()),
+        })
+    }
     pub fn postgres(&self) -> &PostgresReader {
         &self.postgres
     }

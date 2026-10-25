@@ -22,6 +22,15 @@ impl Store {
             asset_max_request_bytes: None,
         })
     }
+    pub fn deferred(url: &str, clock: Clock) -> Result<Self, super::error::ProtocolError> {
+        Ok(Self {
+            database: Arc::new(postgres::Database::deferred(url)?),
+            clock,
+            blobs: None,
+            max_revisions: 200,
+            asset_max_request_bytes: None,
+        })
+    }
     pub fn now(&self) -> DateTime<Utc> {
         DateTime::from_timestamp_millis((self.clock)().timestamp_millis())
             .expect("valid clock timestamp")

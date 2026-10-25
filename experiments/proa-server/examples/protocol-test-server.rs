@@ -59,7 +59,11 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Authority::Open
     };
-    let app = router(MachineState { store, authority });
+    let app = router(MachineState {
+        store,
+        authority,
+        secret: std::env::var("PROA_TEST_SECRET").ok(),
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();

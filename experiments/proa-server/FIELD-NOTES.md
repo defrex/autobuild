@@ -510,3 +510,46 @@ The unchanged shared suite is invoked through the real remote client, with a new
 migrated database and blob prefix per factory, injected clock/retention, bounded
 child cleanup and asserted test/factory counts. A green route smoke test cannot
 replace this evidence.
+
+
+## Native authority and production routing
+
+Delegated credentials require two independent checks: authentic signed claims and
+fresh durable lifecycle facts. They do not inherit a fixed token expiry or their
+parent project's later credential revocation. Registration, anchor, execution,
+session and runner suspension/release semantics instead decide each request.
+Build suspension and harvest suspension differ. Authority guards also sometimes
+clone and parse a request before its producer schema; moving them after schema
+validation changes observable refusals, including source server errors.
+
+Fetch header semantics matter at this boundary. HTTP obs-text is Latin1, and
+repeated Authorization or release identity fields join with comma-space. Reading
+only the first duplicate can accept a credential the TypeScript service rejects.
+Signed payload verification uses its original encoded segment, not a re-encoded
+object. Base64url token decoding is deliberately separate from canonical artifact
+base64 validation.
+
+The normal router selects the machine branch using the full URI before browser
+cookie, origin and Proa middleware. Both branches retain independent gates;
+unknown browser paths cannot acquire machine authority through a browser cookie.
+Public protocol health bypasses backend I/O. Deferred read/write pools still
+preflight every first or replacement connection, while readiness probes the
+configured schema with a bounded wait. Production has no open-authority switch.
+
+Dispatch evidence reads the exact generated build through the existing Rust
+DataReader listing, reduced build state and ordered events, including a fresh
+reader after restart. Per ruling esc_6370a20b, rendering that dispatched build on
+the sibling Builds page remains a node integration check after file-131; shell
+captures cannot substitute for it.
+
+A remaining string-model boundary needs an explicit design decision. JavaScript
+JSON accepts an escaped lone UTF-16 surrogate; serde's String rejects it. This is
+observable even in stripped request properties. It also reaches authority:
+PostgreSQL's JavaScript driver encodes a lone surrogate as U+FFFD for a lookup,
+while JavaScript retains the original claim for later identity comparisons.
+Replacing the claim globally with U+FFFD would therefore widen authority. The
+standalone `tools/protocol-utf16-diagnostic.ts` reproduces both public HTTP
+mismatches against isolated services. It is diagnostic evidence, not an
+acceptance test or a claim that the scalar-string domain is the full protocol.
+The partial-tool stream artifact sidecar solves its bounded assembly case only;
+it does not solve arbitrary request, identity, error or database strings.

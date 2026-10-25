@@ -108,9 +108,10 @@ checks and linked builds.
 
 `protocol-cases.ts` inventories the machine BuildStore routes, including
 current-client additions and the excluded ticket-source/connect/MCP surfaces.
-This is a checklist, not proof of Rust conformance. Future HTTP runners must
-register assertions for each method/path and call `assertProtocolCoverage`;
-an empty or partial registry fails.
+This is a checklist, not proof of Rust conformance. The maintained HTTP aggregate
+records successful native responses by method/path, completes each family's
+assertions, then calls `assertProtocolCoverage`; an empty or partial registry
+fails. Sanitized response counts appear beside the family evidence.
 
 `bun tools/protocol-database-proof.ts` runs the initial storage isolation proof:
 it provisions two independently named databases with the TypeScript migrations,
@@ -119,24 +120,24 @@ PostgreSQL and isolated S3 lifecycle from `data-services.ts`. Set
 `AB_POSTGRES_TEST_URL` only to a loopback administrative database, or leave it
 unset to use the existing local development PostgreSQL helper. No credentials
 or persistent test state are written to the repository. The proof does not
-start Rust or claim the shared HTTP contract suite; those remain outstanding.
+start Rust or claim the shared HTTP contract suite; the maintained native proof
+below provides that separate evidence.
 
 `withProtocolDatabase` supplies only an isolated environment to its callback,
-never a TypeScript backing store. A future remote-client factory must stop its
-Rust server and connections inside that callback before database teardown.
+never a TypeScript backing store. Remote-client factories stop their Rust
+servers and connections inside that callback before database teardown.
 
 ### Native machine-protocol checkpoints
 
-The protocol implementation is still staged. `src/protocol/router.rs` is a
-separate JSON branch exercised by the native test executable; it is not yet
-mounted into the normal browser server. Unsupported families do not count as
-conformance. Delegation, the production router merge, historical-client and
-isolated-dispatch proof remain outstanding. Build/repository/session appends,
-atomic initial events, public snapshots, operator presence, artifact/deposit
-families, repository ticks, ticket assets/pins and stream lifecycles now run
-through the native test server. All 42 exposed named values are checked against
-the executable reducer registry, and the entire unchanged shared suite is the
-completion bar.
+`src/protocol/router.rs` is the JSON branch mounted into the normal server before
+browser middleware. The private native example adds only test clock, authority
+and constructor controls. The maintained aggregate exercises project/delegated
+authority, all event and storage families, ticket assets/pins, stream lifecycles,
+all 42 exposed named values, historical decoders and isolated dispatch. The
+separate contract command runs the entire unchanged shared suite. None of these
+reports waive an unimplemented protocol edge; the standalone UTF-16 diagnostic
+below records a known string-model divergence that still prevents a claim of
+complete conformance.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -245,3 +246,33 @@ PostgreSQL database/blob prefix. The explicitly invoked test process sets
 The runner fails on any failed/skipped test, missing summary or leaked factory,
 and writes logs/counts to `.ab/proa-protocol-contract/`. No methods are replaced
 by direct SQL/backing-store calls and no test family is filtered.
+
+Signed execution grants have separate crypto, lifecycle and real HTTP proofs.
+`bun tools/protocol-token-fixtures.ts`,
+`bun tools/protocol-delegation-fixtures.ts` and
+`bun tools/protocol-delegation-authority-fixtures.ts` check their generated
+oracles. They cover original-payload HMAC verification, token-specific base64url
+semantics, current registration and lifecycle authority, all four grant kinds,
+attenuation, immutable stream labels, source error precedence and duplicate
+Latin1 header semantics. The aggregate invokes native issuance and authority
+proofs; fixture keys and all service/database instances are isolated.
+
+`tools/protocol-compatibility.integration.test.ts` exercises populated response
+families using frozen historical decoder shapes for every identity admitted by
+the current major/minor release window, and exact negotiation refusals outside
+it. Successful mutations run once against the shared database, with independent
+response validation and TypeScript read witnesses.
+
+The dispatch proof in `tools/protocol-dispatch.integration.test.ts` uses real
+Dispatcher/BuildRunner composition, workspace Git operations and finite scripted
+runners in isolation. Its production Rust reader evidence identifies the exact
+generated slug, listing, reduced terminal state and ordered durable history,
+including a fresh reader. Rendering that dispatched result on the sibling Builds
+page is deferred to node integration after file-131 by ruling esc_6370a20b.
+The existing 16-frame captures prove browser coexistence only.
+
+`bun tools/protocol-utf16-diagnostic.ts` is a standalone diagnostic for a known
+unresolved parity boundary, not part of the green acceptance aggregate. It uses
+isolated public HTTP services to show escaped lone-surrogate request/authority
+differences. It builds the native example under the same external Cargo cache lock. See
+[FIELD-NOTES.md](../FIELD-NOTES.md) for why lossy claim replacement would be unsafe.

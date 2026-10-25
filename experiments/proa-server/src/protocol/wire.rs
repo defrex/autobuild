@@ -71,6 +71,23 @@ pub fn wait_parameter(query: Option<&str>) -> Result<u64, ProtocolError> {
     }
     Ok(raw.parse::<u64>().unwrap_or(u64::MAX).min(30))
 }
+/// Fetch Headers exposes HTTP field bytes as Latin1 and joins repeated fields.
+/// UTF8 decoding or taking only the first field changes credential semantics.
+pub fn header_text(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    let values: Vec<String> = headers
+        .get_all(name)
+        .iter()
+        .map(|value| {
+            value
+                .as_bytes()
+                .iter()
+                .map(|byte| char::from(*byte))
+                .collect()
+        })
+        .collect();
+    (!values.is_empty()).then(|| values.join(", "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

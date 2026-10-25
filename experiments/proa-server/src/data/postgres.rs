@@ -49,23 +49,25 @@ pub struct PostgresReader {
     next: AtomicUsize,
 }
 struct Connection {
-    client: Client,
-    task: tokio::task::JoinHandle<()>,
+    client: Option<Client>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 impl std::ops::Deref for Connection {
     type Target = Client;
     fn deref(&self) -> &Client {
-        &self.client
+        self.client.as_ref().expect("connected reader slot")
     }
 }
 impl std::ops::DerefMut for Connection {
     fn deref_mut(&mut self) -> &mut Client {
-        &mut self.client
+        self.client.as_mut().expect("connected reader slot")
     }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }
 
@@ -107,6 +109,23 @@ impl PostgresReader {
         Ok(result)
     }
 
+    /// Application startup may defer network I/O so public health is always
+    /// available. Every first/replacement connection still preflights before use.
+    pub fn deferred(url: &str) -> Result<Self, DataError> {
+        Ok(Self {
+            connections: (0..4)
+                .map(|_| {
+                    Mutex::new(Connection {
+                        client: None,
+                        task: None,
+                    })
+                })
+                .collect(),
+            url: url.into(),
+            tls: connector()?,
+            next: AtomicUsize::new(0),
+        })
+    }
     async fn open(url: &str, tls: MakeRustlsConnect) -> Result<Connection, DataError> {
         // The URL's sslmode and certificate validation apply on every reconnect.
         let (client, connection) = tokio_postgres::connect(url, tls)
@@ -115,8 +134,11 @@ impl PostgresReader {
         let task = tokio::spawn(async move {
             let _ = connection.await;
         });
-        let mut result = Connection { client, task };
-        Self::preflight_client(&mut result.client).await?;
+        let mut result = Connection {
+            client: Some(client),
+            task: Some(task),
+        };
+        Self::preflight_client(result.client.as_mut().expect("connected reader slot")).await?;
         Ok(result)
     }
 
@@ -137,7 +159,7 @@ impl PostgresReader {
         };
         // Replacement stays under the slot lock, so concurrent callers cannot
         // race reconnection. Failed connects leave a closed slot retryable.
-        if client.is_closed() {
+        if client.client.as_ref().is_none_or(Client::is_closed) {
             *client = Self::open(&self.url, self.tls.clone()).await?;
         }
         Ok(client)

@@ -4,6 +4,10 @@ import { cachePath } from './verify'
 import { buildProtocolExecutables } from './protocol-server-harness'
 import { buildCredentialHelper } from './protocol-credentials'
 import { runCredentialHttpProof, runCredentialProof } from './protocol-credentials.integration.test'
+import { proveProtocolDelegatedDispatch } from './protocol-dispatch.integration.test'
+import { proveProtocolDelegation } from './protocol-delegation.integration.test'
+import { proveProtocolDelegationAuthority } from './protocol-delegation-authority.integration.test'
+import { proveProtocolCompatibility } from './protocol-compatibility.integration.test'
 import { proveProtocolReducers } from './protocol-reducers.integration.test'
 import { proveProtocolAssets } from './protocol-assets.integration.test'
 import { proveProtocolStreams } from './protocol-streams.integration.test'
@@ -17,6 +21,8 @@ import { proveProtocolArtifactBoundaries } from './protocol-artifact-boundaries.
 import { proveProtocolArtifacts } from './protocol-artifacts.integration.test'
 import { proveProtocolEvents } from './protocol-events.integration.test'
 import { withDataServices } from './data-services'
+import { beginProtocolCoverage } from './protocol-route-coverage'
+import { proveProtocolRouteAliases } from './protocol-route-aliases.integration.test'
 
 const root = resolve(import.meta.dir, '../../..')
 const common = Bun.spawnSync(['git', 'rev-parse', '--git-common-dir'], { cwd: root })
@@ -35,29 +41,50 @@ if (!process.argv.includes('--caller-holds-lock')) {
   )
   if ((await child.exited) !== 0) throw new Error('Protocol integration failed')
 } else {
-  const { server, blob } = await buildProtocolExecutables(environment)
+  const { server, blob, reader } = await buildProtocolExecutables(environment)
   const credential = await buildCredentialHelper(environment)
-  await withDataServices(async (admin, env) => {
-    await runCredentialProof(credential, admin, env)
-    await runCredentialHttpProof(server, admin, env)
-  })
-  const json = await proveProtocolJson(server)
+  const coverage = beginProtocolCoverage()
+  await coverage.proof('credentials', () =>
+    withDataServices(async (admin, env) => {
+      await runCredentialProof(credential, admin, env)
+      await runCredentialHttpProof(server, admin, env)
+    }),
+  )
+  const delegation = await coverage.proof('delegation', () => proveProtocolDelegation(server))
+  const authority = await coverage.proof('authority', () =>
+    proveProtocolDelegationAuthority(server),
+  )
+  const compatibility = await coverage.proof('compatibility', () =>
+    proveProtocolCompatibility(server),
+  )
+  const dispatch = await coverage.proof('dispatch', () =>
+    proveProtocolDelegatedDispatch(server, reader),
+  )
+  const json = await coverage.proof('json', () => proveProtocolJson(server))
   const blobs = await protocolBlobInteroperability(blob)
-  const ticks = await proveProtocolTicks(server)
-  const reducers = await proveProtocolReducers(server)
-  const assets = await proveProtocolAssets(server)
-  const streams = await proveProtocolStreams(server)
-  const records = await proveProtocolStore(server)
-  const sessions = await proveProtocolSessions(server)
-  const events = await proveProtocolEvents(server)
-  const artifactBoundaries = await proveProtocolArtifactBoundaries(server)
-  const artifacts = await proveProtocolArtifacts(server)
-  const snapshotsPresence = await proveProtocolSnapshotsPresence(server)
+  const ticks = await coverage.proof('ticks', () => proveProtocolTicks(server))
+  const reducers = await coverage.proof('reducers', () => proveProtocolReducers(server))
+  const assets = await coverage.proof('assets', () => proveProtocolAssets(server))
+  const streams = await coverage.proof('streams', () => proveProtocolStreams(server))
+  const records = await coverage.proof('records', () => proveProtocolStore(server))
+  const sessions = await coverage.proof('sessions', () => proveProtocolSessions(server))
+  const events = await coverage.proof('events', () => proveProtocolEvents(server))
+  const artifactBoundaries = await coverage.proof('artifactBoundaries', () =>
+    proveProtocolArtifactBoundaries(server),
+  )
+  const artifacts = await coverage.proof('artifacts', () => proveProtocolArtifacts(server))
+  const snapshotsPresence = await coverage.proof('snapshotsPresence', () =>
+    proveProtocolSnapshotsPresence(server),
+  )
+  const routeAliases = await coverage.proof('route-aliases', () =>
+    proveProtocolRouteAliases(server),
+  )
+  const routeCoverage = coverage.assertComplete()
   const evidence = resolve(root, '.ab/proa-protocol-store')
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', routeCoverage, routeAliases, delegation, authority, compatibility, dispatch, assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol family proofs passed; unchanged suite evidence is recorded separately by protocol-contract.ts. Evidence: ${evidence}`,

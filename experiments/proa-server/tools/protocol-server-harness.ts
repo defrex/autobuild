@@ -1,10 +1,11 @@
+import { observeProtocolResponse } from './protocol-route-coverage'
 import { mkdir, realpath } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 
 const project = resolve(import.meta.dir, '..')
 const root = resolve(project, '../..')
 type Environment = Record<string, string | undefined>
-const builds = new Map<string, Promise<{ server: string; blob: string }>>()
+const builds = new Map<string, Promise<{ server: string; blob: string; reader: string }>>()
 
 async function externalTarget(environment: Environment) {
   const requested = environment.CARGO_TARGET_DIR
@@ -37,6 +38,8 @@ async function compile(environment: Environment, locked: boolean) {
         'protocol-test-server',
         '--example',
         'protocol-blob-proof',
+        '--example',
+        'data-proof',
         '--message-format=json',
       ]
       const child = Bun.spawn(locked ? ['flock', `${target}/.verify.lock`, ...cargo] : cargo, {
@@ -49,6 +52,7 @@ async function compile(environment: Environment, locked: boolean) {
       if ((await child.exited) !== 0) throw new Error('Protocol test server compilation failed')
       let server: string | undefined
       let blob: string | undefined
+      let reader: string | undefined
       for (const line of output.split('\n').filter(Boolean)) {
         const artifact = JSON.parse(line) as {
           reason?: string
@@ -67,10 +71,17 @@ async function compile(environment: Environment, locked: boolean) {
           artifact.executable
         )
           blob = artifact.executable
+        if (
+          artifact.reason === 'compiler-artifact' &&
+          artifact.target?.name === 'data-proof' &&
+          artifact.executable
+        )
+          reader = artifact.executable
       }
       if (!server) throw new Error('Cargo did not report the protocol test server executable')
       if (!blob) throw new Error('Cargo did not report the protocol blob proof executable')
-      return { server, blob }
+      if (!reader) throw new Error('Cargo did not report the production reader proof executable')
+      return { server, blob, reader }
     })()
     builds.set(target, pending)
     pending.catch(() => {
@@ -232,7 +243,15 @@ export async function startProtocolServer(options: ProtocolServerOptions) {
           await close().catch(() => {})
           throw error
         }
-        return response!
+        const completed = await response!
+        const requested = input instanceof Request ? input.url : String(input)
+        if (new URL(requested).origin === url)
+          await observeProtocolResponse(
+            init?.method ?? (input instanceof Request ? input.method : 'GET'),
+            requested,
+            completed,
+          )
+        return completed
       },
       { preconnect: fetch.preconnect },
     ) as typeof fetch

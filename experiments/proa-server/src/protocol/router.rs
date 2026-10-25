@@ -2,7 +2,8 @@
 //! can never rewrite its requests. Normal binary wiring waits for the complete
 //! route/validation/delegation contract; this constructor is exercised natively.
 use super::{
-    auth::{authenticate_project_bearer, ProjectPrincipal},
+    auth::authenticate_project_bearer,
+    delegation::{self, Principal},
     error::ProtocolError,
     identity,
     store::{leases::LeaseKind, records::Scope, Store},
@@ -26,6 +27,7 @@ pub enum Authority {
 pub struct MachineState {
     pub store: Arc<Store>,
     pub authority: Authority,
+    pub secret: Option<String>,
 }
 pub fn router(state: MachineState) -> Router {
     Router::new().fallback(handle).with_state(state)
@@ -71,75 +73,105 @@ fn path_segments(path: &str) -> Result<Vec<String>, ProtocolError> {
         })
         .collect()
 }
-async fn authorize(
+async fn authenticate(
     state: &MachineState,
     authorization: Option<&str>,
-    path: &[String],
-) -> Result<Option<ProjectPrincipal>, ProtocolError> {
+) -> Result<Option<Principal>, ProtocolError> {
     if matches!(state.authority, Authority::Open) {
         return Ok(None);
     }
     let token = super::auth::bearer_token(authorization)
         .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
-    if !token.starts_with("abp_") {
-        return Err(ProtocolError::new(
-            401,
-            "auth",
-            super::auth::RETIRED_CREDENTIAL_MESSAGE,
-        ));
-    }
-    if super::auth::parse_project_token(token).is_none() {
-        return Err(ProtocolError::new(
-            401,
-            "auth",
-            "unknown or revoked credential",
-        ));
-    }
-    let client = state.store.database.client().await?;
-    let principal = authenticate_project_bearer(&client, authorization, state.store.now())
-        .await
-        .map_err(|error| ProtocolError::new(error.status, error.kind, error.error))?;
-    // Release the connection before indirect ownership reads acquire a slot.
-    drop(client);
-    if path.len() > 1 {
-        let owning_repo = match path[0].as_str() {
-            "repos" => Some(path[1].clone()),
-            "builds" => state.store.get_record(Scope::Build(&path[1])).await?["repo"]
-                .as_str()
-                .map(str::to_owned),
-            "sessions" => state.store.get_record(Scope::Session(&path[1])).await?["repo"]
-                .as_str()
-                .map(str::to_owned),
-            _ => None,
-        };
-        if matches!(path[0].as_str(), "builds" | "sessions")
-            && owning_repo.as_deref() != Some(principal.repo.as_str())
-        {
-            return Err(unavailable());
+    if token.starts_with("abp_") {
+        if super::auth::parse_project_token(token).is_none() {
+            return Err(ProtocolError::new(
+                401,
+                "auth",
+                "unknown or revoked credential",
+            ));
         }
-        if let Some(repo) = owning_repo {
-            principal
-                .require_project(&repo)
-                .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
-        }
+        let client = state.store.database.client().await?;
+        let project = authenticate_project_bearer(&client, authorization, state.store.now())
+            .await
+            .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
+        return Ok(Some(Principal::Project(project)));
     }
+    let scope = state.secret.as_deref().and_then(|secret| {
+        super::token::verify_token(secret, token, state.store.now().timestamp_millis())
+    });
+    let principal = match scope {
+        Some(super::token::SignedScope::Delegated(claims)) => {
+            delegation::authenticate_delegated(
+                &state.store,
+                claims,
+                state.store.now().timestamp_millis(),
+            )
+            .await?
+        }
+        Some(super::token::SignedScope::Admin { user, .. }) => Principal::Admin { user },
+        Some(super::token::SignedScope::Internal {
+            repo, user, via, ..
+        }) => {
+            if !delegation::registered(&state.store, &repo).await? {
+                return Err(ProtocolError::new(403, "auth", "project not registered"));
+            }
+            Principal::Internal {
+                repo,
+                user,
+                via: via.map(|value| serde_json::to_value(value).expect("plain via")),
+            }
+        }
+        _ => {
+            return Err(ProtocolError::new(
+                401,
+                "auth",
+                super::auth::RETIRED_CREDENTIAL_MESSAGE,
+            ))
+        }
+    };
     Ok(Some(principal))
 }
-fn enforce_via(
-    principal: Option<&ProjectPrincipal>,
-    actor: Option<&Value>,
-) -> Result<(), ProtocolError> {
-    if principal.is_some()
-        && actor.is_some_and(|actor| actor["kind"] == "human" && actor.get("via").is_some())
-    {
-        return Err(ProtocolError::new(
-            403,
-            "auth",
-            "token carries no via; it may not write delegated events",
-        ));
+async fn authorize(
+    state: &MachineState,
+    authorization: Option<&str>,
+    path: &[String],
+    method: &str,
+    raw_path: &str,
+) -> Result<Option<Principal>, ProtocolError> {
+    let principal = authenticate(state, authorization).await?;
+    if let Some(principal) = &principal {
+        principal.require_machine_access()?;
+        if path.len() == 1
+            && path[0] == "builds"
+            && method != "GET"
+            && matches!(principal, Principal::Delegated(_))
+        {
+            return Err(ProtocolError::new(
+                403,
+                "auth",
+                "delegated credential cannot create builds",
+            ));
+        }
+        let scope = match path.first().map(String::as_str) {
+            Some("builds") if path.len() > 1 => Some(Scope::Build(&path[1])),
+            Some("repos") if path.len() > 1 => Some(Scope::Repo(&path[1])),
+            Some("sessions") if path.len() > 1 => Some(Scope::Session(&path[1])),
+            _ => None,
+        };
+        delegation::authorize_resource(&state.store, principal, scope, method).await?;
+        if let Some(scope) = scope {
+            delegation::mutation_needs_body(principal, scope, method, path, raw_path)?;
+        }
+    }
+    Ok(principal)
+}
+fn enforce_via(principal: Option<&Principal>, actor: Option<&Value>) -> Result<(), ProtocolError> {
+    if let (Some(principal), Some(actor)) = (principal, actor) {
+        delegation::enforce_via(principal, actor)?;
     }
     Ok(())
 }
+
 async fn body(req: Request, schema: &str) -> Result<Value, ProtocolError> {
     body_with_limit(req, schema, None).await
 }
@@ -178,35 +210,61 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
     if method == "GET" && parts == ["health"] {
         return Ok(Json(identity::health_body()).into_response());
     }
-    if !matches!(
-        parts.first(),
-        Some(&"repos" | &"builds" | &"sessions" | &"streams" | &"credentials")
-    ) {
+    if !parts
+        .first()
+        .is_some_and(|segment| MACHINE_NAMESPACES.contains(segment))
+    {
         return Err(ProtocolError::new(
             404,
             "not-found",
             format!("no route: {method} {path}"),
         ));
     }
-    if let Some(error) = identity::current_identity_error(
-        req.headers()
-            .get("x-autobuild-version")
-            .and_then(|h| h.to_str().ok()),
-        req.headers()
-            .get("x-autobuild-protocol-version")
-            .and_then(|h| h.to_str().ok()),
-    ) {
+    let version = super::wire::header_text(req.headers(), "x-autobuild-version");
+    let protocol = super::wire::header_text(req.headers(), "x-autobuild-protocol-version");
+    if let Some(error) = identity::current_identity_error(version.as_deref(), protocol.as_deref()) {
         return Err(ProtocolError::new(409, "conflict", error));
     }
+    let authorization = super::wire::header_text(req.headers(), "authorization");
     if parts.first() == Some(&"credentials") {
+        if parts == ["credentials", "delegate"] && method == "POST" {
+            let secret = state
+                .secret
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .filter(|_| matches!(state.authority, Authority::Project))
+                .ok_or_else(|| {
+                    ProtocolError::new(404, "not-found", "credential issuance unavailable")
+                })?;
+            let principal = authenticate(&state, authorization.as_deref())
+                .await?
+                .ok_or_else(ProtocolError::internal)?;
+            let bytes = to_bytes(req.into_body(), usize::MAX)
+                .await
+                .map_err(|_| ProtocolError::validation("invalid JSON"))?;
+            let raw = super::js_json::parse_js_json(&bytes)
+                .map_err(|_| ProtocolError::validation("invalid JSON"))?;
+            let target = super::token::parse_target(&raw)
+                .ok_or_else(|| ProtocolError::validation("invalid delegation target"))?;
+            let target = serde_json::to_value(target).expect("plain delegation target");
+            let claims = delegation::issue_claims(
+                &state.store,
+                &principal,
+                &target,
+                state.store.now().timestamp_millis(),
+            )
+            .await?;
+            let claims = super::token::parse_delegation_claims(&claims)
+                .ok_or_else(ProtocolError::internal)?;
+            return Ok(reply(
+                200,
+                json!({"token":super::token::mint_delegated_token(secret,&claims)}),
+            ));
+        }
         return Err(ProtocolError::new(
             404,
             "not-found",
-            if parts == ["credentials", "delegate"] && method == "POST" {
-                "credential issuance unavailable".to_owned()
-            } else {
-                format!("no route: {method} {path}")
-            },
+            format!("no route: {method} {path}"),
         ));
     }
     if parts == ["sessions"] || parts == ["streams"] {
@@ -216,12 +274,15 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             format!("no route: {method} {path}"),
         ));
     }
-    let authorization = req
-        .headers()
-        .get("authorization")
-        .and_then(|header| header.to_str().ok())
-        .map(str::to_owned);
-    let principal = authorize(&state, authorization.as_deref(), &segments).await?;
+    let principal = if parts.first() == Some(&"streams") {
+        let value = authenticate(&state, authorization.as_deref()).await?;
+        if let Some(principal) = &value {
+            principal.require_machine_access()?;
+        }
+        value
+    } else {
+        authorize(&state, authorization.as_deref(), &segments, &method, &path).await?
+    };
     if parts.first() == Some(&"streams") && parts.len() >= 2 {
         let record = state.store.get_stream(parts[1]).await?;
         if record.is_null() {
@@ -229,16 +290,26 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         }
         let stream_scope = super::store::streams::record_scope(&record)?;
         if let Some(principal) = principal.as_ref() {
-            let repo = match stream_scope {
-                Scope::Repo(repo) => Some(repo.to_owned()),
-                other => state.store.get_record(other).await?["repo"]
-                    .as_str()
-                    .map(str::to_owned),
-            };
-            if repo.as_deref() != Some(principal.repo.as_str()) {
-                return Err(unavailable());
+            if let Err(error) =
+                delegation::authorize_resource(&state.store, principal, Some(stream_scope), &method)
+                    .await
+            {
+                return Err(if error.status == StatusCode::FORBIDDEN {
+                    unavailable()
+                } else {
+                    error
+                });
             }
         }
+        let req = mutation_request(&state, principal.as_ref(), stream_scope, &segments, req)
+            .await
+            .map_err(|error| {
+                if error.status == StatusCode::FORBIDDEN {
+                    unavailable()
+                } else {
+                    error
+                }
+            })?;
         return stream_route(&state, req, stream_scope, &parts[1..]).await;
     }
     let scope = match parts.as_slice() {
@@ -246,6 +317,11 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         ["repos", id, ..] => Some(Scope::Repo(id)),
         ["sessions", id, ..] => Some(Scope::Session(id)),
         _ => None,
+    };
+    let req = if let Some(scope) = scope {
+        mutation_request(&state, principal.as_ref(), scope, &segments, req).await?
+    } else {
+        req
     };
     if let Some(scope @ Scope::Build(_)) = scope {
         if state.store.get_record(scope).await?.is_null() {
@@ -257,7 +333,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             200,
             state
                 .store
-                .list_builds(principal.as_ref().map(|p| p.repo.as_str()))
+                .list_builds(principal.as_ref().and_then(Principal::repo))
                 .await?,
         ));
     }
@@ -265,18 +341,14 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         let value = body(req, "ensureRepo").await?;
         let repo = value["repo"].as_str().unwrap();
         if let Some(principal) = principal {
-            principal
-                .require_project(repo)
-                .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
+            principal.require_project(repo)?;
         }
         return Ok(reply(200, state.store.ensure_repo(repo).await?));
     }
     if method == "POST" && parts == ["builds"] {
         let mut value = body(req, "newBuild").await?;
-        if let Some(principal) = principal {
-            principal
-                .require_project(value["repo"].as_str().unwrap())
-                .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
+        if let Some(principal) = principal.filter(|p| !matches!(p, Principal::Admin { .. })) {
+            principal.require_project(value["repo"].as_str().unwrap())?;
             let prefix = String::from_utf16_lossy(
                 &value["slug"]
                     .as_str()
@@ -467,11 +539,8 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 format!("no route: {method} /repos/:repo/build-digests"),
             ));
         }
-        let supports_audit = identity::client_supports_integration_audit_pending(
-            req.headers()
-                .get("x-autobuild-version")
-                .and_then(|v| v.to_str().ok()),
-        );
+        let supports_audit =
+            identity::client_supports_integration_audit_pending(version.as_deref());
         let mut digests = state.store.repo_build_digests(parts[1]).await?;
         if !supports_audit {
             for digest in digests.as_array_mut().unwrap() {
@@ -1042,4 +1111,93 @@ async fn asset_route(
             ),
         )),
     }
+}
+
+async fn mutation_request(
+    state: &MachineState,
+    principal: Option<&Principal>,
+    scope: Scope<'_>,
+    path: &[String],
+    req: Request,
+) -> Result<Request, ProtocolError> {
+    let Some(principal) = principal else {
+        return Ok(req);
+    };
+    let method = req.method().as_str().to_owned();
+    let raw_path = req.uri().path().to_owned();
+    if !delegation::mutation_needs_body(principal, scope, &method, path, &raw_path)? {
+        return Ok(req);
+    }
+    let (parts, body) = req.into_parts();
+    let bytes = to_bytes(body, usize::MAX)
+        .await
+        .map_err(|_| ProtocolError::new(500, "internal", "request body read failed"))?;
+    let raw = delegation::parse_authority_body(&bytes)?;
+    delegation::authorize_mutation(
+        &state.store,
+        principal,
+        scope,
+        &method,
+        path,
+        &raw_path,
+        &raw,
+    )
+    .await?;
+    Ok(Request::from_parts(parts, axum::body::Body::from(bytes)))
+}
+
+pub const MACHINE_NAMESPACES: &[&str] = &["builds", "repos", "sessions", "streams", "credentials"];
+/// Browser and machine services keep separate middleware. Preserve the full URI
+/// when forwarding; nesting would strip the first resource segment.
+pub fn is_machine_path(path: &str) -> bool {
+    let first = path.split('/').find(|s| !s.is_empty()).unwrap_or("");
+    let decoded = percent_encoding::percent_decode_str(first).decode_utf8_lossy();
+    decoded == "health" || MACHINE_NAMESPACES.contains(&decoded.as_ref())
+}
+pub fn unavailable_router() -> Router {
+    Router::new().fallback(unavailable_handle)
+}
+async fn unavailable_handle(req: Request) -> Response {
+    let result = unavailable_dispatch(req);
+    match result {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
+}
+fn unavailable_dispatch(req: Request) -> Result<Response, ProtocolError> {
+    let path = req.uri().path();
+    let parts = path_segments(path)?;
+    let method = req.method().as_str();
+    if method == "GET" && parts == ["health"] {
+        return Ok(Json(identity::health_body()).into_response());
+    }
+    if parts
+        .first()
+        .is_some_and(|s| MACHINE_NAMESPACES.contains(&s.as_str()))
+    {
+        let version = super::wire::header_text(req.headers(), "x-autobuild-version");
+        let protocol = super::wire::header_text(req.headers(), "x-autobuild-protocol-version");
+        if let Some(error) =
+            identity::current_identity_error(version.as_deref(), protocol.as_deref())
+        {
+            return Err(ProtocolError::new(409, "conflict", error));
+        }
+        if parts == ["credentials", "delegate"] && method == "POST" {
+            return Err(ProtocolError::new(
+                404,
+                "not-found",
+                "credential issuance unavailable",
+            ));
+        }
+        return Err(ProtocolError::new(
+            503,
+            "internal",
+            "store backend unavailable",
+        ));
+    }
+    Err(ProtocolError::new(
+        404,
+        "not-found",
+        format!("no route: {method} {path}"),
+    ))
 }

@@ -218,3 +218,18 @@ A fake Vercel HTTP responder proves request/decoding mechanics only. No live
 Vercel credentials were used and no remote Vercel object was written. Live
 Vercel interoperability remains unproved until explicitly provisioned
 integration evidence exists.
+
+Native ticket assets and stream close use the same configured blob adapter as
+artifact deposits. Asset writes validate paths/ceilings and preflight their
+manifest response before publishing metadata; snapshot-pin reads additionally
+verify gzip/chunk/file integrity. Stream close prepares its immutable object
+before publication, then locks and rechecks the acknowledged chunk prefix. A
+racing append requires reassembly and another put before the closed state and
+artifact revision commit together. Upload or SQL commit failure exposes no
+partial close or consumed artifact revision. The stream proof exercises real
+S3 failure and the TypeScript writer race, rather than substituting a fake store.
+
+The normal server's deferred backend initialization changes liveness only:
+`/health` does not contact storage; configured data operations and `/readyz`
+still require schema preflight. Blob credentials remain constructor input and
+are never exposed by health, routing errors, capture metadata or evidence logs.

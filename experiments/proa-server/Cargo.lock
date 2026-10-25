@@ -2334,6 +2334,7 @@ dependencies = [
  "cookie",
  "dotenvy",
  "flate2",
+ "hmac 0.12.1",
  "http-body-util",
  "jsonschema",
  "percent-encoding",

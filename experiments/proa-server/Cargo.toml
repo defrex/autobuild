@@ -40,9 +40,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ryu-js = "1.0.3"
 
 flate2 = "1"
+hmac = "0.12"
+
+tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 lto = "thin"

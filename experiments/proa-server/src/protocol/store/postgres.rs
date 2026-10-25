@@ -13,23 +13,25 @@ pub struct Database {
     next: AtomicUsize,
 }
 pub struct Connection {
-    client: Client,
-    task: tokio::task::JoinHandle<()>,
+    client: Option<Client>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 impl std::ops::Deref for Connection {
     type Target = Client;
     fn deref(&self) -> &Client {
-        &self.client
+        self.client.as_ref().expect("connected writer slot")
     }
 }
 impl std::ops::DerefMut for Connection {
     fn deref_mut(&mut self) -> &mut Client {
-        &mut self.client
+        self.client.as_mut().expect("connected writer slot")
     }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }
 impl Database {
@@ -46,13 +48,34 @@ impl Database {
             next: AtomicUsize::new(0),
         })
     }
+    pub fn deferred(url: &str) -> Result<Self, ProtocolError> {
+        Ok(Self {
+            connections: (0..4)
+                .map(|_| {
+                    Mutex::new(Connection {
+                        client: None,
+                        task: None,
+                    })
+                })
+                .collect(),
+            url: url.into(),
+            tls: connector()?,
+            next: AtomicUsize::new(0),
+        })
+    }
     async fn open(url: &str, tls: MakeRustlsConnect) -> Result<Connection, ProtocolError> {
         let (client, connection) = tokio_postgres::connect(url, tls).await?;
         let task = tokio::spawn(async move {
             let _ = connection.await;
         });
-        let mut connection = Connection { client, task };
-        PostgresReader::preflight_client(&mut connection.client).await?;
+        let mut connection = Connection {
+            client: Some(client),
+            task: Some(task),
+        };
+        PostgresReader::preflight_client(
+            connection.client.as_mut().expect("connected writer slot"),
+        )
+        .await?;
         Ok(connection)
     }
     pub async fn client(&self) -> Result<MutexGuard<'_, Connection>, ProtocolError> {
@@ -70,7 +93,7 @@ impl Database {
             Some(connection) => connection,
             None => self.connections[index].lock().await,
         };
-        if connection.is_closed() {
+        if connection.client.as_ref().is_none_or(Client::is_closed) {
             *connection = Self::open(&self.url, self.tls.clone()).await?;
         }
         Ok(connection)
