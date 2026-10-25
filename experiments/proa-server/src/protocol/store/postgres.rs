@@ -78,6 +78,14 @@ impl Database {
         .await?;
         Ok(connection)
     }
+    /// Ticket persistence shares the database and schema preflight, but retains
+    /// its separate transaction API and never borrows browser authority.
+    pub(crate) fn ticket_writer(
+        &self,
+    ) -> Result<crate::data::writer::PostgresWriter, ProtocolError> {
+        crate::data::writer::PostgresWriter::deferred(&self.url)
+            .map_err(|_| ProtocolError::internal())
+    }
     pub async fn client(&self) -> Result<MutexGuard<'_, Connection>, ProtocolError> {
         let index = self.next.fetch_add(1, Ordering::Relaxed) % self.connections.len();
         let mut available = None;
