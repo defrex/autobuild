@@ -44,6 +44,44 @@ struct RowView {
     depth: String,
     landing: Value,
     steps: Vec<StepView>,
+    pr_href: String,
+    pr_label: String,
+    ceiling: String,
+    child_counts: String,
+    messages: Vec<MessageView>,
+}
+#[derive(Clone)]
+struct MessageView {
+    lines: Vec<String>,
+    more: String,
+}
+impl MessageView {
+    fn new(message: &str) -> Self {
+        let mut previous_blank = false;
+        let lines: Vec<String> = message
+            .split('\n')
+            .map(|s| s.trim_end_matches('\r'))
+            .filter(|line| {
+                let blank = line.trim().is_empty();
+                let keep = !blank || !previous_blank;
+                previous_blank = blank;
+                keep
+            })
+            .map(str::to_owned)
+            .collect();
+        let remaining = lines.len().saturating_sub(3);
+        Self {
+            lines: lines.into_iter().take(3).collect(),
+            more: if remaining == 0 {
+                String::new()
+            } else {
+                format!(
+                    "... {remaining} more {} — View details",
+                    if remaining == 1 { "row" } else { "rows" }
+                )
+            },
+        }
+    }
 }
 #[derive(Clone)]
 struct StepView {
@@ -86,7 +124,61 @@ impl HomePage {
                         }
                     })
                     .collect();
+                let pr_url = text(&row["pr"]["url"]);
+                let pr_href = url::Url::parse(pr_url)
+                    .ok()
+                    .filter(|u| matches!(u.scheme(), "http" | "https"))
+                    .map(|u| u.to_string())
+                    .unwrap_or_default();
+                let number = pr_url
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()));
+                let pr_label = if row["pr"].is_object() {
+                    format!(
+                        "PR {}{}",
+                        number.map(|n| format!("#{n} ")).unwrap_or_default(),
+                        text(&row["pr"]["state"])
+                    )
+                } else {
+                    String::new()
+                };
+                let ceilings = &row["reviewRoundCeilings"];
+                let values: Vec<String> =
+                    [("plan", &ceilings["plan"]), ("code", &ceilings["code"])]
+                        .into_iter()
+                        .filter(|(_, v)| !v.is_null())
+                        .map(|(k, v)| format!("{k} {v}"))
+                        .collect();
+                let counts = &row["integrationRow"]["children"];
+                let child_counts = if row["integrationRow"].is_object() {
+                    if counts["known"] == true {
+                        format!(
+                            "{}/{} landed · {} building · {} queued",
+                            counts["landed"], counts["total"], counts["building"], counts["queued"]
+                        )
+                    } else {
+                        "children unknown".into()
+                    }
+                } else {
+                    String::new()
+                };
+                let messages = row["setupError"]
+                    .as_str()
+                    .into_iter()
+                    .chain(array(&row["blockers"]).iter().filter_map(Value::as_str))
+                    .map(MessageView::new)
+                    .collect();
                 RowView {
+                    pr_href,
+                    pr_label,
+                    ceiling: if values.is_empty() {
+                        String::new()
+                    } else {
+                        format!("review round ceiling: {}", values.join(", "))
+                    },
+                    child_counts,
+                    messages,
                     row: row.clone(),
                     href: link(
                         snapshot.project.as_deref().unwrap_or_default(),
@@ -114,7 +206,7 @@ impl HomePage {
             stack.push(index);
         }
         let summary = format!(
-            "{} builds · {} needs you",
+            "{} builds · {} need you",
             snapshot.rows.len(),
             snapshot
                 .rows
@@ -196,7 +288,75 @@ impl<L: DataLoader> WebRenderSync<L> for Questions<'_> {
     fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
         for question in array(self.0) {
             html_sync! {
-                <p class="question" data-store-text>"! "{text(question)}</p>
+                <p class="question full-question" data-store-text>"! "{text(question)}</p>
+            }
+            .render(cx)?;
+        }
+        Ok(())
+    }
+}
+struct RowTokens<'a>(&'a RowView);
+impl<L: DataLoader> WebRenderSync<L> for RowTokens<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        if !self.0.pr_label.is_empty() {
+            if self.0.pr_href.is_empty() {
+                html_sync! {
+                    <p class="build-tokens">{self.0.pr_label.as_str()}</p>
+                }
+                .render(cx)?;
+            } else {
+                html_sync! {
+                    <p class="build-tokens">
+                        <a class="m" href={self.0.pr_href.as_str()} rel="noreferrer">
+                            {self.0.pr_label.as_str()}
+                        </a>
+                    </p>
+                }
+                .render(cx)?;
+            }
+        }
+        let row = &self.0.row;
+        if row["alsoPaused"] == true {
+            html_sync! {
+                <p class="build-tokens slack">"(paused)"</p>
+            }
+            .render(cx)?;
+        }
+        if row["draining"] == true {
+            html_sync! {
+                <p class="build-tokens slack">"(draining)"</p>
+            }
+            .render(cx)?;
+        }
+        Ok(())
+    }
+}
+struct Messages<'a> {
+    views: &'a [MessageView],
+    href: &'a str,
+}
+impl<L: DataLoader> WebRenderSync<L> for Messages<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        for message in self.views {
+            html_sync! {
+                <aside class="message-alert" data-message-preview data-store-text>
+                    {MessageLines(&message.lines)}
+                    {if message.more.is_empty(){None}else{Some(html_sync! {
+                        <a href={self.href}>{message.more.as_str()}</a>
+                    })}}
+                </aside>
+            }
+            .render(cx)?;
+        }
+        Ok(())
+    }
+}
+struct MessageLines<'a>(&'a [String]);
+impl<L: DataLoader> WebRenderSync<L> for MessageLines<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        for (index, line) in self.0.iter().enumerate() {
+            html_sync! {
+                <p>{if index==0{"! "}else{""}}{line.as_str()}</p>
             }
             .render(cx)?;
         }
@@ -239,6 +399,8 @@ impl<L: DataLoader> WebRenderSync<L> for RowNode<'_> {
                         " · landing "
                         {text(&view.landing)}
                     </p>
+                    {RowTokens(view)}
+                    <p class="diagnostic slack" data-ceilings>{view.ceiling.as_str()}</p>
                     <ol class="steps" aria-label="Pipeline steps">{Steps(&view.steps)}</ol>
                     {Reasons(&row["steps"])}
                     <p class="diagnostic" data-store-text>
@@ -246,7 +408,8 @@ impl<L: DataLoader> WebRenderSync<L> for RowNode<'_> {
                         {text(&row["abortProgress"])}
                         {text(&row["error"])}
                     </p>
-                    {Questions(&row["blockers"])}
+                    <p class="diagnostic slack" data-child-counts>{view.child_counts.as_str()}</p>
+                    {Messages{views:&view.messages,href:view.href.as_str()}}
                 </div>
                 <span class="build-status m" data-status={text(&row["status"])}>
                     {text(&row["status"])}

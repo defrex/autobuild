@@ -116,3 +116,11 @@ The display projection has a separate offline oracle under
 at generation/check time. The native `projection_parity` test compares retained
 facts, projected rows, session stream metadata and Unicode cells. The full Rust gate also runs `data-dashboard-integration.ts`, which checks the
 real producer replay against native project/detail, stream and blob reads.
+
+The dashboard integration proof also creates 509 hidden completed builds and
+5,090 closed streams through the TS store. After warming, three idle polls must
+make no per-history-build reads, no repeated pinned-config reads, and no closed
+stream metadata transfers. It checks new-build discovery, terminal ancestors and
+a new live event under five seconds. `metadata:*` entries in SQL evidence report
+registry, discovery, stream and artifact metadata queries as well as returned row
+counts; these are separate from event suffixes and blob byte downloads.

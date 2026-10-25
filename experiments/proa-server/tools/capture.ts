@@ -65,7 +65,7 @@ async function captureSeeded(
       HOME: process.env.HOME,
       PROA_HOST: '127.0.0.1',
       PORT: String(port),
-      RUST_LOG: 'info,proa_server::data::reader=debug',
+      RUST_LOG: 'info,proa_server::data::reader=debug,proa_server::data::postgres=debug',
       PROA_AUTH_URL: `http://127.0.0.1:${port}`,
       GITHUB_CLIENT_ID: 'capture-id',
       GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
@@ -135,6 +135,15 @@ async function captureSeeded(
       const match = line.replace(/\x1b\[[0-9;]*m/g, '').match(/suffix-read (\{.*\})/)
       return match ? [JSON.parse(match[1]!)] : []
     }) as { project: string; scope: string; after: number; rows: number }[]
+    for (const scope of [
+      'metadata:projects',
+      'metadata:build-discovery',
+      'metadata:streams:',
+      'metadata:artifact:',
+      'metadata:build-record:',
+    ])
+      if (!reads.some((read) => read.scope.startsWith(scope)))
+        throw Error(`Missing actual SQL metadata evidence: ${scope}`)
     const events = reads.filter((read) => read.scope.startsWith('build:'))
     if (
       !events.some((read) => read.after > 0 && read.rows === 0) ||
@@ -382,7 +391,7 @@ export async function captureFrames(
         selector: 'body *',
       })
       const fontContexts = (await evaluate(
-        `Array.from(document.querySelectorAll('body *'),el=>({store:!!el.closest('[data-store-text]'),text:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(''),storedDescendants:Array.from(el.querySelectorAll('[data-store-text]')).map(n=>n.textContent).join('')}))`,
+        `Array.from(document.querySelectorAll('body *'),el=>({store:!!el.closest('[data-store-text]'),text:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(''),storedDescendants:el.closest('[data-store-text]')?el.textContent:Array.from(el.querySelectorAll('[data-store-text]')).map(n=>n.textContent).join('')}))`,
       )) as unknown as { store: boolean; text: string; storedDescendants: string }[]
       const fonts = new Set<string>()
       const dataFallbacks: { family: string; text: string }[] = []

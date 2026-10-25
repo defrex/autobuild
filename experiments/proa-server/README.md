@@ -188,3 +188,13 @@ A JSON verify report can attach stored frames with
 `frames: [{kind, rev, mediaType, caption?}]`. Only PNG, JPEG and WebP artifacts are
 served; `/frame` accepts a selected project/build and a report frame index,
 never a blob URL or arbitrary artifact reference.
+
+Dashboard discovery is one batched metadata query returning changed/new/deleted
+records, with durable event sequence checks independent of timestamps. Unchanged
+build facts are reused; only visible builds and their required ancestors read
+stream or pinned-config metadata. Closed stream records and pinned config at an
+unchanged build cursor are retained. Cold startup still reduces each build once
+to determine visibility. Metadata queries are included in capture's SQL evidence.
+Artifact misses use per-object single flight, so a slow download does not block
+unrelated cache hits. Row callouts show the shared three-row preview, retaining
+paragraph breaks and linking to the complete detail text.

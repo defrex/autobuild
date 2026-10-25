@@ -591,3 +591,34 @@ a.btn {
     grid-column: 1 / -1;
   }
 }
+
+.build-tokens {
+  margin: 0 0 8px;
+}
+.message-alert {
+  border: 1px solid var(--red);
+  background: var(--red-wash);
+  color: var(--red);
+  margin-top: 16px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.message-alert p {
+  margin: 0;
+  min-height: 1.5em;
+  white-space: pre-wrap;
+}
+.message-alert a {
+  color: inherit;
+}
+.full-question {
+  white-space: pre-wrap;
+}
+@media (max-width: 600px) {
+  .build-tokens,
+  [data-ceilings],
+  [data-child-counts],
+  .message-alert {
+    grid-column: 1 / -1;
+  }
+}

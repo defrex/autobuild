@@ -449,3 +449,35 @@ Chromium also reports descendant glyphs against containing blocks; the font
 probe checks the actual marked text separately and avoids duplicate aggregate
 rejections for textless wrappers. The logout proof now waits for complete page
 load before clicking sign-out, preserving strict network-error checks.
+
+## Review round 2: mature projects and dense-list parity
+
+A suffix-only event trace hid metadata amplification: each idle snapshot still
+looked up pinned config and every session stream for every historical build.
+Discovery now sends the known event cursors/metadata versions in one query and
+receives only new/changed/deleted records. Historical facts stay in the process
+index; visible rows and needed ancestors alone read stream/pinned metadata.
+Closed stream metadata is retained, open/new metadata remains independently live,
+and selected detail reads one build record. Metadata query/result-row evidence is
+now explicit beside event/chunk/blob evidence. A real-store test adds 509 completed
+hidden builds and 5,090 closed streams and checks warm polls perform no per-history
+reads. Cold startup still folds each build once; the cache is not durable state.
+
+The renderer must consume the projection as well as prove it: setup diagnostics,
+PR state/link, paused markers, review ceilings and integration progress now have
+rendered-HTML regression coverage. Escalations use the three-logical-row preview,
+preserve paragraph boundaries in a red-ruled ANSI callout and link to full detail.
+Artifact bytes retain bounded caching while per-object single flight replaces a
+global lock held across blob I/O. A deliberately stalled object test proves other
+misses and warm hits remain responsive without duplicate same-object fetches.
+
+Round 2's full gate passed. On isolated loopback Postgres/S3, the mature-project
+proof measured three warm polls at 62 ms and a live update at 27 ms; a final focused
+run measured 76/29 ms. These are measured local results, not remote RTT promises.
+Discovery still sends per-build cursor/version evidence and performs indexed tail
+checks; it avoids historical result transfers and per-history transactions rather
+than claiming constant total CPU/request size. The 24-frame matrix was opened in
+both grounds and widths: callout paragraphs/previews, restored PR state, wrapping,
+tree indentation, menu and detail remain readable. Final capture recorded 329
+reads including 260 metadata reads. Its logger now explicitly includes the
+Postgres module and capture fails if any expected metadata category is missing.
