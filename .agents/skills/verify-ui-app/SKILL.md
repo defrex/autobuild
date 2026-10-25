@@ -38,9 +38,9 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    identical to the recorded starting revision are inherited evidence; every
    difference against that revision must be authorized by the spec. A failed
    capture or unexplained difference fails, and this comparison never relaxes
-   visual criteria. Differences must be authorized by the spec. ANSI changes web
-   pixels and adds light/dark variants; terminal frames must remain identical
-   against this build's recorded starting revision. Never loosen comparison.
+   visual criteria. Terminal frame differences, like web differences, must each
+   be authorized by the spec against this build's recorded starting revision.
+   Never loosen comparison.
 5. Open **every PNG listed in frames.json**, including both grounds and both
    widths, with the image tool. Compare applicable reference views at 1440px
    and 390px. Check all generated checklist criteria: title and slug, current
