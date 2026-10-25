@@ -2,8 +2,17 @@ import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
+import { withCaptureSeed, type SeedEvidence } from './capture-seed'
+import type { BuildStore } from '../../../packages/core/src/store/types'
 import { build, project, root } from './verify'
-import { checkRoutes, checkFrameMatrix, frames, palette, probe } from './capture-cases'
+import {
+  checkRoutes,
+  checkFrameMatrix,
+  frames,
+  palette,
+  probe,
+  dataFontFallback,
+} from './capture-cases'
 
 interface Reply {
   result: { value: ReturnType<typeof probe> & boolean }
@@ -15,16 +24,20 @@ interface Reply {
 }
 
 export async function capture() {
+  return withCaptureSeed((seedEnv, seed, store) => captureSeeded(seedEnv, seed, store))
+}
+async function captureSeeded(
+  seedEnv: Record<string, string | undefined>,
+  seed: SeedEvidence,
+  store: BuildStore,
+) {
   checkRoutes(await Bun.file(join(project, 'src/routes.rs')).text())
-  const config = await Bun.file(join(project, 'proa.config.json')).json()
   const sources = await Array.fromAsync(
     new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
   )
   const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
     '\n',
   )
-  if (config.database.driver !== 'none' || /sqlx|postgres|DATABASE_URL|state\.data/i.test(source))
-    throw Error('Unsupported database capability; add a seed adapter; see tools/README.md')
   if (
     !source.includes('x-proa-dev-capability') ||
     !source.includes('ConnectInfo') ||
@@ -47,11 +60,12 @@ export async function capture() {
   const server = Bun.spawn([binary], {
     cwd: runtime,
     env: {
+      ...seedEnv,
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       PROA_HOST: '127.0.0.1',
       PORT: String(port),
-      RUST_LOG: 'info',
+      RUST_LOG: 'info,proa_server::data::reader=debug,proa_server::data::postgres=debug',
       PROA_AUTH_URL: `http://127.0.0.1:${port}`,
       GITHUB_CLIENT_ID: 'capture-id',
       GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
@@ -115,7 +129,39 @@ export async function capture() {
     if (!ready) throw Error('Server readiness timeout')
     for (const path of ['/health', '/readyz', '/sign-in', '/static/styles.css'])
       if (!(await fetch(origin + path)).ok) throw Error(`Response smoke failed: ${path}`)
-    return await captureFrames(origin, output, { capability, refusalOrigin })
+    const captured = await captureFrames(origin, output, { capability, refusalOrigin, seed, store })
+    const log = await Bun.file(join(output, 'server.log')).text()
+    const reads = log.split('\n').flatMap((line) => {
+      const match = line.replace(/\x1b\[[0-9;]*m/g, '').match(/suffix-read (\{.*\})/)
+      return match ? [JSON.parse(match[1]!)] : []
+    }) as { project: string; scope: string; after: number; rows: number }[]
+    for (const scope of [
+      'metadata:projects',
+      'metadata:build-discovery',
+      'metadata:streams:',
+      'metadata:artifact:',
+      'metadata:build-record:',
+    ])
+      if (!reads.some((read) => read.scope.startsWith(scope)))
+        throw Error(`Missing actual SQL metadata evidence: ${scope}`)
+    const events = reads.filter((read) => read.scope.startsWith('build:'))
+    if (
+      !events.some((read) => read.after > 0 && read.rows === 0) ||
+      !events.some((read) => read.after > 0 && read.rows > 0)
+    )
+      throw Error('Missing actual SQL suffix/idle evidence')
+    if (
+      !reads.some(
+        (read) => read.scope.startsWith('stream:') && read.after > 0 && read.rows === 0,
+      ) ||
+      !reads.some((read) => read.scope.startsWith('stream:') && read.after > 0 && read.rows > 0)
+    )
+      throw Error('Missing live transcript suffix evidence')
+    const blobs = reads.filter((read) => read.scope.startsWith('artifact:'))
+    const keys = blobs.map((read) => `${read.project}:${read.scope}`)
+    if (new Set(keys).size !== keys.length) throw Error('Immutable artifact downloaded repeatedly')
+    await Bun.write(join(output, 'sql-evidence.json'), JSON.stringify(reads, null, 2))
+    return captured
   } finally {
     stopServer()
     await Promise.all([server.exited, refusalServer.exited])
@@ -128,7 +174,7 @@ export async function capture() {
 export async function captureFrames(
   origin: string,
   output: string,
-  auth?: { capability: string; refusalOrigin: string },
+  auth?: { capability: string; refusalOrigin: string; seed?: SeedEvidence; store?: BuildStore },
 ) {
   checkFrameMatrix(frames)
   let browser: ReturnType<typeof Bun.spawn> | undefined
@@ -279,7 +325,7 @@ export async function captureFrames(
         source: `window.__captureFrame=${JSON.stringify(frame.id)};localStorage.setItem('proa-theme',${JSON.stringify(frame.theme)})`,
       })
       await send('Network.clearBrowserCookies')
-      if (auth && (frame.state === 'closed' || frame.state === 'open')) {
+      if (auth && !['sign-in', 'refused'].includes(frame.state)) {
         const issued = await fetch(`${origin}/auth/dev-session`, {
           method: 'POST',
           headers: { 'x-proa-dev-capability': auth.capability },
@@ -300,8 +346,21 @@ export async function captureFrames(
           })
         }
       }
+      const scenario = ['sign-in', 'refused'].includes(frame.state)
+        ? 'auth-public'
+        : frame.state === 'closed' || frame.state === 'open'
+          ? 'prepareHappyScenario'
+          : 'prepareScenario'
+      const projectId = auth?.seed?.producers.find((p) => p.producer === scenario)?.project
+      const detail = auth?.seed?.detail
+      const route =
+        frame.state === 'detail' ? `/builds/${detail?.slug ?? 'detail-case'}` : frame.route
+      const query =
+        projectId && !['sign-in', 'refused'].includes(frame.state)
+          ? `?${new URLSearchParams({ project: projectId })}`
+          : ''
       await send('Page.navigate', {
-        url: (frame.state === 'refused' && auth ? auth.refusalOrigin : origin) + frame.route,
+        url: (frame.state === 'refused' && auth ? auth.refusalOrigin : origin) + route + query,
       })
       let loaded = false
       for (let i = 0; i < 200; i++) {
@@ -319,6 +378,8 @@ export async function captureFrames(
       await evaluate(
         `document.documentElement.dataset.theme=${JSON.stringify(frame.theme)};Promise.all([document.fonts.load('16px "Atkinson Hyperlegible Next"'),document.fonts.load('16px "JetBrains Mono"')]).then(()=>document.fonts.ready)`,
       )
+      if (frame.state === 'detail')
+        await evaluate("document.querySelectorAll('details').forEach(node=>node.open=true)")
       if (frame.state === 'open')
         await evaluate("document.querySelector('#account-trigger').click()")
       const result = await evaluate(
@@ -329,14 +390,31 @@ export async function captureFrames(
         nodeId: doc.root.nodeId,
         selector: 'body *',
       })
+      const fontContexts = (await evaluate(
+        `Array.from(document.querySelectorAll('body *'),el=>({store:!!el.closest('[data-store-text]'),text:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(''),storedDescendants:el.closest('[data-store-text]')?el.textContent:Array.from(el.querySelectorAll('[data-store-text]')).map(n=>n.textContent).join('')}))`,
+      )) as unknown as { store: boolean; text: string; storedDescendants: string }[]
       const fonts = new Set<string>()
-      for (const nodeId of nodes.nodeIds) {
+      const dataFallbacks: { family: string; text: string }[] = []
+      for (const [index, nodeId] of nodes.nodeIds.entries()) {
         const usage = await send('CSS.getPlatformFontsForNode', { nodeId })
         for (const font of usage.fonts)
           if (font.glyphCount) {
             fonts.add(font.familyName)
-            if (!['Atkinson Hyperlegible Next', 'JetBrains Mono'].includes(font.familyName))
-              result.failures.push(`Rendered fallback face: ${font.familyName}`)
+            if (!['Atkinson Hyperlegible Next', 'JetBrains Mono'].includes(font.familyName)) {
+              const context = fontContexts[index]!
+              if (dataFontFallback(font.familyName, context.text, context.store))
+                dataFallbacks.push({ family: font.familyName, text: context.text })
+              // Chromium also reports child glyphs against their containing block.
+              // Every descendant is checked separately; this only avoids rejecting
+              // its duplicate aggregate when the wrapper paints no direct text.
+              else if (
+                context.text.trim() ||
+                !dataFontFallback(font.familyName, context.storedDescendants, true)
+              )
+                result.failures.push(
+                  `Rendered fallback face: ${font.familyName} (${context.store ? 'store' : 'interface'}: ${context.text.slice(0, 160)})`,
+                )
+            }
           }
       }
       if (!fonts.size || !result.textElements)
@@ -352,7 +430,18 @@ export async function captureFrames(
       const png = join(output, `${frame.id}.png`)
       const bytes = decodePng(shot.data)
       await Bun.write(png, bytes)
-      inventory.push({ ...frame, png, probe: result, fonts: [...fonts] })
+      inventory.push({
+        ...frame,
+        route: route + query,
+        scenario,
+        project: projectId,
+        build: frame.state === 'detail' ? detail?.slug : undefined,
+        seed: auth?.seed,
+        png,
+        probe: result,
+        fonts: [...fonts],
+        dataFallbacks,
+      })
       if (auth && frame.state === 'open') {
         const behavior = await evaluate(`(() => {
           const trigger = document.querySelector('#account-trigger');
@@ -389,7 +478,12 @@ export async function captureFrames(
       })
       await send('Page.navigate', { url: origin })
       for (let i = 0; i < 100; i++) {
-        if (await evaluate("Boolean(document.querySelector('[data-sign-out]'))")) break
+        if (
+          await evaluate(
+            "document.readyState==='complete' && Boolean(document.querySelector('[data-sign-out]'))",
+          )
+        )
+          break
         await Bun.sleep(50)
       }
       await evaluate(
@@ -403,11 +497,113 @@ export async function captureFrames(
       if (replay.status !== 307) throw Error('Logout did not revoke the copied session')
       if (errors.length) throw Error(errors.join('; '))
     }
+    if (auth?.seed && auth.store) {
+      const detail = auth.seed.detail
+      const path = `/builds/${detail.slug}?${new URLSearchParams({ project: detail.project })}`
+      const issued = await fetch(`${origin}/auth/dev-session`, {
+        method: 'POST',
+        headers: { 'x-proa-dev-capability': auth.capability },
+        redirect: 'manual',
+      })
+      for (const line of issued.headers.getSetCookie()) {
+        if (line.includes('Max-Age=0')) continue
+        const [pair] = line.split(';')
+        const at = pair!.indexOf('=')
+        await send('Network.setCookie', {
+          name: pair!.slice(0, at),
+          value: pair!.slice(at + 1),
+          url: origin,
+          httpOnly: true,
+          sameSite: 'Lax',
+        })
+      }
+      await send('Page.navigate', { url: origin + path })
+      for (let i = 0; i < 100; i++) {
+        if (await evaluate("Boolean(document.querySelector('[data-page=build-detail]'))")) break
+        await Bun.sleep(50)
+      }
+      await evaluate('window.__documentIdentity=document')
+      await auth.store.append(detail.slug, {
+        actor: { kind: 'agent', role: 'implement', session: 'detail-session' },
+        type: 'observation.recorded',
+        payload: { id: 'live-evidence', kind: 'followup', summary: 'Live append evidence' },
+      })
+      const started = Date.now()
+      let updated = false
+      for (let i = 0; i < 100; i++) {
+        if (
+          await evaluate(
+            "document.body.textContent.includes('live-evidence') && document===window.__documentIdentity",
+          )
+        ) {
+          updated = true
+          break
+        }
+        await Bun.sleep(50)
+      }
+      if (!updated || Date.now() - started > 5000)
+        throw Error('Live event did not appear within five seconds in the same document')
+      const stream = (await auth.store.listStreams({ kind: 'build', build: detail.slug })).find(
+        (stream) => stream.label === 'session:detail-session',
+      )
+      if (!stream) throw Error('Missing live transcript seed')
+      await evaluate("document.querySelectorAll('details').forEach(node=>node.open=true)")
+      await auth.store.appendStreamParts(stream.id, [
+        { type: 'text-delta', id: 'text', delta: ' Fresh transcript delta.' },
+      ])
+      let streamed = false
+      for (let i = 0; i < 100; i++) {
+        if (
+          await evaluate(
+            "document.body.textContent.includes('Fresh transcript delta.') && document===window.__documentIdentity && Boolean(document.querySelector('details[open]'))",
+          )
+        ) {
+          streamed = true
+          break
+        }
+        await Bun.sleep(50)
+      }
+      if (!streamed) throw Error('Live transcript suffix did not refresh in five seconds')
+      await Bun.sleep(4200)
+      await send('Emulation.setScriptExecutionDisabled', { value: true })
+      await send('Page.navigate', { url: origin + path })
+      await Bun.sleep(500)
+      const response = await fetch(origin + path, {
+        headers: {
+          cookie: issued.headers
+            .getSetCookie()
+            .map((line) => line.split(';')[0])
+            .join('; '),
+        },
+      })
+      if (!response.ok || !(await response.text()).includes('Stored spec'))
+        throw Error('No-JS detail snapshot missing')
+      const doc = await send('DOM.getDocument', { depth: -1 })
+      const source = (await send('DOM.getOuterHTML', { nodeId: doc.root.nodeId })) as unknown as {
+        outerHTML: string
+      }
+      if (!source.outerHTML.includes('Stored spec') || !source.outerHTML.includes('data-sessions'))
+        throw Error('No-JS detail DOM incomplete')
+      await send('Page.navigate', {
+        url: `${origin}/?${new URLSearchParams({ project: detail.project })}`,
+      })
+      await Bun.sleep(500)
+      const listDoc = await send('DOM.getDocument', { depth: -1 })
+      const listSource = (await send('DOM.getOuterHTML', {
+        nodeId: listDoc.root.nodeId,
+      })) as unknown as { outerHTML: string }
+      if (
+        !listSource.outerHTML.includes('root-node') ||
+        !listSource.outerHTML.includes('unreadable')
+      )
+        throw Error('No-JS dashboard DOM incomplete')
+      await send('Emulation.setScriptExecutionDisabled', { value: false })
+    }
     if (inventory.length !== frames.length) throw Error('Incomplete frame matrix')
     await Bun.write(join(output, 'inventory.json'), JSON.stringify(inventory, null, 2))
     await Bun.write(
       join(output, 'verify-report.md'),
-      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: none. Auth: server-issued loopback development sessions; real refused issuance, public sign-in, protected Builds and account menu.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
+      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: isolated loopback Postgres/S3, seeded before server startup through both scenario producers. ${auth?.seed ? JSON.stringify(auth.seed) : 'Fixture capture'}\n\nAuth: server-issued loopback development sessions; real refused issuance, public sign-in, protected Builds and account menu.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
     )
     return output
   } finally {
