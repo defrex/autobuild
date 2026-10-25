@@ -462,8 +462,15 @@ export class RepoViewStore implements BuildStore {
     await this.backing.releaseLease(slug, holder)
     this.invalidate()
   }
-  upsertOperatorPresence(repo: string, identity: OperatorIdentity): Promise<OperatorPresence> {
-    return this.backing.upsertOperatorPresence(repo, identity)
+  upsertOperatorPresence(
+    repo: string,
+    identity: OperatorIdentity,
+    signal?: AbortSignal,
+  ): Promise<OperatorPresence> {
+    return this.backing.upsertOperatorPresence(repo, identity, signal)
+  }
+  removeOperatorPresence(repo: string, id: string, signal?: AbortSignal): Promise<void> {
+    return this.backing.removeOperatorPresence(repo, id, signal)
   }
   listOperatorPresence(repo: string): Promise<OperatorPresence[]> {
     return this.backing.listOperatorPresence(repo)

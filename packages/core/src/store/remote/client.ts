@@ -3,7 +3,11 @@ import {
   operatorPresenceWireSchema,
   operatorPresenceListSchema,
 } from './protocol'
-import type { OperatorIdentity, OperatorPresence } from '../operator-presence'
+import {
+  operatorIdentitySchema,
+  type OperatorIdentity,
+  type OperatorPresence,
+} from '../operator-presence'
 import {
   clientIdentityError,
   classifyClient,
@@ -267,7 +271,7 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   private async raw(
-    method: 'GET' | 'POST' | 'PUT',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     body?: unknown,
     signal?: AbortSignal,
@@ -628,14 +632,29 @@ export class RemoteBuildStore implements BuildStore {
   async upsertOperatorPresence(
     repo: string,
     identity: OperatorIdentity,
+    signal?: AbortSignal,
   ): Promise<OperatorPresence> {
     return this.requestJson(
       'POST',
       `${this.repoPath(repo)}/operator-presence`,
       operatorPresenceWireSchema,
       operatorPresenceBodySchema.parse(identity),
-      AbortSignal.timeout(10_000),
+      signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
     )
+  }
+
+  async removeOperatorPresence(repo: string, id: string, signal?: AbortSignal): Promise<void> {
+    id = operatorIdentitySchema.shape.id.parse(id)
+    const response = await this.raw(
+      'DELETE',
+      `${this.repoPath(repo)}/operator-presence/${encodeURIComponent(id)}`,
+      undefined,
+      signal,
+    )
+    if (response.status === 404 || response.status === 405) return
+    if (!response.ok) throw await this.toError(response)
+    const result = okResponseSchema.strict().parse(await response.json())
+    if (!result.ok) throw new Error('operator withdrawal was not acknowledged')
   }
 
   async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {

@@ -100,7 +100,11 @@ start the tick-failure clock. Routine outcomes and self-healing failures stay si
 Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
 line. Re-arm only with `ab watch --operator --json --since <watch-cursor>`,
 using this standing watch's own cursor. Presence survives a re-arm gap of up to
-five minutes after its last heartbeat. `ab wait` neither heartbeats nor carries
+five minutes after its last heartbeat on routine timeout/count completion.
+Termination (SIGINT, SIGTERM, SIGHUP or stdout EPIPE) attempts withdrawal within
+about two seconds; re-arming with the cursor re-registers the same ID/start.
+Failed or unsupported withdrawal and SIGKILL fall back to TTL expiry.
+`ab wait` neither heartbeats nor carries
 registration identity. A separate unflagged diagnostic watch or wait must never
 replace the standing monitor or supply its resume cursor.
 Named diagnostic watches end when all named builds

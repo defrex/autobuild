@@ -106,6 +106,9 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     async upsertOperatorPresence(): Promise<never> {
       throw new SessionScopeError(scope, 'upsertOperatorPresence')
     },
+    async removeOperatorPresence(): Promise<never> {
+      throw new SessionScopeError(scope, 'removeOperatorPresence')
+    },
     async listOperatorPresence(): Promise<never> {
       throw new SessionScopeError(scope, 'listOperatorPresence')
     },

@@ -1,3 +1,4 @@
+import { untilDeadline } from './watch-lifetime'
 /**
  * Production BuildStore composition for CLI commands.
  *
@@ -99,6 +100,8 @@ export function openStoreForRepoState(
 }
 
 export interface SessionlessStoreOpts extends OpenStoreForRepoStateOpts {
+  /** Optional command-owned shutdown budget for handle closure. */
+  closeDeadline?: AbortSignal
   targetRepo: string
   exec: Exec
   /** Explicit --store; precedence is applied by repo-state.ts. */
@@ -170,6 +173,8 @@ export async function withAmbientReadStore<T>(
   try {
     return await use(context)
   } finally {
-    await context.store.close()
+    const closing = context.store.close()
+    if (opts.closeDeadline) await untilDeadline(closing, opts.closeDeadline)
+    else await closing
   }
 }

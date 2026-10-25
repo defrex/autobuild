@@ -1,9 +1,9 @@
 # Operator API v1
 
 The hosted service exposes the polling-oriented operator surface at
-`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **5**.
+`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **6**.
 Every request must send `X-Autobuild-Version`,
-`X-Autobuild-Protocol-Version: 5`, and `Authorization: Bearer …`. Identity is
+`X-Autobuild-Protocol-Version: 6`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
 
 Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one

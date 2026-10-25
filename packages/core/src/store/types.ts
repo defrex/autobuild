@@ -424,7 +424,12 @@ export interface BuildStore {
   ensureRepo(repo: string): Promise<RepositoryRecord>
   getRepo(repo: string): Promise<RepositoryRecord | null>
   /** Mutable advisory liveness. No event, lease or repository creation. */
-  upsertOperatorPresence(repo: string, identity: OperatorIdentity): Promise<OperatorPresence>
+  upsertOperatorPresence(
+    repo: string,
+    identity: OperatorIdentity,
+    signal?: AbortSignal,
+  ): Promise<OperatorPresence>
+  removeOperatorPresence(repo: string, id: string, signal?: AbortSignal): Promise<void>
   listOperatorPresence(repo: string): Promise<OperatorPresence[]>
   appendRepo<T extends RepositoryEventType>(
     repo: string,

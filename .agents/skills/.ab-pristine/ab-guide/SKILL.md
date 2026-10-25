@@ -2306,9 +2306,12 @@ unflagged diagnostic watches and waits must not replace the monitor or its curso
 `--operator` is advisory and permits multiple registrations. It rejects named
 slugs, even with `--repository`, and any ambient build or scoped session. Heartbeats
 run every 30 seconds independently of polling; orderly exits renew once more.
-Presence expires five minutes after the last successful heartbeat, without any
-unregister on exit. Reusing its flagged watch cursor preserves the registration
-ID and original start time across re-arms. Unflagged resumes remain read-only.
+Presence expires five minutes after the last successful heartbeat. SIGINT,
+SIGTERM, SIGHUP and stdout EPIPE attempt one withdrawal within about two seconds,
+after cancelling and draining pending heartbeats. Failures report on stderr and
+fall back to TTL expiry; an unsupported remote route falls back silently. SIGKILL
+still relies on TTL expiry. Timeout/count completion keeps presence for re-arming. Reusing its flagged watch cursor preserves the registration
+ID and original start time across re-arms, re-registering after withdrawal. Unflagged resumes remain read-only.
 Repository status lists live registrations with ID, host, PID, start, heartbeat
 and heartbeat age, or an empty list. Human status prints one operator summary.
 MCP registration and dashboard presence are deferred.

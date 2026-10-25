@@ -285,6 +285,21 @@ describe('hosted store service', () => {
     expect(response.status).toBe(200)
     expect(await backing.listOperatorPresence(repo)).toHaveLength(1)
     expect(await backing.getRepo(repo)).toBeNull()
+    await backing.upsertOperatorPresence(repo, {
+      id: 'two',
+      host: 'host',
+      pid: 2,
+      startedAt: clock().toISOString(),
+    })
+    for (const id of ['one', 'one', 'absent']) {
+      const removed = await service.fetch(
+        new Request(`${path}/${id}`, { method: 'DELETE', headers: machineHeaders }),
+      )
+      expect(removed.status).toBe(200)
+      expect(await removed.json()).toEqual({ ok: true })
+    }
+    expect((await backing.listOperatorPresence(repo)).map((row) => row.id)).toEqual(['two'])
+    expect(await backing.getRepo(repo)).toBeNull()
   })
 
   test('GET /repos/{repo}/state-events classifies as a store route and reaches the repo gate', async () => {
