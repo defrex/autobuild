@@ -493,3 +493,29 @@ development browser sessions and unchanged CLI connection functions, including
 hosted policy publication, cross-server credential use, no-JavaScript decisions,
 Origin/CSRF refusals, restart, cancellation and disconnect. These commands run
 inside the maintained experiment gate; they do not use production credentials.
+
+## MCP evidence
+
+`bun tools/mcp-fixtures.ts --write` explicitly regenerates the offline corpus
+from the actual TypeScript MCP endpoint, SDK and hosted operator service. Format
+the regenerated JSON with `bunx biome format --write fixtures/mcp-corpus.json`. The
+normal invocation fails on drift. The corpus preserves SDK descriptors separately
+from original execution schemas: the SDK advertises empty object schemas for
+some union tools while still validating their original Zod inputs.
+
+`bun tools/mcp-integration.ts` starts an isolated migrated PostgreSQL database,
+S3 emulator and normal Rust server. It exercises discovery, registration,
+server-issued development browser admission, consent, S256 exchange, the real
+SDK transport, every advertised tool, restart persistence, refresh races and
+allowlist revocation. Set `CARGO_TARGET_DIR` to an external verification cache
+when running it independently. The normal verify gate includes this suite.
+
+`bun tools/mcp-agent-proof.ts` is a separate explicit command that uses the
+installed authenticated Claude CLI and may incur provider charges. It loads the
+installed operator skill, creates a real OAuth grant and private HTTP MCP config,
+and allows only this isolated deployment's MCP tools. It requires successful
+build listing/detail, escalation answer and ticket creation, plus independent
+TypeScript event-parser/reducer and ticket readback. Credential files are removed
+in `finally`; redacted reports live under `.ab/implement/mcp-agent-proof/`. Deposit
+those reports through the phase CLI; never attach the private config or raw logs.
+Routine verification never launches this model proof.

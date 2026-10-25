@@ -5,6 +5,7 @@ use url::Url;
 #[derive(Clone)]
 pub struct AuthConfig {
     pub origin: Url,
+    pub mcp_resource: Url,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub secret: String,
@@ -143,11 +144,30 @@ impl Config {
                 "non-loopback requires complete HTTPS auth"
             );
         }
+        let mcp_resource = Url::parse(
+            &get("AB_WEB_MCP_RESOURCE").unwrap_or_else(|| origin.join("/mcp").unwrap().to_string()),
+        )?;
+        let loopback_resource = mcp_resource.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        // An unconfigured loopback preview cannot issue browser identities or OAuth grants.
+        let preview_only = host.is_loopback() && !real && get("AB_WEB_MCP_RESOURCE").is_none();
+        anyhow::ensure!(matches!(mcp_resource.scheme(), "http" | "https")
+            && mcp_resource.host_str().is_some()
+            && mcp_resource.username().is_empty() && mcp_resource.password().is_none()
+            && mcp_resource.fragment().is_none()
+            && (mcp_resource.scheme() == "https" || (dev.is_some() && loopback_resource) || preview_only),
+            "AB_WEB_MCP_RESOURCE requires an absolute HTTPS URL (HTTP requires explicit loopback development)");
         let secure = !host.is_loopback() || origin.scheme() == "https";
         Ok(Self {
             address,
             auth: AuthConfig {
                 origin,
+                mcp_resource,
                 client_id,
                 client_secret,
                 secret: secret.unwrap_or_else(crate::auth::random),
@@ -226,5 +246,29 @@ mod tests {
         assert!(parse(&[("PROA_AUTH_URL", "http://127.0.0.1:3001")]).is_err());
         assert!(parse(&[("PROA_AUTH_URL", "http://user:pass@127.0.0.1:3000")]).is_err());
         assert!(parse(&[("PROA_DEV_AUTH", "yes")]).is_err());
+    }
+    #[test]
+    fn mcp_resource_configuration_rejects_unsafe_targets() {
+        assert_eq!(
+            parse(&[]).unwrap().auth.mcp_resource.as_str(),
+            "http://127.0.0.1:3000/mcp"
+        );
+        for resource in [
+            "/mcp",
+            "file:///mcp",
+            "https://user:pass@resource.test/mcp",
+            "https://resource.test/mcp#fragment",
+            "http://127.0.0.1:3000/mcp",
+        ] {
+            assert!(parse(&[("AB_WEB_MCP_RESOURCE", resource)]).is_err());
+        }
+        assert_eq!(
+            parse(&[("AB_WEB_MCP_RESOURCE", "https://resource.test/mcp")])
+                .unwrap()
+                .auth
+                .mcp_resource
+                .as_str(),
+            "https://resource.test/mcp"
+        );
     }
 }
