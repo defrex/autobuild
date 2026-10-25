@@ -126,3 +126,58 @@ describe('effective build config verification policy', () => {
     ).toBe(true)
   })
 })
+
+describe('effective config stage pinning', () => {
+  test.each(['[["a", "b"], "c"]', '[["a"], "b", "c"]', '["a", "b", "c"]', '[]'])(
+    'preserves normalized stages through repeated deposits: %s',
+    (steps) => {
+      const config = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+check = "true"
+[verify]
+steps = ${steps}
+afterReconcile = false
+${steps === '[]' ? '' : ['a', 'b', 'c'].map((name) => `[verify.${name}]\nkind = "check"\ncommand = "check"\nfailFast = true\nafterReconcile = true\nalways = true\n`).join('')}
+`)
+      let current = config
+      for (let i = 0; i < 3; i++) {
+        const content = effectiveBuildConfigContent(current)
+        expect(JSON.parse(content).verify).not.toHaveProperty('stages')
+        expect(JSON.parse(content).verify.steps).toEqual(
+          config.verify.stages ?? config.verify.steps,
+        )
+        current = parseEffectiveBuildConfig({
+          ...artifact({}),
+          content: new TextEncoder().encode(content),
+        })
+        expect(current).toEqual(config)
+        expect(current.verify.steps).toEqual(steps === '[]' ? [] : ['a', 'b', 'c'])
+        if (!steps.includes('[[')) expect(current.verify).not.toHaveProperty('stages')
+        // A deployment-only redeposit must keep the pipeline pin intact.
+        current = { ...current, policy: { ...current.policy, stallRounds: 9 } }
+        expect(buildOwnedSectionsDiffer(config, current)).toBe(false)
+        current = parseEffectiveBuildConfig({
+          ...artifact({}),
+          content: new TextEncoder().encode(effectiveBuildConfigContent(current)),
+        })
+        expect(current.policy.stallRounds).toBe(9)
+        expect(current.verify).toEqual(config.verify)
+        current = { ...current, policy: config.policy }
+      }
+    },
+  )
+
+  test('legacy flattened deposits stay flat when reused', () => {
+    const legacy = JSON.parse(effectiveBuildConfigContent(parseConfig(BASE)))
+    legacy.verify.steps = ['unit']
+    const parsed = parseEffectiveBuildConfig({
+      ...artifact({}),
+      content: new TextEncoder().encode(JSON.stringify(legacy)),
+    })
+    expect(parsed.verify).not.toHaveProperty('stages')
+    expect(JSON.parse(effectiveBuildConfigContent(parsed)).verify.steps).toEqual(['unit'])
+  })
+})
