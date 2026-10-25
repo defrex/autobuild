@@ -213,7 +213,10 @@ export const DOCUMENTATION_RELOAD_FALLBACK = {
   'tickets.doneState': 'hot',
 } as const
 export function reloadBehavior(path: string): string {
-  const parts = path.replaceAll('[]', '').split('.')
+  const parts = path
+    .replace(/^merge(?=\[|\.|$)/, 'landing')
+    .replaceAll('[]', '')
+    .split('.')
   let classification: unknown = CONFIG_RELOAD_CLASSIFICATION
   for (const part of parts) {
     if (typeof classification === 'string') break
@@ -309,6 +312,7 @@ export function schemaFields(
 export function configurationReference(): Record<string, ReferenceField[]> {
   const regions: Record<string, ReferenceField[]> = { root: [] }
   for (const [key, schema] of Object.entries(configRootSchema.shape)) {
+    if (key === 'landing') continue // Deprecated spelling is documented with the canonical merge rules.
     const fields = schemaFields(schema, key)
     const type = fields[0]!.type
     if (!type.includes('table')) regions.root!.push(...fields)

@@ -10,7 +10,7 @@ order: 11
 
 ## Responsibility
 
-The dispatcher claims eligible tickets, starts and observes build runners, settles publication and landing, and recovers durable work. Local and hosted arrangements run the same kernel. Your operator agent acts through the CLI or MCP; Autobuild never starts it.
+The dispatcher claims eligible tickets, starts and observes build runners, settles publication and merge, and recovers durable work. Local and hosted arrangements run the same kernel. Your operator agent acts through the CLI or MCP; Autobuild never starts it.
 
 ## Shipped arrangements
 
@@ -38,7 +38,7 @@ The host needs:
 - runtime authentication and forge credentials ([Forges](forges.md) covers precedence)
 - credentials for a remote Store or workspace provisioning, if used
 
-A service manager may own the process under an identity with the same configuration and credentials. To restart, stop gracefully and let drain and suspension finish; work resumes from durable state. A restart never answers escalations or grants landing consent. See [the dispatcher lifecycle](dispatcher.md).
+A service manager may own the process under an identity with the same configuration and credentials. To restart, stop gracefully and let drain and suspension finish; work resumes from durable state. A restart never answers escalations or grants merge consent. See [the dispatcher lifecycle](dispatcher.md).
 
 ### Hosted scheduled dispatcher
 

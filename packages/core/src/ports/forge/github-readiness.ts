@@ -404,8 +404,8 @@ export async function inspectGitHubReadiness(opts: {
         'root-freshness',
         rootFence ? 'pass' : 'fail',
         rootFence
-          ? `Root ${opts.input.rootBranch} enforces strict nonempty checks for all actors: fenced landing.`
-          : `Root ${opts.input.rootBranch} does not enforce strict nonempty checks for all actors: best-effort landing.`,
+          ? `Root ${opts.input.rootBranch} enforces strict nonempty checks for all actors: fenced merge.`
+          : `Root ${opts.input.rootBranch} does not enforce strict nonempty checks for all actors: best-effort merge.`,
       )
   } catch {
     /* No vacuous success on incomplete target or policy reads. */

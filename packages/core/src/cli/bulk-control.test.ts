@@ -525,7 +525,7 @@ describe('bulk per-build writes are compare-and-set', () => {
     await inner.close()
   })
 
-  test('a competing kernel acknowledgement stops the pause from landing', async () => {
+  test('a competing kernel acknowledgement stops the pause from merge', async () => {
     const paused = await makeStore({ 'a-running': 'pausing' })
     const pausedStore = withRacingAppend(paused, 'a-running', {
       actor: KERNEL,
@@ -569,7 +569,7 @@ describe('bulk per-build writes are compare-and-set', () => {
     await done.close()
   })
 
-  test('a competing abort intent wins the CAS race and no inert pause lands', async () => {
+  test('a competing abort intent wins the CAS race and no inert pause merges', async () => {
     const inner = await makeStore({ 'a-running': 'running' })
     const store = withRacingAppend(inner, 'a-running', {
       actor: { kind: 'human', user: 'other-dashboard' },
@@ -595,7 +595,7 @@ describe('bulk per-build writes are compare-and-set', () => {
       payload: {
         id: 'obs-race',
         kind: 'followup',
-        summary: 'An unrelated fact landed mid-walk',
+        summary: 'An unrelated fact merged mid-walk',
       },
     })
 
@@ -767,7 +767,7 @@ describe('a walk that fails partway', () => {
     await inner.close()
   })
 
-  test('a failure on the intake write still reports the hold it already landed', async () => {
+  test('a failure on the intake write still reports the hold it already merged', async () => {
     const inner = await makeStore({ 'a-running': 'running' })
     const store = withFailingRepoAppend(inner, 'dispatcher.intake-set')
 
@@ -819,7 +819,7 @@ describe('bulkFailureLines', () => {
     ])
   })
 
-  test('drops the empty sections and says so when neither fact landed', () => {
+  test('drops the empty sections and says so when neither fact merged', () => {
     const error = new BulkWalkError(new Error('store write rejected'), {
       direction: 'resume',
       paused: false,
@@ -835,7 +835,7 @@ describe('bulkFailureLines', () => {
     ])
   })
 
-  test('reports a landed hold with an intake write that never followed', () => {
+  test('reports a merged hold with an intake write that never followed', () => {
     // The prefix the ordering exists to produce: an operator reading this knows
     // no queued build can start, even though the walk did not finish.
     const error = new BulkWalkError(new Error('store write rejected'), {

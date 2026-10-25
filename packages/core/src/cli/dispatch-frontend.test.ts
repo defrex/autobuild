@@ -1666,7 +1666,7 @@ async function seedSessionViewHarness(
   }
 }
 
-test('land key records consent for a ready node using a fresh ticket-source read', async () => {
+test('merge key records consent for a ready node using a fresh ticket-source read', async () => {
   let reads = 0
   const tickets = new FakeTicketSource()
   const h = await seedSessionViewHarness({
@@ -1734,7 +1734,7 @@ test('land key records consent for a ready node using a fresh ticket-source read
     h.press({ type: 'text', text: 'l' })
     await waitFor(
       async () => (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
-      'node land request',
+      'node merge request',
     )
     expect(reads).toBeGreaterThan(0)
   } finally {

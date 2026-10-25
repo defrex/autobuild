@@ -29,7 +29,7 @@ Skills guide the agents that plan, implement, review and operate Autobuild, one 
 | `ab-code-review` | Review the implementation against the contract independently |
 | `ab-finalize` | Write the pull request description after verification |
 | `ab-reconcile` | Resolve conflicts in a kernel-prepared replay onto a refreshed base |
-| `ab-operate` | External operator agent: operate the builds the repository's dispatcher dispatches, adopt new work, answer escalations and control landing |
+| `ab-operate` | External operator agent: operate the builds the repository's dispatcher dispatches, adopt new work, answer escalations and control merge |
 | `ab-tickets` | Read, create, groom and update tickets through the tracker interface |
 | `ab-harvest` | Turn claimed observations into ticket proposals |
 | `ab-harvest-review` | Review those proposals independently |

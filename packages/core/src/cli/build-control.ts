@@ -165,7 +165,7 @@ async function appendCommand(
   switch (command) {
     case 'hold':
     case 'land':
-      throw new Error('Landing commands require compare-and-append authorization')
+      throw new Error('Merge commands require compare-and-append authorization')
     case 'pause':
       event = await store.append(slug, {
         actor,
@@ -366,7 +366,7 @@ export function decideRevise(
   if (open.length === 0) {
     const paused =
       state.status === 'paused'
-        ? ` If a revision already landed, the build remains paused; run ab resume ${slug}.`
+        ? ` If a revision already merged, the build remains paused; run ab resume ${slug}.`
         : ''
     return {
       kind: 'refuse',
@@ -541,7 +541,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         if (opts.action.kind === 'land') {
           if (!landPreconditions(current, facts.log.restack))
             throw new Error(
-              'Landing is not ready; wait for current-base verification and finalize before running ab land',
+              'Merge is not ready; wait for current-base verification and finalize before running ab merge',
             )
           if (current.kind === 'node') {
             if (!opts.ticketSource)
@@ -557,7 +557,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
               !observed.contributions.length
             )
               throw new Error(
-                'Node is incomplete; wait for its children and verification before running ab land',
+                'Node is incomplete; wait for its children and verification before running ab merge',
               )
           }
         }
@@ -576,13 +576,13 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
               })
         if (event) return { kind: 'command', slug: opts.slug, command: opts.action.kind, event }
       }
-      throw new Error('Landing command was not recorded')
+      throw new Error('Merge command was not recorded')
     }
     case 'auto-merge-on':
     case 'auto-merge-off':
     case 'toggle-auto-merge':
       throw new Error(
-        'Auto-merge controls are retired; use ab hold or ab land and [[landing]] policy',
+        'Auto-merge controls are retired; use ab hold or ab merge and [[merge]] policy',
       )
 
     case 'dashboard-pause': {

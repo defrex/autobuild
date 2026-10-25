@@ -34,8 +34,8 @@ Check what upgrade committed, then review and commit the version bump.
 
 Upgrade keeps your `autobuild.toml`; supported migrations may amend it.
 
-- **Explicit landing policy:** a valid policy stays byte-for-byte unchanged.
-- **Absent landing policy:** upgrade reads the target repository's journal. Legacy ON becomes leaf auto; OFF or no fact becomes leaf consent; nodes get consent either way. If the journal is unavailable, restore access or configure policy deliberately, then retry.
+- **Explicit merge policy:** a valid `merge` array stays byte-for-byte unchanged. A deprecated `landing` array is renamed to `merge`, preserving rule values, order and comments without reading the legacy journal. Declaring both keys is an error.
+- **Absent merge policy:** upgrade reads the target repository's journal. Legacy ON becomes leaf auto; OFF or no fact becomes leaf consent; nodes get consent either way. If the journal is unavailable, restore access or configure policy deliberately, then retry.
 
 Skills [merge three ways](skills.md#how-upgrades-preserve-customization), with validated agent resolutions for overlapping edits. An unresolved conflict leaves that file untouched while others advance. Read the [upgrade report](skills.md#how-upgrades-preserve-customization) and diff even after exit zero: content conflicts don't fail the command. A conflict-free upgrade makes a narrowly scoped local commit. With `--no-commit`, conflicts or unsafe Git state, edits stay uncommitted with an explanation; resolve the reported files and commit.
 
@@ -52,4 +52,4 @@ bun ab dispatch
 - **Old behavior.** Drain old work before switching if it must keep the old execution behavior; no claim-version switch preserves it.
 - **Hosted services.** Upgrade the hosted service before its connected projects, within its compatibility window.
 
-Read [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or landing policy.
+Read [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or merge policy.

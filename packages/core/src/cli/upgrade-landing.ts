@@ -20,44 +20,84 @@ export async function migrateLandingPolicy(opts: {
     source = await readFile(path, 'utf8')
   } catch {
     throw new Error(
-      `Landing policy migration requires readable ${path}; restore its configuration and retry ab upgrade`,
+      `Merge policy migration requires readable ${path}; restore its configuration and retry ab upgrade`,
     )
   }
   // Parsing proves that the explicit array is valid; retain its exact bytes.
-  parseConfig(source, path)
+  parseConfig(source, path, () => {})
   const parsed = Bun.TOML.parse(source) as Record<string, unknown>
-  if (Object.hasOwn(parsed, 'landing')) return { changed: false }
-  let enabled = false
-  try {
-    const paths = await resolveRepoState({ targetRepo: opts.targetRepo, exec: opts.exec })
-    let journalAbsent = false
-    if (!opts.openStore && !isRemoteStoreRef(paths.storeRef)) {
-      try {
-        await access(join(paths.storeRef, 'autobuild.sqlite'))
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        journalAbsent = true
-      }
-    }
-    if (!journalAbsent) {
-      const context = await openSessionlessStore({
-        ...opts,
-        env: { ...(opts.env ?? process.env), AB_STORE: undefined },
+  if (Object.hasOwn(parsed, 'merge')) return { changed: false }
+  const explicit = Object.hasOwn(parsed, 'landing')
+  let result: string
+  let enabled: boolean | undefined
+  if (explicit) {
+    let root = true
+    result = source
+      .split('\n')
+      .map((line) => {
+        const header = /^\s*\[/.test(line)
+        const renamed = line.replace(
+          /^(\s*\[\[\s*)(?:landing|"landing"|'landing')(\s*\]\])/,
+          '$1merge$2',
+        )
+        if (header) root = false
+        return root
+          ? renamed.replace(/^(\s*)(?:landing|"landing"|'landing')(\s*=)/, '$1merge$2')
+          : renamed
       })
-      try {
-        const facts = await readRepositoryFacts(context.store, context.repo)
-        enabled = facts.value.autoMerge.latest?.enabled ?? false
-      } finally {
-        await context.store.close()
-      }
+      .join('\n')
+    const expected: Record<string, unknown> = { ...parsed, merge: parsed.landing }
+    delete expected.landing
+    const manualEdit = () =>
+      new Error(
+        `Cannot safely rename the deprecated config key in ${path}; manually rename the root landing key and [[landing]] headers to merge, preserving their values, then retry ab upgrade`,
+      )
+    let actual: unknown
+    try {
+      actual = Bun.TOML.parse(result)
+    } catch {
+      throw manualEdit()
     }
-  } catch (error) {
-    throw new Error(
-      `Cannot read the target repository's legacy auto-merge journal; restore store access and retry ab upgrade, or configure explicit [[landing]] rules (landing = [] selects the new defaults): ${error instanceof Error ? error.message : String(error)}`,
-    )
+    const canonical = (value: unknown): string =>
+      JSON.stringify(value, (_key, item) =>
+        item && typeof item === 'object' && !Array.isArray(item)
+          ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+          : item,
+      )
+    if (canonical(actual) !== canonical(expected)) throw manualEdit()
+  } else {
+    enabled = false
+    try {
+      const paths = await resolveRepoState({ targetRepo: opts.targetRepo, exec: opts.exec })
+      let journalAbsent = false
+      if (!opts.openStore && !isRemoteStoreRef(paths.storeRef)) {
+        try {
+          await access(join(paths.storeRef, 'autobuild.sqlite'))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          journalAbsent = true
+        }
+      }
+      if (!journalAbsent) {
+        const context = await openSessionlessStore({
+          ...opts,
+          env: { ...(opts.env ?? process.env), AB_STORE: undefined },
+        })
+        try {
+          const facts = await readRepositoryFacts(context.store, context.repo)
+          enabled = facts.value.autoMerge.latest?.enabled ?? false
+        } finally {
+          await context.store.close()
+        }
+      }
+    } catch (error) {
+      throw new Error(
+        `Cannot read the target repository's legacy auto-merge journal; restore store access and retry ab upgrade, or configure explicit [[merge]] rules (merge = [] selects the new defaults): ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    result = `${source.replace(/\n?$/, '\n')}\n# Migrated from the durable auto-merge default. First matching rule wins.\n[[merge]]\nfrom = "leaf"\nmode = "${enabled ? 'auto' : 'consent'}"\n\n[[merge]]\nfrom = "node"\nmode = "consent"\n`
   }
-  const result = `${source.replace(/\n?$/, '\n')}\n# Migrated from the durable auto-merge default. First matching rule wins.\n[[landing]]\nfrom = "leaf"\nmode = "${enabled ? 'auto' : 'consent'}"\n\n[[landing]]\nfrom = "node"\nmode = "consent"\n`
-  parseConfig(result, path)
+  parseConfig(result, path, () => {})
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
     await writeFile(temporary, result)

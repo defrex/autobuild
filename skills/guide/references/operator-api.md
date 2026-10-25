@@ -163,10 +163,10 @@ Each kernel `spec.revised` records the exact artifact and operator identity
 Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
 The node recollects and verifies the new revision, including on the same head
 and parent after a failed cycle. Earlier cycles remain historical evidence
-and cannot block or authorize landing under the replacement. Children keep
+and cannot block or authorize merge under the replacement. Children keep
 their specs, claims and targets; contributions are not restarted.
 Active verification/reconcile or writer work, restack/reparent work, pause,
-pending controls, landing intent and ended PRs refuse the no-escalation path.
+pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
@@ -273,7 +273,7 @@ The default watch reports actionable conditions only:
 
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
   conflicted `restack.replayed` events. `build.consent-ready` is the single
-  signal for a ready consent or held landing, including first repository-wide
+  signal for a ready consent or held merge, including first repository-wide
   discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
   Unready and stale candidates stay silent. `build.merge-decision` remains for
   current actionable merge-gate deferrals and unsafe forge outcomes, once per
@@ -318,7 +318,7 @@ learn their outcomes from status reconciliation at exit.
 
 `ab wait --for attention` is build-only and uses the same build conditions:
 current failed node verification, an open escalation, janitor failure attention,
-consent readiness, landing/conflict attention or a merge decision. Current failed
+consent readiness, merge/conflict attention or a merge decision. Current failed
 verification satisfies attention even before its notification is written. Existing conditions return immediately,
 even with `--since`; live and backlog matches ignore routine outcomes and
 self-healing failures. A merge match uses the watch observation with
@@ -335,9 +335,9 @@ Metadata-only patches are accepted. Target validation and demotion guards apply
 to CLI, HTTP and MCP alike; unsupported sources refuse even explicit defaults
 or clears before changing other fields. Dispatch routing is unchanged.
 
-Landing controls use `land` and `hold` with acknowledged durable state. Land
-requires readiness and survives restacks; hold persists until land. Repository
-auto-merge settings are retired; configure ordered `[[landing]]` rules.
+HTTP merge controls retain the wire actions `land` and `hold` with acknowledged durable state. Merge
+requires readiness and survives restacks; hold persists until merge. Repository
+auto-merge settings are retired; configure ordered `[[merge]]` rules.
 
 Default attention includes `build.janitor-failing` and
 `dispatcher.forge-persistent`. Raw `dispatcher.forge-degraded` and

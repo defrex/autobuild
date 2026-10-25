@@ -40,13 +40,13 @@ the diff and not to decide applicability again.
 4. Append criterion-by-criterion visual observations to the generated report.
    In its distinct **Headline visual verdict** section, explicitly record pass
    or fail after confirming the headline shows intake and Harvest enabled,
-   per-build `landing enabled` and `landing requested` tokens, and selected
-   `l land` / `o hold` controls in the key legend; a running Harvest with a
+   per-build `merge enabled` and `merge requested` tokens, and selected
+   `l merge` / `o hold` controls in the key legend; a running Harvest with a
    completed and current step; five plausible builds spanning plan, implement, code-review, verify, and a merged PR; a
    review round above one; and no blocked/paused/held state, failure text,
    fixture-only evidence, Unicode stress sample, row-count preview, or
    truncation marker. The retired repository-wide auto-merge switch must be
-   absent; do not require it as evidence of landing authorization. Then retain
+   absent; do not require it as evidence of merge authorization. Then retain
    the verification-fixture observations: each image opened and non-empty; rows/status/progress/separators do not overlap;
    the Harvest row is legible; both mixed frames persistently show
    `repository PAUSED` and the `CAP-QUEUED` row as yellow `(held)` while keeping

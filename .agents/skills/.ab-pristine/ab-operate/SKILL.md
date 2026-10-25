@@ -1,6 +1,6 @@
 ---
 name: ab-operate
-description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control landing consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or from an external connected agent using the operator tool registry.
+description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control merge consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or from an external connected agent using the operator tool registry.
 ---
 
 # Operating the repository
@@ -214,7 +214,7 @@ Read events with a cursor or a small `--events` count; logs are long.
   resolves with a revised spec; `--revise-spec-from-ticket` imports an amended ticket.
   Idle collecting or verification-failed nodes need no escalation and recollect
   for verification on the same head; children and contributions remain intact.
-  Active work, pause, pending controls and landing intent refuse revision. Leaves
+  Active work, pause, pending controls and merge intent refuse revision. Leaves
   require an escalation and restart from plan. Run `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
@@ -224,22 +224,22 @@ Read events with a cursor or a small `--events` count; logs are long.
   check-only verify), pause still takes effect at the next boundary.
 - `ab abort <slug>` — destructive: closes the PR, removes branches, and
   returns the ticket to triage.
-- `ab hold <slug>` — persistently hold a landing and revoke earlier consent.
-- `ab land <slug>` — consent to a ready landing and clear its hold. Consent
+- `ab hold <slug>` — persistently hold a merge and revoke earlier consent.
+- `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
   survives restacks and verification; use hold to withdraw it when work changes.
   Read the matched policy, readiness, acknowledged command and gate deferral in
   build status before acting. Work the consent queue by checking completeness
-  and current verification, then issuing land for the chosen landing. A land
+  and current verification, then issuing merge for the chosen merge. A merge
   acknowledgement accepts consent; it never promises that gates passed.
-- Configure ordered `[[landing]]` rules for project policy through ab-guide.
+- Configure ordered `[[merge]]` rules for project policy through ab-guide.
   Repository auto-merge defaults and per-build auto-merge toggles are retired.
 
 ### Tickets
 
 For feature sets you file yourself, consult the shared
 [destination choice guidance](../ab-guide/references/integration-tree.md#choosing-a-destination):
-explicitly choose root or a node, evaluate the repository's effective landing
-policy, and explain the landing flow to the human. Ask when intent is unclear.
+explicitly choose root or a node, evaluate the repository's effective merge
+policy, and explain the merge flow to the human. Ask when intent is unclear.
 
 `ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
 move tickets; the `ab-tickets` skill covers the tracker's details. Moving a
@@ -332,7 +332,7 @@ Treat every default-watch record as a call to act:
 - `integration.verification-failed`: inspect the failed steps, verified head and parent, then recheck current status. If the node still needs that repair, file a repair child targeting it. Each current failed cycle reports once; recovery does not backfill superseded failures. The node may have advanced after notification.
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
-- `build.consent-ready`: inspect the one consent queue, then land or hold the
+- `build.consent-ready`: inspect the one consent queue, then merge or hold the
   selected candidate under the human's policy. Unready or stale candidates
   do not produce this observation.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
@@ -439,33 +439,33 @@ its integration build collects child contributions on its recorded branch.
 A target is the destination of a contribution. `ab ticket tree --json` (MCP
 `tickets.tree`) shows exhaustive source metadata, including completed tickets
 and empty nodes. A claimed build freezes its effective target; use build status
-or queue entries for landing ancestry after a source ticket changes.
+or queue entries for merge ancestry after a source ticket changes.
 
-Start with `ab landings --json` (MCP `landings.list`). This is the one queue of
-ready landings needing a decision: consent-policy candidates and held ready
+Start with `ab merges --json` (MCP `merges.list`). This is the one queue of
+ready merges needing a decision: consent-policy candidates and held ready
 candidates. Entries include the target, branch preview, candidate head/parent,
 verification receipts and node children/completeness. Unknown completeness is
 not zero children. A changed head or parent must regain current verification;
 unfinished or automatically authorized candidates do not ask for attention.
 
-Select a queue build in the terminal and use `l land` or `o hold`, or run
-`ab land <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `land`
-or `hold`. Hold is available before readiness and suppresses automatic landing.
-Land rechecks readiness and live node completeness, so act on failures by
+Select a queue build in the terminal and use `l merge` or `o hold`, or run
+`ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
+or `hold`. Hold is available before readiness and suppresses automatic merge.
+Merge rechecks readiness and live node completeness, so act on failures by
 refreshing the facts. Open children keep a node collecting. When integration
-verification fails, file a repair child targeting that node and let it land
+verification fails, file a repair child targeting that node and let it merge
 before retrying the node cycle.
 
 Watch for decisions and conflicts with `ab watch --operator --json`; save its opaque cursor
 and resume with `ab watch --operator --since <watch-cursor> --json`. Default attention includes
-failed node verification (`integration.verification-failed`), node landings, node item conflicts, conflicted leaf replays and derived
-`build.consent-ready` observations, including already-ready landings on first
+failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays and derived
+`build.consent-ready` observations, including already-ready merges on first
 repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or
 exit/re-entry can notify again. Explicit `--event` globs remain event-only.
-Use `ab wait --for consent --for node-landed --for restack-conflicted --json`
+Use `ab wait --for consent --for node-merged --for restack-conflicted --json`
 for one wake; state waits return immediately when already satisfied. `--for
-attention` also includes current failed node verification, consent readiness, janitor failure attention and landing/conflict attention.
+attention` also includes current failed node verification, consent readiness, janitor failure attention and merge/conflict attention.
 Resume event backlogs with `--since <cursor>`; keep handling emitted records
 before interpreting terminal completion.
 
@@ -504,7 +504,7 @@ clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery
 request, and only success clears degradation. A further limit extends cooldown.
-Native landing application failures keep candidate-specific retry eligibility,
+Native merge application failures keep candidate-specific retry eligibility,
 including automatic decisions without a human command. Retries recheck consent,
 holds, verification and the exact candidate. Uncertain enables remain pending
 until cancellation can be confirmed after cooldown. Publication retries reuse
@@ -528,7 +528,7 @@ using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
-keeps its existing cadence. Readiness and landing inspections remain fresh.
+keeps its existing cadence. Readiness and merge inspections remain fresh.
 
 For node cadence, durable wakes, restart behavior and CLI evidence, see
 [node polling and status](../ab-guide/references/integration-tree.md#polling-and-status).
@@ -544,7 +544,7 @@ Shared requests are attributed to their first requester; cache hits count zero.
 An open collecting node may intentionally trail its parent. Parent movement is
 observed without starting replay. Use `ab restack <node>` (or `builds.restack`
 with `{repo, slug}`) to request freshness; paused or blocked nodes retain the
-request until their ordinary safety gates permit it. Completeness, landing,
+request until their ordinary safety gates permit it. Completeness, merge,
 queued dependency presence and accepted re-parenting supply automatic demand.
 Nested nodes need independent demand. Inspect the shared parent commit distance
 readout; unknown is unavailable evidence, not zero. Existing transactions finish

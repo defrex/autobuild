@@ -33,7 +33,12 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
-import { landingPolicyDisplay } from './landing-display'
+import {
+  landingPolicyDisplay,
+  mergeVocabulary,
+  mergeSummary,
+  mergedChildren,
+} from './landing-display'
 import { dashboardBuildControl, pauseResumeHelp } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
@@ -351,14 +356,7 @@ function renderBuild(
           : build.autoMerge === 'cancelling'
             ? 'yellow'
             : 'dim'
-    if (build.kind !== 'integration')
-      rightTokens.push(
-        paint(
-          `landing ${build.landing?.command?.kind === 'hold' ? 'held' : build.landing?.decision?.mode === 'consent' && build.landing.command?.kind !== 'land' ? 'awaiting consent' : build.autoMerge}`,
-          autoColor,
-          color,
-        ),
-      )
+    if (build.kind !== 'integration') rightTokens.push(paint(mergeSummary(build), autoColor, color))
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // A repository hold changes no build lifecycle state. Keep QUEUED literal
@@ -523,13 +521,13 @@ function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undef
 // ── The frame ────────────────────────────────────────────────────────────────
 
 export const DASHBOARD_GLOBAL_LEGEND =
-  'Keys: Up/Down select  h harvest  l land  o hold  i intake  p pause all  r resume all  Ctrl-C quit'
+  'Keys: Up/Down select  h harvest  l merge  o hold  i intake  p pause all  r resume all  Ctrl-C quit'
 export const DASHBOARD_HARVEST_LEGEND = 'Keys: Up/Down select  Ctrl-C quit'
 export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  Ctrl-C quit'
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND =
-  'Keys: Up/Down select  Enter details  l land  o hold  p pause  a abort  Ctrl-C quit'
+  'Keys: Up/Down select  Enter details  l merge  o hold  p pause  a abort  Ctrl-C quit'
 export const DASHBOARD_QUEUED_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
 /** The session view offers ONLY scrolling, back, and quit — it is read-only,
@@ -553,8 +551,8 @@ function buildLegend(build: DashboardBuild, detail: boolean): string {
   const control = dashboardBuildControl(build.status)
   const action = control === undefined ? '' : `  ${control.key} ${control.label}`
   return detail
-    ? `Keys: Up/Down scroll  Left/Right select session  Enter transcript  l land  o hold${action}  a abort  Esc back  Ctrl-C quit`
-    : `Keys: Up/Down select  Enter details  l land  o hold${action}  a abort  Ctrl-C quit`
+    ? `Keys: Up/Down scroll  Left/Right select session  Enter transcript  l merge  o hold${action}  a abort  Esc back  Ctrl-C quit`
+    : `Keys: Up/Down select  Enter details  l merge  o hold${action}  a abort  Ctrl-C quit`
 }
 
 const MESSAGE_PREVIEW_ROWS = 3
@@ -717,7 +715,7 @@ function integrationProgress(row: NonNullable<DashboardBuild['integrationRow']>,
       paint('─'.repeat(children.total ? cells[2]! : 22), 'dim', color)
     counts = children.total
       ? [
-          paint(`${children.landed}/${children.total} landed`, 'green', color),
+          paint(mergedChildren(children.landed, children.total), 'green', color),
           ...(children.building ? [paint(`· ${children.building} building`, 'cyan', color)] : []),
           ...(children.queued ? [paint(`· ${children.queued} queued`, 'dim', color)] : []),
         ]
@@ -786,7 +784,7 @@ function detailBody(
     body.push(
       '',
       paint(
-        `Children  ${open} open · ${detail.children.length - open} landed${detail.membershipKnown ? '' : ' · membership unknown'}`,
+        `Children  ${open} open · ${detail.children.length - open} ${mergeVocabulary.merged}${detail.membershipKnown ? '' : ' · membership unknown'}`,
         'bold',
         color,
       ),
@@ -805,9 +803,10 @@ function detailBody(
     body.push('')
     field('Verification', detail.verification)
     for (const result of detail.verifySteps) field(result.step, result.outcome)
-    field('Landing', detail.landing)
+    field(mergeVocabulary.title, detail.landing)
   }
-  if (build.kind !== 'integration') body.push(`  landing ${landingPolicyDisplay(build.landing)}`)
+  if (build.kind !== 'integration')
+    body.push(`  ${mergeVocabulary.label} ${landingPolicyDisplay(build.landing)}`)
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)

@@ -166,9 +166,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Allow rebase merging')
     } else if (frame.id.startsWith('integration-detail-')) {
       expect(frame.text).toContain('Verification')
-      expect(frame.text).toContain('Landing')
+      expect(frame.text).toContain('Merge')
       if (frame.id.endsWith('wide') || frame.id.endsWith('narrow')) {
-        expect(frame.text).toContain('3 open · 8 landed')
+        expect(frame.text).toContain('3 open · 8 merged')
         expect(frame.text).toContain('implement')
         expect(frame.text).toContain('code-review')
         expect(frame.text).toContain('Queued documentation work')
@@ -177,11 +177,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('active 4/4')
       expect(frame.text).not.toContain('QUEUE-5')
       expect(frame.text).toContain('integration')
-      expect(frame.text).toContain('8/11 landed')
+      expect(frame.text).toContain('8/11 merged')
       expect(frame.text).toContain('2 building')
       expect(frame.text).toContain('1 queued')
       expect(frame.text).toContain('unit failed')
-      expect(frame.text).toContain('ready to land into')
+      expect(frame.text).toContain('ready to merge into')
       expect(frame.text).toContain('empty')
     } else if (frame.id === 'post-reconcile-policy') {
       // Capacity clock reads must not move established policy-frame timings.

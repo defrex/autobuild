@@ -357,7 +357,7 @@ export class LocalGitForge implements Forge {
     )
     if (result.exitCode === 0) return true
     if (result.exitCode === 1) return false
-    throw new Error(`local-git could not compare landing ancestry: ${result.stderr.trim()}`)
+    throw new Error(`local-git could not compare merge ancestry: ${result.stderr.trim()}`)
   }
 
   /** Apply Git's two-tree fast-forward operation. It carries index/worktree
@@ -402,7 +402,7 @@ export class LocalGitForge implements Forge {
       throw new Error(`PR #${number} is no longer open`)
     await this.updateRecord(workspacePath, number, (current) => {
       if (current.status !== 'open' || current.pendingLanding)
-        throw new Error(`PR #${number} is landing or terminal`)
+        throw new Error(`PR #${number} is merging or terminal`)
       return { ...current, base }
     })
     if ((await this.inspectLandingPr(workspacePath, number)).base !== base)
@@ -412,7 +412,7 @@ export class LocalGitForge implements Forge {
   async inspectLandingPr(workspacePath: string, number: number) {
     const { record } = await this.readRecord(workspacePath, number)
     if (record.status === 'merged' && !record.mergedHeadSha)
-      throw new Error('historical local-git landing has no frozen source head')
+      throw new Error('historical local-git merge has no frozen source head')
     return {
       base: record.base,
       head: record.head,
@@ -697,7 +697,7 @@ export class LocalGitForge implements Forge {
       true,
     )
     if (moved.exitCode !== 0) {
-      throw new Error(`local-git base ${baseRef} moved before squash landing`)
+      throw new Error(`local-git base ${baseRef} moved before squash merge`)
     }
     if (checkout !== undefined) {
       // A racing operator edit can still appear after preflight. Never roll the

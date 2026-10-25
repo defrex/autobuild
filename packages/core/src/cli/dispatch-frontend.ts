@@ -752,8 +752,8 @@ export class DispatchFrontend {
               : result.command === 'abort'
                 ? `build ${slug}: abort requested`
                 : result.command === 'land'
-                  ? `build ${slug}: landing consent requested`
-                  : `build ${slug}: landing hold requested`
+                  ? `build ${slug}: merge consent requested`
+                  : `build ${slug}: merge hold requested`
     await this.report(message)
     await this.renderOnce()
   }

@@ -28,7 +28,7 @@ The dispatcher claims ready tickets up to your configured capacity and runs each
 4. **Verify.** Your configured checks, commands or agent verifiers, run in ordered stages whose members may run concurrently. A failed stage settles, then returns every failed report to implementation. See [Verification](verification.md). This effectively replaces CI.
 5. **Finalize.** An agent writes the pull request description and Autobuild opens the PR.
 
-Landing depends on the configured policy and merge gates. Conflicts are reconciled, then verified again. Related work can be collected into an integration tree before landing.
+Merge depends on the configured policy and merge gates. Conflicts are reconciled, then verified again. Related work can be collected into an integration tree before merge.
 
 
 ## Where it fits

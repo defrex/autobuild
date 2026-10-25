@@ -19,7 +19,7 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { TOOLS } from '@defrex/autobuild/operator'
-import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
+import { DISPATCHER, KERNEL, parseConfig } from '@defrex/autobuild/testing'
 import {
   authorizeFlow,
   baseEnv,
@@ -110,6 +110,85 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
     }
   })
 
+  test('merge aliases survive authenticated SDK validation and operator API delegation', async () => {
+    const repo = REPO
+    for (const action of ['merge', 'land']) {
+      const slug = `consent-${action}`
+
+      await backing.createBuild({ slug, repo, branch: `branch/${slug}` })
+      await backing.append(slug, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'runner', host: 'host' },
+      })
+      await backing.append(slug, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'local',
+          ref: 'local',
+          path: '/workspace',
+          branch: `branch/${slug}`,
+          base: { source: 'local', remoteError: 'offline', sha: 'base' },
+        },
+      })
+      const finalized = await backing.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+      })
+      await backing.append(slug, {
+        actor: DISPATCHER,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'head', parent: 'base', cycle: String(finalized.seq) },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
+      })
+    }
+    const client = await connectClient(app, adaTokens!, registered!)
+    try {
+      const { tools } = await client.listTools()
+      expect(tools.find((t) => t.name === 'landings.list')?.description).toContain(
+        'Deprecated alias for merges.list',
+      )
+      expect(tools.some((t) => t.name === 'merges.list')).toBe(true)
+      const modern = await client.callTool({ name: 'merges.list', arguments: { repo } })
+      const legacy = await client.callTool({ name: 'landings.list', arguments: { repo } })
+      expect(modern.isError).toBeUndefined()
+      expect(legacy).toEqual(modern)
+      for (const action of ['merge', 'land']) {
+        const slug = `consent-${action}`
+        const result = await client.callTool({
+          name: 'builds.control',
+          arguments: { repo, slug, action },
+        })
+        expect(result.isError).toBeUndefined()
+        expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+          kind: 'command',
+          command: 'land',
+          slug,
+        })
+      }
+    } finally {
+      await client.close()
+    }
+    for (const action of ['merge', 'land']) {
+      expect((await backing.getEvents(`consent-${action}`)).at(-1)).toMatchObject({
+        type: 'build.land-requested',
+        actor: {
+          kind: 'human',
+          user: 'ada@example.com',
+          via: { kind: 'mcp', client: 'e2e-mcp-client' },
+        },
+        payload: { decisionSeq: 4 },
+      })
+    }
+  })
   test('MCP ticket tools retain external-source refusal instead of returning an empty queue', async () => {
     const client = await connectClient(app, adaTokens!, registered!)
     try {

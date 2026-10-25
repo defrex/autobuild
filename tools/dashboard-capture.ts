@@ -244,7 +244,7 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'implement',
       'code-review',
       'Verification',
-      'Landing',
+      'Merge',
       'Queued documentation work',
     ],
   })),
@@ -259,7 +259,7 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
         ? ['Conflict', 'src/a file.ts']
         : state === 'failed'
           ? ['repair child', 'unit']
-          : ['press l, or ab land queue-ready-node'],
+          : ['press l, or ab merge queue-ready-node'],
   })),
   {
     id: 'integration-wide',
@@ -273,10 +273,10 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'conflicted',
       'collect',
       'integration →',
-      'landed',
+      'merged',
       'children unknown',
       'unit failed',
-      'ready to land into',
+      'ready to merge into',
       'NODE-3',
       'Janitor failing: forge publication unavailable',
     ],
@@ -288,7 +288,14 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     scenario: 'integration',
     columns: 70,
     rows: 110,
-    requires: ['landed', 'building', 'queued', 'unit failed', 'repair child', 'ready to land into'],
+    requires: [
+      'merged',
+      'building',
+      'queued',
+      'unit failed',
+      'repair child',
+      'ready to merge into',
+    ],
   },
 
   {
@@ -569,7 +576,7 @@ async function prepareIntegrationScenario(
   const harness = await makeHarness({
     handlers: happyHandlers(),
     configToml: `${CAPTURE_CONFIG_TOML}
-[[landing]]
+[[merge]]
 from = "node"
 into = "node"
 mode = "auto"
