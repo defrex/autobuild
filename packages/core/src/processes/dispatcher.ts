@@ -1,3 +1,4 @@
+import { publicationRetryGate } from '../kernel/publication-retry'
 import {
   NODE_VERIFICATION_CONTEXT,
   prepareNodeVerificationContext,
@@ -853,8 +854,11 @@ export class Dispatcher {
     if (settle === undefined) return undefined
     return async (slug) => {
       if (await deferMixedVersion(this.store, slug)) return
-      await settle(slug)
-      await this.store.refreshBuild(slug)
+      try {
+        await settle(slug)
+      } finally {
+        await this.store.refreshBuild(slug)
+      }
     }
   }
 
@@ -4406,6 +4410,25 @@ export class Dispatcher {
         !(await this.dispatchBudget(record.slug))
       )
         continue
+      const pendingRewrite = facts.publication.latestUncompletedRequest()?.payload
+      const retryIntent =
+        pendingRewrite?.operation === 'reconcile' && pendingRewrite.rewrite
+          ? { operation: 'reconcile' as const, id: pendingRewrite.rewrite.id }
+          : facts.log.restack.intent
+            ? { operation: 'restack' as const, id: facts.log.restack.intent.id }
+            : undefined
+      if (retryIntent) {
+        try {
+          await publicationRetryGate(
+            { store: this.store, slug: record.slug, clock: this.deps.clock, actor: DISPATCHER },
+            retryIntent.operation,
+            retryIntent.id,
+          )
+        } catch (error) {
+          if (error instanceof ForgeRequestDeferred) continue
+          throw error
+        }
+      }
       const decision = await this.decideBuild(record.slug, state, facts.log, report)
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue

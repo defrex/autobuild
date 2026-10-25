@@ -1,3 +1,9 @@
+import {
+  publicationRetryGate,
+  retryPublicationEffect,
+  PublicationRetryPersistenceError,
+} from '../kernel/publication-retry'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { verifyMemberKey } from '../kernel/verify-stage-state'
 import { contextDirectory } from '../context-directory'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
@@ -1192,7 +1198,13 @@ export class BuildRunner {
       return { kind: 'wait', reason: 'mixed-version' }
     const config = await this.captureConfig()
     const { store, slug } = this.deps
-    await this.settleLocalReconcile()
+    try {
+      await this.settleLocalReconcile()
+    } catch (error) {
+      if (error instanceof ForgeRequestDeferred)
+        return { kind: 'wait', reason: 'publication-retry' }
+      throw error
+    }
     await completeAutomaticReconcile(store, slug)
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
@@ -1299,6 +1311,8 @@ export class BuildRunner {
           return decision
       }
     } catch (error) {
+      if (error instanceof ForgeRequestDeferred)
+        return { kind: 'wait', reason: 'publication-retry' }
       if (error instanceof MixedVersionDeferral) return { kind: 'wait', reason: 'mixed-version' }
       if (error instanceof FreshSessionRequired) return this.step()
       if (error instanceof RecoveryBoundaryChanged) return decision
@@ -1408,7 +1422,11 @@ export class BuildRunner {
       }
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     } catch (error) {
-      if (!(error instanceof SessionShutdown) && !(error instanceof MixedVersionDeferral))
+      if (
+        !(error instanceof SessionShutdown) &&
+        !(error instanceof MixedVersionDeferral) &&
+        !(error instanceof ForgeRequestDeferred)
+      )
         throw error
       const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
       if (error instanceof MixedVersionDeferral) await this.requestRelaunch(facts)
@@ -1846,7 +1864,9 @@ export class BuildRunner {
       facts.state.status === 'blocked' ||
       facts.state.status === 'aborted' ||
       facts.state.status === 'done' ||
-      facts.state.pendingCommands.some((command) => command.command === 'abort')
+      facts.state.pendingCommands.some(
+        (command) => command.command === 'abort' || command.command === 'pause',
+      )
     )
       return
     await this.closeProducerSessions()
@@ -1859,6 +1879,8 @@ export class BuildRunner {
       intent.payload.headSha !== request.payload.sha
     )
       throw new Error('local reconcile request does not match durable intent')
+    const retryDeps = { ...this.deps, actor: KERNEL }
+    await publicationRetryGate(retryDeps, 'reconcile', rewriteId)
     const publicationDeps = {
       ...this.deps,
       beforeRewrite: () => this.assertAutomaticRewriteOwnership(true),
@@ -1873,7 +1895,13 @@ export class BuildRunner {
       id: intent.payload.id,
       restackId: intent.payload.restackId,
     })
-    const result = await publishRestack(publicationDeps, intent.payload)
+    const result = await retryPublicationEffect(
+      retryDeps,
+      'reconcile',
+      rewriteId,
+      intent.payload.attempt,
+      () => publishRestack(publicationDeps, intent.payload),
+    )
     if (result.kind === 'lease-mismatch') {
       await store.append(slug, {
         actor: KERNEL,
@@ -1908,6 +1936,12 @@ export class BuildRunner {
     }
     try {
       await this.assertAutomaticRewriteOwnership()
+      if (facts.log.restack.intent)
+        await publicationRetryGate(
+          { ...this.deps, actor: KERNEL },
+          'restack',
+          facts.log.restack.intent.id,
+        )
       let transaction = facts.log.restack.active
       let automatic: Pick<
         EventPayload<'restack.prepared'>,
@@ -2020,12 +2054,19 @@ export class BuildRunner {
         })
         return
       }
-      const published = await publishRestack(deps, {
-        ...prepared,
-        headSha,
-        conflicted: false,
-        artifact: { kind: 'restack', rev: 0 },
-      })
+      const published = await retryPublicationEffect(
+        { ...this.deps, actor: KERNEL },
+        'restack',
+        intent.id,
+        round,
+        () =>
+          publishRestack(deps, {
+            ...prepared,
+            headSha,
+            conflicted: false,
+            artifact: { kind: 'restack', rev: 0 },
+          }),
+      )
       if (published.kind === 'lease-mismatch') {
         await store.append(slug, {
           actor: KERNEL,
@@ -2043,6 +2084,11 @@ export class BuildRunner {
       await store.append(slug, { actor: KERNEL, type: 'restack.completed', payload: intent })
     } catch (error) {
       if (error instanceof LeaseHeldError || error instanceof MixedVersionDeferral) throw error
+      if (
+        error instanceof ForgeRequestDeferred ||
+        error instanceof PublicationRetryPersistenceError
+      )
+        throw error
       if (error instanceof AutomaticRewriteDeferred) return
       await this.failPhase(
         'reconcile',
