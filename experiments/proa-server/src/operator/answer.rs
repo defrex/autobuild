@@ -1,6 +1,6 @@
 //! Answer policy shared by the bearer API and progressive browser forms.
 use super::{
-    control::{active, array, error, pending, ControlService},
+    control::{active, array, error, pending, write, ControlService},
     error::OperatorError,
 };
 use chrono::{DateTime, Utc};
@@ -25,6 +25,23 @@ pub fn terminal_signal(state: &Value) -> Option<Value> {
 }
 fn abort_pending(slug: &str) -> OperatorError {
     error("abort-pending",format!("build \"{slug}\" is aborting; nothing was recorded. Abort is not revocable — after cleanup returns the ticket to Triage, dispatch it as a fresh build"))
+}
+fn reject_cancelled(state: &Value, captured: Option<&[Value]>) -> Result<(), OperatorError> {
+    if array(&state["verifyStage"]["superseded"])
+        .iter()
+        .any(|item| {
+            captured.map_or_else(
+                || array(&state["openEscalations"]).is_empty(),
+                |ids| ids.contains(&item["escalation"]["id"]),
+            )
+        })
+    {
+        return Err(error(
+            "no-open-escalations",
+            "Cannot answer a stale escalation: its verifier occurrence was cancelled by fail-fast",
+        ));
+    }
+    Ok(())
 }
 fn selected(state: &Value, request: &Value) -> Vec<Value> {
     let captured = request.get("escalationIds").and_then(Value::as_array);
@@ -122,6 +139,10 @@ impl ControlService<'_> {
     ) -> Result<Value, OperatorError> {
         let state = self.state(repo, slug).await?;
         active(slug, &state)?;
+        let captured = request.get("escalationIds").and_then(Value::as_array);
+        if captured.is_some() || state["kind"] != "node" || request["resolution"] != "revise-spec" {
+            reject_cancelled(&state, captured.map(Vec::as_slice))?;
+        }
         let ceiling_escalation = validate_answer_options(slug, &state, request)?;
         if request["resolution"] == "revise-spec" {
             return self
@@ -188,6 +209,7 @@ impl ControlService<'_> {
         } else {
             guidance
         };
+        let mut answered_count = 0;
         for escalation in &open {
             let mut payload =
                 json!({"id":escalation["id"],"answer":answer,"resolution":resolution});
@@ -197,14 +219,44 @@ impl ControlService<'_> {
             {
                 payload["reviewRoundCeiling"] = request["ceiling"].clone();
             }
-            self.append(repo, slug, actor, "escalation.answered", payload, now)
-                .await?;
+            if dismiss {
+                self.append(repo, slug, actor, "escalation.answered", payload, now)
+                    .await?;
+                answered_count += 1;
+            } else {
+                loop {
+                    let fresh = self.state(repo, slug).await?;
+                    reject_cancelled(&fresh, Some(std::slice::from_ref(&escalation["id"])))?;
+                    if !array(&fresh["openEscalations"])
+                        .iter()
+                        .any(|item| item["id"] == escalation["id"])
+                    {
+                        break;
+                    }
+                    if self
+                        .writer
+                        .append_build_if_current(
+                            repo,
+                            slug,
+                            fresh["lastSeq"].as_i64().unwrap_or(0),
+                            &write(actor, "escalation.answered", payload.clone()),
+                            now,
+                        )
+                        .await
+                        .map_err(|_| OperatorError::internal())?
+                        .is_some()
+                    {
+                        answered_count += 1;
+                        break;
+                    }
+                }
+            }
         }
         if also_paused {
             self.append(repo, slug, actor, "build.resume-requested", json!({}), now)
                 .await?;
         }
-        let mut result = json!({"kind":"answered","slug":slug,"count":open.len(),"resolution":resolution,"resumed":also_paused});
+        let mut result = json!({"kind":"answered","slug":slug,"count":answered_count,"resolution":resolution,"resumed":also_paused});
         if let Some(remaining) = remaining {
             result["remainingOpen"] = json!(remaining);
             if let Some(signal) = terminal_signal(&self.state(repo, slug).await?) {
@@ -588,15 +640,53 @@ impl ControlService<'_> {
         if let Some(assets) = assets {
             payload["assets"] = assets;
         }
-        self.append(
-            repo,
-            slug,
-            &json!({"kind":"kernel"}),
-            "spec.revised",
-            payload,
-            now,
-        )
-        .await?;
+        if fresh["verifyStage"]["concurrent"] == true {
+            loop {
+                let current = self.state(repo, slug).await?;
+                let authorization = decide_revision(slug, &current, request)?;
+                let RevisionDecision::Complete {
+                    artifact,
+                    assets,
+                    escalation_seq,
+                    ..
+                } = authorization
+                else {
+                    return Err(error(
+                        "missing-authorization",
+                        "Spec revision authorization is no longer effective",
+                    ));
+                };
+                let mut current_payload = json!({"artifact":artifact,"escalation":escalation_seq});
+                if let Some(assets) = assets {
+                    current_payload["assets"] = assets;
+                }
+                if self
+                    .writer
+                    .append_build_if_current(
+                        repo,
+                        slug,
+                        current["lastSeq"].as_i64().unwrap_or(0),
+                        &write(&json!({"kind":"kernel"}), "spec.revised", current_payload),
+                        now,
+                    )
+                    .await
+                    .map_err(|_| OperatorError::internal())?
+                    .is_some()
+                {
+                    break;
+                }
+            }
+        } else {
+            self.append(
+                repo,
+                slug,
+                &json!({"kind":"kernel"}),
+                "spec.revised",
+                payload,
+                now,
+            )
+            .await?;
+        }
         let paused = fresh["status"] == "paused";
         if paused {
             self.append(repo, slug, actor, "build.resume-requested", json!({}), now)

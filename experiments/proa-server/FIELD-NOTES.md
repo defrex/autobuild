@@ -1054,3 +1054,16 @@ does the same for its approved state. This retains the experiment's existing
 project-scoped approval boundary (the earlier connection entry deliberately
 omits organization selection) while using the current store API. The focused
 PostgreSQL/S3 interchange proof passed after that seed correction.
+
+The integrated head also includes #736's concurrent verify/fail-fast contract,
+which the original native state had not yet carried. Beyond the paired stage
+folds, guidance now rechecks cancellation and uses compare-and-append, and a
+concurrent spec revision revalidates retained authorization at publication.
+The failure oracle's old `append` interception no longer exercised guidance's
+conditional write; it now intercepts both actual write paths and requires the
+injected publication error to occur. A new source/native case refuses a
+cancelled verifier without mutation. The focused operator aggregate passed all
+eight answer-failure cases and complete route/action/schema coverage. A ticket
+HTTP helper's remaining protocol-5 literal was replaced with the source protocol
+constant. The unchanged 161-test BuildStore contract and all protocol, ticket
+protocol and real ticket CLI family proofs passed in focused runs.
