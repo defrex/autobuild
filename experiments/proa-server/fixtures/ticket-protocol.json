@@ -3019,7 +3019,7 @@
         },
         "input": {
           "draft": {
-            "target": " �"
+            "target": " \ufeff"
           }
         }
       },
@@ -3768,7 +3768,7 @@
         "input": {
           "id": "ENG-1",
           "patch": {
-            "target": " �"
+            "target": " \ufeff"
           }
         }
       },

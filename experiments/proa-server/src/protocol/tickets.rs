@@ -19,6 +19,10 @@ use axum::{
 };
 use serde_json::Value;
 
+mod admin;
+mod authority;
+mod grants;
+mod policy;
 mod schema;
 
 pub const OPERATIONS: [&str; 13] = [
@@ -47,22 +51,21 @@ pub async fn dispatch(
     parts: &[&str],
 ) -> Result<Response, ProtocolError> {
     let operation = parts.get(1).copied().unwrap_or("");
-    if req.method() != "POST" || parts.len() != 2 || !OPERATIONS.contains(&operation) {
+    if req.method() != "POST"
+        || parts.len() != 2
+        || !OPERATIONS.contains(&operation) && !["policy", "grants"].contains(&operation)
+    {
         return Err(ProtocolError::new(
             404,
             "not-found",
             format!("no route: {} {}", req.method(), req.uri().path()),
         ));
     }
-    let principal = match principal {
-        Some(principal) => Some(principal),
-        None => {
-            let authorization = super::wire::header_text(req.headers(), "authorization");
-            super::router::authenticate(state, authorization.as_deref()).await?
-        }
+    let principal = authority::Authority::authenticate(state, req.headers(), principal).await?;
+    if ["policy", "grants"].contains(&operation) {
+        return admin::route(state, req, &principal, operation).await;
     }
-    .ok_or_else(|| ProtocolError::new(401, "auth", "missing bearer credential"))?;
-    authorize_operation(&principal, operation)?;
+    principal.authorize(operation)?;
     let projection = TicketProjection::from_headers(req.headers())?;
     let bytes = to_bytes(req.into_body(), usize::MAX)
         .await
@@ -71,7 +74,7 @@ pub async fn dispatch(
         .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
     schema::validate(operation, &raw)?;
     if operation == "create"
-        && matches!(principal, Principal::Delegated(_))
+        && principal.delegated()
         && raw["input"]["options"].get("requestedId").is_some()
     {
         return Err(ProtocolError::new(
@@ -80,16 +83,22 @@ pub async fn dispatch(
             "only project or owner authority may request a ticket id",
         ));
     }
-    let repo = repository(&principal, raw["context"]["repo"].as_str())?;
+    let repo = principal.selected_repo(raw["context"]["repo"].as_str())?;
     principal.require_project(&repo)?;
     if !delegation::registered(&state.store, &repo.as_str().into()).await? {
         return Err(ProtocolError::new(403, "auth", "project not registered"));
     }
     let writer = state.store.database.ticket_writer()?;
     let service = TicketService { writer: &writer };
-    // A context is never accepted as policy. Published policy is registration
-    // bound; the legacy effective-config fallback is a later checkpoint.
-    let policy = service.policy(&repo, None).await.map_err(source_error)?;
+    let fallback = if policy::get(state, &repo).await?.is_none() {
+        Some(policy::fallback(state, &repo).await?)
+    } else {
+        None
+    };
+    let policy = service
+        .policy(&repo, fallback.as_ref())
+        .await
+        .map_err(source_error)?;
     let input = &raw["input"];
     let value = match operation {
         "states" => service.states(&repo, &policy).await.map_err(source_error)?,
@@ -263,24 +272,6 @@ fn source_error(error: OperatorError) -> ProtocolError {
         return ProtocolError::internal();
     }
     ProtocolError::new(500, "internal", message)
-}
-
-fn repository(principal: &Principal, selected: Option<&str>) -> Result<String, ProtocolError> {
-    if let Some(selected) = selected {
-        return normalize_repository(selected).ok_or_else(|| {
-            ProtocolError::validation("context.repo must name a normalized repository origin")
-        });
-    }
-    principal
-        .repo()
-        .and_then(|repo| repo.to_scalar().ok())
-        .ok_or_else(|| {
-            ProtocolError::new(
-                403,
-                "auth",
-                "owner ticket requests require context.repo naming a registered project",
-            )
-        })
 }
 
 /// Mirrors the repository identity admitted by the connection/registry contract.

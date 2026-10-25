@@ -173,6 +173,9 @@ export async function checkTicketProtocolContract() {
 
 if (import.meta.main) {
   if (process.argv.includes('--write'))
-    await Bun.write(fixturePath, `${JSON.stringify(ticketProtocolContract(), null, 2)}\n`)
+    await Bun.write(
+      fixturePath,
+      `${JSON.stringify(ticketProtocolContract(), null, 2).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
   else await checkTicketProtocolContract()
 }

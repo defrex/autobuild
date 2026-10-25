@@ -2,10 +2,13 @@
  * This checkpoint does not claim grants, legacy config or connect parity.
  */
 import { SQL } from 'bun'
+import { parseConfig } from '../../../packages/core/src/config/load'
+import { openPostgresBuildStoreFromEnv } from '../../../packages/postgres-store/src/config'
 import { strict as assert } from 'node:assert'
 import { mkdir, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { PostgresTicketSource } from '../../../packages/postgres-store/src/tickets'
+import { PostgresTicketGrantStore } from '../../../packages/postgres-store/src/ticket-grants'
 import { PostgresTicketPolicyStore } from '../../../packages/postgres-store/src/ticket-policy'
 import { PostgresCredentialStore } from '../../../packages/postgres-store/src/credentials'
 import { PostgresProjectRegistry } from '../../../packages/postgres-store/src/projects'
@@ -48,6 +51,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
       const projects = new PostgresProjectRegistry(sql)
       const credentials = new PostgresCredentialStore(sql, projects)
       const policies = new PostgresTicketPolicyStore(sql)
+      const grants = new PostgresTicketGrantStore(sql)
       const repo = 'https://github.com/proa/ticket-reads'
       const foreign = 'https://github.com/proa/ticket-foreign'
       const secret = 'isolated-ticket-read-test-signing-key'
@@ -56,7 +60,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
         await projects.add(repo, 'ticket proof')
         await projects.add(foreign, 'ticket proof')
         await policies.put(repo, policy, 'ticket proof')
-        const source = new PostgresTicketSource(sql, { repo, teamKey: 'ENG' }, lifecycle)
+        const source = new PostgresTicketSource(sql, { repo, teamKey: 'ENG', lifecycle }, lifecycle)
         const first = await source.create({
           title: 'First',
           body: '\nBody bytes  \n',
@@ -85,6 +89,8 @@ export async function ticketProtocolReadIntegration(executable: string) {
         const oracle = createTicketServer({
           secret,
           clock,
+          policy: policies,
+          grants,
           auth: createMachineAuth({ secret, clock, credentials, projects }),
           sourceFor: async (context, principal) => {
             const selected = context.repo ?? ('repo' in principal ? principal.repo : undefined)
@@ -188,7 +194,11 @@ export async function ticketProtocolReadIntegration(executable: string) {
         await compare('list-ready', request({ state: 'absent' }), {}, 400)
         // Writes run against equivalent independent projects, preventing one
         // service's mutation from manufacturing the other's expected result.
-        const mirror = new PostgresTicketSource(sql, { repo: foreign, teamKey: 'ENG' }, lifecycle)
+        const mirror = new PostgresTicketSource(
+          sql,
+          { repo: foreign, teamKey: 'ENG', lifecycle },
+          lifecycle,
+        )
         await mirror.create({ title: 'First', body: '\nBody bytes  \n', labels: ['one'] })
         await mirror.create({
           title: 'Second',
@@ -390,8 +400,196 @@ export async function ticketProtocolReadIntegration(executable: string) {
         assert.equal(BigInt(after.revision), BigInt(before.revision) + 1n)
         assert.ok(['left', 'right'].includes(after.body))
         assertions += 3
+        const legacyRepo = 'https://github.com/proa/legacy-ticket-config'
+        await projects.add(legacyRepo, 'ticket proof')
+        const legacyCredential = await credentials.issue(legacyRepo, 'ticket proof')
+        const legacyStore = await openPostgresBuildStoreFromEnv(env, { clock })
+        try {
+          const config = parseConfig(
+            '[tickets]\nsource="hosted"\nteamKey="OLD"\nreadyState="Old ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+          )
+          const { verify, finalize, ...root } = config
+          await legacyStore.ensureRepo(legacyRepo)
+          const artifact = await legacyStore.putRepoArtifact(legacyRepo, {
+            kind: 'dispatcher-effective-config',
+            content: JSON.stringify({
+              ...root,
+              verify: { steps: verify.steps },
+              finalize: { steps: finalize.steps },
+            }),
+          })
+          await legacyStore.appendRepo(legacyRepo, {
+            actor: { kind: 'dispatcher' },
+            type: 'dispatcher.run-started',
+            payload: {
+              run: 'legacy-config-proof',
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            },
+          })
+          const legacyReply = await native!.fetch(`${native!.url}/tickets/states`, {
+            method: 'POST',
+            headers: { ...headers, authorization: `Bearer ${legacyCredential.token}` },
+            body: request({}),
+          })
+          assert.equal(legacyReply.status, 200)
+          const legacyNames = (await legacyReply.json()).map((v: { name: string }) => v.name)
+          assert.ok(legacyNames.includes('Old ready'))
+          assert.ok(legacyNames.includes('Backlog'))
+          const publish = await native!.fetch(`${native!.url}/tickets/policy`, {
+            method: 'POST',
+            headers: { ...headers, authorization: `Bearer ${legacyCredential.token}` },
+            body: request(policy),
+          })
+          assert.equal(publish.status, 200)
+          const seeded = await sql`SELECT name FROM ab_ticket_states WHERE repo=${legacyRepo}`
+          assert.ok(
+            seeded.some((r) => r.name === 'Old ready'),
+            'legacy names retained on publication',
+          )
+          assertions += 2
+        } finally {
+          await legacyStore.close()
+        }
+        await compare('policy', request(null, { teamKey: 'ENG', repo }))
+        await compare(
+          'policy',
+          request({ ...policy, forbidden: true }, { teamKey: 'ENG', repo }),
+          {},
+          400,
+        )
+        await compare('policy', request(policy, { teamKey: 'ENG', repo }))
+        await compare(
+          'policy',
+          request(null, { teamKey: 'ENG', repo }),
+          { authorization: `Bearer ${internalToken}` },
+          403,
+        )
+        const ticketRequest = async (operation: string, body: unknown, bearer = token) => {
+          const response = await native!.fetch(`${native!.url}/tickets/${operation}`, {
+            method: 'POST',
+            headers: { ...headers, authorization: `Bearer ${bearer}` },
+            body: JSON.stringify(body),
+          })
+          return { status: response.status, body: await response.json() }
+        }
+        const runner = await ticketRequest('grants', {
+          action: 'issue',
+          repo,
+          execution: 'proof',
+          kind: 'runner',
+        })
+        assert.equal(runner.status, 201)
+        assert.deepEqual(await grants.authenticate(runner.body.token, clock()), runner.body.grant)
+        const nativeGrantRead = await ticketRequest(
+          'get',
+          { context: { teamKey: 'ENG' }, input: { id: 'ENG-999' } },
+          runner.body.token,
+        )
+        assert.equal(nativeGrantRead.status, 200)
+        const phase = await ticketRequest(
+          'grants',
+          { action: 'issue', repo, execution: 'proof', kind: 'phase' },
+          runner.body.token,
+        )
+        assert.equal(phase.status, 201)
+        assert.deepEqual(await grants.authenticate(phase.body.token, clock()), phase.body.grant)
+        assert.equal(
+          (
+            await ticketRequest(
+              'create',
+              { context: { teamKey: 'ENG' }, input: { draft: { title: 'Denied', body: '' } } },
+              phase.body.token,
+            )
+          ).status,
+          403,
+        )
+        assert.equal(
+          (
+            await ticketRequest(
+              'create',
+              {
+                context: { teamKey: 'ENG' },
+                input: {
+                  draft: { title: 'Denied', body: '' },
+                  options: { requestedId: 'ENG-500' },
+                },
+              },
+              runner.body.token,
+            )
+          ).status,
+          403,
+        )
+        assert.equal(
+          (
+            await ticketRequest(
+              'grants',
+              { action: 'issue', repo, execution: 'other', kind: 'phase' },
+              runner.body.token,
+            )
+          ).status,
+          403,
+        )
+        assert.equal(
+          (
+            await ticketRequest('grants', {
+              action: 'issue',
+              repo,
+              execution: 'proof',
+              kind: 'phase',
+            })
+          ).status,
+          403,
+        )
+        const tsRunner = await grants.issue(repo, 'typescript', 'runner', null, clock())
+        assert.equal(
+          (
+            await ticketRequest(
+              'get',
+              { context: { teamKey: 'ENG' }, input: { id: 'ENG-999' } },
+              tsRunner.token,
+            )
+          ).status,
+          200,
+        )
+        assert.equal(
+          (await ticketRequest('grants', { action: 'renew', repo }, runner.body.token)).status,
+          200,
+        )
+        assert.equal(
+          (await ticketRequest('grants', { action: 'revoke', repo }, runner.body.token)).status,
+          200,
+        )
+        assert.equal(
+          (
+            await ticketRequest(
+              'get',
+              { context: { teamKey: 'ENG' }, input: { id: 'ENG-999' } },
+              phase.body.token,
+            )
+          ).status,
+          401,
+        )
+        assertions += 13
         await projects.remove(repo, 'ticket proof')
         await compare('get', request({ id: first.ref.id }), {}, 403)
+        await projects.add(repo, 'ticket proof')
+        await compare('policy', request(null, { teamKey: 'ENG', repo }), {
+          authorization: `Bearer ${adminToken}`,
+        })
+        assert.equal(await grants.authenticate(tsRunner.token, clock()), null)
+        assert.equal(
+          (
+            await ticketRequest(
+              'get',
+              { context: { teamKey: 'ENG' }, input: { id: 'ENG-999' } },
+              tsRunner.token,
+            )
+          ).status,
+          401,
+        )
+        assertions += 2
       } finally {
         await native?.close()
         await sql.close()
@@ -406,6 +604,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
       'project/admin admission, cross-project/internal refusal and authorization before JSON parsing',
       'all 13 CRUD operations including prepared state/comment/claim, guarded conflict and blocker rollback, requested ids, creation adoption, counter rollback and node constraints',
       'concurrent native duplicate creates, claims and guarded writes prove one durable winner via TypeScript reads',
+      'registration-bound policy publication, legacy effective-config fallback, mixed-language runner/phase grants and parent revocation',
     ],
   }
 }
