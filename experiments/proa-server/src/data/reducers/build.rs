@@ -1067,7 +1067,9 @@ impl BuildAcc {
                             .cloned()
                             .unwrap_or_default()
                         {
-                            remove(&mut s["requests"], id.as_str().unwrap_or(""));
+                            if s.get("requests").is_some() {
+                                remove(&mut s["requests"], id.as_str().unwrap_or(""));
+                            }
                         }
                         s["contributionBase"] = s["active"]["parent"].clone();
                         remove(s, "distance");
