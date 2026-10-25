@@ -4,12 +4,17 @@ export const routes = {
   '/health': 'endpoint',
   '/readyz': 'endpoint',
   '/static': 'static',
+  '/sign-in': 'public-html',
+  '/auth/github': 'auth',
+  '/auth/github/callback': 'auth',
+  '/auth/sign-out': 'auth',
+  '/auth/dev-session': 'development-issuer',
 } as const
 export const frames = [1440, 390].flatMap((width) =>
   ['light', 'dark'].flatMap((theme) =>
-    ['closed', 'open'].map((state) => ({
+    ['closed', 'open', 'sign-in', 'refused'].map((state) => ({
       id: `builds-${width}-${theme}-${state}`,
-      route: '/',
+      route: state === 'sign-in' ? '/sign-in' : state === 'refused' ? '/auth/dev-session' : '/',
       width,
       theme,
       state,
@@ -33,10 +38,14 @@ export function checkRoutes(source: string) {
 export function checkFrameMatrix(cases: typeof frames) {
   if (new Set(cases.map((f) => f.id)).size !== cases.length) throw Error('Duplicate frame id')
   for (const [route, kind] of Object.entries(routes)) {
-    if (kind !== 'html') continue
+    if (kind !== 'html' && kind !== 'public-html' && kind !== 'development-issuer') continue
     for (const width of [1440, 390])
       for (const theme of ['light', 'dark'])
-        for (const state of ['closed', 'open']) {
+        for (const state of kind === 'html'
+          ? ['closed', 'open']
+          : kind === 'public-html'
+            ? ['sign-in']
+            : ['refused']) {
           if (
             cases.filter(
               (f) =>
@@ -67,22 +76,32 @@ export function probe(colors: string[], state: string, theme: string) {
   }
   const allowed = colors.map(normalize)
   const text = document.body.innerText
+  const publicPage = state === 'sign-in' || state === 'refused'
   for (const content of [
-    'Builds',
     'Autobuild',
-    'proa/server',
-    'Experiment menu',
-    'No build data connected yet.',
-    'This experiment establishes the server and app shell. Builds will appear here when the event log is connected.',
-    ...(state === 'open' ? ['Proa server experiment', 'System', 'Light', 'Dark'] : []),
+    ...(publicPage
+      ? ['Sign in', 'Continue with GitHub']
+      : [
+          'Builds',
+          'proa/server',
+          'operator@example.com',
+          'No build data connected yet.',
+          'This experiment establishes the server and app shell. Builds will appear here when the event log is connected.',
+          ...(state === 'open' ? ['Sign out', 'System', 'Light', 'Dark'] : []),
+        ]),
+    ...(state === 'refused' ? ["You're not in an organization yet.", 'refused@example.com'] : []),
   ])
     if (!text.includes(content)) failures.push(`Missing content: ${content}`)
-  if (document.querySelector('h1')?.textContent !== 'Builds')
-    failures.push('Missing Builds heading')
+  if (document.querySelector('h1')?.textContent !== (publicPage ? 'Sign in' : 'Builds'))
+    failures.push(publicPage ? 'Missing Sign in heading' : 'Missing Builds heading')
+  if (publicPage && document.querySelector('#account-trigger')) failures.push('Public account menu')
+  if (state === 'refused' && !document.querySelector('[role="alert"]'))
+    failures.push('Missing refusal alert')
   if (document.documentElement.dataset.theme !== theme) failures.push('Wrong theme')
   if (
+    !publicPage &&
     document.querySelector('#account-trigger')?.getAttribute('aria-expanded') !==
-    String(state === 'open')
+      String(state === 'open')
   )
     failures.push('Wrong menu state')
   if (document.documentElement.scrollWidth > innerWidth) failures.push('Document overflow')
