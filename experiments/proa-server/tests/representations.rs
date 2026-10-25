@@ -151,7 +151,7 @@ async fn health_and_shell() {
     for marker in [
         "data-shell=",
         "account-trigger",
-        "No build data connected yet.",
+        "No data store configured.",
         "/static/styles.css",
         "/static/theme-init.js",
         "/static/shell.js",
@@ -215,4 +215,46 @@ async fn tcp_development_path_supplies_peer() {
         StatusCode::FORBIDDEN
     );
     task.abort();
+}
+
+#[tokio::test]
+async fn projected_row_diagnostics_tokens_and_bounded_message_preview_reach_html() {
+    use proa_server::data::dashboard::Snapshot;
+    use serde_json::json;
+    let page = pages::home::HomePage::new(Snapshot {
+        projects: vec!["repo".into()],
+        project: Some("repo".into()),
+        settings: json!({}),
+        error: None,
+        rows: vec![
+            json!({"slug":"blocked","status":"blocked","alsoPaused":true,
+            "pr":{"url":"https://github.com/acme/web/pull/612","state":"open"},
+            "reviewRoundCeilings":{"plan":3,"code":5},"setupError":"Setup command failed",
+            "blockers":["Question first line\n\nParagraph preserved\nTHE CONFLICT\nHidden explanation"],"steps":[]}),
+            json!({"slug":"node","status":"running","integrationRow":{"steps":[],"children":{"known":true,"landed":2,"total":5,"building":1,"queued":2}},"steps":[]}),
+        ],
+    });
+    let html = proa_core::render_to_string(page);
+    for expected in [
+        "Setup command failed",
+        "PR #612 open",
+        "https://github.com/acme/web/pull/612",
+        "(paused)",
+        "review round ceiling: plan 3, code 5",
+        "2/5 landed · 1 building · 2 queued",
+        "message-alert",
+        "Question first line",
+        "Paragraph preserved",
+        "... 2 more rows",
+        "View details",
+    ] {
+        assert!(
+            html.contains(expected),
+            "missing projected display field: {expected}: {html}"
+        );
+    }
+    assert!(!html.contains("THE CONFLICT"));
+    assert!(!html.contains("Hidden explanation"));
+    assert!(html.contains("<p></p>"), "paragraph boundary was collapsed");
+    assert!(html.contains("/builds/blocked?project=repo"));
 }

@@ -389,3 +389,236 @@ a.btn {
     max-width: 100%;
   }
 }
+
+/* Live views retain the ANSI reference's ruled rows and prose/machine split. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.project-selector {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 0;
+}
+.project-selector select {
+  background: var(--ground);
+  color: var(--ink);
+  max-width: 60vw;
+}
+.control-line {
+  display: flex;
+  gap: 24px;
+  padding: 12px 0;
+  border-block: 1px solid var(--rule);
+}
+.build-row {
+  display: grid;
+  grid-template-columns: var(--idcol) minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.build-id {
+  color: var(--blue);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.build-title {
+  font-weight: 700;
+  color: var(--ink);
+}
+.build-meta {
+  color: var(--slack);
+  margin: 2px 0 10px;
+}
+.build-status {
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.build-status[data-status="running"],
+.build-status[data-status="done"],
+[data-state="done"] {
+  color: var(--green);
+}
+.build-status[data-status="blocked"],
+.build-status[data-status="unreadable"],
+.question {
+  color: var(--red);
+}
+.build-status[data-status="queued"],
+[data-state="pending"] {
+  color: var(--slack);
+}
+[data-state="current"] {
+  color: var(--teal);
+}
+[data-state="provisional"] {
+  color: var(--amber);
+}
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 0.93em;
+}
+.question {
+  margin: 16px 0 0;
+}
+.diagnostic:empty {
+  display: none;
+}
+.legend {
+  margin-top: 20px;
+}
+.prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  max-width: var(--measure);
+}
+[data-page="build-detail"] section {
+  border-top: 1px solid var(--rule);
+  padding: 16px 0;
+}
+[data-page="build-detail"] h2 {
+  font: inherit;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+[data-frame] img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+@media (max-width: 600px) {
+  .build-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .build-body {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .build-status {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .project-selector {
+    flex-wrap: wrap;
+  }
+}
+[data-page="builds"],
+[data-page="build-detail"] {
+  max-width: none;
+  padding-top: 0;
+}
+[data-page="build-detail"] {
+  padding-top: 24px;
+}
+.project-switch {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.project-switch select {
+  background: var(--ground);
+  color: var(--ink);
+  font: inherit;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  max-width: 48vw;
+}
+.project-switch select:focus-visible {
+  outline: 2px solid var(--blue);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.tree-children {
+  padding-inline-start: 24px;
+}
+.build-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .build-row {
+    gap: 4px 12px;
+  }
+  .build-row .build-id {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .build-row .build-body {
+    display: contents;
+  }
+  .build-row .build-title {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .build-row .build-status {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .build-row .build-meta {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .build-row .steps {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+  .build-row .diagnostic,
+  .build-row .question,
+  .build-row [data-step-reason] {
+    grid-column: 1 / -1;
+  }
+}
+
+.build-tokens {
+  margin: 0 0 8px;
+}
+.message-alert {
+  border: 1px solid var(--red);
+  background: var(--red-wash);
+  color: var(--red);
+  margin-top: 16px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.message-alert p {
+  margin: 0;
+  min-height: 1.5em;
+  white-space: pre-wrap;
+}
+.message-alert a {
+  color: inherit;
+}
+.full-question {
+  white-space: pre-wrap;
+}
+@media (max-width: 600px) {
+  .build-tokens,
+  [data-ceilings],
+  [data-child-counts],
+  .message-alert {
+    grid-column: 1 / -1;
+  }
+}

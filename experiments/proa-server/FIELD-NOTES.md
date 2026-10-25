@@ -364,3 +364,120 @@ a failed reconnect leaves the slot retryable, and a changed schema marker refuse
 reuse. The real-store test terminates all four reader backends, verifies all four
 PIDs are replaced, retains the healthy build's accumulator/cursor, and checks schema
 refusal again after disconnection. No query is transparently retried mid-transaction.
+
+## Dense live views: projection and rendering (2026-10-25)
+
+The dashboard oracle now covers 4,330 build logs, their corpus prefix boundaries,
+32 stream/config variants and nested/missing-parent/cyclic tree inputs. The
+whole/prefix native comparison took about 15 seconds on this host. Recomputing
+TypeScript answers twice in the freshness tooling test took about 12 seconds
+under concurrent checks, so this corpus test has an explicit 60-second budget.
+It never regenerates expected outputs in check mode.
+
+Proa 0.1.3's strict performance lint rejected URL building, JSON formatting and
+elapsed-time allocation inside rendering. Preparing row/step/frame views before
+rendering removed those allocations without suppressing the lint. Data reads use
+request-scoped typed resolvers. Holding ordinary `WebContext` across an await in
+an Axum handler failed its Send-bound Handler check; the pinned core's
+`SendWebContext::with_loader_buffer` supports that handler boundary.
+
+This implementation completes its typed store snapshot before emitting HTML,
+then uses synchronous Proa components for both the document and refresh fragment.
+It is in-order SSR: the no-JS snapshot has all rows and artifact text. It trades
+an early empty shell for a complete first response. The official
+[streaming SSR guide](https://proa.so/docs/core/streaming-ssr) documents Suspense
+swap delivery; using that mode would require the browser swap runtime, so it is
+unsuitable as this view's no-JS baseline. The pinned framework also exposes
+`ssr_async_with_loader` and `ssr_stream_with_loader` in its route response source;
+these must not be confused with synchronous `ssr`.
+
+The [islands guide](https://proa.so/docs/guides/islands) keeps static data, links
+and forms in ordinary SSR. This view uses native project selection and disclosure,
+with one external progressive polling script and locally ticking elapsed values.
+It does not instantiate RSJS islands or signals, so its empty island manifest is
+intentional and no hydration/runtime CSP exception is needed. Durable event and
+stream versions remain server-side; the client has no second projection.
+
+Reproducible proa-ui evaluation: fetch
+`https://ui.proa.so/r/select.json` (version
+`sha256:11415b61da4cc2ac36ce27f3fdc80c2c954bd2a6473290f86e6fa3fd6553b413`),
+then resolve each `files[].source` against `https://ui.proa.so/r/` and inspect
+`select/select.rs`. Its `SelectOption` requires static string values/labels and
+its recipe/foundation adds a styled widget surface. Store-owned project ids
+need owned values without leaking strings. Fetch `accordion.json` the same way
+and inspect `accordion/css_only.rs`: despite the module header describing native
+details, its implementation uses checkbox/radio controls. Native select and
+details preserve the needed keyboard/no-JS behavior and ANSI styles with less
+machinery. No decorative component was added to claim adoption.
+
+Linked RSJS builds detect edits while linking and stop with RSJS0001 rather than
+combine stale descriptors with changed source. Freeze `src/` for the linked gate
+and capture. Ordinary Cargo checks alone do not exercise this safeguard.
+
+The live-stream SQL proof caught a real cross-language decoding seam: the TS
+Postgres adapter can store `stream_chunks.parts` as a JSONB string containing the
+serialized parts array. Rust now accepts that representation and decoded JSONB
+arrays, then validates the part types before advancing its independent cursor.
+The real TS-write/Rust-read proof passes with both idle suffix reads and new text.
+
+Proa 0.3.0's macro expansion panicked on a nested conditional render beside a
+Unicode middle-dot literal (`end byte index ... is not a char boundary`). Moving
+the optional stream-status rendering into a small synchronous component avoids
+that expansion path without changing the markup or disabling checks. The font
+probe also caught ideographic legend spaces selecting a CJK fallback; ordinary
+spaces and CSS gap retain the shipped font coverage.
+
+The required mixed producer contains Japanese and emoji in stored escalation and
+warning text. Requiring only the two Latin interface faces for those glyphs would
+mean corrupting the producer's data. Capture therefore records narrowly scoped
+fallback usage for marked store text: Japanese scripts may use Noto Sans CJK JP,
+and emoji may use Noto Color Emoji. All interface labels, ASCII content, spacing
+and declared CSS font families retain the original strict two-face checks. The
+allowance has negative cases for interface emoji, ordinary English, ideographic
+spacing and arbitrary replacement faces. Per-frame inventory records the exact
+stored text and fallback family for review.
+
+Final linked/native gates passed. The complete 24-frame capture at 1440 and 390
+in both grounds passed palette/font/overflow probes, same-document event and
+transcript updates within five seconds, no-JS snapshots and auth/menu behavior.
+Every PNG was opened: nested tree indentation, wrapping steps, unfilled status
+words, full escalation text, scoped frame and readable session transcripts held
+at both widths. Its actual SQL trace recorded 135 reads, including 109 idle
+suffix reads returning zero rows; one appended build event and one stream chunk
+each returned one new row. Seven scoped immutable blobs were fetched once each.
+Chromium also reports descendant glyphs against containing blocks; the font
+probe checks the actual marked text separately and avoids duplicate aggregate
+rejections for textless wrappers. The logout proof now waits for complete page
+load before clicking sign-out, preserving strict network-error checks.
+
+## Review round 2: mature projects and dense-list parity
+
+A suffix-only event trace hid metadata amplification: each idle snapshot still
+looked up pinned config and every session stream for every historical build.
+Discovery now sends the known event cursors/metadata versions in one query and
+receives only new/changed/deleted records. Historical facts stay in the process
+index; visible rows and needed ancestors alone read stream/pinned metadata.
+Closed stream metadata is retained, open/new metadata remains independently live,
+and selected detail reads one build record. Metadata query/result-row evidence is
+now explicit beside event/chunk/blob evidence. A real-store test adds 509 completed
+hidden builds and 5,090 closed streams and checks warm polls perform no per-history
+reads. Cold startup still folds each build once; the cache is not durable state.
+
+The renderer must consume the projection as well as prove it: setup diagnostics,
+PR state/link, paused markers, review ceilings and integration progress now have
+rendered-HTML regression coverage. Escalations use the three-logical-row preview,
+preserve paragraph boundaries in a red-ruled ANSI callout and link to full detail.
+Artifact bytes retain bounded caching while per-object single flight replaces a
+global lock held across blob I/O. A deliberately stalled object test proves other
+misses and warm hits remain responsive without duplicate same-object fetches.
+
+Round 2's full gate passed. On isolated loopback Postgres/S3, the mature-project
+proof measured three warm polls at 62 ms and a live update at 27 ms; a final focused
+run measured 76/29 ms. These are measured local results, not remote RTT promises.
+Discovery still sends per-build cursor/version evidence and performs indexed tail
+checks; it avoids historical result transfers and per-history transactions rather
+than claiming constant total CPU/request size. The 24-frame matrix was opened in
+both grounds and widths: callout paragraphs/previews, restored PR state, wrapping,
+tree indentation, menu and detail remain readable. Final capture recorded 329
+reads including 260 metadata reads. Its logger now explicitly includes the
+Postgres module and capture fails if any expected metadata category is missing.
