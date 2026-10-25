@@ -60,6 +60,7 @@ async function typecheckExitWithinDeadline(
   } finally {
     clearTimeout(deadlineTimer)
   }
+  await typecheck.exited
   const elapsedMs = Math.round(performance.now() - start)
   const [output, error] = await Promise.all([
     new Response(typecheck.stdout).text(),
@@ -167,7 +168,12 @@ describe('plugin SDK package surface', () => {
         '--skipLibCheck',
         'plugin.ts',
       ],
-      { cwd: destination, stdout: 'pipe', stderr: 'pipe' },
+      {
+        cwd: destination,
+        env: { ...process.env, NODE_COMPILE_CACHE: join(destination, '.node-compile-cache') },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
     )
     // This test runs a full `tsc --noEmit` plus a transpile and a dynamic
     // import inside bun's per-test timeout, and the compile alone is
@@ -214,7 +220,10 @@ describe('plugin SDK package surface', () => {
     // injection rather than by wall-clock luck — and if that ever stopped
     // holding, the resolve below fails the test loudly instead of silently
     // passing.
+    const scratch = await mkdtemp(join(tmpdir(), 'ab-tsc-deadline-'))
+    temporary.push(scratch)
     const typecheck = Bun.spawn([join(root, 'node_modules', '.bin', 'tsc'), '--version'], {
+      env: { ...process.env, NODE_COMPILE_CACHE: join(scratch, '.node-compile-cache') },
       stdout: 'pipe',
       stderr: 'pipe',
     })
@@ -336,7 +345,7 @@ describe('plugin SDK package surface', () => {
         'bun',
         'verify.ts',
       ],
-      { cwd: consumer },
+      { cwd: consumer, env: { NODE_COMPILE_CACHE: join(consumer, '.node-compile-cache') } },
     )
     expect(consumerTypes.exitCode, consumerTypes.stdout + consumerTypes.stderr).toBe(0)
     const consumerImport = Bun.spawn(['bun', 'verify.ts'], {
