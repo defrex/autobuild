@@ -37,7 +37,7 @@ export async function setRepositorySetting(opts: {
   if (opts.setting === 'auto-merge-default')
     throw new OperatorControlError(
       'retired-setting',
-      'Auto-merge default is retired; configure [[landing]] rules in autobuild.toml',
+      'Auto-merge default is retired; configure [[merge]] rules in autobuild.toml',
     )
   await opts.store.ensureRepo(opts.repo)
   const payload = {

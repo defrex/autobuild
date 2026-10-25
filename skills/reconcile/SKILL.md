@@ -7,7 +7,7 @@ description: Resolve the kernel-prepared replay of a build's single change onto 
 
 The kernel has collapsed this build's contribution into one change and replayed
 it onto a frozen refreshed base. Your job is to preserve both the build's intent
-and the behavior already landed upstream. Work on the prepared detached HEAD;
+and the behavior already merged upstream. Work on the prepared detached HEAD;
 the kernel retains the published branch until guarded publication succeeds.
 
 For a node conflict, `nodeChange` names the integration owner, transaction,
@@ -36,7 +36,7 @@ root, and must not be committed. Manifest-directed artifact paths remain authori
 2. Inspect `git status` and the prepared replay. If conflicts remain, resolve
    them with the explicit charge to regress against neither side:
    - Preserve the behavior the spec and approved plan require.
-   - Preserve the behavior already landed on the target base.
+   - Preserve the behavior already merged on the target base.
    Stage only the resolved files and run `git cherry-pick --continue`. If the
    change is now redundant, preserve an empty commit with `git commit
    --allow-empty --no-edit`; never skip away the build's identity. A clean

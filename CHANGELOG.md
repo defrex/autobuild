@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use `ab merge` / `ab merges`, `[[merge]]` rules, MCP `merges.list`, and the `merge` action on `builds.control`. The old `land` / `landings` commands, `[[landing]]`, `landings.list`, and `land` action remain compatible deprecated aliases. `ab upgrade` migrates the config key. `ab wait --for node-merged` replaces `node-landed`, which remains an alias. Dashboard and documentation terminology now consistently says merge.
+
 Build sessions now hydrate inputs under `.ab/<phase>/` (or `.ab/verify-<step>/`
 and `.ab/finalize-<step>/`). Repository-authored skills must replace hardcoded
 hydrated `.ab/<file>` paths with `$AB_CONTEXT_DIR/<file>`. Custom output scratch

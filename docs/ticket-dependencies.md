@@ -62,25 +62,25 @@ and claims the ticket only after they resolve and other readiness gates pass.
 
 Read [nodes and targets](integration-tree.md) for lifecycle, validation and
 source storage, and [choosing a destination](integration-tree.md#choosing-a-destination)
-when filing a feature set. Blockers order work independently of landing targets;
-landing authorization follows the repository's matched policy.
+when filing a feature set. Blockers order work independently of merge targets;
+merge authorization follows the repository's matched policy.
 
 ## When a blocker resolves
 
 In a repository with nodes, a blocker that has a build resolves when its change
 is present in the dependent's target head (or the configured root branch).
 Source done state and aggregate blocker flags do not bypass this gate. A
-confirmed landing SHA reachable from the sampled target proves presence even
+confirmed merge SHA reachable from the sampled target proves presence even
 without a build trailer. A node blocker requires its entire completed owned
 contribution, including nested changes and foreign commits, excluding inherited
 parent history. An empty completed contribution is satisfied; missing evidence,
 an open or aborted node, or ambiguous newest build generations remain queued.
 Older successful generations are never substituted for the newest build.
 
-- Same node: the blocking change lands directly into the target.
-- Ancestor: the change lands into an ancestor, then presence demand restacks only the required path to the target.
-- Sibling: the blocking node lands into their common ancestor, then presence demand reaches the target through the minimal ancestor path.
-- Descendant: the blocking node lands into the dependent's target ancestor.
+- Same node: the blocking change merges directly into the target.
+- Ancestor: the change merges into an ancestor, then presence demand restacks only the required path to the target.
+- Sibling: the blocking node merges into their common ancestor, then presence demand reaches the target through the minimal ancestor path.
+- Descendant: the blocking node merges into the dependent's target ancestor.
 
 Blockers that never had a build, and repositories without nodes, retain the
 source's done-state rule. Waiting tickets stay source work; diagnostics identify

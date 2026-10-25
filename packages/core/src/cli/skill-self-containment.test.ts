@@ -87,7 +87,7 @@ describe('shipped skill self-containment', () => {
       'remote-store-protocol.md',
       'ticket-dependencies.md',
       'integration-tree.md',
-      'landing-policy.md',
+      'merge-policy.md',
       'restacking.md',
       'migration-1.0.md',
     ]) {

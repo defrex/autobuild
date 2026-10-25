@@ -1320,7 +1320,7 @@ describe('projectBuild: provisional code-loop output', () => {
 // boundary that invalidates it, and the row renders `done` for work that is
 // about to re-run.
 
-describe('f_9ce5ba8d: a verify failure reopens the code loop THE MOMENT it lands', () => {
+describe('f_9ce5ba8d: a verify failure reopens the code loop THE MOMENT it merges', () => {
   // Plan@3 identified this and closed it with `approval.round === implement.round`
   // — a clause that only engages once `implement.started` at the new round
   // lands. This asserts at the state that exposes the gap, NOT after it.
@@ -1346,7 +1346,7 @@ describe('f_9ce5ba8d: a verify failure reopens the code loop THE MOMENT it lands
     expect(reduceBuild(failedCycle).implement.round).toBe(1)
   })
 
-  test('…and still not done once implement.started r2 lands', () => {
+  test('…and still not done once implement.started r2 merges', () => {
     const build = project(toLog([...failedCycleWrites(), ev('implement.started', { round: 2 })]))
     expect(stateOf(build, 'implement')).toBe('current')
     expect(stateOf(build, 'code-review')).toBe('pending')
@@ -1557,7 +1557,7 @@ describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () 
     expect(stepFor(build, 'verify:test')?.count).toBeUndefined()
   })
 
-  test('count 2 appears on the running step once verify.started a2 lands', () => {
+  test('count 2 appears on the running step once verify.started a2 merges', () => {
     const build = project(
       toLog([...postApprove, ev('verify.started', { step: 'lint', attempt: 2 })]),
     )
@@ -1774,7 +1774,7 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
     expect(build.steps.filter((s) => s.state === 'current')).toEqual([])
   })
 
-  test('window B — restart landed: the engine runs plan r2, so implement is not current', () => {
+  test('window B — restart merged: the engine runs plan r2, so implement is not current', () => {
     const log = toLog(restartLanded)
     expect(decideNext(log, CONFIG)).toMatchObject({ kind: 'run-phase', phase: 'plan', round: 2 })
     // The reducer still carries the pre-restart context — that is the fact the
@@ -1786,7 +1786,7 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
     expect(build.steps.filter((s) => s.state === 'current')).toEqual([])
   })
 
-  test('…and plan goes current once the post-restart plan.started lands', () => {
+  test('…and plan goes current once the post-restart plan.started merges', () => {
     const build = project(toLog([...restartLanded, ev('plan.started', { round: 2 })]))
     expect(stateOf(build, 'plan')).toBe('current')
     expect(stateOf(build, 'implement')).toBe('pending')
@@ -1835,7 +1835,7 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
 
   test('a parked merge step names the missing consent — and requested/enabled do not', () => {
     const pending = project(toLog(throughPr))
-    expect(stepFor(pending, 'merge')?.reason).toBe('Landing policy decision pending')
+    expect(stepFor(pending, 'merge')?.reason).toBe('Merge policy decision pending')
     const ready = [
       ...throughPr,
       ev('landing.decided', {
@@ -1848,11 +1848,11 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
       }),
     ]
     const held = project(toLog([...ready, ev('build.hold-requested', {})]))
-    expect(stepFor(held, 'merge')?.reason).toContain('Landing held')
+    expect(stepFor(held, 'merge')?.reason).toContain('Merge held')
     expect(stepFor(held, 'merge')?.reason).not.toContain('awaits consent')
     const bare = project(toLog(ready))
     expect(stepFor(bare, 'merge')?.reason).toBe(
-      'Landing awaits consent — use ab land auth-rate-limit; use ab hold auth-rate-limit to withdraw consent',
+      'Merge awaits consent — use ab merge auth-rate-limit; use ab hold auth-rate-limit to withdraw consent',
     )
     const consented = project(toLog([...ready, ev('build.auto-merge-requested', {})]))
     expect(stepFor(consented, 'merge')?.reason).toBeUndefined()

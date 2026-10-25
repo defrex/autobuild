@@ -10,7 +10,7 @@ order: 12
 
 ## Responsibility
 
-Operator surfaces are where you and your operator agent inspect tickets and builds, answer escalations, pause work and authorize landing. Autobuild never hosts or starts your agent; it runs anywhere.
+Operator surfaces are where you and your operator agent inspect tickets and builds, answer escalations, pause work and authorize merge. Autobuild never hosts or starts your agent; it runs anywhere.
 
 ## Shipped arrangements
 
@@ -58,7 +58,7 @@ readyState = "ready"
 The hosted web app shows registered repositories and their builds.
 
 - **Sign-in** uses the deployment's GitHub authentication and organization membership policy, independent of CLI credentials.
-- **Landing consent:** a landing awaiting consent offers **Land** and **Hold**. These record durable actions; readiness and merge gates still apply. See [Authorize landing](operating.md#authorize-landing).
+- **Merge consent:** a merge awaiting consent offers **Merge** and **Hold**. These record durable actions; readiness and merge gates still apply. See [Authorize merge](operating.md#authorize-merge).
 - **Appearance:** open the account menu and choose **System**, **Light** or **Dark** under **Theme**. System is the default and follows the OS preference. Your choice is saved for this browser.
 - **Secrets** (database, blob, signing, OAuth, super-user list) stay on the service, never in TOML or browser bundles.
 

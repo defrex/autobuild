@@ -6,6 +6,7 @@ import {
   integrationCurrent,
   integrationCycleVerified,
 } from '../../kernel/integration-state'
+import { mergeVocabulary } from './landing-display'
 import { awaitsConsent, landingReady } from '../../kernel/landing-readiness'
 
 export const treeVocabulary = {
@@ -13,7 +14,7 @@ export const treeVocabulary = {
   node: 'node',
   target: 'target',
   integration: 'integration build',
-  landing: 'landing',
+  landing: mergeVocabulary.label,
   restack: 'restack',
   consent: 'consent',
   queue: 'queue',
@@ -25,7 +26,7 @@ export const treeVocabulary = {
   verification: 'verification',
   current: 'current',
   pending: 'pending',
-  readyToLand: 'ready to land',
+  readyToLand: 'ready to merge',
   notReady: 'not ready',
 } as const
 

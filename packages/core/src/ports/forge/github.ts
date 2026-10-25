@@ -1227,7 +1227,7 @@ export class GitHubForge implements Forge {
       base: z.object({ ref: z.string() }),
       head: z.object({ ref: z.string(), sha: z.string() }),
     })
-    const pr = this.parse(schema, response, `node landing PR #${number}`)
+    const pr = this.parse(schema, response, `node merge PR #${number}`)
     return {
       base: pr.base.ref,
       head: pr.head.ref,
@@ -1387,7 +1387,7 @@ export class GitHubForge implements Forge {
       }
       if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
         return unproven(
-          'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
+          'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
         )
       }
       rulesetGate =
@@ -1671,7 +1671,7 @@ export class GitHubForge implements Forge {
       }
       if (data.repository.mergeQueue !== null) {
         throw new Error(
-          'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
+          'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
         )
       }
       return message
@@ -1756,7 +1756,7 @@ export class GitHubForge implements Forge {
     const view = await this.getJson(
       z.object({ commit: z.object({ message: z.string() }) }),
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${encodeURIComponent(sha)}`,
-      'landed commit message',
+      'merged commit message',
     )
     return view.commit.message
   }

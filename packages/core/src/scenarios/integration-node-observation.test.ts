@@ -113,7 +113,7 @@ test('display metadata follows membership authorities, survives failed scans, an
     tickets: [
       listed('QUEUED', 'Queued title'),
       listed('CANCELLED', 'Cancelled', true),
-      listed('LANDED', 'Renamed landed', true),
+      listed('LANDED', 'Renamed merged', true),
     ],
     diagnostics: [] as string[],
   }
@@ -123,7 +123,7 @@ test('display metadata follows membership authorities, survives failed scans, an
   expect(first.contributions).toEqual(['landed'])
   expect(first.children).toEqual([
     { source: 'fake', id: 'FROZEN', title: 'Frozen frozen' },
-    { source: 'fake', id: 'LANDED', title: 'Renamed landed', builds: ['landed'] },
+    { source: 'fake', id: 'LANDED', title: 'Renamed merged', builds: ['landed'] },
     { source: 'fake', id: 'QUEUED', title: 'Queued title' },
   ])
   const count = (await store.getEvents('node')).length
