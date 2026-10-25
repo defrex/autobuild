@@ -20,6 +20,22 @@ struct Cached {
     cursor: i64,
     accumulator: Accumulator,
 }
+impl Cached {
+    fn advance(&mut self, events: &[Value]) -> Result<(), DataError> {
+        let mut cursor = self.cursor;
+        for event in events {
+            let next = event["seq"].as_i64().ok_or(DataError::Query)?;
+            if next <= cursor {
+                return Err(DataError::Query);
+            }
+            cursor = next;
+        }
+        // The reducer commits its candidate only after the complete suffix succeeds.
+        self.accumulator.advance(events)?;
+        self.cursor = cursor;
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct QueryRead {
     pub project: String,
@@ -91,17 +107,7 @@ impl DataReader {
             rows: events.len(),
         });
         if !events.is_empty() {
-            let mut cursor = cached.cursor;
-            for event in &events {
-                let next = event["seq"].as_i64().ok_or(DataError::Query)?;
-                if next <= cursor {
-                    return Err(DataError::Query);
-                }
-                cursor = next;
-            }
-            // advance is transactional: it leaves the original accumulator unchanged on error.
-            cached.accumulator.advance(&events)?;
-            cached.cursor = cursor;
+            cached.advance(&events)?;
         }
         Ok(cached.accumulator.finish())
     }
@@ -145,5 +151,41 @@ impl DataReader {
         };
         let reference = metadata["blobRef"].as_str().ok_or(DataError::Blob)?;
         self.blobs.get(reference).await.map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn a_failed_suffix_cannot_advance_the_cursor_or_accumulator() {
+        let mut cached = Cached {
+            cursor: 0,
+            accumulator: Accumulator::new(ReduceScope::Session),
+        };
+        let before = cached.accumulator.finish();
+        let unknown = json!({"seq":1,"type":"unknown.future-event","payload":{},"ts":"2026-01-01T00:00:00.000Z","actor":{"kind":"system"},"session":"test"});
+        assert!(cached.advance(&[unknown]).is_err());
+        assert_eq!(cached.cursor, 0);
+        assert_eq!(cached.accumulator.finish(), before);
+        cached.advance(&[]).unwrap();
+        assert_eq!(cached.accumulator.finish(), before);
+    }
+    #[test]
+    fn invalid_or_repeated_sequences_never_mutate_state() {
+        let mut cached = Cached {
+            cursor: 7,
+            accumulator: Accumulator::new(ReduceScope::Build),
+        };
+        let before = cached.accumulator.finish();
+        for seq in [json!(null), json!(7), json!(6)] {
+            assert!(matches!(
+                cached.advance(&[json!({"seq":seq})]),
+                Err(DataError::Query)
+            ));
+            assert_eq!(cached.cursor, 7);
+            assert_eq!(cached.accumulator.finish(), before);
+        }
     }
 }

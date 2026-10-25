@@ -4,7 +4,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::{Mutex, MutexGuard};
 use tokio_postgres::{Client, Row, Transaction};
 
 pub const SCHEMA_VERSION: i32 = 17;
@@ -40,14 +41,19 @@ impl Scope<'_> {
     }
 }
 
+/// Four independent read-only connections let unrelated scopes advance concurrently.
+/// Transactions never share a connection, including during schema preflight.
 pub struct PostgresReader {
-    client: Mutex<Client>,
-    connection: tokio::task::JoinHandle<()>,
+    connections: Vec<Connection>,
+    next: AtomicUsize,
 }
-
-impl Drop for PostgresReader {
+struct Connection {
+    client: Mutex<Client>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for Connection {
     fn drop(&mut self) {
-        self.connection.abort();
+        self.task.abort();
     }
 }
 
@@ -58,25 +64,45 @@ fn timestamp(row: &Row, name: &str) -> String {
 
 impl PostgresReader {
     pub async fn connect(url: &str) -> Result<Self, DataError> {
-        let tls = TlsConnector::builder()
-            .build()
-            .map_err(|_| DataError::Connection)?;
-        let (client, connection) = tokio_postgres::connect(url, MakeTlsConnector::new(tls))
-            .await
-            .map_err(|_| DataError::Connection)?;
-        let connection = tokio::spawn(async move {
-            let _ = connection.await;
-        });
+        let mut connections = Vec::new();
+        for _ in 0..4 {
+            let tls = TlsConnector::builder()
+                .build()
+                .map_err(|_| DataError::Connection)?;
+            let (client, connection) = tokio_postgres::connect(url, MakeTlsConnector::new(tls))
+                .await
+                .map_err(|_| DataError::Connection)?;
+            let task = tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            connections.push(Connection {
+                client: Mutex::new(client),
+                task,
+            });
+        }
         let result = Self {
-            client: Mutex::new(client),
-            connection,
+            connections,
+            next: AtomicUsize::new(0),
         };
         result.preflight().await?;
         Ok(result)
     }
 
+    async fn client(&self) -> MutexGuard<'_, Client> {
+        let index = self.next.fetch_add(1, Ordering::Relaxed) % self.connections.len();
+        for offset in 0..self.connections.len() {
+            if let Ok(client) = self.connections[(index + offset) % self.connections.len()]
+                .client
+                .try_lock()
+            {
+                return client;
+            }
+        }
+        self.connections[index].client.lock().await
+    }
+
     pub async fn preflight(&self) -> Result<(), DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -125,7 +151,7 @@ impl PostgresReader {
     }
 
     pub async fn projects(&self) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -185,7 +211,7 @@ impl PostgresReader {
         scope: Scope<'_>,
         after: i64,
     ) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -228,7 +254,7 @@ impl PostgresReader {
     }
 
     pub async fn builds(&self, repo: &str) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -249,7 +275,7 @@ impl PostgresReader {
     }
 
     pub async fn sessions(&self, repo: &str) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -275,7 +301,7 @@ impl PostgresReader {
         kind: &str,
         revision: Option<i64>,
     ) -> Result<Option<Value>, DataError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await;
         let tx = client
             .build_transaction()
             .read_only(true)
