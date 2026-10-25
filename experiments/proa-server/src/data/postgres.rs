@@ -75,6 +75,18 @@ fn timestamp(row: &Row, name: &str) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+fn enrich_build_liveness(record: &mut Value, row: &Row) {
+    if let Some(at) = row.get::<_, Option<DateTime<Utc>>>("heartbeat_at") {
+        record["heartbeatAt"] = json!(at.to_rfc3339_opts(SecondsFormat::Millis, true));
+    }
+    if let (Some(holder), Some(expires)) = (
+        row.get::<_, Option<String>>("lease_holder"),
+        row.get::<_, Option<DateTime<Utc>>>("lease_expires_at"),
+    ) {
+        record["lease"] = json!({"holder":holder,"expiresAt":expires.to_rfc3339_opts(SecondsFormat::Millis,true)});
+    }
+}
+
 fn stream_parts(raw: Value) -> Result<Value, DataError> {
     // The TypeScript adapter accepts driver-decoded JSON and JSONB strings.
     let value = match raw {
@@ -241,12 +253,13 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
-        let rows = tx.query("SELECT b.slug,b.ticket,b.branch,b.created_at,b.updated_at,(SELECT COALESCE(MAX(seq),0) FROM events WHERE build=b.slug) AS event_seq, false AS deleted FROM builds b LEFT JOIN jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) ON k.slug=b.slug WHERE b.repo=$1 AND (k.slug IS NULL OR b.updated_at <> k.updated::timestamptz OR EXISTS(SELECT 1 FROM events e WHERE e.build=b.slug AND e.seq>k.seq)) UNION ALL SELECT k.slug,NULL::jsonb,NULL::text,now(),now(),0::bigint,true FROM jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) WHERE NOT EXISTS(SELECT 1 FROM builds b WHERE b.repo=$1 AND b.slug=k.slug) ORDER BY 4,1", &[&repo,known]).await.map_err(|_|DataError::Query)?;
+        let rows = tx.query("SELECT b.slug,b.ticket,b.branch,b.created_at,b.updated_at,b.heartbeat_at,b.lease_holder,b.lease_expires_at,(SELECT COALESCE(MAX(seq),0) FROM events WHERE build=b.slug) AS event_seq, false AS deleted FROM builds b LEFT JOIN jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) ON k.slug=b.slug WHERE b.repo=$1 AND (k.slug IS NULL OR b.updated_at <> k.updated::timestamptz OR EXISTS(SELECT 1 FROM events e WHERE e.build=b.slug AND e.seq>k.seq)) UNION ALL SELECT k.slug,NULL::jsonb,NULL::text,now(),now(),NULL::timestamptz,NULL::text,NULL::timestamptz,0::bigint,true FROM jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) WHERE NOT EXISTS(SELECT 1 FROM builds b WHERE b.repo=$1 AND b.slug=k.slug) ORDER BY 4,1", &[&repo,known]).await.map_err(|_|DataError::Query)?;
         let result = rows.iter().map(|row| {
             if row.get::<_,bool>("deleted") {return json!({"slug":row.get::<_,String>("slug"),"deleted":true});}
             let mut record = json!({"slug":row.get::<_,String>("slug"),"repo":repo,"createdAt":timestamp(row,"created_at"),"updatedAt":timestamp(row,"updated_at"),"eventSeq":row.get::<_,i64>("event_seq")});
             if let Some(ticket) = row.get::<_,Option<Value>>("ticket") {record["ticket"]=ticket;}
             if let Some(branch) = row.get::<_,Option<String>>("branch") {record["branch"]=json!(branch);}
+            enrich_build_liveness(&mut record,row);
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -366,13 +379,14 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
-        let rows = tx.query("SELECT slug, repo, ticket, branch, created_at, updated_at FROM builds WHERE repo = $1 ORDER BY created_at, slug", &[&repo])
+        let rows = tx.query("SELECT slug, repo, ticket, branch, created_at, updated_at, heartbeat_at,lease_holder,lease_expires_at FROM builds WHERE repo = $1 ORDER BY created_at, slug", &[&repo])
             .await.map_err(|_| DataError::Query)?;
         let result = rows.iter().map(|row| {
             let mut record = json!({ "slug": row.get::<_, String>("slug"), "repo": repo,
                 "createdAt": timestamp(row, "created_at"), "updatedAt": timestamp(row, "updated_at") });
             if let Some(ticket) = row.get::<_, Option<Value>>("ticket") { record["ticket"] = ticket; }
             if let Some(branch) = row.get::<_, Option<String>>("branch") { record["branch"] = json!(branch); }
+            enrich_build_liveness(&mut record,row);
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -390,7 +404,7 @@ impl PostgresReader {
             .map_err(|_| DataError::Query)?;
         let rows = tx
             .query(
-                "SELECT ticket,branch,created_at,updated_at FROM builds WHERE repo=$1 AND slug=$2",
+                "SELECT ticket,branch,created_at,updated_at,heartbeat_at,lease_holder,lease_expires_at FROM builds WHERE repo=$1 AND slug=$2",
                 &[&repo, &slug],
             )
             .await
@@ -399,6 +413,7 @@ impl PostgresReader {
             let mut value=json!({"slug":slug,"repo":repo,"createdAt":timestamp(row,"created_at"),"updatedAt":timestamp(row,"updated_at")});
             if let Some(ticket)=row.get::<_,Option<Value>>("ticket"){value["ticket"]=ticket;}
             if let Some(branch)=row.get::<_,Option<String>>("branch"){value["branch"]=json!(branch);}
+            enrich_build_liveness(&mut value,row);
             value
         });
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -457,6 +472,46 @@ impl PostgresReader {
             .collect::<Result<Vec<_>, DataError>>()?;
         tx.commit().await.map_err(|_| DataError::Query)?;
         Ok(result)
+    }
+
+    /// Session-scoped stream reads keep chunks and record on the same read-only connection.
+    pub async fn session_stream(
+        &self,
+        repo: &str,
+        session: &str,
+        stream: &str,
+        after: i64,
+    ) -> Result<Value, DataError> {
+        let mut connection = self.client().await?;
+        let tx = connection
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        Self::assert_scope(&tx, repo, Scope::Session(session)).await?;
+        let row = tx.query_opt("SELECT s.* FROM streams s JOIN sessions o ON o.id=s.session WHERE s.id=$1 AND s.scope_kind='session' AND s.session=$2 AND o.repo=$3", &[&stream,&session,&repo]).await.map_err(|_| DataError::Query)?.ok_or(DataError::Query)?;
+        let rows = tx
+            .query(
+                "SELECT * FROM stream_chunks WHERE stream=$1 AND seq>$2 ORDER BY seq",
+                &[&stream, &after],
+            )
+            .await
+            .map_err(|_| DataError::Query)?;
+        let chunks = rows.iter().map(|r| Ok(json!({"stream":stream,"seq":r.get::<_,i64>("seq"),"ts":timestamp(r,"ts"),"parts":stream_parts(r.get("parts"))?}))).collect::<Result<Vec<Value>,DataError>>()?;
+        let mut value = json!({"chunks":chunks,"status":row.get::<_,String>("status")});
+        if let Some(outcome) = row.get::<_, Option<String>>("outcome") {
+            value["outcome"] = json!(outcome);
+        }
+        if let (Some(kind), Some(revision), Some(blob)) = (
+            row.get::<_, Option<String>>("artifact_kind"),
+            row.get::<_, Option<i64>>("artifact_revision"),
+            row.get::<_, Option<String>>("artifact_blob_ref"),
+        ) {
+            value["artifact"] = json!({"kind":kind,"revision":revision,"blobRef":blob});
+        }
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        Ok(value)
     }
 
     pub async fn sessions(&self, repo: &str) -> Result<Vec<Value>, DataError> {

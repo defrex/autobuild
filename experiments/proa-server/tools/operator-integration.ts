@@ -1,5 +1,13 @@
 /** Native Rust-write / TypeScript-read proof. No live dispatcher or credentials are used. */
 import { SQL } from 'bun'
+import { createOperatorServer } from '../../../packages/hosted-store-service/src/operator-server'
+import { testProjects } from '../../../packages/hosted-store-service/src/testing/projects'
+import { replayNativeControls } from './control-integration'
+import { mintToken } from '../../../packages/core/src/store/remote/token'
+import {
+  AUTOBUILD_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION,
+} from '../../../packages/core/src/store/remote/version'
 import { strict as assert } from 'node:assert'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -106,6 +114,9 @@ export async function operatorIntegration(
         sessionCases: string[]
         httpParity: boolean
         dispatcherProof: boolean
+        httpSessionCases: string[]
+        controlCases: string[]
+        readCases: string[]
       }
     | undefined
   const terminate = () => {
@@ -128,7 +139,7 @@ export async function operatorIntegration(
     }
     // Exact exercised writer capabilities. No DDL, deletes, ownership or broad table-write grant.
     await sql.unsafe(
-      `GRANT INSERT, UPDATE ON sessions, session_events, builds, events, repo_streams, repo_events, repo_change_positions TO ${writerRole}`,
+      `GRANT INSERT, UPDATE ON sessions, session_events, builds, events, repo_streams, repo_events, repo_change_positions, artifacts TO ${writerRole}`,
     )
     await sql.unsafe(`GRANT USAGE ON SEQUENCE sessions_creation_seq TO ${writerRole}`)
     store = await openPostgresBuildStoreFromEnv(
@@ -141,7 +152,10 @@ export async function operatorIntegration(
       url.password = password
       return { ...environment, AB_POSTGRES_URL: url.href }
     }
-    const writerEnv = withRole(writerRole)
+    const writerEnv = {
+      ...withRole(writerRole),
+      AB_STORE_SECRET: 'offline-operator-fixture-secret',
+    }
     rust = await bridge(writerEnv, runtime, [native])
     const request = async (command: Record<string, unknown>) => {
       const response = await rust!.request({ now: operatorClock, ...command })
@@ -215,6 +229,25 @@ export async function operatorIntegration(
       resolve(project, 'fixtures/operator-corpus.json'),
     ).json()) as OperatorCorpus
     await checkOperatorCorpus(corpus)
+    for (const item of corpus.manifest.operatorNormalization) {
+      const response = await rust.request({
+        op: 'create',
+        repo: operatorRepo,
+        user: item.input,
+        now: operatorClock,
+      })
+      if ('error' in item) {
+        assert.equal(response.error, item.error)
+      } else {
+        const record = response.value as { id: string; operator: string }
+        assert.equal(record.operator, item.owner)
+        assert.equal((await store.getSession(record.id))?.operator, item.owner)
+        assert.deepEqual((await store.getSessionEvents(record.id))[0]?.actor, {
+          kind: 'human',
+          user: item.owner,
+        })
+      }
+    }
     const checked: string[] = []
     for (const fixture of corpus.fixtures.filter((fixture) =>
       sessionCases.has(fixture.scenario.id),
@@ -409,11 +442,226 @@ export async function operatorIntegration(
     })
     assert.deepEqual(restarted.value.state, encodeReducerValue(reduceSession(concurrentEvents)))
 
+    // Replay the TypeScript HTTP session contract through the real native socket.
+    for (const repo of [operatorRepo, 'foreign/repo'])
+      await sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),${repo},'added','proof',${operatorClock})`
+    const address = (await request({ op: 'http-address' })).value as string
+    const controlEvidence = await replayNativeControls({ sql, store, address })
+    const readOracle = createOperatorServer({
+      store,
+      projects: testProjects([operatorRepo]),
+      secret: 'offline-operator-fixture-secret',
+      clock,
+    })
+    const readHeaders = {
+      authorization: `Bearer ${mintToken('offline-operator-fixture-secret', { version: 1, internalOperator: { repo: operatorRepo, user: 'operator@example.com' }, exp: clock().getTime() + 60000 })}`,
+      'x-autobuild-version': AUTOBUILD_VERSION,
+      'x-autobuild-protocol-version': String(REMOTE_STORE_PROTOCOL_VERSION),
+    }
+    await store.createBuild({
+      slug: 'native-queued-read',
+      repo: operatorRepo,
+      created: createdWrite,
+    })
+    for (const scope of ['active', 'queued', 'all', 'invalid']) {
+      const path = `/operator/v1/repos/${encodeURIComponent(operatorRepo)}/builds?scope=${scope}`
+      const expected = await readOracle.fetch(
+        new Request(`http://oracle.invalid${path}`, { headers: readHeaders }),
+      )
+      const actual = await fetch(`${address}${path}`, { headers: readHeaders })
+      assert.equal(actual.status, expected.status)
+      assert.deepEqual(
+        await actual.json(),
+        await expected.json(),
+        `native builds ${scope} read parity`,
+      )
+    }
+    await store.putArtifact('native-control', {
+      kind: 'proof bytes',
+      content: new Uint8Array([0, 255, 1, 128]),
+      metadata: { source: 'native-read-proof' },
+    })
+    for (const suffix of [
+      '',
+      '?rev=0',
+      '?rev=0000',
+      '?rev=9007199254740991',
+      '?rev=9007199254740992',
+      '?rev=-1',
+      '?rev=1e0',
+    ]) {
+      const path = `/operator/v1/repos/${encodeURIComponent(operatorRepo)}/builds/native-control/artifacts/proof%20bytes${suffix}`
+      const expected = await readOracle.fetch(
+        new Request(`http://oracle.invalid${path}`, { headers: readHeaders }),
+      )
+      const actual = await fetch(`${address}${path}`, { headers: readHeaders })
+      assert.equal(actual.status, expected.status, `artifact ${suffix} status`)
+      for (const key of [
+        'content-type',
+        'content-disposition',
+        'x-autobuild-artifact-kind',
+        'x-autobuild-artifact-revision',
+        'x-autobuild-artifact-blob-ref',
+      ])
+        assert.equal(
+          actual.headers.get(key),
+          expected.headers.get(key),
+          `artifact ${suffix} ${key}`,
+        )
+      assert.deepEqual(
+        new Uint8Array(await actual.arrayBuffer()),
+        new Uint8Array(await expected.arrayBuffer()),
+        `artifact ${suffix} bytes`,
+      )
+    }
+    const httpStore = store
+    const httpChecked: string[] = []
+    for (const fixture of corpus.fixtures.filter((f) => f.scenario.route.includes('sessions'))) {
+      await sql`TRUNCATE sessions CASCADE`
+      const bindings: string[] = []
+      for (const seed of fixture.seed) {
+        const source = seed.record as { repo: string; operator: string; title?: string }
+        const record = await httpStore.createSession({
+          repo: source.repo,
+          operator: source.operator,
+          title: source.title,
+        })
+        bindings.push(record.id)
+        // The seed's first creation fact is produced by the same store call above.
+        for (const raw of seed.events.slice(1)) {
+          const e = raw as { actor: unknown; type: string; payload: unknown }
+          await httpStore.appendSessionEvent(record.id, validateSessionEventWrite(e))
+        }
+      }
+      for (let i = 0; i < fixture.scenario.requests.length; i++) {
+        const input = fixture.scenario.requests[i]!
+        const token = mintToken(
+          'offline-operator-fixture-secret',
+          input.auth === 'admin'
+            ? {
+                version: 1,
+                ownerAdmin: { user: input.user ?? 'operator@example.com' },
+                exp: clock().getTime() + 60000,
+              }
+            : {
+                version: 1,
+                internalOperator: {
+                  repo: input.auth === 'foreign' ? 'foreign/repo' : operatorRepo,
+                  user: input.user ?? 'operator@example.com',
+                },
+                exp: clock().getTime() + (input.auth === 'expired' ? -1 : 60000),
+              },
+        )
+        const headers = new Headers()
+        if (input.version !== null)
+          headers.set('X-Autobuild-Version', input.version ?? AUTOBUILD_VERSION)
+        if (input.protocol !== null)
+          headers.set(
+            'X-Autobuild-Protocol-Version',
+            input.protocol ?? String(REMOTE_STORE_PROTOCOL_VERSION),
+          )
+        if (input.auth !== 'missing')
+          headers.set('Authorization', `Bearer ${input.auth === 'invalid' ? 'invalid' : token}`)
+        const path = bindings.reduce(
+          (p, id, n) => p.replaceAll(`$session:${n}`, encodeURIComponent(id)),
+          input.path,
+        )
+        const response = await fetch(
+          `${address}/operator/v1/repos/${encodeURIComponent(operatorRepo)}/${path}`,
+          {
+            method: input.method,
+            headers,
+            body:
+              input.rawBody ?? (input.body === undefined ? undefined : JSON.stringify(input.body)),
+          },
+        )
+        const actual = (await response.json()) as { id?: string }
+        if (response.status === 201 && actual.id) bindings.push(actual.id)
+        const expected = fixture.observations[i]!
+        assert.equal(response.status, expected.status, `${fixture.scenario.id}: real HTTP status`)
+        assert.deepEqual(
+          bindOperatorIds(actual, bindings),
+          expected.body,
+          `${fixture.scenario.id}: real HTTP body`,
+        )
+        assert.equal(response.headers.get('content-type'), expected.headers['content-type'])
+        const records = [
+          ...(await httpStore.listSessions(operatorRepo)),
+          ...(await httpStore.listSessions('foreign/repo')),
+        ]
+        const snapshots = await Promise.all(
+          records.map(async (record) => {
+            const events = await httpStore.getSessionEvents(record.id)
+            events.forEach(validateSessionEventWrite)
+            return { record, events, state: reduceSession(events) }
+          }),
+        )
+        assert.deepEqual(
+          bindOperatorIds(snapshots, bindings),
+          expected.sessions,
+          `${fixture.scenario.id}: real HTTP durable state`,
+        )
+      }
+      httpChecked.push(fixture.scenario.id)
+    }
+
+    const streamSession = await store.createSession({
+      repo: operatorRepo,
+      operator: 'operator@example.com',
+    })
+    const stream = await store.createStream(
+      { kind: 'session', session: streamSession.id },
+      'turn:stream-proof',
+    )
+    await store.appendSessionEvent(streamSession.id, {
+      actor: { kind: 'agent', role: 'orchestrator', session: 'turn-proof' },
+      type: 'turn.started',
+      payload: {
+        turn: 'turn-proof',
+        stream: stream.id,
+        trigger: { kind: 'message', messageSeq: 1 },
+      },
+    })
+    await store.appendStreamParts(stream.id, [
+      { type: 'text-start', id: 'text-1' },
+      { type: 'text-delta', id: 'text-1', delta: 'Native stream bytes' },
+    ])
+    const streamPath = `/operator/v1/repos/${encodeURIComponent(operatorRepo)}/sessions/${streamSession.id}/turns/turn-proof/stream`
+    for (const suffix of ['', '?since=0', '?since=1&wait=-1']) {
+      const expected = await readOracle.fetch(
+        new Request(`http://oracle.invalid${streamPath}${suffix}`, { headers: readHeaders }),
+      )
+      const actual = await fetch(`${address}${streamPath}${suffix}`, { headers: readHeaders })
+      assert.equal(actual.status, expected.status)
+      assert.deepEqual(await actual.json(), await expected.json(), `session stream ${suffix}`)
+    }
+    await store.closeStream(stream.id, 'completed')
+    const closedExpected = await readOracle.fetch(
+      new Request(`http://oracle.invalid${streamPath}`, { headers: readHeaders }),
+    )
+    const closedActual = await fetch(`${address}${streamPath}`, { headers: readHeaders })
+    assert.equal(closedActual.status, closedExpected.status)
+    assert.deepEqual(
+      await closedActual.json(),
+      await closedExpected.json(),
+      'closed session stream artifact metadata',
+    )
+
     evidence = {
-      checkpoint: 'native-session-storage-foundation',
+      checkpoint: 'native-http-controls',
       claims: operatorFoundationClaims,
       sessionCases: checked,
       httpParity: false,
+      httpSessionCases: httpChecked,
+      controlCases: controlEvidence,
+      readCases: [
+        'builds:active',
+        'builds:queued',
+        'builds:all',
+        'builds:invalid-scope',
+        'artifacts:binary-revisions',
+        'sessions:open-closed-stream',
+      ],
       dispatcherProof: false,
     }
     console.log(JSON.stringify(evidence))

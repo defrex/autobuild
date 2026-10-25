@@ -33,8 +33,8 @@ pub enum WriteError {
     #[error("project not registered")]
     ProjectNotRegistered,
 }
-struct Connection {
-    client: Client,
+pub(crate) struct Connection {
+    pub(crate) client: Client,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Connection {
@@ -46,6 +46,14 @@ pub struct PostgresWriter {
     connection: Mutex<Connection>,
     url: String,
     tls: MakeRustlsConnect,
+}
+
+pub fn normalize_operator(operator: &str) -> Result<&str, WriteError> {
+    let operator = operator.trim_matches(crate::operator::auth::js_space);
+    if operator.is_empty() {
+        return Err(WriteError::Validation("operator is required".into()));
+    }
+    Ok(operator)
 }
 
 fn policy() -> &'static Value {
@@ -148,6 +156,11 @@ pub fn validate_write(scope: Scope, write: &Value) -> Result<Value, WriteError> 
                 return Err(bad());
             }
             out["compatibility"] = c.clone();
+        } else {
+            out["compatibility"] = json!({
+                "writerVersion": crate::operator::protocol::service_version(),
+                "classification": policy()["classification"][scope.name()][kind],
+            });
         }
     }
     Ok(out)
@@ -261,7 +274,7 @@ impl PostgresWriter {
         }
         Ok(result)
     }
-    async fn client(&self) -> Result<MutexGuard<'_, Connection>, WriteError> {
+    pub(crate) async fn client(&self) -> Result<MutexGuard<'_, Connection>, WriteError> {
         let mut connection = self.connection.lock().await;
         if connection.client.is_closed() {
             *connection = Self::open(&self.url, self.tls.clone()).await?;
@@ -413,7 +426,7 @@ impl PostgresWriter {
         title: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<Value, WriteError> {
-        let operator = operator.trim();
+        let operator = normalize_operator(operator)?;
         if operator.is_empty() {
             return Err(WriteError::Validation("operator is required".into()));
         }
@@ -523,6 +536,25 @@ fn credential_record(row: &Row) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operator_normalization_matches_typescript_generated_unicode_cases() {
+        let corpus: Value =
+            serde_json::from_str(include_str!("../../fixtures/operator-corpus.json")).unwrap();
+        for case in corpus["manifest"]["operatorNormalization"]
+            .as_array()
+            .unwrap()
+        {
+            let result = normalize_operator(case["input"].as_str().unwrap());
+            if let Some(owner) = case["owner"].as_str() {
+                assert_eq!(result.unwrap(), owner);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    case["error"].as_str().unwrap()
+                );
+            }
+        }
+    }
     #[test]
     fn producer_rejects_read_tolerated_fields_and_wrong_actor() {
         let write = json!({"actor":{"kind":"human","user":"owner"},"type":"build.pause-requested","payload":{}});

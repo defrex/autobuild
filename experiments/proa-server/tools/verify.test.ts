@@ -15,7 +15,12 @@ test('operator checkpoint gates keep oracle drift and native write evidence mand
   for (const stage of [
     'tools/operator-fixtures.ts',
     'tools/writer-fixtures.ts',
+    'tools/request-fixtures.ts',
+    'tools/control-fixtures.ts',
+    'tools/query-fixtures.ts',
+    'tools/delegation-fixtures.ts',
     'tools/operator-integration.ts',
+    'tools/ticket-integration.ts',
   ])
     expect(source).toContain(`['bun', '${stage}']`)
 })

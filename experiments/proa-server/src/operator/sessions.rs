@@ -203,6 +203,35 @@ impl SessionService<'_> {
         Ok(view(record, reduced["session"].clone()))
     }
 
+    pub async fn stream(
+        &self,
+        repo: &str,
+        id: &str,
+        turn: &str,
+        since: i64,
+        wait_seconds: u64,
+    ) -> Result<Value, OperatorError> {
+        let view = self.get(repo, id).await?;
+        let stream = turn_stream(&view["state"], id, turn)?.to_owned();
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(wait_seconds.min(30));
+        loop {
+            let read = self
+                .reader
+                .postgres()
+                .session_stream(repo, id, &stream, since)
+                .await
+                .map_err(storage_error)?;
+            if read["status"] != "open"
+                || read["chunks"].as_array().is_some_and(|c| !c.is_empty())
+                || tokio::time::Instant::now() >= deadline
+            {
+                return Ok(read);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
     pub async fn create(
         &self,
         repo: &str,

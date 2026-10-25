@@ -13,14 +13,31 @@ async fn main() -> anyhow::Result<()> {
     let writer = PostgresWriter::connect(&config.database_url).await?;
     let competing = PostgresWriter::connect(&config.database_url).await?;
     let reader = DataReader::connect(config).await?;
+    let auth = proa_server::config::Config::parse(|_| None)?.auth;
+    let app = proa_server::app::AppState::from_env(auth).await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let router = proa_server::operator::http::router_with_clock(std::sync::Arc::new(|| {
+        "2026-09-02T00:00:00.000Z".parse().unwrap()
+    }))
+    .merge(proa_server::operator::delegation::router_with_clock(
+        std::sync::Arc::new(|| "2026-09-02T00:00:00.000Z".parse().unwrap()),
+    ))
+    .with_state(app);
+    let http = tokio::spawn(async move { axum::serve(listener, router).await });
     println!("{}", json!({"ready": true}));
     io::stdout().flush()?;
     for line in io::stdin().lock().lines() {
         let command: Value = serde_json::from_str(&line?)?;
-        let reply = execute(&command, &writer, &competing, &reader).await;
+        let reply = if command["op"] == "http-address" {
+            json!({"value":format!("http://{address}")})
+        } else {
+            execute(&command, &writer, &competing, &reader).await
+        };
         println!("{reply}");
         io::stdout().flush()?;
     }
+    http.abort();
     Ok(())
 }
 

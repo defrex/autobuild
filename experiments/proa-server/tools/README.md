@@ -24,12 +24,12 @@ The locked private `s3rver` 3.7.1 dependency supplies a real local HTTP S3 subse
 binding loopback port zero in a unique temporary directory. Startup probes signed
 upload/download through the actual TypeScript AWS client. Production blob settings
 are removed, and exact test endpoint/credentials are passed explicitly to both clients.
-The TypeScript producer creates a uniquely named database/SELECT-only role, writes
+The TypeScript producer creates a uniquely named database and separate SELECT-only reader and mutation roles, writes
 all three event and artifact scopes through the actual store, and invokes the native
 Rust reader. Cleanup closes clients and removes only that run's database, role,
 server and directory, including failure paths. Startup/teardown are bounded.
 No forge or live sandbox runner is needed. Seeded capture provisions both services
-in isolated loopback resources, with a SELECT-only Rust role.
+in isolated loopback resources. Rust reader transactions retain their SELECT-only role; browser writes use `PROA_POSTGRES_WRITE_URL` with a separately granted writer role.
 The proa-rust gate runs `bun test tools` from the experiment directory before
 Rust checks, so negative capture fixtures, route coverage and pipeline regressions
 are enforced for every applicable build. Capture-build mode only exports the
@@ -74,7 +74,7 @@ with source hashes, timestamp shifts, replay counts and artifact inventories.
 `sql-evidence.json` records actual native suffix reads and immutable downloads.
 Capture checks no-JS DOM snapshots, same-document event refresh within five seconds,
 live transcript suffixes and retained disclosures. Server and browser processes,
-databases, SELECT-only roles and S3 directories are cleaned on failure too.
+databases, reader/writer roles and S3 directories are cleaned on failure too.
 
 Corpus generation: `bun tools/generate-fixtures.ts` from the experiment executes
 scenario/compatibility producers, captures per-store logs and validates every event
@@ -96,10 +96,11 @@ operator@example.com; the second server's configured refused@example.com is abse
 from its allowlist. No live GitHub calls or browser-signed cookie stubs are used.
 The exact server-issued cookie is installed into Chromium; each frame starts with
 cleared cookies. Refusal is a real POST navigation to the denied issuer, with only
-that route's expected 403 excluded from asset-error detection.
+that route's expected 403 and the tested `/controls` stale-answer 409 excluded from asset-error detection.
 
-The matrix covers initial public sign-in, actual refusal, signed-in Builds and
-open account menu at 1440/390 in both grounds. Content/readiness probes understand
+The 40-frame matrix covers initial public sign-in, actual refusal, signed-in Builds,
+open account menu, detail, guidance, pending pause, destructive confirmation and
+stale-answer refusal at 1440/390 in both grounds. Content/readiness probes understand
 public versus authenticated pages and assert identity, sign-out and alert content.
 Palette, rendered fonts, overflow, external requests, HTTP asset failures and
 browser exceptions remain enforced. After capture a real sign-out form submission
@@ -125,19 +126,58 @@ a new live event under five seconds. `metadata:*` entries in SQL evidence report
 registry, discovery, stream and artifact metadata queries as well as returned row
 counts; these are separate from event suffixes and blob byte downloads.
 
-## Operator foundation checkpoint
+## Operator contract proofs
 
 `bun tools/operator-fixtures.ts` checks the committed operator HTTP oracle against
 current TypeScript sources, identity rules and documentation. Regenerate deliberately
 with `--write`; `coverage.missing*` in `fixtures/operator-corpus.json` remains an
 explicit completion checklist. `bun tools/writer-fixtures.ts` checks the generated
-actor/classification policy; `--write` regenerates it. Rust session policy tests
+actor/classification policy; `--write` regenerates it. Rust policy tests
 consume the oracle and compare exact refusals, actor/payload, write count and state.
 
 `bun tools/operator-integration.ts` provisions isolated PostgreSQL/S3 resources and
 runs the native `operator-proof` test bridge, then reads its actual writes through
 the TypeScript store. Its database roles are separate from the existing SELECT-only
 reader proof; denied writes must leave no durable event. This bridge is test tooling,
-not a production API or a proxy for Rust HTTP requests. Full HTTP route replay,
-browser mutation capture and the isolated dispatcher scheduling proof remain gates
-in [the staged parity checklist](../OPERATOR-PARITY.md).
+not a production API or a proxy for Rust HTTP requests. The HTTP replay and browser
+proofs exercise the real server separately. [The staged parity checklist](../OPERATOR-PARITY.md)
+distinguishes measured coverage from remaining full-surface and concurrency gates;
+a passing subset does not establish complete operator parity.
+
+## Native hosted ticket proof
+
+`bun tools/ticket-integration.ts` uses isolated PostgreSQL/S3 and a least-privilege
+writer role to compare native ticket operations with the unchanged TypeScript
+adapter and `updateTicketTarget` policy. It checks body bytes, node/target graph
+rules, state discovery and creation, exact refusals, guarded revisions, per-id
+unguarded blocker commits, concurrent writers, restart reads and published policy
+without a dispatcher configuration artifact. The retarget cases validate actual
+Rust-produced `node.parent-requested` payloads through the core event validator,
+compare them with TypeScript, and cover held writer leases, pending operations
+and pending parent cycles.
+
+The `ticket-proof` example is test-only. Its `--http` mode serves the actual Rust
+operator router over an ephemeral loopback port. The proof issues a project
+credential, creates and patches a ticket over HTTP, reads the stored result
+through TypeScript, and checks strict unknown-field rejection, stale revisions
+and revocation on the next request. This proves those routes; it does not claim
+exhaustive operator HTTP parity. The gate prints machine-readable claims and
+cleans up only its own database, role and processes.
+
+## Browser mutation proof
+
+The capture seeds independent control builds for each script mode. Chromium clicks
+the rendered pause, cancel-pause, resume, abort, discard, guidance, retry and dismiss
+forms with JavaScript enabled and disabled. The proof reads the resulting facts
+through the TypeScript store, checks the admitted identity, confirms destructive
+first steps write nothing and checks enhanced submissions retain the document.
+`browser-control-proof.json` records the actions and exact event kinds. The same
+run rejects wrong CSRF, foreign Origin and cross-project forms without writes.
+
+Browser forms carry only the cookie session's CSRF token, project and slug. They
+share the native operator policies and strict answer schema; supplied identity
+fields never grant authority. Ordinary successful POSTs redirect with 303. Enhanced
+POSTs request server-rendered HTML with `X-Proa-Fragment: 1`; a typed refusal is
+escaped inline with the draft retained. Polls preserve drafts, errors and pending
+confirmations, and responses from older polls cannot replace a mutation result.
+Landing consent remains API-only.

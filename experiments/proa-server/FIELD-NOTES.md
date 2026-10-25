@@ -497,3 +497,48 @@ and progressive enhancement have not yet been measured; their browser and visual
 proofs remain required before the build can finish. The ticket attribution gap
 `obs_675b94d9` is retained as an explicit TypeScript storage-parity exception rather
 than filled with a new experiment-only audit schema.
+
+## Operator controls: forms and progressive enhancement
+
+The form surface renders synchronously. A request-scoped loader supplies one
+fresh dashboard/detail snapshot, and the authenticated Viewer supplies the CSRF
+field and sign-off on both initial HTML and polling fragments. No bearer token
+or machine signing key enters the page. Browser POSTs recheck the live session,
+registered project, canonical Origin/Referer and CSRF before sharing native
+operator policy. Confirmation renders a second ordinary form; that first POST
+writes no lifecycle intent. Successful ordinary mutations use a 303 GET, while
+enhanced requests receive the same rendered page fragment.
+
+A draft, a refusal and a destructive confirmation are page state as well as
+server state. Polling preserves their controls subtree; submitting aborts an
+older poll and advances a generation so its response cannot overwrite the
+acknowledgment. Mutation handlers never optimistically change lifecycle words.
+The enhancement delegates to the forms, disables only the submitted form's
+buttons and restores focus after replacing the fragment. Concurrent local
+submissions are suppressed while a mutation is pending.
+
+Proa needs an explicit `raw_text_ok` around deliberate textarea interpolation,
+just as around the existing document title. This suppresses a warning, not HTML
+escaping: the render test checks a `</textarea><script>` draft and revised body
+cannot break out. Proa 0.1.3/0.3.0 also rejects a label/input anywhere inside a
+`details` element as nested interactive content, although the HTML disclosure
+content model permits it. A plain fieldset with a legend carries the extra
+answer options without disabling the compiler's accessibility checks. Reproduce
+with `html_sync! { <details><summary>"Options"</summary><label for="x">"Value"</label><input id="x"/></details> }`.
+
+The seeded Chromium run exercised eight build operations in each script mode
+(16 real mutations): pause, cancel-pause, resume, abort, discard, guidance, retry
+and finding dismissal. The TypeScript store accepted every resulting native fact
+with `operator@example.com` as the human actor and no delegated `via`. Both
+confirmation first steps left event counts unchanged. Enhanced acknowledgments
+arrived in the original document; a guidance draft, a stale-answer refusal and
+a confirmation survived a polling interval. Wrong CSRF and Origin returned 403;
+a valid registered but foreign project returned 404; all three left events
+unchanged. The 40-frame visual matrix retained the ANSI grounds, local faces,
+inline red states and narrow wrapping with no overflow.
+
+The browser proof caught a DOM API trap: form controls named `action` shadow
+`HTMLFormElement.action`. Enhancement must read `getAttribute('action')`, while
+native no-JavaScript submission already follows the attribute. The CDP driver
+also waits for deferred scripts before enhanced clicks and reacquires nodes
+retired by a poll or navigation; neither timing is evidence of a server failure.

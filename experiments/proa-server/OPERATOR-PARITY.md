@@ -10,8 +10,8 @@ are complete.
 
 The first checkpoint adds source-pinned TypeScript HTTP oracle fixtures, a
 separate native write connection, API identity/authentication primitives, and
-session ownership/approval/archive policies. The existing server still exposes
-its read-only browser dashboard: these library primitives are not yet public
+session ownership/approval/archive policies. At that checkpoint the server still exposed
+only its read-only browser dashboard; those library primitives had no public
 operator routes or browser mutations. The SELECT-only reader pool stays separate.
 
 `tools/operator-fixtures.ts --write` regenerates the oracle corpus from the
@@ -33,33 +33,60 @@ ticket-attribution contract requires a maintainer product-design decision.
 Build and repository facts retain human identity and optional transport `via`;
 session facts name the signed user and never carry `via`.
 
-## First follow-up conformance case
+## Native HTTP and browser checkpoint
 
-Before exposing session creation, align `PostgresWriter::create_session` operator
-normalization with TypeScript `normalizeOperator` / ECMAScript `String.trim`.
-It currently uses Rust `str::trim`, which differs for U+FEFF and U+0085. Add
-TypeScript-generated normalization cases (including empty-after-trim and preserved
-non-whitespace) and assert the signed user matches the stored owner/creation actor.
-The current native creation proof uses ordinary email identities and does not
-cover this difference. This is remaining work within this build, not a scope waiver.
+The follow-up identity gap is fixed: TypeScript-generated ECMAScript trim cases
+include U+FEFF, U+0085, empty-after-trim and retained interior whitespace. Native
+session creation stores the normalized owner and the same creation actor.
+
+The server now exposes bearer sessions, build controls/answers/restack,
+intake/bulk/harvest mutations, hosted tickets, build lists, artifact bytes and
+session-turn streams. Browser controls use the same native policies, fresh cookie
+admission, CSRF and canonical origin; the separate reader remains SELECT-only.
+`PROA_POSTGRES_WRITE_URL` can select a distinct writer role. API routes have their
+own identity/auth layer and bypass browser redirects and origin middleware.
+
+The current executable proofs cover 77 real HTTP build/repository control cases,
+35 real HTTP session cases, list scopes, binary artifact revision boundaries,
+open/closed session streams, and TypeScript validation/reduction of native facts.
+Ticket proof checks native PostgreSQL rows, revisions, blocker batches, concurrent
+writers, restart readback, bearer HTTP writes/revocation, and claimed-node parent
+reservations against the actual TypeScript operation. Source-derived request
+schemas compare successful outputs and exact Zod refusal strings. Delegation
+issuance has 16 oracle/native policy cases, including exact signed token bytes.
+These are bounded claims, not proof of the entire operator contract.
+
+S3/Vercel artifact uploads precede SQL publication. Vercel upload wire tests cover
+both auth modes and failure privacy. The pinned provider contract is recorded in
+BLOB-CONTRACT.md. Native API/domain code never invokes TypeScript.
+
+Browser forms offer guidance/retry/dismiss, extended answer options,
+pause/cancel-pause/resume, explicit abort/discard confirmations, intake/bulk and
+harvest controls. JavaScript uses the same forms with SSR fragments and polling
+coordination. No browser landing controls or ticket authoring pages are added.
+The capture and end-to-end browser proof remain mandatory before completion.
 
 ## Remaining completion gates
 
-- Wire and replay the real HTTP API: identity admission before auth, project
-  isolation, strict bodies and exact TypeScript errors; finish delegated lifecycle
-  validation and credential issuance seam.
-- Complete API read projections, artifact revisions and bounded session streams.
-- Complete build controls, landing guards, restack and all answer variants,
-  including blob/artifact publication and spec/asset rules.
-- Complete settings/intake, ordered partial bulk operations and harvest controls.
-- Complete native hosted ticket policy, row locks and revision-checked mutations.
-- Complete the generic HTTP tool registry face through the same domain handlers;
+- Complete API read projections: build detail/dashboardRow, dashboard, repository
+  status and harvest status, durable config validation and typed corrupt-config
+  errors, complete runtime attach provenance and cleaning visibility.
+- Complete the generic HTTP registry route through the same native operations;
   MCP transport remains out of scope.
-- Add authenticated browser forms with CSRF/origin checks, inline refusals,
-  destructive confirmation and polling-safe progressive enhancement; no web
-  landing controls or ticket authoring pages.
-- Establish full Rust HTTP differential results and ordered native write/reducer
-  parity, complete producer-validation negative cases, concurrency/failure/restart proofs, isolated dispatcher pause/resume
-  evidence and the control-state capture matrix in both grounds and widths.
-- Record measured Proa forms/mutations experience in FIELD-NOTES.md; run every
-  required root/native/tooling check and visually inspect every captured PNG.
+- Complete node landing live ticket completeness and hosted spec/asset repinning,
+  and audit all answer transaction/race guards against the TypeScript helpers.
+  Multi-escalation prefixes, terminalization during preparation, retry recovery,
+  node fences and failed artifact publication need dedicated seam evidence.
+- Match configured session creation wake inheritance and exercise bounded
+  stream waits over real HTTP.
+- Replay delegation issuance over real HTTP with durable credential/lease/session
+  state; pure issuance token parity and separate lifecycle tests are not that proof.
+- Expand control/ticket differential coverage to all route/action/answer variants,
+  compatibility fixtures, failure injection, stale races and ordered partial bulk
+  progress. Do not treat positive leaf control cases as node-control coverage.
+- Establish the isolated real dispatcher pause/resume proof and terminal dashboard
+  evidence. This checkpoint does not run any live repository dispatcher operation.
+- Finish browser JS/no-JS mutation proof and inspect all 40 control-state frames
+  at both widths and grounds. Run every required root/native/tooling gate.
+
+`ab done` remains forbidden until every approved acceptance criterion is covered.

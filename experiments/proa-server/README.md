@@ -1,6 +1,6 @@
 # Proa server experiment
 
-Nonshipping Rust/Proa experiment, version 0.1.0. Builds and build detail read the shared TypeScript-owned store through native Rust projections, with GitHub operator sign-in and read-only live updates.
+Nonshipping Rust/Proa experiment, version 0.1.0. Builds and build detail read the shared TypeScript-owned store through native Rust projections, with GitHub operator sign-in, native operator controls and live updates.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
@@ -177,7 +177,7 @@ inside that project. Every normal GET is a complete snapshot with scripting off.
 A two-second progressive refresh has one request in flight, keeps the last good
 content on failure, and returns 304 for unchanged models. Build and transcript
 cursors are independent. Immutable artifact bytes have a bounded process cache.
-No TypeScript runs inside the server, and no page writes lifecycle state.
+No TypeScript runs inside the server. Browser forms and bearer API controls call the same native service and persist TypeScript-compatible facts through a separate write connection.
 
 The offline TypeScript projection oracle is regenerated with
 `bun tools/projection-fixtures.ts --write` and checked without writing by
@@ -203,5 +203,17 @@ paragraph breaks and linking to the complete detail text.
 
 Native operator foundations are being delivered in tested checkpoints. See
 [operator parity and remaining gates](OPERATOR-PARITY.md) for the current boundary,
-attribution exception and completion requirements. The browser dashboard remains
-read-only until its authenticated form transport is implemented.
+attribution exception and completion requirements. Browser forms use fresh cookie admission, CSRF and canonical origin checks. Bearer
+routes use protocol/version admission and fresh project credentials or signed
+internal operator authority. `AB_STORE_SECRET` enables signed API credentials and
+is separate from `PROA_SESSION_SECRET`; bearer values never reach the browser.
+
+`PROA_POSTGRES_WRITE_URL` selects a separate writer connection, defaulting to the
+configured database URL. Give the reader SELECT-only access and the writer only
+the tested mutation capabilities. Neither connection initializes schema. S3/Vercel
+uploads precede artifact metadata publication.
+
+Ordinary forms work without JavaScript. With JavaScript, those same forms replace
+server-rendered fragments while polling preserves drafts and refusals. Abort and
+discard need explicit confirmation. The browser has no landing consent controls.
+The parity ledger identifies unfinished API surface and proofs.

@@ -17,7 +17,7 @@ pub struct OperatorError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub progress: Option<Value>,
+    pub progress: Option<Box<Value>>,
 }
 impl OperatorError {
     pub fn new(status: u16, kind: &'static str, error: impl Into<String>) -> Self {
@@ -42,7 +42,7 @@ impl OperatorError {
         Self::new(404, "not-found", error)
     }
     pub fn internal() -> Self {
-        Self::new(500, "internal", "internal error")
+        Self::new(500, "internal", "operator API is unavailable")
     }
     pub fn with_code(mut self, code: impl Into<String>) -> Self {
         self.code = Some(code.into());

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { normalizeOperator } from '../../../packages/core/src/store/types'
 import { MemoryBuildStore } from '../../../packages/core/src/store/memory'
 import { reduceSession } from '../../../packages/core/src/store/session-reducer'
 import { createOperatorServer } from '../../../packages/hosted-store-service/src/operator-server'
@@ -158,6 +159,21 @@ export function operatorManifest() {
       historicalProtocols: RELEASE_LINE_PROTOCOLS,
     },
     clock: operatorClock,
+    operatorNormalization: [
+      ' owner@example.com ',
+      '\uFEFFOwner@Example.com\uFEFF',
+      '\u0085Owner@Example.com\u0085',
+      '\uFEFF \t\n',
+      '',
+      '\u2007Owner@Example.com\u202F',
+      'Owner\uFEFFName',
+    ].map((input) => {
+      try {
+        return { input, owner: normalizeOperator(input) }
+      } catch (error) {
+        return { input, error: (error as Error).message }
+      }
+    }),
     // Only concrete generated session ids are bound. Timestamps, actor, sequence and text stay exact.
     bindings: {
       '$session:N':
