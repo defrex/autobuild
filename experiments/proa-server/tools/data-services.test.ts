@@ -75,3 +75,36 @@ test('signed real S3 readiness and cleanup after failing child', async () => {
   await expect(access(service.directory)).rejects.toThrow()
   await expect(fetch(service.endpoint)).rejects.toThrow()
 }, 30000)
+
+test('missing and unready S3 service fail explicitly', async () => {
+  await expect(startS3({ command: ['/definitely-missing/proa-s3-service'] })).rejects.toThrow()
+  await expect(startS3({ command: ['/bin/false'] })).rejects.toThrow('before readiness')
+  await expect(
+    startS3({
+      command: ['bun', '-e', 'setInterval(() => {}, 1000)'],
+      startupTimeoutMs: 50,
+    }),
+  ).rejects.toThrow('startup timed out')
+}, 10000)
+
+test('announced but unreachable S3 service fails its signed readiness probe', async () => {
+  await expect(
+    startS3({
+      command: [
+        'bun',
+        '-e',
+        `
+    console.log(JSON.stringify({ endpoint: 'http://127.0.0.1:1', directory: process.env.PROA_S3_DIRECTORY }));
+    setInterval(() => {}, 1000);
+  `,
+      ],
+    }),
+  ).rejects.toThrow()
+}, 15000)
+
+test('service stop is idempotent and waits for shared cleanup', async () => {
+  const service = await startS3()
+  await Promise.all([service.stop(), service.stop()])
+  await expect(access(service.directory)).rejects.toThrow()
+  await expect(fetch(service.endpoint)).rejects.toThrow()
+}, 30000)

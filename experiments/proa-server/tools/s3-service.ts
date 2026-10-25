@@ -1,26 +1,20 @@
 // Gate-owned S3 subset. Signature checking remains enabled.
 import S3rver from 's3rver'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rm } from 'node:fs/promises'
 
-const directory = await mkdtemp(join(tmpdir(), 'proa-s3-'))
-const server = new S3rver({
-  address: '127.0.0.1',
-  port: 0,
-  silent: true,
-  directory,
-  configureBuckets: [{ name: 'proa-data-proof' }],
-})
-let closing = false
-async function close() {
-  if (closing) return
-  closing = true
-  try {
-    await server.close()
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
+const directory = process.env.PROA_S3_DIRECTORY
+if (!directory) throw new Error('S3 service requires its parent-owned temporary directory')
+let server: S3rver | undefined
+let closing: Promise<void> | undefined
+function close() {
+  closing ??= (async () => {
+    try {
+      await server?.close()
+    } finally {
+      await rm(directory!, { recursive: true, force: true })
+    }
+  })()
+  return closing
 }
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.once(signal, () => {
@@ -30,6 +24,13 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     )
   })
 try {
+  server = new S3rver({
+    address: '127.0.0.1',
+    port: 0,
+    silent: true,
+    directory,
+    configureBuckets: [{ name: 'proa-data-proof' }],
+  })
   const address = await server.run()
   console.log(JSON.stringify({ endpoint: `http://127.0.0.1:${address.port}`, directory }))
 } catch (error) {
