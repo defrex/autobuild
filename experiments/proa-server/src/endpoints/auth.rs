@@ -232,7 +232,7 @@ pub async fn gateway(
         "/health" | "/readyz" | "/sign-in" | "/auth/github" | "/auth/github/callback"
     ) || path.starts_with("/static/")
         || path == "/auth/dev-session" && state.auth.config.dev.is_some();
-    if public {
+    if public || path.starts_with("/operator/v1/") || path == "/credentials/delegate" {
         next.run(request).await
     } else {
         let id = state.auth.read_cookie(request.headers(), "proa-session");
@@ -328,6 +328,9 @@ mod tests {
             AppState {
                 auth: Arc::new(auth),
                 data: None,
+                writer: None,
+                blobs: None,
+                operator_secret: None,
             },
             list,
         )
@@ -631,6 +634,9 @@ mod failure_tests {
             let state = AppState {
                 auth: Arc::new(auth),
                 data: None,
+                writer: None,
+                blobs: None,
+                operator_secret: None,
             };
             let response = routes::router(state.clone())
                 .oneshot(
