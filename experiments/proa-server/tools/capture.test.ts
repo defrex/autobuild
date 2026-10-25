@@ -28,7 +28,7 @@ test('route inventory rejects new and unsupported route declarations', async () 
     'Route::page("/new",other)',
   ])
     expect(() => checkRoutes(`${source}\n${declaration}`, machine)).toThrow('Unclassified')
-  expect(new Set(frames.map((f) => f.id)).size).toBe(40)
+  expect(new Set(frames.map((f) => f.id)).size).toBe(68)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
       for (const state of ['open', 'closed'])
@@ -45,10 +45,14 @@ test('machine namespaces and fallback services require explicit evidence classif
     'repos',
     'sessions',
     'streams',
+    'tickets',
   ])
   expect(() =>
     checkMachineNamespaces(
-      machine.replace(/(pub const MACHINE_NAMESPACES[^;]*?)"builds"/, '$1"builds", "tickets"'),
+      machine.replace(
+        /(pub const MACHINE_NAMESPACES[^;]*?)"builds"/,
+        '$1"builds", "future-namespace"',
+      ),
     ),
   ).toThrow('Unclassified machine namespace')
   expect(() =>
@@ -61,6 +65,12 @@ test('machine namespaces and fallback services require explicit evidence classif
       machine.replace('pub const MACHINE_NAMESPACES', 'const MACHINE_NAMESPACES'),
     ),
   ).toThrow('Unclassified machine namespace')
+  expect(() =>
+    checkRoutes(
+      source.replace('proa_server::connection::http::is_public_path(request.uri().path())', 'true'),
+      machine,
+    ),
+  ).toThrow('Unclassified fallback')
   expect(() => checkRoutes(`${source}\n.fallback(other)`, machine)).toThrow('Unclassified fallback')
   expect(() => checkRoutes(`${source}\n.fallback_service(other)`, machine)).toThrow(
     'Unclassified fallback',

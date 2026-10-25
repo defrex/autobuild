@@ -250,3 +250,12 @@ the dispatched build on the sibling Builds page remains a node integration check
 after file-131, per the approved scope ruling. This is a nonshipping experiment.
 See [the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
 for fixture generation, isolated proofs and evidence.
+
+The ticket machine namespace is `/tickets/*`, separate from `/api` operator
+presentation. `/connect` is the signed-in project approval page; its forms work
+without JavaScript. Public `/connect/v1/requests`, `/poll`, and `/cancel` use the
+CLI capability, while `/connect/v1/status` and `/revoke` use project credentials.
+Browser `/connect/v1/browser/lookup` and `/decide` require a fresh allowed session
+and the configured canonical Origin. Requests, decisions and prepared credentials
+share the TypeScript service's PostgreSQL tables, so either server can continue a
+flow after restart. Organization approval and ticket browsing are outside scope.

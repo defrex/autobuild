@@ -470,3 +470,10 @@ refusals before source construction. Frozen historical decoders are replayed whe
 their release line remains admitted; outside the release window the oracle
 records the version refusal instead. This evidence does not prove PostgreSQL,
 native HTTP parity or browser connect behavior. Use `--write` to refresh.
+
+`connect-fixtures.ts` pins the TypeScript repository normalizer and its accepted
+and refused identity forms. `connect-persistence-integration.ts` runs a native
+bridge against isolated migrated PostgreSQL and checks restart, mixed-server
+approval, credential usability, denial/expiry, collision rollback, cancellation
+and revocation. Both participate in the experiment verify gate. Connect captures
+seed real durable requests and decisions at both widths and in both grounds.

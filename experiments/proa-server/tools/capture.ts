@@ -407,8 +407,9 @@ export async function captureFrames(
         frame.state === 'detail' || frame.state.startsWith('control-')
           ? `/dashboard/builds/${detail?.slug ?? 'detail-case'}`
           : frame.route
-      const query =
-        projectId && !['sign-in', 'refused'].includes(frame.state)
+      const query = frame.state.startsWith('connect-')
+        ? `?${new URLSearchParams({ code: auth?.seed?.connect?.[frame.state.slice(8)] ?? '' })}`
+        : projectId && !['sign-in', 'refused'].includes(frame.state)
           ? `?${new URLSearchParams({ project: frame.state.startsWith('control-') ? detail!.project : projectId })}`
           : ''
       await send('Page.navigate', {

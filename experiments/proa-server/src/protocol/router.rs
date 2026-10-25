@@ -81,7 +81,7 @@ fn path_segments(path: &str) -> Result<Vec<String>, ProtocolError> {
         })
         .collect()
 }
-async fn authenticate(
+pub(crate) async fn authenticate(
     state: &MachineState,
     authorization: Option<&str>,
 ) -> Result<Option<Principal>, ProtocolError> {
@@ -314,6 +314,9 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             "not-found",
             format!("no route: {method} {path}"),
         ));
+    }
+    if parts.first() == Some(&"tickets") {
+        return super::tickets::dispatch(&state, req, None, &parts).await;
     }
     let principal = if parts.first() == Some(&"streams") {
         let value = authenticate(&state, authorization.as_deref()).await?;
@@ -1326,7 +1329,14 @@ async fn mutation_request(
     Ok(Request::from_parts(parts, axum::body::Body::from(bytes)))
 }
 
-pub const MACHINE_NAMESPACES: &[&str] = &["builds", "repos", "sessions", "streams", "credentials"];
+pub const MACHINE_NAMESPACES: &[&str] = &[
+    "builds",
+    "repos",
+    "sessions",
+    "streams",
+    "credentials",
+    "tickets",
+];
 /// Browser and machine services keep separate middleware. Preserve the full URI
 /// when forwarding; nesting would strip the first resource segment.
 pub fn is_machine_path(path: &str) -> bool {
@@ -1380,4 +1390,23 @@ fn unavailable_dispatch(req: Request) -> Result<Response, ProtocolError> {
         "not-found",
         format!("no route: {method} {path}"),
     ))
+}
+
+#[cfg(test)]
+mod ticket_routing_tests {
+    use super::*;
+
+    #[test]
+    fn ticket_namespace_bypasses_browser_middleware_including_encoded_paths() {
+        for path in [
+            "/tickets/get",
+            "/tickets/policy",
+            "/tickets/grants",
+            "/%74ickets/get",
+        ] {
+            assert!(is_machine_path(path));
+        }
+        assert!(!is_machine_path("/dashboard/tickets"));
+        assert!(!is_machine_path("/tickets-other/get"));
+    }
 }
