@@ -259,3 +259,31 @@ Browser `/connect/v1/browser/lookup` and `/decide` require a fresh allowed sessi
 and the configured canonical Origin. Requests, decisions and prepared credentials
 share the TypeScript service's PostgreSQL tables, so either server can continue a
 flow after restart. Organization approval and ticket browsing are outside scope.
+
+## MCP and OAuth
+
+The experiment serves the existing operator MCP contract at `/mcp`. Configure
+`AB_WEB_MCP_RESOURCE` to its absolute public resource URL; the default is
+`<PROA_AUTH_URL>/mcp`. HTTPS is required outside explicit loopback development.
+Discovery uses the configured public origin, never the incoming Host header.
+Clients dynamically register at `/api/auth/mcp/register`, authorize with S256,
+and exchange form-encoded requests at `/api/auth/mcp/token`. Signed-in operators
+approve at `/oauth/consent`; `prompt=consent` requests an explicit decision.
+The compatibility JSON consent endpoint is `/api/auth/oauth2/consent`.
+
+Apply `migrations/001-oauth.sql` explicitly to the experiment database before
+using OAuth. Grant the configured `PROA_POSTGRES_WRITE_URL` role USAGE on
+`proa_oauth` and SELECT/UPDATE on `proa_oauth.state`. The server does not run DDL
+or alter the shared schema version. Missing storage fails closed for OAuth;
+existing browser pages keep their established storage behavior.
+
+Grant transitions serialize under an experiment-owned row lock. Authorization,
+consent and refresh secrets are stored as SHA-256 digests; the ES256 signing key
+is encrypted with a key derived from `PROA_SESSION_SECRET`. Keep that secret
+stable across restarts. JWKS exposes public fields only. Access grants bind the
+operator, client, expiry and MCP resource, and every call rereads the allowlist.
+This intentionally simple experiment store serializes OAuth traffic across
+clients; it is not a throughput claim or a shared product migration.
+
+See [verification tooling](tools/README.md) for fixture regeneration, SDK parity,
+ANSI captures and the explicit external-agent proof.
