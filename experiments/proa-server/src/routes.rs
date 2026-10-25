@@ -24,6 +24,7 @@ pub fn router(state: AppState) -> Router {
     let (router, metadata) = router_from_spec(vec![
         // proa:route-specs:start
         Route::endpoint("/", get(pages::home::handler)),
+        Route::endpoint("/connect", get(pages::connect::handler)),
         Route::endpoint("/dashboard/builds/:slug", get(pages::build::handler)),
         // proa:route-specs:end
     ]);
@@ -47,6 +48,9 @@ pub fn router(state: AppState) -> Router {
     };
     let cross_origin = CrossOriginProtectionLayer::new()
         .with_trusted_origin(state.auth.config.origin.origin().ascii_serialization());
+    let connection_origin = state.auth.config.origin.origin().ascii_serialization();
+    let connection_machine = state.machine.clone();
+    let connection_browser = state.clone();
     let browser = router
         .route("/health", get(endpoints::health::live))
         .route("/readyz", get(endpoints::health::ready))
@@ -59,6 +63,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/github/callback", get(endpoints::auth::callback))
         .route("/auth/sign-out", post(endpoints::auth::sign_out))
         .route("/controls", post(endpoints::controls::submit))
+        .route("/connect/decide", post(endpoints::connect::submit))
         // proa:explicit-routes:end
         .layer(cross_origin)
         .merge(proa_server::operator::http::router())
@@ -73,11 +78,41 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(endpoints::auth::privacy))
         .layer(SecurityHeadersLayer::new(security));
     Router::new().fallback_service(service_fn(move |request: Request| {
+        let connection = connection_machine.clone();
+        let browser_state = connection_browser.clone();
+        let origin = connection_origin.clone();
+        let public_connection = proa_server::connection::http::is_public_path(request.uri().path());
+        let credential_connection =
+            proa_server::connection::http::is_machine_path(request.uri().path());
+        let browser_connection = matches!(
+            request.uri().path(),
+            "/connect/v1/browser/lookup" | "/connect/v1/browser/decide"
+        );
         let selected = if protocol::router::is_machine_path(request.uri().path()) {
             machine.clone()
         } else {
             browser.clone()
         };
-        async move { selected.oneshot(request).await }
+        async move {
+            if browser_connection {
+                return Ok(endpoints::connect::browser(browser_state, request).await);
+            }
+            if public_connection || credential_connection {
+                return Ok(match connection {
+                    Some(state) => {
+                        if public_connection {
+                            proa_server::connection::http::public(&state, request, &origin).await
+                        } else {
+                            proa_server::connection::http::credential(&state, request).await
+                        }
+                    }
+                    None => proa_server::connection::http::respond(
+                        serde_json::json!({"error":"connection service is unavailable; retry"}),
+                        503,
+                    ),
+                });
+            }
+            selected.oneshot(request).await
+        }
     }))
 }

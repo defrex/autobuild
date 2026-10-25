@@ -1,5 +1,7 @@
 export const routes = {
   '/': 'html',
+  '/connect': 'connect-html',
+  '/connect/decide': 'browser-connect',
   '/dashboard/builds/:slug': 'detail-html',
   '/refresh': 'endpoint',
   '/controls': 'browser-control',
@@ -22,6 +24,7 @@ export const machineNamespaces = {
   sessions: 'machine-store',
   streams: 'machine-store',
   credentials: 'machine-credential',
+  tickets: 'machine-ticket',
 } as const
 export function checkMachineNamespaces(source: string) {
   const definitions = [
@@ -73,6 +76,8 @@ export function checkCaptureCapabilities(driver: string, sources: Record<string,
         'src/pages/build.rs',
         'src/endpoints/live.rs',
         'src/endpoints/controls.rs',
+        'src/pages/connect.rs',
+        'src/endpoints/connect.rs',
       ].includes(path)
     )
       continue
@@ -111,6 +116,16 @@ export const frames = [1440, 390].flatMap((width) =>
     })),
   ),
 )
+for (const width of [1440, 390])
+  for (const theme of ['light', 'dark'])
+    for (const state of ['entry', 'pending', 'approved', 'denied', 'expired', 'unknown', 'error'])
+      frames.push({
+        id: `connect-${width}-${theme}-${state}`,
+        route: '/connect',
+        width,
+        theme,
+        state: `connect-${state}`,
+      })
 export function checkRoutes(source: string, machineSource: string) {
   checkMachineNamespaces(machineSource)
   // These two operator routers have their own executable contract gate.
@@ -127,7 +142,8 @@ export function checkRoutes(source: string, machineSource: string) {
   if (
     (source.match(/\.fallback_service\(/g) || []).length !== 1 ||
     /\.fallback\(/.test(source) ||
-    !source.includes('protocol::router::is_machine_path(request.uri().path())')
+    !source.includes('protocol::router::is_machine_path(request.uri().path())') ||
+    !source.includes('proa_server::connection::http::is_public_path(request.uri().path())')
   )
     throw Error('Unclassified fallback route: preserve explicit machine/browser dispatch')
   const discovered = [
@@ -147,6 +163,7 @@ export function checkFrameMatrix(cases: typeof frames) {
   if (new Set(cases.map((f) => f.id)).size !== cases.length) throw Error('Duplicate frame id')
   for (const [route, kind] of Object.entries(routes)) {
     if (
+      kind !== 'connect-html' &&
       kind !== 'detail-html' &&
       kind !== 'html' &&
       kind !== 'public-html' &&
@@ -155,19 +172,23 @@ export function checkFrameMatrix(cases: typeof frames) {
       continue
     for (const width of [1440, 390])
       for (const theme of ['light', 'dark'])
-        for (const state of kind === 'detail-html'
-          ? [
-              'detail',
-              'control-answer',
-              'control-pausing',
-              'control-confirmation',
-              'control-refusal',
-            ]
-          : kind === 'html'
-            ? ['closed', 'open']
-            : kind === 'public-html'
-              ? ['sign-in']
-              : ['refused']) {
+        for (const state of kind === 'connect-html'
+          ? ['entry', 'pending', 'approved', 'denied', 'expired', 'unknown', 'error'].map(
+              (s) => `connect-${s}`,
+            )
+          : kind === 'detail-html'
+            ? [
+                'detail',
+                'control-answer',
+                'control-pausing',
+                'control-confirmation',
+                'control-refusal',
+              ]
+            : kind === 'html'
+              ? ['closed', 'open']
+              : kind === 'public-html'
+                ? ['sign-in']
+                : ['refused']) {
           if (
             cases.filter(
               (f) =>
@@ -199,12 +220,13 @@ export function probe(colors: string[], state: string, theme: string) {
   const allowed = colors.map(normalize)
   const text = document.body.innerText
   const publicPage = state === 'sign-in' || state === 'refused'
+  const connectPage = state.startsWith('connect-')
   for (const content of [
     'Autobuild',
     ...(publicPage
       ? ['Sign in', 'Continue with GitHub']
       : [
-          'Builds',
+          ...(connectPage ? ['Connect a project'] : ['Builds']),
           'operator@example.com',
           ...(state === 'open' ? ['Sign out', 'System', 'Light', 'Dark'] : []),
         ]),
@@ -215,13 +237,22 @@ export function probe(colors: string[], state: string, theme: string) {
     document.querySelector('h1')?.textContent !==
     (publicPage
       ? 'Sign in'
-      : state === 'detail'
-        ? 'detail-case'
-        : state.startsWith('control-')
-          ? document.querySelector('[data-page=build-detail] h1')?.textContent
-          : 'Builds')
+      : connectPage
+        ? 'Connect a project'
+        : state === 'detail'
+          ? 'detail-case'
+          : state.startsWith('control-')
+            ? document.querySelector('[data-page=build-detail] h1')?.textContent
+            : 'Builds')
   )
     failures.push(publicPage ? 'Missing Sign in heading' : 'Missing Builds heading')
+  if (
+    connectPage &&
+    !document.querySelector(
+      `[data-connect-${['unknown', 'error'].includes(state.slice(8)) ? 'error' : state.slice(8)}]`,
+    )
+  )
+    failures.push('Missing connection state')
   if (state.startsWith('control-')) {
     for (const word of state === 'control-answer'
       ? ['Guidance', 'Send guidance', 'Retry', 'Dismiss finding']
