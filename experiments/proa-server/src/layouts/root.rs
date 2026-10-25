@@ -5,6 +5,7 @@ use proa_macros::html_sync;
 
 pub struct RootDocument<C> {
     pub title: &'static str,
+    pub viewer: Option<crate::auth::Viewer>,
     pub content: C,
 }
 
@@ -22,7 +23,7 @@ impl<L: DataLoader, C: WebRenderSync<L>> WebRenderSync<L> for RootDocument<C> {
                     <link rel="stylesheet" href="/static/styles.css" />
                     <script src="/static/shell.js" defer></script>
                 </head>
-                <body>{Shell { content: self.content }}</body>
+                <body>{Shell { content: self.content, viewer: self.viewer }}</body>
             </html>
         }
         .render(cx)
