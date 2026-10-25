@@ -1,12 +1,11 @@
 //! SELECT-only access to TypeScript-owned storage. No snapshot reads or DDL.
 use super::error::DataError;
 use chrono::{DateTime, SecondsFormat, Utc};
-use native_tls::TlsConnector;
-use postgres_native_tls::MakeTlsConnector;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio_postgres::{Client, Row, Transaction};
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 pub const SCHEMA_VERSION: i32 = 17;
 pub const SCHEMA_CHECKSUM: &str =
@@ -64,12 +63,23 @@ fn timestamp(row: &Row, name: &str) -> String {
 
 impl PostgresReader {
     pub async fn connect(url: &str) -> Result<Self, DataError> {
+        // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
+        // platform trust without linking OpenSSL into the captured Proa binary.
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+        let config = rustls::ClientConfig::builder_with_provider(
+            rustls::crypto::aws_lc_rs::default_provider().into(),
+        )
+        .with_safe_default_protocol_versions()
+        .map_err(|_| DataError::Connection)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let tls = MakeRustlsConnect::new(config);
         let mut connections = Vec::new();
         for _ in 0..4 {
-            let tls = TlsConnector::builder()
-                .build()
-                .map_err(|_| DataError::Connection)?;
-            let (client, connection) = tokio_postgres::connect(url, MakeTlsConnector::new(tls))
+            // tokio-postgres still interprets the URL's sslmode; no mode is
+            // rewritten and a negotiated TLS connection verifies its peer.
+            let (client, connection) = tokio_postgres::connect(url, tls.clone())
                 .await
                 .map_err(|_| DataError::Connection)?;
             let task = tokio::spawn(async move {

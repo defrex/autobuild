@@ -107,6 +107,7 @@ impl HarvestAcc {
                     return Err(bad());
                 }
                 let mut run = pick(p, &["run", "observations", "scan", "trigger"]);
+                run["scan"] = pick(&p["scan"], &["kind", "rev"]);
                 run["status"] = json!("running");
                 run["startedSeq"] = e["seq"].clone();
                 run["startedAt"] = e["ts"].clone();
@@ -311,23 +312,27 @@ impl HarvestAcc {
                 step["outcome"] = p["outcome"].clone();
                 for k in ["artifact", "detail"] {
                     if let Some(v) = p.get(k) {
-                        step[k] = v.clone();
+                        step[k] = if k == "artifact" {
+                            pick(v, &["kind", "rev"])
+                        } else {
+                            v.clone()
+                        };
                     }
                 }
             }
             "harvest.proposals.submitted" => push(
                 run,
                 "proposals",
-                with_seq(&pick(p, &["round", "artifact"]), e),
-            ),
-            "harvest.review.verdict" => push(
-                run,
-                "reviews",
                 with_seq(
-                    &pick(p, &["round", "verdict", "findings", "artifact", "reason"]),
+                    &json!({"round":p["round"],"artifact":pick(&p["artifact"],&["kind","rev"])}),
                     e,
                 ),
             ),
+            "harvest.review.verdict" => {
+                let mut review = pick(p, &["round", "verdict", "findings", "artifact", "reason"]);
+                review["artifact"] = pick(&p["artifact"], &["kind", "rev"]);
+                push(run, "reviews", with_seq(&review, e));
+            }
             "harvest.proposal.id-reserved" => {
                 let a = run["reservations"].as_array_mut().unwrap();
                 let id = p["id"].as_str().unwrap_or("").to_lowercase();
@@ -362,7 +367,7 @@ impl HarvestAcc {
                 if run["status"] == "running" {
                     run["status"] = json!("completed");
                     run["dispositions"] = p["dispositions"].clone();
-                    run["report"] = p["report"].clone();
+                    run["report"] = pick(&p["report"], &["kind", "rev"]);
                     run["terminalSeq"] = e["seq"].clone();
                     run["terminalAt"] = e["ts"].clone();
                     let run_id = run["run"].clone();
@@ -473,11 +478,11 @@ impl HarvestAcc {
                         s["status"] = json!("suspended");
                         s["suspendedAt"] = e["ts"].clone();
                         s["cause"] = p["cause"].clone();
-                        s["transcript"] = p["transcript"].clone();
+                        s["transcript"] = pick(&p["transcript"], &["kind", "rev"]);
                     }
                     "harvest.session.ended" => {
                         s["status"] = json!("ended");
-                        s["transcript"] = p["transcript"].clone();
+                        s["transcript"] = pick(&p["transcript"], &["kind", "rev"]);
                     }
                     _ => {}
                 }

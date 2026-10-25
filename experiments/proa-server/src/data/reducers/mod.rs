@@ -51,11 +51,11 @@ impl Accumulator {
             .map(|e| events::decode(self.scope(), e))
             .collect::<Result<Vec<_>, _>>()?;
         let mut next = self.clone();
-        for event in &decoded {
+        for (event, raw) in decoded.iter().zip(values) {
             match &mut next {
                 Self::Build(a) => a.fold(event)?,
-                Self::Repository(a) => a.fold(event)?,
-                Self::Session(a) => a.fold(event),
+                Self::Repository(a) => a.fold(event, raw)?,
+                Self::Session(a) => a.fold(raw),
             }
         }
         *self = next;

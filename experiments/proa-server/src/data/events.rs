@@ -14,14 +14,16 @@ fn schemas() -> &'static Value {
 /// Remove additive object fields recursively only where the producer has a
 /// closed object. The source envelope stays intact, including compatibility.
 fn project(schema: &Value, value: &mut Value) {
-    if jsonschema::is_valid(schema, value) {
-        return;
-    }
     if let Some(branches) = schema
         .get("anyOf")
         .or_else(|| schema.get("oneOf"))
         .and_then(Value::as_array)
     {
+        // A valid later union member must win before considering projection
+        // through an earlier member (notably the historical empty variant).
+        if jsonschema::is_valid(schema, value) {
+            return;
+        }
         for branch in branches {
             let mut candidate = value.clone();
             project(branch, &mut candidate);
@@ -59,15 +61,27 @@ fn project(schema: &Value, value: &mut Value) {
         }
     }
 }
-fn validators() -> &'static HashMap<String, jsonschema::Validator> {
-    static VALIDATORS: OnceLock<HashMap<String, jsonschema::Validator>> = OnceLock::new();
+fn has_defaults(schema: &Value) -> bool {
+    match schema {
+        Value::Object(object) => {
+            object.contains_key("default") || object.values().any(has_defaults)
+        }
+        Value::Array(items) => items.iter().any(has_defaults),
+        _ => false,
+    }
+}
+fn validators() -> &'static HashMap<String, (jsonschema::Validator, bool)> {
+    static VALIDATORS: OnceLock<HashMap<String, (jsonschema::Validator, bool)>> = OnceLock::new();
     VALIDATORS.get_or_init(|| {
         let mut out = HashMap::new();
         for (scope, catalog) in schemas().as_object().unwrap() {
             for (kind, schema) in catalog.as_object().unwrap() {
                 out.insert(
                     format!("{scope}:{kind}"),
-                    jsonschema::validator_for(schema).expect("generated schema validates"),
+                    (
+                        jsonschema::validator_for(schema).expect("generated schema validates"),
+                        has_defaults(schema),
+                    ),
                 );
             }
         }
@@ -324,11 +338,15 @@ pub fn decode(scope: Scope, event: &Value) -> Result<Value, DataError> {
         return Err(bad());
     }
     let mut result = event.clone();
-    defaults(schema, &mut result["payload"]);
-    let validator = &validators()[&format!("{}:{kind}", scope.name())];
+    let (validator, needs_defaults) = &validators()[&format!("{}:{kind}", scope.name())];
+    if *needs_defaults {
+        defaults(schema, &mut result["payload"]);
+    }
     if !validator.is_valid(&result["payload"]) {
         project(schema, &mut result["payload"]);
-        defaults(schema, &mut result["payload"]);
+        if *needs_defaults {
+            defaults(schema, &mut result["payload"]);
+        }
     }
     if !validator.is_valid(&result["payload"]) {
         return Err(bad());

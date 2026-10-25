@@ -12,6 +12,9 @@ fn scope(s: &str) -> Scope {
     }
 }
 fn difference(left: &Value, right: &Value, path: &str) -> Option<String> {
+    if left == right {
+        return None;
+    }
     match (left, right) {
         (Value::Object(a), Value::Object(b)) => {
             for key in a.keys().chain(b.keys()) {
@@ -42,14 +45,21 @@ fn difference(left: &Value, right: &Value, path: &str) -> Option<String> {
         }
     }
 }
-fn corpus() -> Value {
-    let path = std::env::var("PROA_PARITY_CORPUS")
-        .unwrap_or_else(|_| format!("{}/fixtures/corpus.json", env!("CARGO_MANIFEST_DIR")));
-    serde_json::from_slice(
-        &std::fs::read(path).expect("generate corpus with bun tools/generate-fixtures.ts"),
-    )
-    .unwrap()
+fn corpus() -> &'static Value {
+    static CORPUS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let path = std::env::var("PROA_PARITY_CORPUS")
+            .unwrap_or_else(|_| format!("{}/fixtures/corpus.json.gz", env!("CARGO_MANIFEST_DIR")));
+        let bytes =
+            std::fs::read(&path).expect("generate corpus with bun tools/generate-fixtures.ts");
+        if path.ends_with(".gz") {
+            serde_json::from_reader(flate2::read::GzDecoder::new(bytes.as_slice())).unwrap()
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        }
+    })
 }
+
 #[test]
 fn every_catalog_witness_decodes() {
     let corpus = corpus();
@@ -85,10 +95,26 @@ fn typescript_corpus_matches_native_reducers_and_incremental_splits() {
                 assert_eq!(seq, &unknown["seq"], "{name}: negative event seq");
             }
             let before = acc.finish();
-            assert!(
-                acc.advance(events).is_err(),
-                "{name}: unknown fact accepted"
-            );
+            match acc.advance(events) {
+                Err(proa_server::data::error::DataError::Decode {
+                    scope: actual_scope,
+                    event_type,
+                    seq,
+                }) => {
+                    assert_eq!(actual_scope, scope.name(), "{name}: failure scope");
+                    assert_eq!(
+                        event_type,
+                        unknown["type"].as_str().unwrap(),
+                        "{name}: failure type"
+                    );
+                    assert_eq!(
+                        seq,
+                        unknown["seq"].as_i64().unwrap(),
+                        "{name}: failure cursor"
+                    );
+                }
+                other => panic!("{name}: expected unknown-event decode failure, got {other:?}"),
+            }
             assert_eq!(
                 acc.finish(),
                 before,

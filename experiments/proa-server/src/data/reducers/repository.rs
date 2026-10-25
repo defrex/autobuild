@@ -48,12 +48,15 @@ fn durable(t: &str) -> bool {
         .contains(&t)
 }
 impl RepositoryAcc {
-    pub fn fold(&mut self, e: &Value) -> Result<(), DataError> {
+    pub fn fold(&mut self, e: &Value, raw: &Value) -> Result<(), DataError> {
         let p = &e["payload"];
         let t = e["type"].as_str().unwrap_or("");
-        self.harvest.fold(e)?;
-        super::repository_upgrades::fold(&mut self.facts["upgrades"], e);
-        super::repository_attention::fold(&mut self.facts["attention"], e);
+        // The TS read-facts reducer gives its constituent folds the stored
+        // facts, then projects known payloads only for its own selector loop.
+        // Bounded journal views also retain source envelopes verbatim.
+        self.harvest.fold(raw)?;
+        super::repository_upgrades::fold(&mut self.facts["upgrades"], raw);
+        super::repository_attention::fold(&mut self.facts["attention"], raw);
         if t == "dispatcher.run-started" {
             self.anchor = Some(number(&e["seq"]));
             self.journal.retain(|h| {
@@ -68,7 +71,7 @@ impl RepositoryAcc {
                 .any(|h| h["type"] == t && number(&h["seq"]) >= number(&e["seq"]))
             {
                 self.retained.retain(|h| h["type"] != t);
-                self.retained.push(e.clone());
+                self.retained.push(raw.clone());
             }
             if !self
                 .journal
@@ -76,12 +79,12 @@ impl RepositoryAcc {
                 .any(|h| h["type"] == t && number(&h["seq"]) >= number(&e["seq"]))
             {
                 self.journal.retain(|h| h["type"] != t);
-                self.journal.push(e.clone());
+                self.journal.push(raw.clone());
             }
         } else {
-            self.retained.push(e.clone());
+            self.retained.push(raw.clone());
             if durable(t) || self.anchor.is_some() {
-                self.journal.push(e.clone());
+                self.journal.push(raw.clone());
             }
         }
         match t {
@@ -110,13 +113,13 @@ impl RepositoryAcc {
                     }] = fact;
                 }
             }
-            "dispatcher.forge-degraded" => self.facts["forgeHealth"] = p.clone(),
+            "dispatcher.forge-degraded" => self.facts["forgeHealth"] = raw["payload"].clone(),
             "dispatcher.forge-recovered" => {
                 if self.facts["forgeHealth"]["forge"] == p["forge"] {
                     remove(&mut self.facts, "forgeHealth");
                 }
             }
-            "dispatcher.ticket-source-degraded" => self.facts["health"] = p.clone(),
+            "dispatcher.ticket-source-degraded" => self.facts["health"] = raw["payload"].clone(),
             "dispatcher.ticket-source-dependency-limited" => {
                 if self.facts["health"]["cause"] == "rate-limited"
                     && self.facts["health"]["source"] == p["source"]
@@ -126,21 +129,22 @@ impl RepositoryAcc {
             }
             "dispatcher.ticket-source-recovered" => remove(&mut self.facts, "health"),
             "dispatcher.run-started" => {
-                self.facts["config"] = json!({"run":p["run"],"reference":p["effectiveConfig"]});
+                self.facts["config"] =
+                    json!({"run":p["run"],"reference":raw["payload"]["effectiveConfig"]});
                 self.facts["run"] = p["run"].clone();
                 self.facts["status"] = json!({"run":p["run"],"health":"starting","roleWarnings":[],"diagnostics":[],"lastSeq":0});
                 self.facts["latestRun"] = p["run"].clone();
             }
             "dispatcher.config-reloaded" => {
                 if self.facts["config"]["run"] == p["run"] {
-                    if let Some(reference) = p.get("effectiveConfig") {
+                    if let Some(reference) = raw["payload"].get("effectiveConfig") {
                         self.facts["config"]["reference"] = reference.clone();
                     }
                 }
             }
             "dispatcher.ticket-scan-completed" => self.facts["scan"] = p.clone(),
             "dispatcher.run-stopped" => self.facts["latestStoppedRun"] = p["run"].clone(),
-            "tickets.migration-recorded" => self.migration(e)?,
+            "tickets.migration-recorded" => self.migration(raw)?,
             "harvest.failed" => {
                 let key = serde_json::to_string(&json!([
                     p["run"],
@@ -270,7 +274,7 @@ impl RepositoryAcc {
             }
             _ => {}
         }
-        self.sandbox(e);
+        self.sandbox(raw);
         self.status(e);
         if t.starts_with("dispatcher.") && p["run"].is_string() {
             self.run_fact(e);
