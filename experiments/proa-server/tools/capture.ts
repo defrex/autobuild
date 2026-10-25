@@ -329,7 +329,12 @@ export async function captureFrames(
       if (r.method === 'Fetch.requestPaused') {
         // Chromium invents an implicit favicon request for pages with no icon.
         // It is not an application asset; leave explicit Image requests checked.
-        if (r.params.resourceType === 'Other' && r.params.request.url === `${origin}/favicon.ico`) {
+        if (
+          r.params.resourceType === 'Other' &&
+          [origin, auth?.refusalOrigin, auth?.backendOrigin]
+            .filter(Boolean)
+            .some((base) => r.params.request.url === `${base}/favicon.ico`)
+        ) {
           intercept('Fetch.fulfillRequest', {
             requestId: r.params.requestId,
             responseCode: 204,
@@ -338,7 +343,8 @@ export async function captureFrames(
         }
         const local =
           r.params.request.url.startsWith(`${origin}/`) ||
-          Boolean(auth && r.params.request.url.startsWith(`${auth.refusalOrigin}/`))
+          Boolean(auth && r.params.request.url.startsWith(`${auth.refusalOrigin}/`)) ||
+          Boolean(auth?.backendOrigin && r.params.request.url.startsWith(`${auth.backendOrigin}/`))
         if (auth && r.params.request.url === `${auth.refusalOrigin}/auth/dev-session`) {
           intercept('Fetch.continueRequest', {
             requestId: r.params.requestId,
@@ -364,6 +370,13 @@ export async function captureFrames(
       if (
         r.method === 'Network.responseReceived' &&
         r.params.response.status >= 400 &&
+        !expectedConnectCaptureResponse(
+          r.params.response.status,
+          r.params.response.url,
+          origin,
+          auth?.backendOrigin,
+          auth?.seed?.connect,
+        ) &&
         !(
           auth &&
           r.params.response.status === 403 &&
@@ -1099,3 +1112,21 @@ export function decodePng(data?: string) {
   return bytes
 }
 if (import.meta.main) console.log(await capture())
+
+export function expectedConnectCaptureResponse(
+  status: number,
+  url: string,
+  origin: string,
+  backendOrigin?: string,
+  codes?: Record<string, string>,
+) {
+  return (
+    (status === 404 &&
+      codes?.unknown !== undefined &&
+      url === `${origin}/connect?${new URLSearchParams({ code: codes.unknown })}`) ||
+    (status === 503 &&
+      backendOrigin !== undefined &&
+      codes?.error !== undefined &&
+      url === `${backendOrigin}/connect?${new URLSearchParams({ code: codes.error })}`)
+  )
+}

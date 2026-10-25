@@ -82,7 +82,7 @@ pub async fn browser(state: AppState, request: axum::extract::Request) -> Respon
     if request.method() != axum::http::Method::POST {
         return respond(json!({"error":"method not allowed"}), 405);
     }
-    if request
+    if !request
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -91,8 +91,7 @@ pub async fn browser(state: AppState, request: axum::extract::Request) -> Respon
         .next()
         .unwrap_or_default()
         .trim()
-        .to_ascii_lowercase()
-        != "application/json"
+        .eq_ignore_ascii_case("application/json")
     {
         return respond(json!({"error":"application/json required"}), 400);
     }

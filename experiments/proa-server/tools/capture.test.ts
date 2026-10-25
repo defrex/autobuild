@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureFrames, decodePng } from './capture'
+import { captureFrames, decodePng, expectedConnectCaptureResponse } from './capture'
 import {
   checkRoutes,
   checkCaptureCapabilities,
@@ -193,4 +193,43 @@ test('only stored multilingual text permits corresponding fallback glyphs', () =
   expect(dataFontFallback('Noto Sans CJK JP', '　', true)).toBe(false)
   expect(dataFontFallback('Noto Sans CJK JP', 'English', true)).toBe(false)
   expect(dataFontFallback('serif', '日本語', true)).toBe(false)
+})
+
+test('only exact documented connection error frames accept HTTP errors', () => {
+  const codes = { unknown: '0000000000', error: 'INVALID' }
+  expect(
+    expectedConnectCaptureResponse(
+      404,
+      'http://local/connect?code=0000000000',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(true)
+  expect(
+    expectedConnectCaptureResponse(
+      503,
+      'http://backend/connect?code=INVALID',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(true)
+  for (const url of [
+    'http://other/connect?code=0000000000',
+    'http://local/static/missing.css',
+    'http://local/connect?code=unexpected',
+  ])
+    expect(expectedConnectCaptureResponse(404, url, 'http://local', 'http://backend', codes)).toBe(
+      false,
+    )
+  expect(
+    expectedConnectCaptureResponse(
+      500,
+      'http://local/connect?code=0000000000',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(false)
 })
