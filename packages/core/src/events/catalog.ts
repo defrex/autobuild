@@ -155,6 +155,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'code-review.verdict': ['agent'],
 
   'verify.reconcile-policy-captured': ['kernel'],
+  'verify.config-captured': ['kernel'],
+  'verify.config-superseded': ['kernel'],
   'verify.started': ['kernel'],
   'verify.cancelled': ['kernel'],
   'verify.stage-failed': ['kernel'],
