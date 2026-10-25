@@ -3214,6 +3214,13 @@ Publication requests and loss records alone are not retained Git history: their
 unpublished objects may have died with a released sandbox. A separately published
 or reviewed tip remains an archive requirement even when an earlier request named
 that same SHA.
+Restack and reconcile publication reject tracked modifications with the existing
+clean-worktree error. Nonignored untracked files do not block publication and
+remain unpublished and untouched; each publication that encounters them records
+a path-bearing `observation.recorded` followup, deduplicated by operation,
+transaction, candidate SHA and exact path list on recovery. The phase-terminal
+D5 clean-worktree rule for `ab done` remains unchanged.
+
 The branch replacement uses an explicit expected-old-head guard. A lost lease
 fetches the observed contribution and prepares another correlated transaction on
 the same occurrence's frozen base, preserving external work; deleted, divergent,
