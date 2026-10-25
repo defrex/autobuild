@@ -581,6 +581,18 @@ and workspace adapter fields stay pinned; changed values are durable restart
 notices rather than partial adapter swaps. `--once` retains static startup
 configuration.
 
+`config/pipeline-source.ts` strictly reads the runner's execution checkout.
+`processes/verify-cycle-config.ts` deposits immutable cycle config and checks
+build-owned identity and source ancestry at settled stage boundaries. Typed
+`verify.config-captured` and `verify.config-superseded` facts advance the result
+boundary in the reducer and log index, independently of reconcile identity.
+The runner refreshes after workspace mutation and before constructing members;
+concurrent siblings settle before another stage is selected. Recovery and
+readiness compose live deployment settings onto the captured artifact revision.
+`kernel/plan-verify-selection.ts` keeps strict plan deposit validation separate
+from runtime drift resolution: unknown approved names select all optional steps
+and an explicit engine action deposits a deduplicated observation.
+
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `packages/core/src/processes/harvest.ts` is the deterministic core (scan,
 source-aware originating-ticket lifecycle projection, filing-time blocker
@@ -1324,7 +1336,10 @@ and session settlement fence mutation. Transaction targets stay frozen while
 later moves coalesce. `publication.requested` carries automatic transaction
 identity through trusted remote teardown and publication. The runner settles
 local resolver intent only after its session ends. Verification facts
-cite the cycle's base/head, and clean waiting rewrites preserve those results.
+cite the cycle's base/head. Clean waiting leaf rewrites preserve completed
+verification when build-owned config is unchanged, even when the old pin commit
+is no longer an ancestor. Changed config still supersedes while waiting.
+Ancestry gates cycles that run further steps; those cycles capture fresh config.
 Object packs retain newly introduced replay trees/blobs as well as commit bytes.
 
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in

@@ -218,10 +218,31 @@ dispatcher itself and are never interpreted by the build runner.
 Consequently, an accepted base-branch reload re-deposits only the
 deployment-owned sections to active builds; it does not retarget an in-flight
 build's verify universe, finalize steps, commands, or provisioning. A build
-that publishes a pipeline change to its own branch picks it up at its next
-launch, so config changes still flow through the pipeline for the build that
-carries them. In-flight environments are never re-provisioned: a fresh build
+that receives a pipeline change in its checkout picks it up at the next
+settled verify boundary. In-flight environments are never re-provisioned: a fresh build
 from the new base is the path for a changed provisioning definition.
+
+At every verify-cycle entry, after restack or reconcile settles, the runner
+reads `autobuild.toml` from the execution checkout at resolved `HEAD` (including
+detached integration heads). `verify.config-captured` cites an immutable
+`verify-cycle-config` artifact revision, checkout head, build-owned content
+identity and truthful source metadata. Dirty worktree bytes carry
+`worktree-dirty` without a commit. A settled stage boundary rechecks the
+build-owned sections and the known source commit's ancestry. A change or
+non-ancestor source records `verify.config-superseded` and starts a fresh cycle
+before constructing any further member. Already launched siblings settle first.
+A waiting leaf with completed verification retains its receipts after a clean
+rewrite when build-owned config is unchanged, even when the rewrite replaces
+the pin commit's ancestry. Changed config still supersedes while waiting; a
+future verification cycle always captures fresh config before running steps.
+Old pass/skip receipts cannot satisfy that cycle, and supersession creates no
+failure or failure-budget charge. Unchanged config on a descendant head retains
+its pin; every new cycle still rereads the checkout. Read, parse and Git evidence
+failures block verification as infrastructure failures. Recovery and readiness
+read the capture's exact revision, so a concurrent deployment reload cannot
+replace its build-owned sections. Historical streams capture before further
+verification. Deployment-owned reloads remain live; environments are not
+re-provisioned.
 
 Every accepted revision is deposited verbatim as a `dispatcher-config`
 repository artifact and referenced by a `dispatcher.config-reloaded` repository
@@ -248,7 +269,7 @@ These fields hot-reload:
 | `[pr]` | Next build creation. |
 | `[landing]` (ordered `[[landing]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
-| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
+| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
@@ -767,7 +788,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Type:** `strict table`
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Workspace provider selector and provider-specific configuration.
 
@@ -780,7 +801,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Type:** `string`
 - **Default:** `"git-worktree"`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release.
 
@@ -793,7 +814,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Type:** `table`
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Adapter-specific declarative configuration passed unchanged to the selected plugin factory.
 
@@ -806,7 +827,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Type:** `plugin-owned TOML value`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Plugin-owned value passed through unchanged. Builtin providers validate their own declared schema.
 
@@ -877,7 +898,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `strict table`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Strict Vercel workspace provisioning configuration.
 
@@ -890,7 +911,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `"vercel/sandbox/universal:latest"`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Managed image used to provision the workspace.
 
@@ -903,7 +924,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `number`
 - **Default:** `4`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Virtual CPUs allocated to each workspace; provider account limits may further restrict allocation.
 
@@ -916,7 +937,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `number`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** VM/session lifetime in seconds and abrupt-orphan bound. Provider plan limits also apply.
 
@@ -929,7 +950,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `number`
 - **Default:** `30000`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Deadline in milliseconds for each provider acknowledgement, independent of session lifetime.
 
@@ -942,7 +963,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `number`
 - **Default:** `omitted`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Snapshot expiration in seconds. Omission uses the provider expiration policy.
 
@@ -955,7 +976,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Primary region; omission uses the provider region selection.
 
@@ -968,7 +989,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `array of string`
 - **Default:** `[]`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Ordered alternative regions used if the primary region cannot provision a workspace.
 
@@ -981,7 +1002,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `array of string`
 - **Default:** `[]`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** unique API-credential variable names copied into runtime and agent/check commands
 
@@ -994,7 +1015,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `array of strict table`
 - **Default:** `[]`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique
 
@@ -1007,7 +1028,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Unique provisioning step name. Must contain a non-whitespace character.
 
@@ -1020,7 +1041,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Shell command executed in declaration order during provisioning. Must contain a non-whitespace character.
 
@@ -1033,7 +1054,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `table`
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight`
 
@@ -1046,7 +1067,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `strict table`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Installation and preflight commands for an effective runtime. Every effective role or alternate runtime must have an entry.
 
@@ -1059,7 +1080,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** required nonblank shell command; use an immutable package version, digest, or commit
 
@@ -1072,7 +1093,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** required nonblank shell command; verify the expected executable and exact version
 
@@ -1085,7 +1106,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv`
 
@@ -1098,7 +1119,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Optional
-- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv`
 
@@ -1283,7 +1304,7 @@ schema fields.
 - **Type:** `table`
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Named shell commands used by setup and deterministic checks.
 
@@ -1296,7 +1317,7 @@ schema fields.
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Named deterministic shell command.
 
@@ -1334,8 +1355,9 @@ For example, set `afterReconcile = false` in `[verify]` and
 
 The kernel freezes the resolved ordered policy in
 `verify.reconcile-policy-captured` at the next engine action after reconcile
-completion. Live configuration changes apply at that boundary; a cycle already
-started keeps its policy through recovery. Historical cycles already started
+completion. A cycle already started keeps its policy through recovery.
+Configuration supersession starts a fresh cycle and captures a new policy for
+its configured universe, retaining the original reconcile identity. Historical cycles already started
 without a captured policy retain the rerun-all behavior. Initial verification
 and verification after subsequent code review always use ordinary applicability.
 Policy exclusion precedes plan selection and paths, including `always = true`.
@@ -1368,7 +1390,7 @@ There are two strict step variants:
 - **Type:** `table`
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
@@ -1381,7 +1403,7 @@ There are two strict step variants:
 - **Type:** `array of (string | array of string)`
 - **Default:** `[]`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
@@ -1394,7 +1416,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `true`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Whether verification runs after reconciliation. A step override takes precedence.
 
@@ -1407,7 +1429,7 @@ There are two strict step variants:
 - **Type:** `strict table | strict table`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
 
@@ -1420,7 +1442,7 @@ There are two strict step variants:
 - **Type:** `"check"`
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1433,7 +1455,7 @@ There are two strict step variants:
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
@@ -1446,7 +1468,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `false (omission is preserved)`
 - **Required:** Optional when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
 
@@ -1459,7 +1481,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
 
@@ -1472,7 +1494,7 @@ There are two strict step variants:
 - **Type:** `array of string`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Apply only when at least one changed path matches. Available to both variants.
 
@@ -1485,7 +1507,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
 
@@ -1498,7 +1520,7 @@ There are two strict step variants:
 - **Type:** `"agent"`
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1511,7 +1533,7 @@ There are two strict step variants:
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 
@@ -1524,7 +1546,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `false (omission is preserved)`
 - **Required:** Optional when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
 
@@ -1537,7 +1559,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
 
@@ -1550,7 +1572,7 @@ There are two strict step variants:
 - **Type:** `array of string`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Apply only when at least one changed path matches. Available to both variants.
 
@@ -1563,7 +1585,7 @@ There are two strict step variants:
 - **Type:** `boolean`
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
 
@@ -1688,6 +1710,13 @@ steps are stored in `[verify].steps` order from the exact plan completion later
 approved by plan review. A spec restart replaces the selection with the newly
 approved plan; reconciliation reuses it.
 
+If the approved selection later names any step absent from the cycle's pinned
+configured universe, the entire selection falls back to all configured optional
+steps. The kernel records one observation per cycle and plan revision naming
+the unknown steps. Mandatory steps, path applicability and post-reconcile policy
+still apply. A valid selection continues to skip genuinely omitted optional
+steps. Strict validation when depositing a new plan is unchanged.
+
 For each step the kernel evaluates approved-plan selection first, then path
 applicability. Exclusion by either mechanism records a queryable `skipped`
 outcome. A selection exclusion or path miss starts no check or agent.
@@ -1759,7 +1788,7 @@ are errors.
 - **Type:** `table`
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
@@ -1772,7 +1801,7 @@ are errors.
 - **Type:** `array of string`
 - **Default:** `[]`
 - **Required:** Optional
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
@@ -1785,7 +1814,7 @@ are errors.
 - **Type:** `strict table | strict table`
 - **Default:** `omitted`
 - **Required:** Required
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
 
@@ -1798,7 +1827,7 @@ are errors.
 - **Type:** `"check"`
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1811,7 +1840,7 @@ are errors.
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
@@ -1824,7 +1853,7 @@ are errors.
 - **Type:** `"agent"`
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1837,7 +1866,7 @@ are errors.
 - **Type:** `string`
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
-- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 

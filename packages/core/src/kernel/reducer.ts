@@ -329,7 +329,7 @@ export interface BuildState {
    *
    * `cycleSince` is the seq after which results describe the CURRENT code
    * (§15.6-A): max(restartSince, latest code-review approve, latest
-   * `reconcile.completed`). Results at or before it describe code that no
+   * `reconcile.completed`, config capture/supersession). Results at or before it describe code that no
    * longer exists — implement or reconcile changed it, and a new cycle re-runs
    * from the FIRST step. 0 before any boundary lands. This is the same filter
    * engine.ts:275-276 applies over its post-restart index. */
@@ -339,6 +339,9 @@ export interface BuildState {
     results: VerifyResult[]
     currentStep?: string
     running?: string[]
+    configPin?: import('../events/payloads').EventPayload<'verify.config-captured'> & {
+      seq: number
+    }
     cycleSince: number
   }
   /** Highest `reconcile.started.attempt` — the kernel's own occurrence
@@ -460,7 +463,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 23
+export const BUILD_REDUCER_VERSION = 24
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1009,6 +1012,11 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         complete('code-review', event.seq, { round })
         break
 
+      case 'verify.config-captured':
+        verify.configPin = { ...event.payload, seq: event.seq }
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        break
+      case 'verify.config-superseded':
       case 'integration.prepared':
         verify.cycleSince = Math.max(verify.cycleSince, event.seq)
         break

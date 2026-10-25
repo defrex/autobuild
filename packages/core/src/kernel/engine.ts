@@ -1,3 +1,4 @@
+import { resolveApprovedVerifySelection } from './plan-verify-selection'
 import { activeVerifyStage } from './verify-stages'
 import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
@@ -83,6 +84,7 @@ export type VerifyMemberDecision =
       skipCause?: 'post-reconcile-policy'
     }
 export type Decision =
+  | { kind: 'record-verify-selection-drift'; summary: string }
   | { kind: 'restart-execution' }
   | { kind: 'run-verify-stage'; members: VerifyMemberDecision[] }
   | { kind: 'cancel-verify-stage'; steps: string[]; cause: string; attempt: number }
@@ -177,8 +179,12 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     state.verifyStage.failures.findLast(
       (f) =>
         f.cycle >=
-          Math.max(log.restartSeq, log.code.latestApproveSeq, log.lastReconcileCompletedSeq) &&
-        f.seq > log.lastImplementCompletedSeq,
+          Math.max(
+            log.restartSeq,
+            log.code.latestApproveSeq,
+            log.lastReconcileCompletedSeq,
+            log.verifyConfigBoundary,
+          ) && f.seq > log.lastImplementCompletedSeq,
     ) ??
     state.verifyStage.failures.find(
       (f) => f.seq === state.verifyStage.implementations[String(decision.round)],
@@ -225,8 +231,13 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // blocked ≡ any open (unanswered) escalation (§15.5).
   const stageCycle =
     state.kind === 'node'
-      ? (state.integration?.cycle?.seq ?? 0)
-      : Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq, log.restartSeq)
+      ? Math.max(state.integration?.cycle?.seq ?? 0, log.verifyConfigBoundary)
+      : Math.max(
+          log.code.latestApproveSeq,
+          log.lastReconcileCompletedSeq,
+          log.restartSeq,
+          log.verifyConfigBoundary,
+        )
   const stage =
     config.verify.stages === undefined
       ? undefined
@@ -293,13 +304,14 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     if (integrationFailed(state)) return { kind: 'wait', reason: 'blocked' }
     const results = log.verifyCompleted.filter(
       (result) =>
-        result.seq > cycle.seq &&
+        result.seq > Math.max(cycle.seq, log.verifyConfigBoundary) &&
         result.restackId === cycle.id &&
         result.headSha === cycle.head &&
         result.baseSha === cycle.parent,
     )
     const starts = log.verifyStarted.filter(
-      (result) => result.seq > cycle.seq && result.restackId === cycle.id,
+      (result) =>
+        result.seq > Math.max(cycle.seq, log.verifyConfigBoundary) && result.restackId === cycle.id,
     )
     const attempts = [...results, ...starts].map((result) => result.attempt)
     const attempt = attempts.length ? Math.max(...attempts) : log.maxVerifyAttemptEver + 1
@@ -441,10 +453,11 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   }
 
   // Verify cycle (§15.6-A): results only count after the latest of (last
-  // code-review approve, last reconcile.completed) — implement or reconcile
-  // changed the code, so earlier results describe code that no longer exists
-  // and the cycle re-runs from the FIRST step, cheap checks first.
-  const cycleBoundary = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
+  // code-review approval, reconcile completion, or configuration boundary).
+  // Replay identity remains separate: refreshing config neither restacks the
+  // workspace again nor discards its post-reconcile policy.
+  const replayBoundary = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
+  const cycleBoundary = Math.max(replayBoundary, log.verifyConfigBoundary)
   const cycleResults = log.verifyCompleted.filter((v) => v.seq > cycleBoundary)
   const cycleFails = cycleResults.filter((v) => v.outcome === 'fail')
   const lastCycleFail = cycleFails.at(-1)
@@ -577,12 +590,12 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     return { kind: 'restack', trigger: log.restack.active.trigger, cycle: log.restack.active.cycle }
   }
   if (
-    log.restack.gates[String(cycleBoundary)] === undefined &&
-    (log.restack.finalizedAt ?? 0) < cycleBoundary &&
-    !log.verifyStarted.some((v) => v.seq > cycleBoundary) &&
-    cycleResults.length === 0
+    log.restack.gates[String(replayBoundary)] === undefined &&
+    (log.restack.finalizedAt ?? 0) < replayBoundary &&
+    !log.verifyStarted.some((v) => v.seq > replayBoundary) &&
+    !log.verifyCompleted.some((v) => v.seq > replayBoundary)
   ) {
-    return { kind: 'restack', trigger: 'verify-entry', cycle: cycleBoundary }
+    return { kind: 'restack', trigger: 'verify-entry', cycle: replayBoundary }
   }
   // Attempt numbering (§15.6-A): every step in one cycle shares one attempt.
   // A cycle already underway (started or completed events after the boundary)
@@ -601,7 +614,9 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   const policy =
     reconcileCycle &&
     !log.restack.initialVerification &&
-    log.reconcilePolicy?.reconcileSeq === cycleBoundary
+    log.reconcilePolicy?.reconcileSeq === log.lastReconcileCompletedSeq &&
+    (log.reconcilePolicy.cycle === cycleBoundary ||
+      (log.verifyConfigBoundary === 0 && log.reconcilePolicy.cycle === undefined))
       ? log.reconcilePolicy
       : undefined
   if (
@@ -610,15 +625,24 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     policy === undefined &&
     cycleAttempts.length === 0
   ) {
-    return { kind: 'capture-reconcile-policy', reconcileSeq: cycleBoundary }
+    return { kind: 'capture-reconcile-policy', reconcileSeq: log.lastReconcileCompletedSeq }
   }
   const approvedPlan = log.plan.approvedPlan
+  const selection = resolveApprovedVerifySelection(approvedPlan?.verifySteps, config)
+  if (selection.unknown.length) {
+    const summary =
+      `verify selection drift (cycle ${cycleBoundary}, plan@${approvedPlan!.artifact.rev}): ` +
+      `unknown steps ${selection.unknown.map((name) => JSON.stringify(name)).join(', ')}; ` +
+      'running all configured optional steps subject to paths and post-reconcile policy'
+    if (!state.observations.some((observation) => observation.summary === summary))
+      return { kind: 'record-verify-selection-drift', summary }
+  }
   const approvedSelection =
-    approvedPlan?.verifySteps === undefined
+    selection.selected === undefined
       ? undefined
       : {
-          steps: new Set(approvedPlan.verifySteps),
-          planRev: approvedPlan.artifact.rev,
+          steps: selection.selected,
+          planRev: approvedPlan!.artifact.rev,
         }
   const memberDecision = (step: string): VerifyMemberDecision | undefined => {
     // First unsatisfied step in the current cycle runs next — only an explicit
