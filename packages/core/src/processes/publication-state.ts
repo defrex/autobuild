@@ -1,3 +1,8 @@
+import {
+  publicationRetryState,
+  type PublicationOperation,
+  type PublicationRetryEvent,
+} from '../kernel/publication-retry'
 import { reconcileHead } from '../kernel/reconcile-head'
 import type { AbEvent } from '../events/catalog'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
@@ -28,10 +33,11 @@ type LedgerItem =
  * any type) whose seq exceeds the request's. */
 export interface PublicationLedger {
   ledger: LedgerItem[]
+  retries: PublicationRetryEvent[]
 }
 
 /** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 5
+export const PUBLICATION_STATE_REDUCER_VERSION = 6
 
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
@@ -111,6 +117,7 @@ function itemCompletes(item: LedgerItem, request: PublicationRequest): boolean {
 
 /** The publication selectors, derived from one ledger. */
 export interface PublicationView {
+  retry(operation: PublicationOperation, id: string): ReturnType<typeof publicationRetryState>
   requestCompleted(request: PublicationRequest): boolean
   requestSettled(request: PublicationRequest): boolean
   latestUncompletedRequest(): PublicationRequest | undefined
@@ -119,7 +126,10 @@ export interface PublicationView {
   pending(): boolean
 }
 
-function viewOf(ledger: readonly LedgerItem[]): PublicationView {
+function viewOf(
+  ledger: readonly LedgerItem[],
+  retries: readonly PublicationRetryEvent[],
+): PublicationView {
   const requestCompleted = (request: PublicationRequest): boolean =>
     ledger.some((item) => itemCompletes(item, request))
 
@@ -153,6 +163,7 @@ function viewOf(ledger: readonly LedgerItem[]): PublicationView {
   }
 
   return {
+    retry: (operation, id) => publicationRetryState(retries, operation, id),
     requestCompleted,
     requestSettled,
     latestUncompletedRequest,
@@ -172,9 +183,36 @@ export const publicationStateReducer: IncrementalReducer<
   PublicationView
 > = defineReducer<PublicationLedger, AbEvent, PublicationView>({
   version: PUBLICATION_STATE_REDUCER_VERSION,
-  initial: () => ({ ledger: [] }),
+  initial: () => ({ ledger: [], retries: [] }),
   fold(acc, events) {
     for (const event of events) {
+      if (
+        event.type === 'publication.retry-scheduled' ||
+        event.type === 'publication.retry-exhausted' ||
+        event.type === 'escalation.answered'
+      )
+        acc.retries.push(event)
+      if (
+        event.type === 'restack.completed' ||
+        event.type === 'restack.contended' ||
+        event.type === 'reconcile.contended' ||
+        (event.type === 'reconcile.completed' && 'rewriteId' in event.payload)
+      ) {
+        const id =
+          'id' in event.payload
+            ? event.payload.id
+            : 'rewriteId' in event.payload
+              ? event.payload.rewriteId
+              : undefined
+        const operation = event.type.startsWith('restack.') ? 'restack' : 'reconcile'
+        acc.retries = acc.retries.filter(
+          (e) =>
+            e.type === 'escalation.answered' ||
+            e.payload.operation !== operation ||
+            e.payload.rewriteId !== id,
+        )
+      }
+      if (event.type === 'workspace.released') acc.retries = []
       const item = compact(event)
       const last = acc.ledger[acc.ledger.length - 1]
       if (item !== undefined) acc.ledger.push(item)
@@ -182,7 +220,7 @@ export const publicationStateReducer: IncrementalReducer<
       else acc.ledger.push({ t: 'barrier', seq: event.seq })
     }
   },
-  finish: (acc) => viewOf(acc.ledger),
+  finish: (acc) => viewOf(acc.ledger, acc.retries),
 })
 
 export function publicationRequestCompleted(
