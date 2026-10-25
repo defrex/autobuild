@@ -53,3 +53,20 @@ tower = { version = "0.5", features = ["util"] }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[dependencies.jsonwebtoken]
+version = "10"
+features = ["rust_crypto"]
+
+[dependencies.p256]
+version = "0.13"
+features = ["pem", "pkcs8"]
+
+[dependencies.aes-gcm]
+version = "0.10"
+
+[dependencies.futures-core]
+version = "0.3"
+
+[dependencies.futures-util]
+version = "0.3"

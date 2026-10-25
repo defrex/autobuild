@@ -38,6 +38,7 @@ pub struct Auth {
     pub transactions: Mutex<HashMap<String, Transaction>>,
     pub allowed: Allowlist,
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    pub oauth_random: Arc<dyn Fn() -> String + Send + Sync>,
     key: Key,
 }
 impl Auth {
@@ -45,6 +46,7 @@ impl Auth {
         let provider = Arc::new(github::Github::new(config.clone()));
         Self {
             key: Key::derive_from(config.secret.as_bytes()),
+            oauth_random: Arc::new(random),
             config,
             provider,
             sessions: Mutex::new(HashMap::new()),

@@ -1,6 +1,7 @@
 export const routes = {
   '/': 'html',
   '/connect': 'connect-html',
+  '/oauth/consent': 'consent-html',
   '/connect/decide': 'browser-connect',
   '/dashboard/builds/:slug': 'detail-html',
   '/refresh': 'endpoint',
@@ -16,6 +17,29 @@ export const routes = {
   '/auth/sign-out': 'auth',
   '/auth/dev-session': 'development-issuer',
 } as const
+// Public OAuth endpoints have protocol evidence; only consent is browser HTML.
+export const oauthRoutes = {
+  '/.well-known/oauth-protected-resource': 'public-json',
+  '/.well-known/oauth-authorization-server': 'public-json',
+  '/api/auth/.well-known/oauth-protected-resource': 'public-json',
+  '/api/auth/.well-known/oauth-authorization-server': 'public-json',
+  '/api/auth/jwks': 'public-json',
+  '/api/auth/mcp/register': 'public-json',
+  '/api/auth/mcp/token': 'public-json',
+  '/api/auth/oauth2/consent': 'browser-json',
+  '/api/auth/mcp/authorize': 'public-authorization',
+  '/oauth/resume': 'browser-continuation',
+} as const
+export function checkOAuthRoutes(source: string, router: string) {
+  const declaration = source.split('pub fn is_public_path')[1]?.split('pub fn response')[0] ?? ''
+  const found = [...declaration.matchAll(/"(\/[^"\n]+)"/g)].map((m) => m[1]).sort()
+  if (
+    JSON.stringify(found) !== JSON.stringify(Object.keys(oauthRoutes).sort()) ||
+    !router.includes('proa_server::oauth::http::is_public_path(request.uri().path())') ||
+    !router.includes('request.uri().path() == "/mcp"')
+  )
+    throw Error('Unclassified OAuth/MCP route')
+}
 // Entire machine namespaces bypass browser rendering and cookie/origin middleware.
 // They have protocol integration evidence rather than screenshot frames.
 export const machineNamespaces = {
@@ -76,6 +100,7 @@ export function checkCaptureCapabilities(driver: string, sources: Record<string,
         'src/pages/build.rs',
         'src/endpoints/live.rs',
         'src/endpoints/controls.rs',
+        'src/pages/consent.rs',
         'src/pages/connect.rs',
         'src/endpoints/connect.rs',
       ].includes(path)
@@ -126,6 +151,16 @@ for (const width of [1440, 390])
         theme,
         state: `connect-${state}`,
       })
+for (const width of [1440, 390])
+  for (const theme of ['light', 'dark'])
+    for (const state of ['named', 'unnamed', 'long', 'missing', 'expired', 'used', 'refusal'])
+      frames.push({
+        id: `consent-${width}-${theme}-${state}`,
+        route: '/oauth/consent',
+        width,
+        theme,
+        state: `consent-${state}`,
+      })
 export function checkRoutes(source: string, machineSource: string) {
   checkMachineNamespaces(machineSource)
   // These two operator routers have their own executable contract gate.
@@ -163,6 +198,7 @@ export function checkFrameMatrix(cases: typeof frames) {
   if (new Set(cases.map((f) => f.id)).size !== cases.length) throw Error('Duplicate frame id')
   for (const [route, kind] of Object.entries(routes)) {
     if (
+      kind !== 'consent-html' &&
       kind !== 'connect-html' &&
       kind !== 'detail-html' &&
       kind !== 'html' &&
@@ -172,23 +208,27 @@ export function checkFrameMatrix(cases: typeof frames) {
       continue
     for (const width of [1440, 390])
       for (const theme of ['light', 'dark'])
-        for (const state of kind === 'connect-html'
-          ? ['entry', 'pending', 'approved', 'denied', 'expired', 'unknown', 'error'].map(
-              (s) => `connect-${s}`,
+        for (const state of kind === 'consent-html'
+          ? ['named', 'unnamed', 'long', 'missing', 'expired', 'used', 'refusal'].map(
+              (s) => `consent-${s}`,
             )
-          : kind === 'detail-html'
-            ? [
-                'detail',
-                'control-answer',
-                'control-pausing',
-                'control-confirmation',
-                'control-refusal',
-              ]
-            : kind === 'html'
-              ? ['closed', 'open']
-              : kind === 'public-html'
-                ? ['sign-in']
-                : ['refused']) {
+          : kind === 'connect-html'
+            ? ['entry', 'pending', 'approved', 'denied', 'expired', 'unknown', 'error'].map(
+                (s) => `connect-${s}`,
+              )
+            : kind === 'detail-html'
+              ? [
+                  'detail',
+                  'control-answer',
+                  'control-pausing',
+                  'control-confirmation',
+                  'control-refusal',
+                ]
+              : kind === 'html'
+                ? ['closed', 'open']
+                : kind === 'public-html'
+                  ? ['sign-in']
+                  : ['refused']) {
           if (
             cases.filter(
               (f) =>
@@ -221,12 +261,17 @@ export function probe(colors: string[], state: string, theme: string) {
   const text = document.body.innerText
   const publicPage = state === 'sign-in' || state === 'refused'
   const connectPage = state.startsWith('connect-')
+  const consentPage = state.startsWith('consent-')
   for (const content of [
     'Autobuild',
     ...(publicPage
       ? ['Sign in', 'Continue with GitHub']
       : [
-          ...(connectPage ? ['Connect a project'] : ['Builds']),
+          ...(consentPage
+            ? ['Authorize an agent']
+            : connectPage
+              ? ['Connect a project']
+              : ['Builds']),
           'operator@example.com',
           ...(state === 'open' ? ['Sign out', 'System', 'Light', 'Dark'] : []),
         ]),
@@ -237,13 +282,15 @@ export function probe(colors: string[], state: string, theme: string) {
     document.querySelector('h1')?.textContent !==
     (publicPage
       ? 'Sign in'
-      : connectPage
-        ? 'Connect a project'
-        : state === 'detail'
-          ? 'detail-case'
-          : state.startsWith('control-')
-            ? document.querySelector('[data-page=build-detail] h1')?.textContent
-            : 'Builds')
+      : consentPage
+        ? 'Authorize an agent'
+        : connectPage
+          ? 'Connect a project'
+          : state === 'detail'
+            ? 'detail-case'
+            : state.startsWith('control-')
+              ? document.querySelector('[data-page=build-detail] h1')?.textContent
+              : 'Builds')
   )
     failures.push(publicPage ? 'Missing Sign in heading' : 'Missing Builds heading')
   if (
@@ -253,6 +300,13 @@ export function probe(colors: string[], state: string, theme: string) {
     )
   )
     failures.push('Missing connection state')
+  if (consentPage) {
+    const pending = ['named', 'unnamed', 'long'].includes(state.slice(8))
+    if (!document.querySelector(pending ? '[data-consent-form]' : '[data-consent-error]'))
+      failures.push('Missing consent state')
+    if (pending && !document.querySelector('[data-consent-id]')?.textContent)
+      failures.push('Missing raw client ID')
+  }
   if (state.startsWith('control-')) {
     for (const word of state === 'control-answer'
       ? ['Guidance', 'Send guidance', 'Retry', 'Dismiss finding']
