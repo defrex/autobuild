@@ -115,6 +115,9 @@ export async function ticketCliIntegration(
           PROA_HOST: '127.0.0.1',
           PORT: String(port),
           PROA_AUTH_URL: nativeUrl,
+          // This machine-only fixture configures GitHub auth, not development issuance.
+          // Keep its unused OAuth resource HTTPS while the isolated HTTP listener is loopback.
+          AB_WEB_MCP_RESOURCE: 'https://ticket-cli.example.test/mcp',
           GITHUB_CLIENT_ID: 'ticket-cli-proof',
           GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
           PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
