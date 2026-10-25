@@ -23,11 +23,28 @@ build = "bun run check:build"
 # Integration tests need a real PostgreSQL; local builds use the host's own.
 test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun run test:integration"
 
-# The configured universe and order of verification. A plan may deselect
-# optional steps in its opening `verifySteps` front matter; a plan without that
-# metadata runs all of them.
+# The configured universe and stage order of verification. Members of a stage
+# run concurrently; every member must pass or skip before the next stage starts.
+# A plan may deselect optional steps in its opening `verifySteps` front matter;
+# a plan without that metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "build", "integration", "ui-tui", "ui-app", "ui-website", "docs"]
+# Cheap gates precede independent suites: unit needs no database, build probes
+# use isolated temporary directories, and integration alone uses PostgreSQL on
+# 5432 (its deploy rehearsal uses a unique schema, temporary consumer and
+# ephemeral ports).
+# All deterministic checks precede agents. Keep ui-tui separate from ui-app:
+# both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
+# ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
+# .ab/docs-verify-report.md are distinct. Browser profiles and website HTTP
+# ports are allocated per invocation.
+# Leave failFast unset: RFC 0004 §8 favors collecting independent sibling
+# reports here; cheap gates already run before the long suites.
+steps = [
+  ["lint", "types"],
+  ["unit", "build", "integration"],
+  "ui-tui",
+  ["ui-app", "ui-website", "docs"],
+]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
