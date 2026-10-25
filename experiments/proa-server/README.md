@@ -26,15 +26,23 @@ From this directory:
 ```sh
 bun install --frozen-lockfile
 export PATH="$PWD/node_modules/.bin:$PATH"
+export CARGO_TARGET_DIR="$PWD/../../.ab/proa-dev-target"
 proa dev --no-restart
 # Or build and run the production executable:
-proa build --locked --artifact-out target/release/proa-server
-proa start
+proa build --locked --artifact-out ../../.ab/proa-dev-server
+../../.ab/proa-dev-server
 ```
 
 Both Proa dev and build regenerate ignored `public/styles.css` using the local
 Tailwind CLI. Do not install Tailwind globally or commit compiled CSS. Cargo.lock
 pins Rust resolution; use `--locked` for builds and tests.
+
+Keep manual Cargo output under the ignored root `.ab/` directory as above.
+The root documentation tests scan repository files, including ignored `target/`
+directories; a multi-gigabyte native build cache there can exceed their timeout.
+The automated gate already places its shared Cargo cache outside worktrees.
+If an earlier manual build left `target/` here, move that generated directory
+under root `.ab/` before running the root tests.
 
 Default binding is `127.0.0.1:3000`. Set `PORT=4567` to change the port and
 `PROA_HOST=::1` to change the IP address. Invalid/zero ports fail explicitly.

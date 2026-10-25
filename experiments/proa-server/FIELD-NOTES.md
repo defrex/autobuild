@@ -595,3 +595,13 @@ corresponding action is still offered. Capture now acknowledges a pause, appends
 the dispatcher acknowledgment, and requires Resume without navigation; it also
 checks later escalations, external intake changes, and refusal-plus-draft
 retention while action availability changes.
+
+### Manual Cargo cache and root documentation scans
+
+The root Pi provisioning documentation test walks ignored native `target/`
+directories. A 12 GB manual-build cache made that test exceed its five-second
+timeout during the full suite. Moving the generated cache into root `.ab/`,
+which the walker excludes, reduced the isolated 30-test file from about four
+seconds to 157 ms without changing assertions or timeouts. Manual setup now
+exports `CARGO_TARGET_DIR` into `.ab/` and puts its executable there too. The
+automated gate already uses a shared cache outside all worktrees.
