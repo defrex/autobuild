@@ -15,11 +15,16 @@ const BRANCH = `ab/${SLUG}`
 
 class FailOnceStore extends MemoryBuildStore {
   failCompletion = false
+  failRetry = false
 
   override async append<T extends EventType>(
     slug: string,
     event: EventWrite<T>,
   ): Promise<EventEnvelope<T>> {
+    if (this.failRetry && event.type === 'publication.retry-scheduled') {
+      this.failRetry = false
+      throw new Error('retry store unavailable')
+    }
     if (this.failCompletion && event.type === 'implement.completed') {
       this.failCompletion = false
       throw new Error('injected append crash')
@@ -1086,4 +1091,95 @@ test('release preserves pending publication on forge scheduling deferral and ret
     expect(h.published).toHaveLength(1)
     expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'publication.lost')).toBe(false)
   }
+})
+
+test('transient reconcile publication and exhausted attention retain the workspace at release', async () => {
+  const { ForgeFailure } = await import('../ports/forge-failure')
+  const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+  const { settlePublicationBeforeRelease } = await import('../processes/publication-loss')
+  const { PUBLICATION_RETRY_SECONDS } = await import('../kernel/publication-retry')
+  const h = await seedRestackPublication()
+  const clock = manualClock()
+  h.deps.clock = clock
+  let calls = 0
+  let failing = true
+  h.deps.publication!.rewrite = async () => {
+    calls++
+    if (failing)
+      throw new ForgeFailure('HTTP 503 Service Unavailable', {
+        kind: 'transient',
+        retry: 'retryable',
+      })
+    return { kind: 'published' }
+  }
+  const release = () =>
+    settlePublicationBeforeRelease(
+      {
+        store: h.store,
+        settlePublication: (slug) => settlePendingPublication({ ...h.deps }, slug),
+      },
+      SLUG,
+      [],
+      'cleanup',
+    )
+  for (const seconds of PUBLICATION_RETRY_SECONDS) {
+    await expect(release()).rejects.toBeInstanceOf(ForgeRequestDeferred)
+    const previous = calls
+    await expect(release()).rejects.toBeInstanceOf(ForgeRequestDeferred)
+    expect(calls).toBe(previous)
+    if (calls === 1)
+      await h.store.append(SLUG, {
+        actor: agentActor('reconcile', 'reconstructed'),
+        type: 'publication.requested',
+        payload: h.request.payload,
+      })
+    clock.advance(seconds * 1000)
+  }
+  await expect(release()).rejects.toBeInstanceOf(ForgeRequestDeferred)
+  await expect(release()).rejects.toBeInstanceOf(ForgeRequestDeferred)
+  expect(calls).toBe(7)
+  const events = await h.store.getEvents(SLUG)
+  expect(events.some((e) => e.type === 'publication.lost' || e.type === 'workspace.released')).toBe(
+    false,
+  )
+  const raises = events.filter((e) => e.type === 'escalation.raised')
+  expect(raises).toHaveLength(1)
+  await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'escalation.answered',
+    payload: { id: raises[0]!.payload.id, answer: 'retry', resolution: 'retry' },
+  })
+  failing = false
+  await release()
+  expect(
+    (await h.store.getEvents(SLUG)).filter((e) => e.type === 'reconcile.completed'),
+  ).toHaveLength(1)
+})
+
+test('a failed retry write propagates without recording loss or releasing the workspace', async () => {
+  const { ForgeFailure } = await import('../ports/forge-failure')
+  const { PublicationRetryPersistenceError } = await import('../kernel/publication-retry')
+  const { settlePublicationBeforeRelease } = await import('../processes/publication-loss')
+  const h = await seedRestackPublication()
+  h.store.failRetry = true
+  h.deps.publication!.rewrite = async () => {
+    throw new ForgeFailure('HTTP 503', { kind: 'transient', retry: 'retryable' })
+  }
+  await expect(
+    settlePublicationBeforeRelease(
+      { store: h.store, settlePublication: (slug) => settlePendingPublication(h.deps, slug) },
+      SLUG,
+      [],
+      'cleanup',
+    ),
+  ).rejects.toBeInstanceOf(PublicationRetryPersistenceError)
+  expect(
+    (await h.store.getEvents(SLUG)).some(
+      (e) =>
+        e.type === 'publication.lost' ||
+        e.type === 'workspace.released' ||
+        e.type === 'phase.failed' ||
+        e.type === 'publication.retry-scheduled',
+    ),
+  ).toBe(false)
 })

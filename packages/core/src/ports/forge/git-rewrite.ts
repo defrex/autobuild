@@ -1,3 +1,4 @@
+import { classifyGitNetworkFailure } from '../forge-failure'
 import type { ForgeRewrite, RewriteResult } from '../types'
 import type { Exec } from '../workspace/git-worktree'
 import { isValidGitBranchName } from '../../kernel/origin'
@@ -16,7 +17,18 @@ function branchRef(branch: string): string {
  * never consults a remote, even when the repository happens to have one. */
 export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
   async function git(cwd: string, args: string[], allowFailure = false) {
-    const result = await exec(['git', ...args], { cwd })
+    const network = !local && ['push', 'fetch', 'ls-remote'].includes(args[0] ?? '')
+    let result: Awaited<ReturnType<Exec>>
+    try {
+      result = await exec(['git', ...args], { cwd })
+    } catch (error) {
+      throw network ? classifyGitNetworkFailure(error) : error
+    }
+    if (network && result.exitCode !== 0) {
+      const original = new Error(result.stderr || result.stdout)
+      const classified = classifyGitNetworkFailure(original)
+      if (classified !== original) throw classified
+    }
     if (!allowFailure && result.exitCode !== 0)
       throw new Error(
         `reconcile git ${args.join(' ')} failed: ${result.stderr || result.stdout}; enable refs/autobuild/archive/ publication and guarded build-branch rewrites`,
@@ -224,7 +236,18 @@ export async function refreshBranchCache(
   object(sha)
   if (!isValidGitBranchName(branch)) throw new Error('invalid publication branch')
   const run = async (args: string[]) => {
-    const result = await exec(['git', ...args], { cwd })
+    const network = ['push', 'fetch', 'ls-remote'].includes(args[0] ?? '')
+    let result: Awaited<ReturnType<Exec>>
+    try {
+      result = await exec(['git', ...args], { cwd })
+    } catch (error) {
+      throw network ? classifyGitNetworkFailure(error) : error
+    }
+    if (network && result.exitCode !== 0) {
+      const original = new Error(result.stderr || result.stdout)
+      const classified = classifyGitNetworkFailure(original)
+      if (classified !== original) throw classified
+    }
     if (result.exitCode !== 0)
       throw new Error(`publication cache ${args.join(' ')} failed: ${result.stderr}`)
   }

@@ -1,3 +1,4 @@
+import { publicationRetryGate, retryPublicationEffect } from '../kernel/publication-retry'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { stat } from 'node:fs/promises'
 import { deferMixedVersion, MixedVersionDeferral } from '../kernel/mixed-version'
@@ -93,21 +94,35 @@ export async function settlePendingPublication(
       intended.branch !== request.payload.branch
     )
       throw new Error('restack publication request does not match its durable intent')
+    const retryDeps = { ...deps, slug, clock: deps.clock ?? systemClock, actor: DISPATCHER }
+    await publicationRetryGate(retryDeps, 'restack', transaction.id)
     const archives = [...new Set([...events.gitTips, request.payload.sha])].map((sha) => ({
       ref: `refs/autobuild/archive/${slug}/${sha}`,
       sha,
     }))
-    await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
-    const result = await publication.rewrite({
-      ref,
-      sha: request.payload.sha,
-      branch: transaction.branch,
-      expected: transaction.oldHead,
-      localExpected: transaction.localBranchHead,
-      archives,
-    })
+    const external = <T>(effect: () => Promise<T>) =>
+      retryPublicationEffect(
+        retryDeps,
+        'restack',
+        transaction.id,
+        events.state.reconcileAttempts + 1,
+        effect,
+      )
+    await external(() => suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`))
+    const result = await external(() =>
+      publication.rewrite!({
+        ref,
+        sha: request.payload.sha,
+        branch: transaction.branch,
+        expected: transaction.oldHead,
+        localExpected: transaction.localBranchHead,
+        archives,
+      }),
+    )
     if (result.kind === 'published')
-      await confirmDispatcherCache(deps, request.payload.branch, request.payload.sha)
+      await external(() =>
+        confirmDispatcherCache(deps, request.payload.branch, request.payload.sha),
+      )
     const latest = (await readBuildFacts(deps.store, slug)).value
     if (
       (result.kind === 'published' || result.rewritten === true) &&
@@ -170,19 +185,27 @@ export async function settlePendingPublication(
       throw new Error('reconcile request does not match its durable resolved intent')
     if (events.reconcileBases[String(transaction.attempt)] !== transaction.targetBase)
       throw new Error('reconcile publication target differs from the recorded start')
+    const retryDeps = { ...deps, slug, clock: deps.clock ?? systemClock, actor: DISPATCHER }
+    await publicationRetryGate(retryDeps, 'reconcile', transaction.id)
     const tips = new Set([...events.gitTips, request.payload.sha])
     const archives = [...tips].map((sha) => ({ ref: `refs/autobuild/archive/${slug}/${sha}`, sha }))
-    await suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`)
-    const result = await publication.rewrite({
-      ref,
-      sha: request.payload.sha,
-      branch: request.payload.branch,
-      expected: transaction.oldHead,
-      localExpected: transaction.localBranchHead,
-      archives,
-    })
+    const external = <T>(effect: () => Promise<T>) =>
+      retryPublicationEffect(retryDeps, 'reconcile', transaction.id, transaction.attempt, effect)
+    await external(() => suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`))
+    const result = await external(() =>
+      publication.rewrite!({
+        ref,
+        sha: request.payload.sha,
+        branch: request.payload.branch,
+        expected: transaction.oldHead,
+        localExpected: transaction.localBranchHead,
+        archives,
+      }),
+    )
     if (result.kind === 'published')
-      await confirmDispatcherCache(deps, request.payload.branch, request.payload.sha)
+      await external(() =>
+        confirmDispatcherCache(deps, request.payload.branch, request.payload.sha),
+      )
     const history = (await readBuildFacts(deps.store, slug)).value.reconcileHistory
     if (
       (result.kind === 'published' || result.rewritten === true) &&

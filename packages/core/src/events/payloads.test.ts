@@ -1286,3 +1286,38 @@ test('spec revisions require exactly one strict durable origin and stay kernel-o
     }),
   ).toThrow()
 })
+
+test('publication retry scheduling is a decisive, trusted, bounded protocol', async () => {
+  const { buildEventPolicy } = await import('./policy')
+  const common = { operation: 'restack', rewriteId: 'r', round: 1, anchor: 0, error: 'HTTP 503' }
+  for (const actor of [KERNEL, DISPATCHER]) {
+    for (const type of ['publication.retry-scheduled', 'publication.retry-exhausted'] as const) {
+      const payload =
+        type === 'publication.retry-scheduled'
+          ? { ...common, failure: 1, retryAt: '2026-07-15T12:00:30.000Z' }
+          : { ...common, failure: 7 }
+      expect(validateEventWrite({ actor, type, payload }).type).toBe(type)
+      expect(buildEventPolicy[type]).toBe('decisive')
+      expect(() =>
+        validateEventWrite({ actor: agentActor('reconcile', 's'), type, payload }),
+      ).toThrow(/may not emit/)
+      expect(() =>
+        validateEventWrite({ actor, type, payload: { ...payload, failure: 8 } }),
+      ).toThrow(/invalid payload/)
+    }
+  }
+  expect(
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'escalation.raised',
+      payload: {
+        id: 'publication:restack:r:0',
+        phase: 'reconcile',
+        round: 1,
+        source: 'policy',
+        policyCause: 'publication-retry-limit',
+        question: 'HTTP 503 after 6 retries',
+      },
+    }).type,
+  ).toBe('escalation.raised')
+})

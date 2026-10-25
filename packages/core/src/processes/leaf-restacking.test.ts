@@ -1,3 +1,7 @@
+import { ForgeFailure } from '../ports/forge-failure'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
+import { PUBLICATION_RETRY_SECONDS } from '../kernel/publication-retry'
+import { manualClock } from '../testing/fixed'
 import { Dispatcher } from './dispatcher'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -38,7 +42,12 @@ command = "test"
 `)
 for (const conflict of [false, true])
   for (const { remote, recovery } of [false, true].flatMap((remote) =>
-    (!remote && conflict ? ['none', 'contention', 'pause'] : ['none']).map((recovery) => ({
+    [
+      ...(!remote && conflict ? ['none', 'contention', 'pause'] : ['none']),
+      'transient',
+      'persistent',
+      'acknowledgement',
+    ].map((recovery) => ({
       remote,
       recovery,
     })),
@@ -99,7 +108,7 @@ for (const conflict of [false, true])
         }
         const forge = new LocalGitForge({ exec: bunExec })
         let competingHead: string | undefined
-        if (!remote && (!conflict || recovery === 'contention')) {
+        if (!remote && ((!conflict && recovery === 'none') || recovery === 'contention')) {
           const capability = forge.rewrite!
           Object.defineProperty(forge, 'rewrite', {
             configurable: true,
@@ -124,6 +133,29 @@ for (const conflict of [false, true])
           })
         }
 
+        let publicationCalls = 0
+        let failPublication =
+          recovery === 'transient' || recovery === 'persistent' || recovery === 'acknowledgement'
+        if (failPublication) {
+          const capability = forge.rewrite!
+          Object.defineProperty(forge, 'rewrite', {
+            configurable: true,
+            value: {
+              ...capability,
+              replace: async (input: Parameters<typeof capability.replace>[0]) => {
+                publicationCalls++
+                if (failPublication && recovery === 'acknowledgement')
+                  await capability.replace(input)
+                if (failPublication)
+                  throw new ForgeFailure('HTTP 503 Service Unavailable', {
+                    kind: 'transient',
+                    retry: 'retryable',
+                  })
+                return capability.replace(input)
+              },
+            },
+          })
+        }
         let sessions = 0
         const deps = {
           store: store.scopeBuild(BUILD),
@@ -189,9 +221,11 @@ for (const conflict of [false, true])
           clock: () => new Date(),
           instance: 'test',
           host: 'test',
+          opts: { maxPhaseAttempts: failPublication ? 1 : 2 },
         }
         await store.claimLease(BUILD, 'test', 3_600_000)
-        deps.clock = () => new Date('2026-07-15T12:00:00.000Z')
+        const retryClock = manualClock()
+        deps.clock = retryClock
         const runner = new BuildRunner(deps)
         const settle = async () =>
           settlePendingPublication(
@@ -203,6 +237,7 @@ for (const conflict of [false, true])
               exec: bunExec,
               ids: sequentialIds(),
               runId: 'test',
+              clock: retryClock,
               publication: {
                 publish: async () => {
                   throw new Error('must use rewrite')
@@ -222,6 +257,76 @@ for (const conflict of [false, true])
             },
             BUILD,
           )
+        if (failPublication) {
+          await runner.step()
+          if (conflict) await runner.step()
+          const attempt = async () => {
+            if (remote) {
+              try {
+                await settle()
+              } catch (error) {
+                if (!(error instanceof ForgeRequestDeferred)) throw error
+              }
+            } else await new BuildRunner(deps).step()
+          }
+          if (remote) await attempt()
+          expect(publicationCalls).toBe(1)
+          if (!remote) {
+            await new BuildRunner(deps).run()
+            expect(publicationCalls).toBe(1)
+          }
+          if (!remote && conflict && recovery === 'transient') {
+            await store.append(BUILD, {
+              actor: humanActor('operator'),
+              type: 'build.pause-requested',
+              payload: {},
+            })
+            expect(await runner.step()).toEqual({ kind: 'acknowledge', command: 'pause' })
+            expect((await readBuildFacts(store, BUILD)).value.state.status).toBe('paused')
+            expect(publicationCalls).toBe(1)
+            await store.append(BUILD, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+            expect(await runner.step()).toEqual({ kind: 'acknowledge', command: 'resume' })
+            expect(publicationCalls).toBe(1)
+          }
+          const attempts = recovery === 'persistent' ? 6 : 1
+          for (let index = 0; index < attempts; index++) {
+            const events = await store.getEvents(BUILD)
+            const calls = publicationCalls
+            await attempt()
+            expect(publicationCalls).toBe(calls)
+            expect(await store.getEvents(BUILD)).toHaveLength(events.length)
+            if (recovery !== 'persistent') failPublication = false
+            retryClock.advance(PUBLICATION_RETRY_SECONDS[index]! * 1000)
+            await attempt()
+          }
+          if (recovery === 'persistent') {
+            const facts = (await readBuildFacts(store, BUILD)).value
+            expect(publicationCalls).toBe(7)
+            expect(facts.state.openEscalations).toHaveLength(1)
+            await attempt()
+            expect(publicationCalls).toBe(7)
+            const escalation = facts.state.openEscalations[0]!
+            await store.append(BUILD, {
+              actor: humanActor('operator'),
+              type: 'escalation.answered',
+              payload: { id: escalation.id, answer: 'retry', resolution: 'retry' },
+            })
+            failPublication = false
+            await attempt()
+          }
+          const events = await store.getEvents(BUILD)
+          expect(events.filter((e) => e.type === 'phase.failed')).toHaveLength(0)
+          expect(events.filter((e) => e.type === 'session.started')).toHaveLength(conflict ? 1 : 0)
+          expect(
+            events.some((e) => e.type === (conflict ? 'reconcile.completed' : 'restack.completed')),
+          ).toBe(true)
+          expect(await git(['show', '-s', '--format=%P', BRANCH])).toBe(target)
+          return
+        }
         expect(await runner.step()).toMatchObject({ kind: 'restack', trigger: 'verify-entry' })
         if (!remote && !conflict) {
           expect(await runner.step()).toMatchObject({ kind: 'restack', trigger: 'verify-entry' })

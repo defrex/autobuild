@@ -112,6 +112,7 @@ export const policyEscalationCauseSchema = z.enum([
   'execution-no-progress',
   'setup-failure-limit',
   'infrastructure-failure-limit',
+  'publication-retry-limit',
   'phase-attempt-limit',
   'non-retryable-phase-failure',
 ])

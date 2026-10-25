@@ -477,6 +477,20 @@ raise with its own event type.
 
 ## Forge failure recovery
 
+Leaf restack and reconcile publication retry classified transient forge or transport
+failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
+300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
+identity, episode anchor, failure ordinal, last error and absolute retry time;
+restart resumes that schedule without rerunning the resolver. These retries do
+not consume `maxPhaseAttempts`. A seventh transient failure records
+`publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
+error and six retries. Answering that escalation opens a fresh publication episode
+for the same retained intent without resetting agent phase failures. Pending
+publication keeps its workspace through backoff and unresolved exhaustion.
+Classified rate limits retain repository cooldown and consume no publication
+retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
+errors retain their existing behavior.
+
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
 Skipped polls preserve the episode across restart. After

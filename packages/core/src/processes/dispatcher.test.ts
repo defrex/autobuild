@@ -1,3 +1,4 @@
+import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
@@ -5387,6 +5388,152 @@ describe('Dispatcher startup resume', () => {
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
 describe('Dispatcher lease sweep', () => {
+  for (const operation of ['restack', 'reconcile'] as const)
+    for (const exhausted of [false, true])
+      for (const command of ['abort', 'pause', 'resume'] as const)
+        test(`${operation} ${exhausted ? 'exhaustion' : 'backoff'} permits swept runner to acknowledge ${command}`, async () => {
+          const runnerToml = '[roles.default]\nruntime = "scripted"\n'
+          const h = harness({
+            toml: runnerToml,
+            onLaunch: async (slug, store) => {
+              const { BuildRunner } = await import('./build-runner')
+              const { ScriptedAgentRunner } = await import('../ports/runner/fake')
+              const runner = new BuildRunner({
+                store: store.scopeBuild(slug),
+                config: parseConfig(withReadyState(runnerToml)),
+                runtimes: {
+                  scripted: {
+                    runner: new ScriptedAgentRunner({
+                      script: async () => {
+                        throw new Error('control acknowledgement must not start an agent')
+                      },
+                    }),
+                    servesModels: [],
+                  },
+                },
+                workspacePath: `/ws/ab/${slug}`,
+                branch: `ab/${slug}`,
+                slug,
+                exec: async () => {
+                  throw new Error('control acknowledgement must not execute Git')
+                },
+                forge: h.forge,
+                ids: sequentialIds(),
+                clock: h.clock,
+                instance: 'replacement',
+                host: 'test',
+              })
+              expect(await runner.step()).toEqual({ kind: 'acknowledge', command })
+            },
+          })
+          const slug = await seedBuild(h)
+          const {
+            trigger: _trigger,
+            cycle: _cycle,
+            observation: _observation,
+            message: _message,
+            ...rewrite
+          } = {
+            ...leafTransaction,
+            branch: `ab/${slug}`,
+          }
+          if (operation === 'restack') {
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'restack.prepared',
+              payload: { ...leafTransaction, branch: `ab/${slug}` },
+            })
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'restack.publish-intended',
+              payload: { ...leafTransaction, branch: `ab/${slug}`, headSha: 'e'.repeat(40) },
+            })
+          } else {
+            const transaction = { ...rewrite, attempt: 1 }
+            const artifact = { kind: 'reconcile-notes', rev: 0 }
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'reconcile.started',
+              payload: { attempt: 1, baseSha: transaction.targetBase },
+            })
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'reconcile.prepared',
+              payload: transaction,
+            })
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'reconcile.publish-intended',
+              payload: { ...transaction, headSha: 'e'.repeat(40), conflicted: true, artifact },
+            })
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'publication.requested',
+              payload: {
+                operation,
+                branch: transaction.branch,
+                sha: 'e'.repeat(40),
+                artifact,
+                rewrite: { ...transaction, conflicted: true },
+              },
+            })
+          }
+          if (command === 'resume')
+            await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+          const retry = { operation, rewriteId: rewrite.id, round: 1, anchor: 0, error: 'HTTP 503' }
+          if (exhausted)
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'publication.retry-exhausted',
+              payload: { ...retry, failure: 7 },
+            })
+          else
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'publication.retry-scheduled',
+              payload: {
+                ...retry,
+                failure: 1,
+                retryAt: new Date(h.clock().getTime() + 300_000).toISOString(),
+              },
+            })
+          await h.store.claimLease(slug, 'old-runner', 1000)
+          h.clock.advance(2000)
+          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+          expect(h.launches).toEqual([])
+          await h.store.append(slug, {
+            actor: humanActor('operator'),
+            type: `build.${command}-requested`,
+            payload: {},
+          })
+          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+          expect(h.launches).toEqual([slug])
+          const events = await h.store.getEvents(slug)
+          const state = reduceBuild(events)
+          expect(state.pendingCommands).toEqual([])
+          expect(state.status).toBe(
+            command === 'abort'
+              ? 'aborted'
+              : command === 'pause'
+                ? 'paused'
+                : exhausted
+                  ? 'blocked'
+                  : 'running',
+          )
+          expect(
+            events.some(
+              (event) => event.type === 'escalation.answered' || event.type === 'phase.failed',
+            ),
+          ).toBe(false)
+          expect(
+            events.filter(
+              (event) =>
+                event.type === 'publication.retry-scheduled' ||
+                event.type === 'publication.retry-exhausted',
+            ),
+          ).toHaveLength(1)
+        })
+
   test('a detached replacement launch failure stays under the infrastructure budget without rejecting', async () => {
     const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const provider: WorkspaceProvider = {
