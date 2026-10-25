@@ -16,7 +16,8 @@ Prerequisites:
 - Proa CLI **0.1.3**: `cargo install proa-cli --version 0.1.3 --locked`.
 - Bun (validated with 1.4.4) for local Tailwind **4.3.1** and @tailwindcss/cli **4.3.1**.
 - A native compiler/linker, C build tools and pkg-config for Rust dependencies
-  (validated on Linux with GCC and GNU ld), plus OpenSSL development libraries.
+  (validated on Linux with GCC and GNU ld). PostgreSQL TLS uses Rust TLS
+  with the host trust roots; no dynamic OpenSSL library is required.
 - An installed local PostgreSQL cluster for the full Rust gate. The gate starts
   an existing cluster and provisions its own disposable database and local S3 service.
   Offline shell development and capture need no database or credentials.
@@ -102,4 +103,8 @@ From this directory, `bun tools/generate-fixtures.ts` executes the scripted core
 scenarios and compatibility producers and regenerates the corpus with current
 TypeScript reducer answers. `bun tools/check-fixtures.ts` independently checks
 source/catalog freshness and re-reduces committed logs without rewriting them.
-Rust parity compares full and chunked replay, including prefixes and empty suffixes.
+The losslessly compressed `fixtures/corpus.json.gz` contains logs and oracle
+answers; `fixtures/manifest.json` lists producers, versions, catalogs and source
+hashes. Identical scope/log inputs share one case with every origin retained as an
+alias. Rust parity compares full and chunked replay, including prefixes and empty
+suffixes.

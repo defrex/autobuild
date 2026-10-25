@@ -18,26 +18,45 @@ import { withDataServices } from './data-services'
 import { expected } from './fixture-core'
 
 const project = resolve(import.meta.dir, '..')
-async function bridge(env: Record<string, string | undefined>, cwd: string, command?: string[]) {
+async function buildNative(env: Record<string, string | undefined>) {
   const child = Bun.spawn(
-    command ?? [
+    [
       'cargo',
-      'run',
+      'build',
       '--locked',
-      '--quiet',
       '--example',
       'data-proof',
-      '--manifest-path',
-      resolve(project, 'Cargo.toml'),
+      '--bin',
+      'proa-server',
+      '--message-format=json',
     ],
     {
-      cwd,
+      cwd: project,
       env,
-      stdin: 'pipe',
       stdout: 'pipe',
-      stderr: 'pipe',
+      stderr: 'inherit',
     },
   )
+  const output = await new Response(child.stdout).text()
+  if ((await child.exited) !== 0) throw new Error('Native data proof build failed')
+  const paths = new Map<string, string>()
+  for (const line of output.split('\n').filter(Boolean)) {
+    const artifact = JSON.parse(line) as {
+      reason: string
+      executable?: string
+      target?: { name: string }
+    }
+    if (artifact.reason === 'compiler-artifact' && artifact.executable && artifact.target)
+      paths.set(artifact.target.name, artifact.executable)
+  }
+  const reader = paths.get('data-proof'),
+    server = paths.get('proa-server')
+  if (!reader || !server) throw new Error('Cargo did not report native proof executables')
+  return { reader, server }
+}
+async function bridge(env: Record<string, string | undefined>, cwd: string, command: string[]) {
+  // Spawn the actual executable so timeouts/signals reap the reader, not a cargo parent.
+  const child = Bun.spawn(command, { cwd, env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
   let diagnostics = ''
   const stderr = (async () => {
     for await (const bytes of child.stderr) {
@@ -77,15 +96,22 @@ async function bridge(env: Record<string, string | undefined>, cwd: string, comm
     },
     async close() {
       child.stdin.end()
-      await child.exited
+      const timer = setTimeout(() => child.kill(), 10000)
+      try {
+        await child.exited
+      } finally {
+        clearTimeout(timer)
+      }
     },
   }
 }
 export async function integration(
   adminUrl: string,
   environment: Record<string, string | undefined>,
-  options: { rustCommand?: string[] } = {},
+  options: { failRust?: boolean } = {},
 ) {
+  const native = await buildNative(environment)
+  const readerCommand = [native.reader, ...(options.failRust ? ['--fail-for-cleanup'] : [])]
   const suffix = crypto.randomUUID().replaceAll('-', '')
   const database = `proa_proof_${suffix}`
   const role = `proa_read_${suffix}`
@@ -124,9 +150,11 @@ export async function integration(
     createdWrite.payload.repo = repo
     await store.createBuild({ slug: 'healthy', repo, created: createdWrite })
     await store.createBuild({ slug: 'unknown', repo, created: createdWrite })
+    await store.createBuild({ slug: 'empty', repo })
     await store.createBuild({ slug: 'foreign', repo: 'foreign' })
     await store.append('healthy', sampleEventWrite('first'))
     await store.ensureRepo(repo)
+    await store.ensureRepo('empty-repository')
     await store.appendRepo(repo, {
       actor: { kind: 'human', user: 'integration' },
       type: 'dispatcher.auto-merge-default-set',
@@ -191,7 +219,7 @@ export async function integration(
         await writer!`SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname`
       return JSON.stringify({ contents, columns, constraints, indexes })
     }
-    rust = await bridge(env, runtime, options.rustCommand)
+    rust = await bridge(env, runtime, readerCommand)
     const value = async (command: Record<string, unknown>) => {
       const reply = await rust!.request({ repo, ...command })
       assert.equal(reply.error, undefined)
@@ -199,8 +227,25 @@ export async function integration(
     }
     const before = await snapshot()
     assert.equal((await value({ op: 'projects' })).length, 1)
-    assert.equal((await value({ op: 'builds' })).length, 2)
+    assert.equal((await value({ op: 'builds' })).length, 3)
     assert.equal((await value({ op: 'sessions' }))[0].id, session.id)
+    assert.deepEqual(await value({ op: 'build', id: 'empty' }), {
+      build: encodeReducerValue(reduceBuild([])),
+    })
+    assert.deepEqual(
+      await value({ op: 'repository', repo: 'empty-repository' }),
+      expected('repository', []),
+    )
+    for (const command of [
+      { op: 'build', repo: 'foreign', id: 'healthy' },
+      { op: 'build', repo, id: 'absent' },
+      { op: 'repository', repo: 'absent' },
+      { op: 'session', repo: 'foreign', id: session.id },
+    ])
+      assert.match(
+        (await rust.request(command)).error,
+        /scope does not exist in the selected project/,
+      )
     const first = await value({ op: 'build', id: 'healthy' })
     assert.deepEqual(first, {
       build: encodeReducerValue(reduceBuild(await store.getEvents('healthy'))),
@@ -271,13 +316,14 @@ export async function integration(
     await rust.close()
     rust = undefined
     // A new process must replay with the same result.
-    rust = await bridge(env, runtime, options.rustCommand)
+    rust = await bridge(env, runtime, readerCommand)
     assert.deepEqual(await value({ op: 'build', id: 'healthy' }), concurrent[0])
     await rust.close()
     rust = undefined
+    const healthySession = await store.createSession({ repo, operator: 'independent' })
     await writer`INSERT INTO repo_events (repo, seq, ts, actor, type, payload) VALUES (${repo}, 2, now(), ${JSON.stringify({ kind: 'kernel', id: 'integration' })}::jsonb, 'future.repo', '{}'::jsonb)`
     await writer`INSERT INTO session_events (session, seq, ts, actor, type, payload) VALUES (${session.id}, 3, now(), ${JSON.stringify({ kind: 'human', user: 'integration' })}::jsonb, 'future.session', '{}'::jsonb)`
-    rust = await bridge(env, runtime, options.rustCommand)
+    rust = await bridge(env, runtime, readerCommand)
     assert.match(
       (await rust.request({ op: 'repository', repo })).error,
       /repository.*future.repo.*seq 2/,
@@ -287,28 +333,22 @@ export async function integration(
       /session.*future.session.*seq 3/,
     )
     assert.deepEqual(await value({ op: 'build', id: 'healthy' }), concurrent[0])
+    assert.deepEqual(await value({ op: 'session', id: healthySession.id }), {
+      session: encodeReducerValue(reduceSession(await store.getSessionEvents(healthySession.id))),
+    })
     await rust.close()
     rust = undefined
     await writer`UPDATE ab_schema_migrations SET version = 999 WHERE singleton = true`
-    await assert.rejects(() => bridge(env, runtime), /expected version 17, found 999/)
-    const startup = Bun.spawn(
-      [
-        'cargo',
-        'run',
-        '--locked',
-        '--quiet',
-        '--bin',
-        'proa-server',
-        '--manifest-path',
-        resolve(project, 'Cargo.toml'),
-      ],
-      {
-        cwd: runtime,
-        env: { ...env, PROA_HOST: '127.0.0.1', PORT: '65500' },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
+    await assert.rejects(
+      () => bridge(env, runtime, readerCommand),
+      /expected version 17, found 999/,
     )
+    const startup = Bun.spawn([native.server], {
+      cwd: runtime,
+      env: { ...env, PROA_HOST: '127.0.0.1', PORT: '65500' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
     const startupTimeout = setTimeout(() => startup.kill(), 180000)
     try {
       const [stdout, stderr, code] = await Promise.all([
@@ -371,18 +411,7 @@ if (import.meta.main)
       await assert.rejects(
         () =>
           integration(adminUrl, env, {
-            rustCommand: [
-              'cargo',
-              'run',
-              '--locked',
-              '--quiet',
-              '--example',
-              'data-proof',
-              '--manifest-path',
-              resolve(project, 'Cargo.toml'),
-              '--',
-              '--fail-for-cleanup',
-            ],
+            failRust: true,
           }),
         /Rust data bridge closed/,
       )

@@ -90,6 +90,9 @@ export async function build(capture = false): Promise<string> {
   // flock owns the lock through the entire child process; the OS releases it on death.
   const env = {
     ...process.env,
+    // Development capture/corpus overrides must never replace gate evidence.
+    PROA_PARITY_CORPUS: undefined,
+    PROA_CAPTURE_FILE: undefined,
     CARGO_TARGET_DIR: cache,
     PATH: `${project}/node_modules/.bin:${process.env.PATH}`,
   }

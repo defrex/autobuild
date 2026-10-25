@@ -253,3 +253,34 @@ Provider contracts consulted:
 [AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
 [Vercel SDK get](https://vercel.com/docs/vercel-blob/using-blob-sdk#get), and
 [S3rver 3.7.1 lifecycle](https://github.com/jamhall/s3rver/blob/v3.7.1/README.md).
+
+
+Linked-build finding: the initial PostgreSQL native-TLS connector introduced
+`libcrypto.so.3`. Proa 0.1.3 refuses that non-system dependency when freezing an
+immutable launch snapshot. Switching to `tokio-postgres-rustls` with native trust
+roots removes both libcrypto/libssl links while preserving URL sslmode and certificate
+validation. The real-store proof passes after this change; no Proa patch or disabled
+linked build is needed.
+
+Current corpus inventory: 33 producer files executed 725 tests, with two explicitly
+provider-gated skips. The corpus preserves 19,408 source cases/provenance aliases
+as 5,868 distinct scope/log fixtures: 4,330 build, 1,409 repository and 129 session.
+All 219 catalog names have decoding witnesses (134 build, 74 repository, 11 session).
+Ten unknown-type cases retain TS answers and assert scoped Rust unreadability;
+39 deliberately invalid TS histories preserve the oracle error outcome, and 16
+causally incomplete standalone witnesses are decoding-only. Freshness covers 820
+source/dependency inputs. Lossless deterministic gzip is about 2.8 MiB, alongside
+268 KiB of decoding schemas and a readable 110 KiB manifest; identical logs retain
+all original producer identities as aliases. Generation completed with the current
+producer code, then its non-mutating freshness check passed.
+
+The clean repository unit run passed 8,153 tests with 49 skips and zero failures.
+The initial run exposed a corpus self-test instrumentation leak, now fixed by full
+prototype/reducer restoration. The separately known inherited AB_CONTEXT_DIR routing
+test issue remains outside this build; the clean run removed only that variable.
+Rust default/union validation caches and exact-equality fast paths keep the broader
+17,616-case development parity stress run practical (about 102 seconds before the
+last redundant-validator optimization); final-gate timings remain in its ignored
+build evidence directory. Extra generated additive-field histories verified raw
+repository journals and opaque session fields against TypeScript. The server
+never loads oracle answers: only the generated event schema catalog is embedded.

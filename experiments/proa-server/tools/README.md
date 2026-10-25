@@ -75,6 +75,10 @@ Corpus generation: `bun tools/generate-fixtures.ts` from the experiment executes
 scenario/compatibility producers, captures per-store logs and validates every event
 catalog witness. Verification runs `bun tools/check-fixtures.ts` before Cargo tests;
 it recomputes TypeScript answers and checks source hashes without regenerating goldens.
+`fixtures/corpus.json.gz` stores lossless JSON cases; the readable manifest inventories
+producers and source hashes. Identical scope/log cases retain all provenance aliases.
+Staging is under ignored workspace `.ab/`; replacement restores the old corpus if
+publication fails, and failed runs retain diagnostic inputs.
 `tests/reducer_parity.rs` compares native replay and chunked advancement field by field.
 `tools/data-integration.ts` proves TS-write/Rust-read PostgreSQL/blob interoperability,
 read-only tables, incremental suffix counts, restart and failure isolation.
