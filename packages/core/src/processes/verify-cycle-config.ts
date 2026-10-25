@@ -6,11 +6,7 @@ import { KERNEL } from '../events/envelope'
 import type { BuildState } from '../kernel/reducer'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore } from '../store/types'
-import {
-  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-  effectiveBuildConfigContent,
-  parseEffectiveBuildConfig,
-} from './build-execution-state'
+import { effectiveBuildConfigContent, parseEffectiveBuildConfig } from './build-execution-state'
 
 export type VerifyPipelineReader = () => Promise<PipelineSource & { head: string }>
 export function buildConfigIdentity(config: Config): string {
@@ -73,13 +69,9 @@ export async function refreshVerifyCycle(input: {
     content: effectiveBuildConfigContent(config),
     metadata: { pipelineSource: observed.meta, cycle: state.verify.cycleSince },
   })
-  // Compatibility readers may still use the latest launch artifact. The
-  // capture itself references the unpruned, immutable cycle artifact above.
-  await store.putArtifact(slug, {
-    kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-    content: effectiveBuildConfigContent(config),
-    metadata: { pipelineSource: observed.meta },
-  })
+  // Publishing an artifact is not a cycle transition. Only the capture fact
+  // makes these bytes authoritative; keep the mutable launch/reload artifact
+  // untouched so a crash before this append cannot expose an uncommitted pin.
   await store.appendIfCurrent(slug, state.lastSeq, {
     actor: KERNEL,
     type: 'verify.config-captured',

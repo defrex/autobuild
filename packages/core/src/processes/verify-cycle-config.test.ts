@@ -147,6 +147,7 @@ test('artifact/append crash windows recover with one authoritative capture', asy
     return append(...args)
   }
   await expect(f.refresh()).rejects.toThrow('crash')
+  expect(await f.store.getArtifact('test', BUILD_EFFECTIVE_CONFIG_ARTIFACT)).toBeNull()
   expect((await f.state()).verify.configPin).toBeUndefined()
   await f.refresh()
   expect(await f.refresh()).toBe(false)
