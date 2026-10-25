@@ -7,3 +7,7 @@ pub mod data;
 
 pub mod operator;
 pub mod protocol;
+
+pub mod oauth;
+
+pub mod mcp;
