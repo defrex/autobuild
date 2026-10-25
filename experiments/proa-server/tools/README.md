@@ -12,7 +12,24 @@ bun test experiments/proa-server/tools
 Prerequisites are the experiment README's pinned Rust 1.99.1 and Proa 0.1.3,
 Bun, Linux flock, and local Chromium (`CHROMIUM_BIN`, default /usr/bin/chromium).
 Capture uses offline dependency resolution; provision Cargo dependencies with the
-Rust gate first. No network service, credentials, forge or live runner is needed.
+Rust gate first. The full Rust gate also needs an installed local PostgreSQL
+cluster (on Debian: provision with the repository's `scripts/postgres-live.sh install`
+as a maintainer). With `AB_POSTGRES_TEST_URL` unset, the gate invokes
+`scripts/postgres-live.sh ensure-running` and explicitly uses
+`postgres://postgres:postgres@127.0.0.1:5432/postgres`. A nonblank override must name a
+loopback administrative connection; it bypasses the helper, and invalid connections
+fail without fallback. The gate never installs, stops or resets PostgreSQL.
+
+The locked private `s3rver` 3.7.1 dependency supplies a real local HTTP S3 subset,
+binding loopback port zero in a unique temporary directory. Startup probes signed
+upload/download through the actual TypeScript AWS client. Production blob settings
+are removed, and exact test endpoint/credentials are passed explicitly to both clients.
+The TypeScript producer creates a uniquely named database/SELECT-only role, writes
+all three event and artifact scopes through the actual store, and invokes the native
+Rust reader. Cleanup closes clients and removes only that run's database, role,
+server and directory, including failure paths. Startup/teardown are bounded.
+No forge or live sandbox runner is needed. Capture alone remains offline and does
+not provision either service.
 The proa-rust gate runs `bun test tools` from the experiment directory before
 Rust checks, so negative capture fixtures, route coverage and pipeline regressions
 are enforced for every applicable build. Capture-build mode only exports the
@@ -46,13 +63,25 @@ of cases in capture-cases.ts; new/unsupported declarations fail closed. Extend
 cases with every HTML route/state, 1440/390 widths and light/dark grounds. Supply
 explicit seeded identifiers for parameterized routes, never guessed ids.
 
-Database contract: **database=none** today, verified from proa.config.json and Rust
-sources. When data reads are introduced, implement an explicit seed adapter before
-allowing capture. Create an isolated loopback PostgreSQL database, reuse
-prepareHappyScenario/prepareScenario from the scripted dashboard scenarios (see
-tools/web-dashboard-dev.ts at repository root), seed before starting the server,
-and drop only that isolated database in finally. Never run the shared dev reset or
-invent browser rows. Data-dependent cases without an adapter fail.
+Data contract: the native configured reader and the deliberately unconfigured shell
+are distinct modes. Proa's generated database layer remains `database.driver=none`;
+the native reader is initialized separately before binding. Current pages read no
+data, so capture starts in an isolated cwd with no inherited database/blob credentials
+and renders the unchanged shell. Source inventory rejects page-level data reads until a seeded data capture
+contract is supplied; auth uses the development issuer described below. The full gate's data proof is separate
+from pixel capture and never invents browser records.
+
+Corpus generation: `bun tools/generate-fixtures.ts` from the experiment executes
+scenario/compatibility producers, captures per-store logs and validates every event
+catalog witness. Verification runs `bun tools/check-fixtures.ts` before Cargo tests;
+it recomputes TypeScript answers and checks source hashes without regenerating goldens.
+`fixtures/corpus.json.gz` stores lossless JSON cases; the readable manifest inventories
+producers and source hashes. Identical scope/log cases retain all provenance aliases.
+Staging is under ignored workspace `.ab/`; replacement restores the old corpus if
+publication fails, and failed runs retain diagnostic inputs.
+`tests/reducer_parity.rs` compares native replay and chunked advancement field by field.
+`tools/data-integration.ts` proves TS-write/Rust-read PostgreSQL/blob interoperability,
+read-only tables, incremental suffix counts, restart and failure isolation.
 
 Auth contract: capture requires the supported Rust development issuer and fails
 closed if its capability contract is absent. It launches isolated loopback servers
