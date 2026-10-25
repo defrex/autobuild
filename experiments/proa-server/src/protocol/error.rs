@@ -31,6 +31,14 @@ impl ProtocolError {
     pub fn missing(scope: &str, key: &str) -> Self {
         Self::new(404, "not-found", format!("unknown {scope} \"{key}\""))
     }
+    /// Query refusals preserve only the PostgreSQL server message, as the TS
+    /// endpoint does. Never expose connection URLs, query text or error details.
+    pub fn query(error: tokio_postgres::Error) -> Self {
+        error
+            .as_db_error()
+            .map(|db| Self::new(500, "internal", db.message()))
+            .unwrap_or_else(Self::internal)
+    }
     pub fn internal() -> Self {
         Self::new(500, "internal", "internal server error")
     }

@@ -2342,6 +2342,7 @@ dependencies = [
  "proa_macros",
  "proa_stream",
  "rand 0.8.8",
+ "regex",
  "reqwest",
  "rustls 0.23.46",
  "rustls-native-certs",

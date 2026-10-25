@@ -130,9 +130,10 @@ Rust server and connections inside that callback before database teardown.
 The protocol implementation is still staged. `src/protocol/router.rs` is a
 separate JSON branch exercised by the native test executable; it is not yet
 mounted into the normal browser server. Unsupported families do not count as
-conformance. In particular, atomic initial build events are refused until the
-complete build validator exists, and delegation, artifacts, snapshots, assets,
-streams, repository writes and reducer values remain outstanding.
+conformance. Delegation, artifacts, assets, streams, repository ticks and reducer values
+remain outstanding; the complete shared suite and production router merge are
+still required. Build/repository/session appends, atomic initial events, public
+snapshots and operator presence now run through the native test server.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -140,9 +141,16 @@ Generate the independent strict append corpus with
 validators and actual TypeScript HTTP handler separately. It records source
 hashes, normalized accepted writes and exact refusal messages in the deterministic
 compressed corpus. It is distinct from the permissive persisted-log fixtures.
-`protocol-payload-schemas.json` records which payload schemas the closed Rust
-interpreter supports and which require further custom checks. Unsupported
-schemas fail closed; the actor/type prefix is never a complete build validator.
+`protocol-payload-schemas.json` covers every current producer payload schema.
+The closed Rust interpreter handles primitive checks, unions, transforms and
+named refinements; generation rejects unknown constructs. Full write preparation
+also enforces actor/catalog authority and stamps compatibility metadata. The
+actor/type prefix alone is never a complete validator.
+
+`bun tools/protocol-write-preparation-fixtures.ts` verifies producer policy,
+metadata and initial-event/sequence oracles (`--generate` refreshes them).
+`bun tools/protocol-event-reads.ts` checks the repository bounded-read policy
+(`--write` refreshes it). The gate runs both before Rust tests.
 
 Identity inputs and exact refusal oracles come from
 `bun tools/protocol-identity-generate.ts`, checked by
@@ -161,9 +169,11 @@ until artifact retention is implemented.
 
 The proofs cover project credentials in both language directions (including
 actual TypeScript credential CLI issuance), immediate invalidation, authenticated
-HTTP ownership gates, records, leases, node writers, complete session append
-validation, cross-language sequence/CAS races, held-read wake/timeout/cancellation,
-and restart continuity. Raw tokens remain only in test process memory and private
+HTTP ownership gates, all three strict event catalogs, atomic build creation,
+records, leases, node writers, snapshot caches, operator presence, cross-language
+sequence/CAS races, SQL/commit rollback, held-read wake/timeout/cancellation, and
+restart continuity. Public snapshot state uses the TypeScript adapter's shared
+JSONB string envelope, including scalar strings and legacy object reads. Raw tokens remain only in test process memory and private
 pipes. Sanitized evidence is written to `.ab/proa-protocol-store/checkpoint-proof.json`.
 This report explicitly states `fullBuildStoreContract: false`: the unchanged
 full shared suite, historical-client fixtures and dispatch proof are still required.

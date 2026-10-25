@@ -1,4 +1,4 @@
-import { requestSchemas } from './protocol-fixtures-schema'
+import { requestSchemas, producerPayloadVariants } from './protocol-fixtures-schema'
 /** Strict new-write oracles, deliberately separate from stored-log decoding. */
 import { createHash } from 'node:crypto'
 import { gzipSync, gunzipSync } from 'node:zlib'
@@ -164,6 +164,12 @@ export async function generateWriteCorpus(): Promise<WriteCorpus> {
       const event = witnessEvent(scope, type, schema)
       const input: Write = { actor: event.actor, type, payload: event.payload }
       const variants: { name: string; input: Write }[] = [{ name: 'valid', input }]
+      variants.push(
+        ...producerPayloadVariants(scope, type, event.payload).map(({ name, payload }) => ({
+          name,
+          input: { ...input, payload },
+        })),
+      )
       // Exercise optional session fields as well as the minimal required witness.
       // Session schemas are entirely covered by the closed producer interpreter.
       if (scope === 'session') {
@@ -306,36 +312,43 @@ export async function generateWriteCorpus(): Promise<WriteCorpus> {
   const requests: WriteCorpus['requests'] = []
   for (const [name, schema] of Object.entries(requestSchemas)) {
     const input =
-      name === 'newSession'
-        ? { repo: 'witness', operator: 'witness', title: 'title' }
-        : name === 'eventWrite'
-          ? {
-              actor: { kind: 'kernel' },
-              type: 'witness',
-              payload: {},
-              compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
-            }
-          : name === 'conditionalEvent'
-            ? { expectedSeq: 1, event: { actor: { kind: 'kernel' }, type: 'witness', payload: {} } }
-            : name === 'newBuild'
+      name === 'snapshotPut'
+        ? { version: 1, cursor: 0, state: { ready: true } }
+        : name === 'operatorPresence'
+          ? { id: 'witness', host: 'loopback', pid: 1, startedAt: '2026-01-01T00:00:00.000Z' }
+          : name === 'newSession'
+            ? { repo: 'witness', operator: 'witness', title: 'title' }
+            : name === 'eventWrite'
               ? {
-                  slug: 'witness',
-                  repo: 'witness',
-                  repoOrigin: 'origin',
-                  ticket: { source: 'file', id: 'witness', url: 'url', title: 'title' },
-                  branch: 'ab/witness',
-                  created: {
-                    actor: { kind: 'kernel' },
-                    type: 'witness',
-                    payload: {},
-                    compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
-                  },
+                  actor: { kind: 'kernel' },
+                  type: 'witness',
+                  payload: {},
+                  compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
                 }
-              : name === 'ensureRepo'
-                ? { repo: 'witness' }
-                : name === 'leaseClaim'
-                  ? { holder: 'witness', ttlMs: 1 }
-                  : { holder: 'witness' }
+              : name === 'conditionalEvent'
+                ? {
+                    expectedSeq: 1,
+                    event: { actor: { kind: 'kernel' }, type: 'witness', payload: {} },
+                  }
+                : name === 'newBuild'
+                  ? {
+                      slug: 'witness',
+                      repo: 'witness',
+                      repoOrigin: 'origin',
+                      ticket: { source: 'file', id: 'witness', url: 'url', title: 'title' },
+                      branch: 'ab/witness',
+                      created: {
+                        actor: { kind: 'kernel' },
+                        type: 'witness',
+                        payload: {},
+                        compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
+                      },
+                    }
+                  : name === 'ensureRepo'
+                    ? { repo: 'witness' }
+                    : name === 'leaseClaim'
+                      ? { holder: 'witness', ttlMs: 1 }
+                      : { holder: 'witness' }
     for (const variant of [
       { name: 'valid', payload: input },
       { name: 'null', payload: null },

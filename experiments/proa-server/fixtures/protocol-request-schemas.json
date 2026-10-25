@@ -144,5 +144,68 @@
       }
     },
     "strict": false
+  },
+  "snapshotPut": {
+    "type": "object",
+    "shape": {
+      "version": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 1, "inclusive": true }
+        ]
+      },
+      "cursor": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      },
+      "state": { "type": "unknown" }
+    },
+    "strict": false
+  },
+  "operatorPresence": {
+    "type": "object",
+    "shape": {
+      "id": {
+        "type": "string",
+        "checks": [
+          { "check": "trim" },
+          { "check": "min_length", "minimum": 1 },
+          { "check": "max_length", "maximum": 256 }
+        ]
+      },
+      "host": {
+        "type": "string",
+        "checks": [
+          { "check": "trim" },
+          { "check": "min_length", "minimum": 1 },
+          { "check": "max_length", "maximum": 256 }
+        ]
+      },
+      "pid": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": false },
+          { "check": "number_format", "format": "safeint" }
+        ]
+      },
+      "startedAt": {
+        "type": "string",
+        "checks": [
+          {
+            "check": "string_format",
+            "format": "datetime",
+            "source": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "flags": "",
+            "pattern": "/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/"
+          }
+        ]
+      }
+    },
+    "strict": true
   }
 }

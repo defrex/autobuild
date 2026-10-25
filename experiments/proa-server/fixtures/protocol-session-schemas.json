@@ -88,13 +88,21 @@
                 },
                 "ts": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
                 "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
-                "payload": { "type": "record", "value": { "type": "unknown" } }
+                "payload": {
+                  "type": "record",
+                  "key": { "type": "string" },
+                  "value": { "type": "unknown" }
+                }
               },
               "strict": true
             },
             "buildState": {
               "type": "optional",
-              "inner": { "type": "record", "value": { "type": "unknown" } }
+              "inner": {
+                "type": "record",
+                "key": { "type": "string" },
+                "value": { "type": "unknown" }
+              }
             }
           },
           "strict": true
@@ -122,7 +130,7 @@
       "turn": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
       "toolCallId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
       "toolName": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
-      "input": { "type": "record", "value": { "type": "unknown" } }
+      "input": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } }
     },
     "strict": true
   },

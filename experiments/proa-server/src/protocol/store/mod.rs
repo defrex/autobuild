@@ -26,3 +26,8 @@ pub fn timestamp(value: DateTime<Utc>) -> String {
 }
 
 pub mod sessions;
+
+pub mod presence;
+pub mod snapshots;
+
+pub mod events;

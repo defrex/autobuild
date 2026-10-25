@@ -4,6 +4,7 @@
 //! validate payloads, compatibility and cross-field rules before mutation. It
 //! never invokes the forward-compatible stored-event decoder.
 pub mod session;
+pub mod writes;
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
@@ -306,6 +307,13 @@ pub fn validate_catalog_payload(
     kind: &str,
     input: &Value,
 ) -> Result<Value, PayloadValidationError> {
+    validate_catalog_payload_optional(scope, kind, Some(input))
+}
+pub fn validate_catalog_payload_optional(
+    scope: WriteScope,
+    kind: &str,
+    input: Option<&Value>,
+) -> Result<Value, PayloadValidationError> {
     static SCHEMAS: OnceLock<Value> = OnceLock::new();
     let schemas = SCHEMAS.get_or_init(|| {
         serde_json::from_str(include_str!("../../fixtures/protocol-payload-schemas.json"))
@@ -318,7 +326,7 @@ pub fn validate_catalog_payload(
         return Err(PayloadValidationError::Unsupported(reason.to_owned()));
     };
     let mut issues = Vec::new();
-    let (value, _) = session::parse(schema, Some(input), &mut Vec::new(), &mut issues);
+    let (value, _) = session::parse(schema, input, &mut Vec::new(), &mut issues);
     if issues.is_empty() {
         Ok(value.unwrap())
     } else {
@@ -358,7 +366,8 @@ mod payload_tests {
                 WriteScope::Repository
             };
             let kind = case["input"]["type"].as_str().unwrap();
-            let actual = validate_catalog_payload(scope, kind, &case["input"]["payload"]);
+            let actual =
+                validate_catalog_payload_optional(scope, kind, case["input"].get("payload"));
             if schemas["unsupported"][scope.name()].get(kind).is_some() {
                 assert!(
                     matches!(actual, Err(PayloadValidationError::Unsupported(_))),

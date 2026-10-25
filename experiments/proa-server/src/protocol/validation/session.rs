@@ -1,7 +1,9 @@
-//! Closed interpreter for the session catalog's generated producer schemas.
-//! Unsupported constructs are rejected during generation; this is not the
-//! permissive persisted-event schema path. The sole custom check is ported here.
+//! Closed interpreter for generated producer and wire-request schemas.
+//! This never uses the permissive persisted-event projection. Named custom
+//! checks and transforms live in rules.rs; unknown constructs fail generation.
 use super::{received, validate_actor_type, WriteScope};
+#[path = "rules.rs"]
+mod rules;
 use serde_json::{json, Map, Value};
 use std::sync::OnceLock;
 
@@ -48,7 +50,7 @@ pub(super) fn parse(
 ) -> (Option<Value>, bool) {
     let kind = schema["type"].as_str().expect("closed schema type");
     let mut abort = false;
-    let value = match kind {
+    let mut value = match kind {
         "nullable" if input == Some(&Value::Null) => return (Some(Value::Null), false),
         "nullable" => return parse(&schema["inner"], input, path, issues),
         "default" if input.is_none() => return (Some(schema["value"].clone()), false),
@@ -62,6 +64,7 @@ pub(super) fn parse(
             }
             return (input.cloned(), false);
         }
+        "custom" => input.cloned().unwrap_or(Value::Null),
         "object" => {
             let Some(object) = input.and_then(Value::as_object) else {
                 issues.push(type_issue("object", input, path));
@@ -96,6 +99,25 @@ pub(super) fn parse(
             };
             let mut output = Map::new();
             for (key, value) in object {
+                if key == "__proto__" {
+                    continue;
+                }
+                if let Some(key_schema) = schema.get("key") {
+                    let mut key_issues = Vec::new();
+                    parse(
+                        key_schema,
+                        Some(&Value::String(key.clone())),
+                        &mut Vec::new(),
+                        &mut key_issues,
+                    );
+                    if !key_issues.is_empty() {
+                        let mut key_path = path.clone();
+                        key_path.push(json!(key));
+                        issues.push(json!({"code":"invalid_key","origin":"record","issues":key_issues,"path":key_path,"message":"Invalid key in record"}));
+                        abort = true;
+                        continue;
+                    }
+                }
                 path.push(Value::String(key.clone()));
                 let (value, child_abort) = parse(&schema["value"], Some(value), path, issues);
                 abort |= child_abort;
@@ -123,42 +145,85 @@ pub(super) fn parse(
         }
         "union" => {
             let options = schema["options"].as_array().unwrap();
-            let Some(object) = input.and_then(Value::as_object) else {
-                issues.push(json!({"code":"invalid_type","expected":"object","path":path,
-                    "message":format!("Invalid input: expected object, received {}",received(input))}));
-                return (None, true);
-            };
-            let discriminator = schema["discriminator"].as_str().unwrap();
-            for option in options {
-                if option["shape"][discriminator]["values"]
-                    .as_array()
-                    .unwrap()
+            if let Some(discriminator) = schema.get("discriminator").and_then(Value::as_str) {
+                let Some(object) = input.and_then(Value::as_object) else {
+                    issues.push(json!({"code":"invalid_type","expected":"object","path":path,"message":format!("Invalid input: expected object, received {}",received(input))}));
+                    return (None, true);
+                };
+                let values = options
                     .iter()
-                    .any(|value| Some(value) == object.get(discriminator))
-                {
-                    return parse(option, input, path, issues);
-                }
-            }
-            let values = options
-                .iter()
-                .flat_map(|option| {
+                    .flat_map(|option| {
+                        option["shape"][discriminator]["values"]
+                            .as_array()
+                            .expect("literal union tag")
+                            .iter()
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(option) = options.iter().find(|option| {
                     option["shape"][discriminator]["values"]
                         .as_array()
                         .unwrap()
                         .iter()
-                        .cloned()
-                })
-                .collect::<Vec<_>>();
-            let labels = values
-                .iter()
-                .map(|value| format!("'{}'", value.as_str().unwrap()))
-                .collect::<Vec<_>>()
-                .join(" | ");
-            path.push(Value::String(discriminator.to_owned()));
-            issues.push(json!({"code":"invalid_union","errors":[],"note":"No matching discriminator","discriminator":discriminator,"options":values,"path":path,
-                "message":format!("Invalid discriminator value. Expected {labels}")}));
-            path.pop();
-            return (None, true);
+                        .any(|v| Some(v) == object.get(discriminator))
+                }) {
+                    let (value, child_abort) = parse(option, input, path, issues);
+                    abort = child_abort;
+                    value.unwrap_or(Value::Null)
+                } else {
+                    let labels = values
+                        .iter()
+                        .map(|v| {
+                            format!(
+                                "'{}'",
+                                v.as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| v.to_string())
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    path.push(json!(discriminator));
+                    issues.push(json!({"code":"invalid_union","errors":[],"note":"No matching discriminator","discriminator":discriminator,"options":values,"path":path,"message":format!("Invalid discriminator value. Expected {labels}")}));
+                    path.pop();
+                    return (None, true);
+                }
+            } else {
+                let mut results = Vec::new();
+                for option in options {
+                    let mut child_issues = Vec::new();
+                    let (value, child_abort) =
+                        parse(option, input, &mut Vec::new(), &mut child_issues);
+                    if child_issues.is_empty() {
+                        results.clear();
+                        results.push((value, child_issues, false));
+                        break;
+                    }
+                    results.push((value, child_issues, child_abort));
+                }
+                let successes = results
+                    .iter()
+                    .filter(|(_, issues, _)| issues.is_empty())
+                    .count();
+                let nonaborted = results.iter().filter(|(_, _, abort)| !*abort).count();
+                if successes > 0 || nonaborted == 1 {
+                    let (value, child_issues, child_abort) = results
+                        .into_iter()
+                        .find(|(_, issues, abort)| issues.is_empty() || !abort)
+                        .unwrap();
+                    for mut issue in child_issues {
+                        let mut prefix = path.clone();
+                        prefix.extend(issue["path"].as_array().unwrap().clone());
+                        issue["path"] = json!(prefix);
+                        issues.push(issue);
+                    }
+                    abort = child_abort;
+                    value.unwrap_or(Value::Null)
+                } else {
+                    issues.push(json!({"code":"invalid_union","errors":results.into_iter().map(|(_,issues,_)|issues).collect::<Vec<_>>(),"path":path,"message":"Invalid input"}));
+                    return (None, true);
+                }
+            }
         }
         "literal" | "enum" => {
             let values = schema["values"].as_array().unwrap();
@@ -193,6 +258,7 @@ pub(super) fn parse(
     };
     if !abort {
         for check in schema["checks"].as_array().into_iter().flatten() {
+            let issue_start = issues.len();
             match check["check"].as_str().unwrap() {
                 "min_length" | "max_length" => {
                     let (origin, length) = if let Some(string) = value.as_str() {
@@ -256,13 +322,25 @@ pub(super) fn parse(
                         issues.push(issue);
                     }
                 }
-                "greater_than" => {
+                "greater_than" | "less_than" => {
                     let bound = check["value"].as_f64().unwrap();
                     let inclusive = check["inclusive"] == true;
                     let number = value.as_f64().unwrap();
-                    if number < bound || (!inclusive && number == bound) {
-                        issues.push(json!({"origin":"number","code":"too_small","minimum":check["value"],"inclusive":inclusive,"path":path,
-                            "message":format!("Too small: expected number to be >{}{bound}",if inclusive{"="}else{""})}));
+                    let greater = check["check"] == "greater_than";
+                    if (greater && (number < bound || (!inclusive && number == bound)))
+                        || (!greater && (number > bound || (!inclusive && number == bound)))
+                    {
+                        let mut issue = json!({"origin":"number","code":if greater{"too_small"}else{"too_big"}});
+                        issue[if greater { "minimum" } else { "maximum" }] = check["value"].clone();
+                        issue["inclusive"] = json!(inclusive);
+                        issue["path"] = json!(path);
+                        issue["message"] = json!(format!(
+                            "Too {}: expected number to be {}{}{bound}",
+                            if greater { "small" } else { "big" },
+                            if greater { ">" } else { "<" },
+                            if inclusive { "=" } else { "" }
+                        ));
+                        issues.push(issue);
                     }
                 }
                 "wake_exclusive_source" => {
@@ -272,7 +350,17 @@ pub(super) fn parse(
                         issues.push(json!({"code":"custom","message":"a wake trigger names exactly one of build or journal","path":path}));
                     }
                 }
-                _ => unreachable!("generation rejects unknown checks"),
+                _ => {
+                    abort |= rules::apply(check, &mut value, path, issues);
+                }
+            }
+            if let Some(message) = check.get("message") {
+                for issue in &mut issues[issue_start..] {
+                    issue["message"] = message.clone();
+                }
+            }
+            if abort {
+                break;
             }
         }
     }

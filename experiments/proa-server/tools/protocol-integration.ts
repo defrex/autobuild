@@ -6,6 +6,8 @@ import { buildCredentialHelper } from './protocol-credentials'
 import { runCredentialHttpProof, runCredentialProof } from './protocol-credentials.integration.test'
 import { proveProtocolStore } from './protocol-store.integration.test'
 import { proveProtocolSessions } from './protocol-sessions.integration.test'
+import { proveProtocolSnapshotsPresence } from './protocol-snapshots-presence.integration.test'
+import { proveProtocolEvents } from './protocol-events.integration.test'
 import { withDataServices } from './data-services'
 
 const root = resolve(import.meta.dir, '../../..')
@@ -33,11 +35,13 @@ if (!process.argv.includes('--caller-holds-lock')) {
   })
   const records = await proveProtocolStore(server)
   const sessions = await proveProtocolSessions(server)
+  const events = await proveProtocolEvents(server)
+  const snapshotsPresence = await proveProtocolSnapshotsPresence(server)
   const evidence = resolve(root, '.ab/proa-protocol-store')
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions }, null, 2)}\n`,
+    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol checkpoint proof passed; complete shared suite remains required. Evidence: ${evidence}`,

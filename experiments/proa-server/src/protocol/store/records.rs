@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
 
-/// Deliberately names the no-initial-event operation. Atomic created-event
-/// support must validate the complete write before entering this transaction.
+/// Parsed identity fields. The optional initial event is validated separately
+/// before either the record or its first fact may become visible.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmptyBuildInput {
@@ -142,6 +142,25 @@ async fn current_record<C: GenericClient + Sync>(
 }
 impl Store {
     pub async fn create_empty_build(&self, input: EmptyBuildInput) -> Result<Value, ProtocolError> {
+        self.create_build_inner(input, None).await
+    }
+    pub async fn create_build(&self, input: &Value) -> Result<Value, ProtocolError> {
+        let created = crate::protocol::validation::writes::validate_created_event(input)
+            .map_err(|error| ProtocolError::new(422, "validation", error))?;
+        let mut identity = input.clone();
+        identity
+            .as_object_mut()
+            .ok_or_else(ProtocolError::internal)?
+            .remove("created");
+        let identity: EmptyBuildInput =
+            serde_json::from_value(identity).map_err(|_| ProtocolError::internal())?;
+        self.create_build_inner(identity, created).await
+    }
+    async fn create_build_inner(
+        &self,
+        input: EmptyBuildInput,
+        created: Option<Value>,
+    ) -> Result<Value, ProtocolError> {
         let now = self.now();
         let mut client = self.database.client().await?;
         let tx = client.transaction().await?;
@@ -155,8 +174,14 @@ impl Store {
                 format!("build \"{}\" already exists", input.slug),
             ));
         }
+        let row = if let Some(created) = created {
+            super::events::insert_prepared(&tx, scope, &created, 1, self.now()).await?;
+            lock(&tx, scope).await?
+        } else {
+            row
+        };
         let value = current_record(&tx, &row, scope).await?;
-        tx.commit().await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
         Ok(value)
     }
     pub async fn ensure_repo(&self, repo: &str) -> Result<Value, ProtocolError> {
@@ -168,7 +193,7 @@ impl Store {
         let tx = client.transaction().await?;
         tx.execute("INSERT INTO repo_streams(repo,created_at,updated_at) VALUES($1,$2,$2) ON CONFLICT(repo) DO NOTHING", &[&repo, &now]).await?;
         let value = record(&lock(&tx, Scope::Repo(repo)).await?, Scope::Repo(repo));
-        tx.commit().await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
         Ok(value)
     }
     pub async fn get_record(&self, scope: Scope<'_>) -> Result<Value, ProtocolError> {
@@ -247,17 +272,7 @@ impl Store {
             .await?;
         let mut events = Vec::new();
         for row in rows {
-            let seq = row.get::<_, i64>("seq");
-            if seq > 9_007_199_254_740_991 {
-                return Err(ProtocolError::internal());
-            }
-            let mut event = json!({scope.event_key(): scope.id(), "seq": seq, "ts": row_timestamp(&row,"ts"), "actor": row.get::<_, Value>("actor"), "type": row.get::<_, String>("type"), "payload": row.get::<_, Value>("payload")});
-            if !matches!(scope, Scope::Session(_)) {
-                if let Some(compatibility) = row.get::<_, Option<Value>>("compatibility") {
-                    event["compatibility"] = compatibility;
-                }
-            }
-            events.push(event);
+            events.push(super::events::event_record(&row, scope)?);
         }
         Ok(events.into())
     }

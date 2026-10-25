@@ -5,11 +5,7 @@ use super::{
     auth::{authenticate_project_bearer, ProjectPrincipal},
     error::ProtocolError,
     identity,
-    store::{
-        leases::LeaseKind,
-        records::{EmptyBuildInput, Scope},
-        Store,
-    },
+    store::{leases::LeaseKind, records::Scope, Store},
 };
 use axum::{
     body::to_bytes,
@@ -129,11 +125,46 @@ async fn authorize(
     }
     Ok(Some(principal))
 }
+fn enforce_via(
+    principal: Option<&ProjectPrincipal>,
+    actor: Option<&Value>,
+) -> Result<(), ProtocolError> {
+    if principal.is_some()
+        && actor.is_some_and(|actor| actor["kind"] == "human" && actor.get("via").is_some())
+    {
+        return Err(ProtocolError::new(
+            403,
+            "auth",
+            "token carries no via; it may not write delegated events",
+        ));
+    }
+    Ok(())
+}
 async fn body(req: Request, schema: &str) -> Result<Value, ProtocolError> {
-    // No Axum extractor can answer with plaintext/405 before identity/auth.
-    let bytes = to_bytes(req.into_body(), usize::MAX)
-        .await
-        .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
+    body_with_limit(req, schema, None).await
+}
+async fn body_with_limit(
+    req: Request,
+    schema: &str,
+    ceiling: Option<(usize, &str)>,
+) -> Result<Value, ProtocolError> {
+    let bytes = to_bytes(
+        req.into_body(),
+        ceiling.map(|(limit, _)| limit).unwrap_or(usize::MAX),
+    )
+    .await
+    .map_err(|error| {
+        use std::error::Error;
+        if error
+            .source()
+            .is_some_and(|cause| cause.is::<http_body_util::LengthLimitError>())
+        {
+            if let Some((_, message)) = ceiling {
+                return ProtocolError::new(413, "validation", message);
+            }
+        }
+        ProtocolError::validation("request body is not valid JSON")
+    })?;
     let raw: Value = serde_json::from_slice(&bytes)
         .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
     super::validation::validate_request(schema, &raw)
@@ -222,31 +253,52 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         return Ok(reply(200, state.store.ensure_repo(repo).await?));
     }
     if method == "POST" && parts == ["builds"] {
-        let value = body(req, "newBuild").await?;
-        if value.get("created").is_some() {
-            return Err(ProtocolError::new(
-                503,
-                "internal",
-                "initial event validation unavailable",
-            ));
-        }
-        let mut input: EmptyBuildInput =
-            serde_json::from_value(value).map_err(|_| ProtocolError::internal())?;
+        let mut value = body(req, "newBuild").await?;
         if let Some(principal) = principal {
             principal
-                .require_project(&input.repo)
+                .require_project(value["repo"].as_str().unwrap())
                 .map_err(|e| ProtocolError::new(e.status, e.kind, e.error))?;
-            use rand::RngCore;
-            let mut suffix = [0u8; 12];
-            rand::thread_rng().fill_bytes(&mut suffix);
-            let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
-            input.slug = format!(
-                "{}-{suffix}",
-                input.slug.chars().take(60).collect::<String>()
+            let prefix = String::from_utf16_lossy(
+                &value["slug"]
+                    .as_str()
+                    .unwrap()
+                    .encode_utf16()
+                    .take(60)
+                    .collect::<Vec<_>>(),
             );
-            input.branch = Some(format!("ab/{}", input.slug));
+            for _ in 0..10 {
+                use rand::RngCore;
+                let mut suffix = [0u8; 12];
+                rand::thread_rng().fill_bytes(&mut suffix);
+                let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+                value["slug"] = format!("{prefix}-{suffix}").into();
+                value["branch"] = format!("ab/{}", value["slug"].as_str().unwrap()).into();
+                match state.store.create_build(&value).await {
+                    Ok(record) => return Ok(reply(201, record)),
+                    Err(error)
+                        if error.status == StatusCode::CONFLICT
+                            && error.error.contains("already exists") =>
+                    {
+                        continue
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "build identity allocation failed",
+            ));
         }
-        return Ok(reply(201, state.store.create_empty_build(input).await?));
+        let slug = value["slug"].as_str().unwrap();
+        if !state.store.get_record(Scope::Build(slug)).await?.is_null() {
+            return Err(ProtocolError::new(
+                409,
+                "conflict",
+                format!("build \"{slug}\" already exists"),
+            ));
+        }
+        return Ok(reply(201, state.store.create_build(&value).await?));
     }
     if parts.len() == 3 && parts[0] == "repos" && parts[2] == "sessions" && method == "POST" {
         let value = body(req, "newSession").await?;
@@ -265,7 +317,73 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 .await?,
         ));
     }
+    if parts.len() == 3 && parts[0] == "repos" && parts[2] == "operator-presence" {
+        return match method.as_str() {
+            "GET" => Ok(reply(
+                200,
+                state.store.list_operator_presence(parts[1]).await?,
+            )),
+            "POST" => {
+                let value = body(req, "operatorPresence").await?;
+                Ok(reply(
+                    200,
+                    state
+                        .store
+                        .upsert_operator_presence(parts[1], &value)
+                        .await?,
+                ))
+            }
+            _ => Err(ProtocolError::new(
+                404,
+                "not-found",
+                "unknown operator presence route",
+            )),
+        };
+    }
     if let Some(scope) = scope {
+        if parts.len() == 4
+            && parts[2] == "snapshots"
+            && matches!(scope, Scope::Build(_) | Scope::Repo(_))
+            && !parts[3].contains('/')
+        {
+            if matches!(scope, Scope::Repo(_)) && state.store.get_record(scope).await?.is_null() {
+                return Err(ProtocolError::missing("repo", scope.id()));
+            }
+            super::store::snapshots::validate_snapshot_reducer(parts[3])?;
+            return match method.as_str() {
+                "GET" => {
+                    let version = super::wire::int_parameter(req.uri().query(), "version")?
+                        .filter(|v| *v >= 1)
+                        .ok_or_else(|| {
+                            ProtocolError::validation("query parameter \"version\" is required")
+                        })?;
+                    Ok(reply(
+                        200,
+                        state.store.get_snapshot(scope, parts[3], version).await?,
+                    ))
+                }
+                "PUT" => {
+                    let value = body_with_limit(
+                        req,
+                        "snapshotPut",
+                        Some((
+                            super::store::snapshots::SNAPSHOT_BODY_MAX_BYTES,
+                            "snapshot body is over the 16 MiB ceiling",
+                        )),
+                    )
+                    .await?;
+                    Ok(reply(
+                        200,
+                        json!({"written":state.store.put_snapshot(scope,parts[3],&value).await?}),
+                    ))
+                }
+                _ => Err(ProtocolError::new(
+                    404,
+                    "not-found",
+                    format!("no route: {method} snapshots/{}", parts[3]),
+                )),
+            };
+        }
         if method == "GET" && parts.len() == 3 && parts[2] == "events" {
             let since = super::wire::int_parameter(req.uri().query(), "since")?.unwrap_or(0);
             let wait = super::wire::wait_parameter(req.uri().query())?;
@@ -274,10 +392,12 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 state.store.read_events_held(scope, since, wait).await?,
             ));
         }
-        if parts[0] == "sessions"
-            && method == "POST"
-            && (parts.get(2) == Some(&"events"))
-            && (parts.len() == 3 || (parts.len() == 4 && parts[3] == "conditional"))
+        if method == "POST"
+            && parts.get(2) == Some(&"events")
+            && (parts.len() == 3
+                || (parts.len() == 4
+                    && parts[3] == "conditional"
+                    && matches!(scope, Scope::Build(_) | Scope::Session(_))))
         {
             let conditional = parts.len() == 4;
             let value = body(
@@ -290,21 +410,43 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             )
             .await?;
             let input = if conditional { &value["event"] } else { &value };
-            let expected = if conditional {
-                Some(
-                    value["expectedSeq"]
-                        .as_i64()
-                        .or_else(|| value["expectedSeq"].as_f64().map(|value| value as i64))
-                        .ok_or_else(|| ProtocolError::validation("invalid expected sequence"))?,
-                )
+            let event = if matches!(scope, Scope::Session(_)) {
+                let expected = if conditional {
+                    Some(
+                        value["expectedSeq"]
+                            .as_i64()
+                            .or_else(|| value["expectedSeq"].as_f64().map(|n| n as i64))
+                            .ok_or_else(ProtocolError::internal)?,
+                    )
+                } else {
+                    None
+                };
+                state
+                    .store
+                    .append_session(scope.id(), input, expected)
+                    .await?
             } else {
-                None
+                enforce_via(principal.as_ref(), input.get("actor"))?;
+                state
+                    .store
+                    .append_event(
+                        scope,
+                        input,
+                        if conditional {
+                            Some(&value["expectedSeq"])
+                        } else {
+                            None
+                        },
+                    )
+                    .await?
             };
-            let event = state
-                .store
-                .append_session(scope.id(), input, expected)
-                .await?;
             return Ok(reply(if event.is_null() { 200 } else { 201 }, event));
+        }
+        if method == "GET" && parts.len() == 3 && parts[0] == "repos" && parts[2] == "high-water" {
+            return Ok(reply(
+                200,
+                json!({"seq":state.store.high_water(scope).await?}),
+            ));
         }
         if parts.len() == 2 && method == "GET" {
             let record = state.store.get_record(scope).await?;
@@ -312,6 +454,10 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 return Err(ProtocolError::missing(scope.name(), scope.id()));
             }
             return Ok(reply(200, record));
+        }
+        if method == "GET" && parts.len() == 3 && parts[0] == "repos" && parts[2] == "state-events"
+        {
+            return Ok(reply(200, state.store.repo_state_events(scope.id()).await?));
         }
         if method == "GET" && parts.len() == 3 && parts[0] == "repos" {
             match parts[2] {

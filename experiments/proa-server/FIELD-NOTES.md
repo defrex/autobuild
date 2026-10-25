@@ -388,3 +388,28 @@ Reproduce with `bun tools/protocol-integration.ts`. The native proof uses two Ru
 processes and a TypeScript writer over isolated PostgreSQL/S3 services. It records
 sanitized checkpoint evidence under `.ab/proa-protocol-store/`, explicitly without
 claiming the complete shared BuildStore suite or rendered dashboard integration.
+
+## Strict producer schemas and shared snapshot bytes
+
+The machine write interpreter now covers every producer payload schema, with
+named Rust checks for refinements and transformations that JSON Schema cannot
+express. Corpus additions for optional fields, whitespace, provider/native-handle
+branches, URLs and filenames caught two concrete differences: regex end/newline
+handling and Zod URL trimming before normalization. The full native HTTP proof
+compares normalized accepted writes and exact refusal text, not just booleans.
+Compatibility stamping belongs after static/catalog validation and before SQL.
+Ordinary CAS validates even when its expected head is stale; initial build
+creation publishes its record and first fact in one transaction. Deferred SQL
+constraint triggers prove commit failures roll both back, including repository
+change position and sequence visibility.
+
+Snapshot interoperability also depends on physical encoding. The TypeScript
+PostgreSQL adapter explicitly serializes snapshot state, and Bun.SQL binds that
+as a JSONB string envelope; reads unwrap that layer. Writing an ordinary JSONB
+object can look right in Rust while a later TypeScript writer changes the
+representation. Mixed Rust/TypeScript races exposed this. Rust now writes the
+same envelope and reads both it and direct legacy objects, with scalar strings,
+null and escaped NUL tested in both directions. This was a missing Rust encoding
+convention, not a TypeScript scalar-state bug. Presence remains independent of
+journal creation, and its clock rollback/expiry probes leave event sequences and
+repository change positions untouched.
