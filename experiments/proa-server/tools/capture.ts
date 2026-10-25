@@ -253,8 +253,15 @@ export async function captureFrames(
   const profile = join(output, 'profile')
   const cleanup = () => {
     socket?.close()
-    // The profile is disposable; prevent late Chromium writes after cleanup.
-    browser?.kill('SIGKILL')
+    // Chromium's helpers can outlive its main process and recreate the profile.
+    // Own a process group so every profile writer is stopped before removal.
+    if (browser) {
+      try {
+        process.kill(-browser.pid, 'SIGKILL')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
+    }
   }
   process.once('SIGTERM', cleanup)
   process.once('SIGINT', cleanup)
@@ -271,7 +278,7 @@ export async function captureFrames(
         `--user-data-dir=${profile}`,
         'about:blank',
       ],
-      { stdout: 'ignore', stderr: 'ignore' },
+      { stdout: 'ignore', stderr: 'ignore', detached: true },
     )
     let debugPort = ''
     for (let i = 0; i < 200; i++) {
