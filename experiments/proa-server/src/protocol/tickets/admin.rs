@@ -65,6 +65,9 @@ pub async fn route(
             .or_else(|| authority.repo())
             .ok_or_else(|| refused("registered project policy is required"))?;
         authority.require_project(&repo)?;
+        if !crate::protocol::delegation::registered(&state.store, &repo.as_str().into()).await? {
+            return Err(refused("project not registered"));
+        }
         if raw["input"].is_null() {
             if matches!(authority, Authority::Ordinary(Principal::Internal { .. }))
                 || matches!(authority,Authority::Ordinary(Principal::Delegated(c)) if !matches!(c.kind,DelegationKind::HarvestRunner|DelegationKind::HarvestPhase))

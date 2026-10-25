@@ -277,58 +277,7 @@ fn source_error(error: OperatorError) -> ProtocolError {
 /// Mirrors the repository identity admitted by the connection/registry contract.
 /// HTTP userinfo is refused; SSH's transport username is not an identity.
 pub fn normalize_repository(raw: &str) -> Option<String> {
-    let value = raw.trim_matches(crate::operator::auth::js_space);
-    if value.is_empty()
-        || value
-            .chars()
-            .any(|c| crate::operator::auth::js_space(c) || "\\?#".contains(c))
-    {
-        return None;
-    }
-    let candidate = if value.contains("://") {
-        value.to_owned()
-    } else {
-        // scp syntax deliberately excludes absolute remote paths and drives.
-        let (host, path) = value.split_once(':')?;
-        if path.starts_with('/')
-            || host.len() == 1 && host.as_bytes()[0].is_ascii_alphabetic()
-            || host.contains('/')
-            || path.contains('@') && !host.contains('@')
-        {
-            return None;
-        }
-        let host = host.rsplit_once('@').map(|(_, host)| host).unwrap_or(host);
-        format!("https://{host}/{path}")
-    };
-    let url = url::Url::parse(&candidate).ok()?;
-    if !url.password().unwrap_or_default().is_empty()
-        || !url.username().is_empty() && !matches!(url.scheme(), "ssh" | "git+ssh")
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return None;
-    }
-    let scheme = match url.scheme() {
-        "ssh" | "git" | "git+ssh" | "https" => "https",
-        _ => return None,
-    };
-    let host = url.host_str()?;
-    let mut path = url.path().to_owned();
-    if path.to_ascii_lowercase().ends_with(".git/") {
-        path.truncate(path.len() - 5);
-    } else if path.to_ascii_lowercase().ends_with(".git") {
-        path.truncate(path.len() - 4);
-    }
-    let path = path.trim_end_matches('/');
-    if path.is_empty() || path == "/" || path.contains(['%', '\\']) {
-        return None;
-    }
-    let authority = if let Some(port) = url.port() {
-        format!("{host}:{port}")
-    } else {
-        host.to_owned()
-    };
-    Some(format!("{scheme}://{authority}{path}"))
+    crate::connection::normalize_repository(raw).ok()
 }
 
 #[derive(Clone, Copy)]
@@ -419,6 +368,9 @@ mod tests {
             "https://github.com/Owner/Repo.git",
             "git@github.com:Owner/Repo.git",
             "ssh://git@github.com/Owner/Repo.git",
+            "ssh://git@GitHub.com/Owner/Repo.git",
+            "git://GitHub.com/Owner/Repo.git",
+            "git+ssh://git@GitHub.com/Owner/Repo.git",
         ] {
             assert_eq!(
                 normalize_repository(value).as_deref(),

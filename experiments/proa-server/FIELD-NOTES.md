@@ -935,3 +935,11 @@ it. The browser correctly showed pending again. The expired capture now starts
 the real request eleven minutes in the past, so its stored expiry is already
 past when the normal server reads it. Backend-failure capture uses a separate
 normal server with storage unconfigured, rather than a fabricated error model.
+
+Review exposed a request-lifetime mismatch in the machine ticket/connect path:
+constructing a deferred writer in every handler reloaded TLS roots and discarded
+its connection after each poll. The machine database now owns one shared writer,
+so its existing reconnect/preflight boundary survives across requests. This does
+not cache credentials, policy or grants: those still read current database state.
+The writer lifetime regression test checks shared ownership across successive
+requests; the normal HTTP and CLI proofs exercise the retained connection.

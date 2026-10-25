@@ -118,7 +118,7 @@ pub async fn put(
         )
         .await?
         .filter(|r| r.get::<_, String>("action") == "added")
-        .ok_or_else(|| ProtocolError::new(500, "internal", "project not registered"))?
+        .ok_or_else(|| ProtocolError::new(403, "auth", "project not registered"))?
         .get::<_, i64>("seq");
     let old = tx
         .query_opt(
