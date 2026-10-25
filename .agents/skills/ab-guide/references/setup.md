@@ -419,6 +419,10 @@ from `$AB_CONTEXT_DIR`, using the manifest for collision-adjusted paths.
 
 Its session instructions must preserve this contract:
 
+Scratch output, downloaded references, probes, and temporary scripts belong under `.ab/`
+(prefer the current `$AB_CONTEXT_DIR` when appropriate), never at the worktree
+root, and must not be committed. Manifest-directed artifact paths remain authoritative.
+
 1. Run `ab context` and read `"$AB_CONTEXT_DIR/context.json"`. The verifier receives
    `$AB_CONTEXT_DIR/spec.md`, the configured step,
    the commit range, and, after escalation is answered, `$AB_CONTEXT_DIR/guidance.json`.
