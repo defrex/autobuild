@@ -136,7 +136,10 @@ async fn health_and_shell() {
         .unwrap();
     assert_eq!(health.status(), StatusCode::OK);
     let health = String::from_utf8(body(health).await).unwrap();
-    assert!(health.contains(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        proa_server::protocol::js_json::parse_js_json(health.as_bytes()).unwrap(),
+        serde_json::to_value(proa_server::protocol::identity::health_body()).unwrap()
+    );
     let html = app
         .oneshot(
             Request::builder()
@@ -172,6 +175,7 @@ fn admitted() -> (app::AppState, String) {
             writer: None,
             blobs: None,
             operator_secret: None,
+            machine: None,
         },
         cookie.split(';').next().unwrap().to_owned(),
     )
@@ -195,6 +199,7 @@ async fn tcp_development_path_supplies_peer() {
         writer: None,
         blobs: None,
         operator_secret: None,
+        machine: None,
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/auth/dev-session", listener.local_addr().unwrap());
@@ -262,5 +267,296 @@ async fn projected_row_diagnostics_tokens_and_bounded_message_preview_reach_html
     assert!(!html.contains("THE CONFLICT"));
     assert!(!html.contains("Hidden explanation"));
     assert!(html.contains("<p></p>"), "paragraph boundary was collapsed");
-    assert!(html.contains("/builds/blocked?project=repo"));
+    assert!(html.contains("/dashboard/builds/blocked?project=repo"));
+}
+
+#[tokio::test]
+async fn production_machine_namespaces_bypass_browser_auth_and_origin_middleware() {
+    let (state, cookie) = admitted();
+    let app = routes::router(state);
+    for path in [
+        "/builds",
+        "/repos",
+        "/sessions/unknown/events",
+        "/streams/unknown/chunks",
+        "/%62uilds/unknown",
+        "//repos//unknown",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("origin", "https://foreign.invalid")
+                    .header("sec-fetch-site", "cross-site")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::COOKIE, format!("{cookie}; proa-session=invalid"))
+                    .header(
+                        "x-autobuild-version",
+                        proa_server::protocol::identity::health_body().autobuild_version,
+                    )
+                    .header(
+                        "x-autobuild-protocol-version",
+                        proa_server::protocol::identity::health_body().protocol_version,
+                    )
+                    .body(Body::from("{"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert!(response.headers().get(header::LOCATION).is_none(), "{path}");
+        assert!(
+            response.headers().get(header::SET_COOKIE).is_none(),
+            "{path}"
+        );
+        assert!(response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json"));
+        let value: serde_json::Value = serde_json::from_slice(&body(response).await).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"kind":"internal","error":"store backend unavailable"}),
+            "{path}"
+        );
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/credentials/delegate")
+                .header(
+                    "x-autobuild-version",
+                    proa_server::protocol::identity::health_body().autobuild_version,
+                )
+                .header(
+                    "x-autobuild-protocol-version",
+                    proa_server::protocol::identity::health_body().protocol_version,
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body(response).await).unwrap(),
+        serde_json::json!({"kind":"not-found","error":"credential issuance unavailable"})
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/buildsx")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert!(response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .starts_with("/sign-in"));
+}
+
+#[tokio::test]
+async fn production_machine_identity_and_path_errors_remain_json_without_storage() {
+    let (state, _) = admitted();
+    let app = routes::router(state);
+    for (path, status) in [
+        ("/builds/unknown", StatusCode::CONFLICT),
+        ("/repos/%GG/events", StatusCode::BAD_REQUEST),
+        ("/health/unknown", StatusCode::NOT_FOUND),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(header::ACCEPT, "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{path}");
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        let value: serde_json::Value = serde_json::from_slice(&body(response).await).unwrap();
+        assert!(value["error"].is_string());
+    }
+}
+
+#[tokio::test]
+async fn production_machine_auth_and_health_do_not_connect_to_deferred_storage() {
+    use proa_server::protocol::{
+        router::{Authority, MachineState},
+        store::Store,
+    };
+    use std::{sync::Arc, time::Duration};
+    let (mut state, _) = admitted();
+    state.machine = Some(MachineState {
+        store: Arc::new(
+            Store::deferred(
+                "postgres://unused:unused@127.0.0.1:9/unreachable",
+                Arc::new(chrono::Utc::now),
+            )
+            .unwrap(),
+        ),
+        authority: Authority::Project,
+        secret: Some("production-routing-test".into()),
+    });
+    let app = routes::router(state);
+    for path in [
+        "/builds",
+        "/repos/unknown/events",
+        "/streams/unknown/chunks",
+        "/credentials/delegate",
+    ] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("origin", "https://foreign.invalid")
+                    .header(
+                        "x-autobuild-version",
+                        proa_server::protocol::identity::health_body().autobuild_version,
+                    )
+                    .header(
+                        "x-autobuild-protocol-version",
+                        proa_server::protocol::identity::health_body().protocol_version,
+                    )
+                    .body(Body::from("{"))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("authentication must not contact storage")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body(response).await).unwrap(),
+            serde_json::json!({"kind":"auth","error":"missing bearer credential"})
+        );
+    }
+    let response = tokio::time::timeout(
+        Duration::from_secs(1),
+        app.oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("health must not contact storage")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body(response).await).unwrap(),
+        serde_json::to_value(proa_server::protocol::identity::health_body()).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn production_readiness_reports_unreachable_storage_while_health_stays_live() {
+    use proa_server::data::{
+        config::{BlobConfig, DataConfig},
+        reader::DataReader,
+    };
+    use std::sync::Arc;
+    let (mut state, _) = admitted();
+    state.data = Some(Arc::new(
+        DataReader::deferred(DataConfig {
+            database_url: "postgres://unused:unused@127.0.0.1:9/unreachable".into(),
+            blobs: BlobConfig::S3 {
+                bucket: "routing-test".into(),
+                region: "us-east-1".into(),
+                access_key_id: "unused".into(),
+                secret_access_key: "unused".into(),
+                endpoint: Some("http://127.0.0.1:9".into()),
+                session_token: None,
+                force_path_style: Some(true),
+            },
+            prefix: "routing-test".into(),
+            artifact_retention_max_revisions: None,
+        })
+        .unwrap(),
+    ));
+    let app = routes::router(state);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        app.clone().oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body(response).await).unwrap(),
+        serde_json::json!({"status":"not ready","version":env!("CARGO_PKG_VERSION")})
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body(response).await).unwrap(),
+        serde_json::to_value(proa_server::protocol::identity::health_body()).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn build_detail_browser_path_is_distinct_from_machine_namespace() {
+    let (state, cookie) = admitted();
+    let app = routes::router(state);
+    let machine = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/builds/example")
+                .header(header::ACCEPT, "text/html")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(machine.status(), StatusCode::CONFLICT);
+    assert!(machine.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    let value: serde_json::Value = serde_json::from_slice(&body(machine).await).unwrap();
+    assert!(value["error"].is_string());
+    let browser = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/builds/example?project=repo")
+                .header(header::ACCEPT, "text/html")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // This router fixture has no DataReader; the real seeded HTML is asserted by capture.
+    assert_eq!(browser.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body(browser).await, b"Project unavailable");
 }

@@ -420,6 +420,7 @@ mod tests {
                 crate::config::Config::parse(|_| None).unwrap().auth,
             )),
             data: None,
+            machine: None,
             writer: None,
             blobs: None,
             operator_secret: None,

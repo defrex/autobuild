@@ -59,7 +59,9 @@ export function cachePath(
   )
 }
 export async function build(capture = false): Promise<string> {
-  const common = Bun.spawnSync(['git', 'rev-parse', '--git-common-dir'], { cwd: root })
+  const common = Bun.spawnSync(['git', 'rev-parse', '--git-common-dir'], {
+    cwd: root,
+  })
   if (common.exitCode) throw new Error('Cannot resolve Git common directory')
   const requestedCache =
     process.env.PROA_VERIFY_CACHE ||
@@ -118,6 +120,30 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/query-fixtures.ts'],
         ['bun', 'tools/writer-fixtures.ts'],
         ['bun', 'tools/projection-fixtures.ts'],
+        ['bun', 'tools/protocol-identity-check.ts'],
+        ['bun', 'tools/check-protocol-fixtures.ts'],
+        ['bun', 'tools/protocol-event-reads.ts'],
+        ['bun', 'tools/protocol-write-preparation-fixtures.ts'],
+        ['bun', 'tools/protocol-artifact-preparation-fixtures.ts'],
+        ['bun', 'tools/protocol-tick-fixtures.ts'],
+        ['bun', 'tools/protocol-blob-fixtures.ts'],
+        ['bun', 'tools/protocol-json-number-fixtures.ts'],
+        ['bun', 'tools/protocol-numeric-fixtures.ts'],
+        ['bun', 'tools/protocol-asset-fixtures.ts'],
+        ['bun', 'tools/protocol-stream-document-fixtures.ts'],
+        ['bun', 'tools/protocol-reducer-fixtures.ts'],
+        ['bun', 'tools/protocol-restack-fixtures.ts'],
+        ['bun', 'tools/protocol-token-fixtures.ts'],
+        ['bun', 'tools/protocol-delegation-fixtures.ts'],
+        ['bun', 'tools/protocol-delegation-authority-fixtures.ts'],
+        ['bun', 'tools/protocol-unicode-fixtures.ts'],
+        ['bun', 'tools/protocol-token-unicode-fixtures.ts'],
+        ['bun', 'tools/protocol-unicode-validation-fixtures.ts'],
+        ['bun', 'tools/protocol-reducer-unicode-fixtures.ts'],
+        ['bun', 'tools/protocol-persisted-unicode-fixtures.ts'],
+        ['bun', 'tools/protocol-persisted-reducer-fixtures.ts'],
+        ['bun', 'tools/protocol-read-json-fixtures.ts'],
+        ['bun', 'tools/protocol-lease-dates-fixtures.ts'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],
@@ -134,6 +160,8 @@ export async function build(capture = false): Promise<string> {
           join(root, '.ab/proa-operator-evidence/coverage.json'),
         ],
         ['bun', 'tools/dispatcher-integration.ts'],
+        ['bun', 'tools/protocol-contract.ts', '--caller-holds-lock'],
+        ['bun', 'tools/protocol-integration.ts', '--caller-holds-lock'],
       ]
   commands.push([
     'proa',

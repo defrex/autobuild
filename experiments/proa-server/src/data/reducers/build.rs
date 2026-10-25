@@ -24,6 +24,34 @@ impl Default for BuildAcc {
     }
 }
 impl BuildAcc {
+    /// The named build-stream seed publishes the canonical carried accumulator,
+    /// not the finished BuildState. Preserve the same omission and map shapes.
+    pub fn carried(&self) -> Value {
+        let mut out = self.state.clone();
+        let sessions = out.as_object_mut().unwrap().remove("sessions").unwrap();
+        out["openSessions"] = sessions["open"].clone();
+        out["suspendedSessions"] = sessions["suspended"].clone();
+        out["sessionTotals"] = sessions["totals"].clone();
+        out["nativeHandles"] = sessions["nativeHandles"].clone();
+        let findings = out
+            .as_object_mut()
+            .unwrap()
+            .remove("reviewFindings")
+            .unwrap();
+        out["planReviewFindings"] = findings["planReview"].clone();
+        out["codeReviewFindings"] = findings["codeReview"].clone();
+        out["endedExecutionInstances"] = self.ended.clone();
+        if !out["drainingExecutions"].is_object() {
+            out["drainingExecutions"] = json!({})
+        }
+        out["attached"] = json!(self.attached);
+        out["pausedFlag"] = json!(self.paused);
+        out["pending"] = self.pending.clone();
+        if let Some(terminal) = &self.terminal {
+            out["terminal"] = json!(terminal)
+        }
+        out
+    }
     fn start(&mut self, phase: &str, event: &Value, extra: &[&str]) {
         let mut ctx = pick(&event["payload"], extra);
         ctx["phase"] = json!(phase);
@@ -63,11 +91,11 @@ impl BuildAcc {
             ]
             .contains(&t)
             {
-                {
-                    let mut canonical = p.clone();
-                    canonical.sort_all_objects();
-                    serde_json::to_string(&canonical).unwrap()
-                }
+                // Poll activity keys are canonical JSON, independently of the
+                // insertion order retained for exact machine-write diagnostics.
+                let mut canonical = p.clone();
+                canonical.sort_all_objects();
+                serde_json::to_string(&canonical).unwrap()
             } else {
                 number(&e["seq"]).to_string()
             });
@@ -878,7 +906,9 @@ impl BuildAcc {
                 if s.get("requests").is_none() {
                     s["requests"] = json!({});
                 }
-                s["requests"][id] = p.clone();
+                if id != "__proto__" {
+                    s["requests"][id] = p.clone();
+                }
             }
             "node.restack-satisfied" => {
                 if s.get("requests").is_some() {
@@ -925,7 +955,9 @@ impl BuildAcc {
                 if s.get("contributionBoundaries").is_none() {
                     s["contributionBoundaries"] = json!({});
                 }
-                s["contributionBoundaries"][p["sha"].as_str().unwrap_or("")] = p["sha"].clone();
+                if p["sha"] != "__proto__" {
+                    s["contributionBoundaries"][p["sha"].as_str().unwrap_or("")] = p["sha"].clone();
+                }
             }
             "node.writer-reserved" => {
                 if s.get("active").is_some() {
@@ -936,8 +968,10 @@ impl BuildAcc {
                 if s.get("contributionBoundaries").is_none() {
                     s["contributionBoundaries"] = json!({});
                 }
-                s["contributionBoundaries"][p["expected"].as_str().unwrap_or("")] =
-                    p["oldBase"].clone();
+                if p["expected"] != "__proto__" {
+                    s["contributionBoundaries"][p["expected"].as_str().unwrap_or("")] =
+                        p["oldBase"].clone();
+                }
                 s["items"] = json!([]);
             }
             "node.item-prepared" => {
@@ -1014,7 +1048,9 @@ impl BuildAcc {
                         .unwrap_or(&s["active"]["oldBase"])
                         .clone()
                 };
-                s["contributionBoundaries"][p["head"].as_str().unwrap_or("")] = base;
+                if p["head"] != "__proto__" {
+                    s["contributionBoundaries"][p["head"].as_str().unwrap_or("")] = base;
+                }
                 if s["active"]["operation"] == "restack" {
                     if s.get("foreignAliases").is_none() {
                         s["foreignAliases"] = json!({});
@@ -1031,25 +1067,48 @@ impl BuildAcc {
                             continue;
                         }
                         let sha = change["sha"].as_str().unwrap_or("");
-                        let alias = s["foreignAliases"]
-                            .get(sha)
-                            .unwrap_or(&change["sha"])
-                            .clone();
+                        let alias =
+                            s["foreignAliases"]
+                                .get(sha)
+                                .cloned()
+                                .unwrap_or_else(|| match sha {
+                                    "__proto__" => json!({}),
+                                    "constructor" => json!("function Object() { [native code] }"),
+                                    "toString"
+                                    | "toLocaleString"
+                                    | "valueOf"
+                                    | "hasOwnProperty"
+                                    | "isPrototypeOf"
+                                    | "propertyIsEnumerable"
+                                    | "__defineGetter__"
+                                    | "__defineSetter__"
+                                    | "__lookupGetter__"
+                                    | "__lookupSetter__" => {
+                                        json!(format!("function {sha}() {{ [native code] }}"))
+                                    }
+                                    _ => change["sha"].clone(),
+                                });
                         if item["dropped"] == true {
                             let identity = if let Some(b) = change.get("build") {
                                 format!("build:{}", b.as_str().unwrap_or(""))
                             } else {
-                                format!("foreign:{}", alias.as_str().unwrap_or(""))
+                                format!("foreign:{}", alias.as_str().unwrap_or("[object Object]"))
                             };
                             let identity = json!(identity);
                             if !dropped.contains(&identity) {
                                 dropped.push(identity);
                             }
-                        } else if change.get("build").is_none() {
+                        } else if change.get("build").is_none() && item["head"] != "__proto__" {
                             s["foreignAliases"][item["head"].as_str().unwrap_or("")] = alias;
                         }
                     }
-                    dropped.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                    dropped.sort_by_cached_key(|value| {
+                        value
+                            .as_str()
+                            .unwrap_or("")
+                            .encode_utf16()
+                            .collect::<Vec<_>>()
+                    });
                     s["droppedIdentities"] = json!(dropped);
                 }
                 s["rewritten"] = p.clone();
@@ -1099,7 +1158,9 @@ impl BuildAcc {
                     if s.get("contributionBoundaries").is_none() {
                         s["contributionBoundaries"] = json!({});
                     }
-                    s["contributionBoundaries"][p["head"].as_str().unwrap_or("")] = base;
+                    if p["head"] != "__proto__" {
+                        s["contributionBoundaries"][p["head"].as_str().unwrap_or("")] = base;
+                    }
                 }
                 s["inventory"] = p.clone();
             }
