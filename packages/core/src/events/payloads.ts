@@ -932,6 +932,21 @@ export const eventPayloadSchemas = {
   'code-review.verdict': reviewVerdictPayload,
 
   // ── Verify / finalize ──────────────────────────────────────────────────────
+  'verify.config-captured': z.strictObject({
+    cycle: z.number().int().nonnegative(),
+    artifact: artifactRefSchema,
+    head: gitOid,
+    identity: z.string().min(1),
+    source: z.strictObject({
+      ref: z.enum(['branch-head', 'worktree-dirty']),
+      commit: gitOid.optional(),
+    }),
+  }),
+  'verify.config-superseded': z.strictObject({
+    captureSeq: z.number().int().positive(),
+    head: gitOid,
+    identity: z.string().min(1),
+  }),
   'verify.started': z.strictObject({
     baseSha: gitOid.optional(),
     headSha: gitOid.optional(),
@@ -946,6 +961,7 @@ export const eventPayloadSchemas = {
     feedback: feedbackSchema.optional(),
   }),
   'verify.reconcile-policy-captured': z.strictObject({
+    cycle: z.number().int().nonnegative().optional(),
     reconcileSeq: z.number().int().positive(),
     steps: z
       .array(

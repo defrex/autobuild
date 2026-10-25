@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
-import { resolvePlanVerifySteps } from './plan-verify-selection'
+import { resolveApprovedVerifySelection, resolvePlanVerifySteps } from './plan-verify-selection'
 
 const config = parseConfig(`
 [tickets]
@@ -104,4 +104,19 @@ command = "unit"
       resolvePlanVerifySteps('+++\r\nverifySteps = ["types", "unit"]\r\n+++\r\n# Plan\r\n', config),
     ).toEqual(['types', 'unit'])
   })
+})
+
+test('runtime resolution falls back for mixed known and removed names while preserving valid empty selection', () => {
+  expect(resolveApprovedVerifySelection(['types', 'removed'], config)).toEqual({
+    unknown: ['removed'],
+    selected: undefined,
+  })
+  expect(resolveApprovedVerifySelection(undefined, config)).toEqual({
+    unknown: [],
+    selected: undefined,
+  })
+  expect(resolveApprovedVerifySelection([], config).selected).toEqual(new Set())
+  expect(resolveApprovedVerifySelection(['types', 'unit'], config).selected).toEqual(
+    new Set(['types', 'unit']),
+  )
 })

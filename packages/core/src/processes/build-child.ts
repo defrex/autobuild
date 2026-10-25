@@ -1,3 +1,5 @@
+import { composeBuildConfig } from '../config/live'
+import { readVerifyPipeline } from '../config/pipeline-source'
 import { guardForge } from '../kernel/guarded-forge'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -13,7 +15,6 @@ import { openProductionStore } from '../cli/store-opening'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from './build-runner'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-  buildOwnedSectionsDiffer,
   diagnosticArtifact,
   parseEffectiveBuildConfig,
   type BuildRunnerDiagnosticOutcome,
@@ -80,13 +81,9 @@ export async function runBuildChild(
       if (latest === null) return currentConfig
       try {
         const parsed = parseEffectiveBuildConfig(latest)
-        // Defensive guard (SPEC §16.1): after pinning, a boundary deposit may
-        // move deployment-owned sections only. If build-owned sections change
-        // without the build's own branch advancing, the artifact was written
-        // by something other than a launch — keep the last valid boundary.
-        if (!buildOwnedSectionsDiffer(currentConfig, parsed)) {
-          currentConfig = parsed
-        }
+        // Deployment reloads may race a runner capture. The runner resolves
+        // build-owned sections through the capture's immutable revision.
+        currentConfig = composeBuildConfig(currentConfig, parsed)
       } catch {
         // The dispatcher publishes only validated snapshots. If storage is
         // externally corrupted, preserve the child's last valid boundary.
@@ -98,6 +95,7 @@ export async function runBuildChild(
       store,
       config: currentConfig,
       getConfig,
+      readVerifyPipeline: () => readVerifyPipeline(workspace.path ?? workspace.ref, spawnExec),
       runtimes,
       workspacePath: workspace.path ?? workspace.ref,
       workspaceProvider: workspace.provider,

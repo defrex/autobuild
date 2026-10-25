@@ -581,6 +581,18 @@ and workspace adapter fields stay pinned; changed values are durable restart
 notices rather than partial adapter swaps. `--once` retains static startup
 configuration.
 
+`config/pipeline-source.ts` strictly reads the runner's execution checkout.
+`processes/verify-cycle-config.ts` deposits immutable cycle config and checks
+build-owned identity and source ancestry at settled stage boundaries. Typed
+`verify.config-captured` and `verify.config-superseded` facts advance the result
+boundary in the reducer and log index, independently of reconcile identity.
+The runner refreshes after workspace mutation and before constructing members;
+concurrent siblings settle before another stage is selected. Recovery and
+readiness compose live deployment settings onto the captured artifact revision.
+`kernel/plan-verify-selection.ts` keeps strict plan deposit validation separate
+from runtime drift resolution: unknown approved names select all optional steps
+and an explicit engine action deposits a deduplicated observation.
+
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `packages/core/src/processes/harvest.ts` is the deterministic core (scan,
 source-aware originating-ticket lifecycle projection, filing-time blocker

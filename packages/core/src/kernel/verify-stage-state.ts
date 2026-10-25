@@ -47,6 +47,8 @@ export function initialVerifyStageState(): VerifyStageState {
 }
 export function advanceVerifyStage(state: VerifyStageState, event: AbEvent): void {
   switch (event.type) {
+    case 'verify.config-captured':
+    case 'verify.config-superseded':
     case 'spec.revised':
     case 'reconcile.completed':
     case 'integration.prepared':

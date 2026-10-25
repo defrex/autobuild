@@ -103,3 +103,19 @@ export function resolvePlanVerifySteps(plan: string, config: Config): string[] {
 
   return config.verify.steps.filter((step) => selected.has(step))
 }
+
+/** Runtime drift is distinct from strict plan-deposit validation above. */
+export function resolveApprovedVerifySelection(
+  steps: readonly string[] | undefined,
+  config: Config,
+) {
+  const unknown = [
+    ...new Set(
+      steps?.filter(
+        (step) =>
+          !config.verify.steps.includes(step) || !Object.hasOwn(config.verify.stepConfigs, step),
+      ) ?? [],
+    ),
+  ].sort()
+  return { unknown, selected: steps === undefined || unknown.length ? undefined : new Set(steps) }
+}

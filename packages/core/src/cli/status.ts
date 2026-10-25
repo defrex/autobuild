@@ -1024,7 +1024,11 @@ async function projectBuildDecision(
   // Source 1 — the store deposit. A deposit that fails to parse is itself
   // reportable state: it is surfaced as unavailable naming the artifact rather
   // than silently falling back to a possibly stale workspace file.
-  const artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+  const artifact = await store.getArtifact(
+    slug,
+    state.verify.configPin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+    state.verify.configPin?.artifact.rev,
+  )
   if (artifact !== null) {
     try {
       return decideFromConfig(facts, parseEffectiveBuildConfig(artifact))
@@ -1136,7 +1140,8 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     // pinned pipeline came from, alongside the effective-config revision.
     const configArtifact = await context.store.getArtifact(
       opts.slug,
-      BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      facts.state.verify.configPin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      facts.state.verify.configPin?.artifact.rev,
     )
     const configMeta =
       configArtifact !== null ? parseBuildConfigMetadata(configArtifact) : undefined
