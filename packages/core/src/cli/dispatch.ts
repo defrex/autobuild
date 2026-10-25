@@ -1778,9 +1778,7 @@ class DispatchLoop {
       throw new Error('build-control returned an invalid auto-merge toggle result')
     }
     this.say(
-      `build ${slug}: landing ${
-        result.command === 'hold' ? 'hold requested' : 'consent requested'
-      }`,
+      `build ${slug}: merge ${result.command === 'hold' ? 'hold requested' : 'consent requested'}`,
     )
     await this.renderOnce()
   }
@@ -4871,7 +4869,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 storeRef: opened.storeRef,
                 stdout: resolvedOpts.stdout,
               },
-              'ab land',
+              'ab merge',
             )
           ).source,
         env: resolvedOpts.env,

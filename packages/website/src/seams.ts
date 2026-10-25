@@ -63,7 +63,7 @@ export const SEAMS: Seam[] = [
   {
     id: 'forge',
     name: 'forge',
-    caption: 'where code lands',
+    caption: 'where code merges',
     adapters: [
       { id: 'local-git', label: 'local git', side: 'local' },
       { id: 'github', label: 'GitHub', side: 'remote' },

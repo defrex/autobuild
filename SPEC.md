@@ -395,7 +395,7 @@ files, including development configs, remain exactly as installed.
   `build.created` from the immutable record (only records an older dispatcher
   left with an empty stream: new claims write it atomically with the record), executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
-  `dispatch.failed`. New claims do not seed landing consent or materialize
+  `dispatch.failed`. New claims do not seed merge consent or materialize
   historical auto-merge defaults; policy is sampled at readiness. Meanwhile,
   `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
@@ -460,7 +460,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Ticket** | A source record of kind `work` (default) or `node`, optionally targeting a same-source node; ordinary groomed work is dispatchable |
 | **Node ticket** | A named integration point represented by a ticket of kind `node`; its integration build owns a branch collecting child work |
 | **Build** | One ticket execution with a slug; either a work pipeline or an integration branch lifecycle; the unit the operator sees |
-| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and lands under ordered policy (node consent by default) |
+| **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and merges under ordered policy (node consent by default) |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
@@ -503,8 +503,8 @@ the bare phase names throughout.
 ## 5. Pipeline grammar
 
 Work builds retain the fixed grammar below. Integration builds instead follow
-`spec → branch opening → collecting → complete → verify:* → authorization → land → close`.
-Authorization follows ordered landing policy: nodes default to explicit consent,
+`spec → branch opening → collecting → complete → verify:* → authorization → merge → close`.
+Authorization follows ordered merge policy: nodes default to explicit consent,
 while an auto rule authorizes a complete, verified candidate without a command.
 They never enter plan, implement, code-review or finalize. A node conflict uses
 source-aware reconcile. Idle collecting nodes own no execution resources;
@@ -586,10 +586,10 @@ Leaf branches are collapsed into one build change and restacked onto the frozen
 target branch's current head at verify entry, before any verifier or exclusion.
 This is kernel work within the fixed grammar, not another phase. A verify failure
 returns to implementation; its new commits append to the canonical change, and
-the next approved cycle collapses and restacks again. While waiting to land after
+the next approved cycle collapses and restacks again. While waiting to merge after
 finalize and its post-steps, an observed target move also schedules a restack.
 For a node-targeted leaf, published finalize-step commits also schedule one
-waiting restack, even when the target SHA is unchanged, so guarded landing
+waiting restack, even when the target SHA is unchanged, so guarded merge
 preserves one canonical build identity.
 Clean waiting restacks retain existing verification when build-owned config is
 unchanged (§16.1), including when replay replaces the pin commit's ancestry.
@@ -660,10 +660,10 @@ Each kernel `spec.revised` records the exact artifact and operator identity
 Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
 The node recollects and verifies the new revision, including on the same head
 and parent after a failed cycle. Earlier cycles remain historical evidence
-and cannot block or authorize landing under the replacement. Children keep
+and cannot block or authorize merge under the replacement. Children keep
 their specs, claims and targets; contributions are not restarted.
 Active verification/reconcile or writer work, restack/reparent work, pause,
-pending controls, landing intent and ended PRs refuse the no-escalation path.
+pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
@@ -1040,7 +1040,7 @@ The base-selection invariants make this safe with Git:
   back to the local base and records the diagnostic.
 - **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
   resumes the published branch. The kernel collapses and restacks at verify
-  entry and after target moves while awaiting landing. The first
+  entry and after target moves while awaiting merge. The first
   `workspace.provisioned` base stays immutable branch-cut provenance; later
   `existing` facts are resume evidence, not new cuts. A remote workspace lost
   before publication may be freshly cut again; the latest `remote` or `local`
@@ -1147,7 +1147,7 @@ owning scope in the same atomic operation that marks the stream closed. A
 stream that dies mid-turn stays open and readable, so its output survives.
 
 Close serializes against append, per stream: an append issued while a stream
-is being closed — or after it has closed — either lands in the finalized
+is being closed — or after it has closed — either merges in the finalized
 artifact or is rejected with `StreamClosedError`; an accepted append is never
 silently omitted from the artifact the close deposits. Appends to other
 streams are unaffected.
@@ -2187,7 +2187,7 @@ event-level mechanics live in the repository catalog and reducer tests):
   the source reports completion or the relationship is deliberately removed.
   The waiver is a field of
   its own rather than a reuse of `triageState`, because bounces, aborts, and
-  closed-unmerged PRs must still land where the next tick will not reclaim
+  closed-unmerged PRs must still merge where the next tick will not reclaim
   them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
@@ -2264,18 +2264,18 @@ status is for builds awaiting a human.
 In repositories with integration nodes, a blocker that has a build resolves only
 when its change identity is present in the dependent's sampled target head
 (the configured root branch when no target is set). Source completion or an
-aggregate source blocker flag cannot substitute for presence. Confirmed landing
+aggregate source blocker flag cannot substitute for presence. Confirmed merge
 SHAs prove identity through Git reachability even without a build trailer;
-confirmed node landings transport their frozen whole contribution, including
+confirmed node merges transport their frozen whole contribution, including
 node-owned foreign changes and nested contributions. Inherited parent history
 is excluded. An empty completed node contributes nothing; missing or ambiguous
 completion evidence does not mean empty. The newest build generation is used,
 with ties diagnosed rather than falling back to older successful work.
 
 Demand-driven restacking supplies ancestor changes to descendants. Sibling changes
-wait for their node to land in the common ancestor and presence demand into the target;
-descendant changes wait for their node to land into the target ancestor. Same-node
-landings satisfy presence directly. Unknown evidence leaves source work queued,
+wait for their node to merge in the common ancestor and presence demand into the target;
+descendant changes wait for their node to merge into the target ancestor. Same-node
+merges satisfy presence directly. Unknown evidence leaves source work queued,
 with diagnostics naming the blocker and destination. Blockers with no build,
 and repositories without nodes, retain source done-state resolution. Presence
 is checked only at claim, with the sampled destination revalidated before claim;
@@ -2316,13 +2316,13 @@ Once it holds commits its current parent lacks, the dispatcher opens or adopts
 its PR. No placeholder commit is created; parent-only advancement is still empty.
 
 Claims targeting an open node freeze its build identity and branch as their base.
-Their PR, landing and reconcile all use that frozen base, even after source
-metadata changes. Missing, unopened, landed, closed or aborted targets remain
+Their PR, merge and reconcile all use that frozen base, even after source
+metadata changes. Missing, unopened, merged, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
 
 A node is complete when exhaustive native ticket enumeration finds no unresolved
-ticket targeting it, no unsettled frozen child claim remains, and a landed
+ticket targeting it, no unsettled frozen child claim remains, and a merged
 contribution is durably known. Triage, backlog and ready children keep it open;
 done and cancelled children do not. Listing diagnostics fail closed. Completeness
 is sampled again before verification and publication. Source edits cannot be
@@ -2331,17 +2331,17 @@ transactional with a forge write.
 The kernel verifies the exact node head and sampled parent with all configured
 verify steps and normal path applicability. A moved head or parent invalidates
 eligibility, including a clean restack. Failure blocks the node; file a repair
-child targeting it. Repair children remain admissible, and their landed head
+child targeting it. Repair children remain admissible, and their merged head
 supersedes the failed cycle. Reports retain their actual head/base citations.
 
-Landing follows ordered `[[landing]]` rules (§15.7), defaulting to node consent.
-Auto mode authorizes complete, verified nodes; consent mode waits for `ab land`.
-Land refuses incomplete nodes and names open children; `ab hold` remains available.
+Merge follows ordered `[[merge]]` rules (§15.7), defaulting to node consent.
+Auto mode authorizes complete, verified nodes; consent mode waits for `ab merge`.
+Merge refuses incomplete nodes and names open children; `ab hold` remains available.
 Node parents and local-git roots receive guarded fast-forwards, preserving one
 commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
-Authoritative enforced up-to-date protection records fenced landing; uncertainty
-records unfenced landing and triggers immutable landed-tree comparison. A mismatch
+Authoritative enforced up-to-date protection records fenced merge; uncertainty
+records unfenced merge and triggers immutable merged-tree comparison. A mismatch
 raises operator attention and never rewrites the shared parent.
 The repository build digest carries an additive optional pending-audit signal from
 `integration.landed` with an operation until `integration.audited` settles it.
@@ -2373,20 +2373,20 @@ generation and observed ticket revision. Only acceptance changes the effective
 node ancestry; `build.created` and `node.opening` remain historical provenance.
 Replay completion, `node.parent-pr-retargeted`, and `node.parent-completed`
 acknowledge independent effects. Pending requests and accepted moves fence
-verification and landing, and keep both old and new parents incomplete. Leases
+verification and merge, and keep both old and new parents incomplete. Leases
 alone do not represent outstanding work. Recovery rereads ambiguous writes,
 cancels unconfirmed requests, resumes frozen replay, and retries PR retargeting
 without replaying unrelated ticket edits. Later edits wait for the reserved
 operation to settle. Native auto-merge is cancelled before changing the base.
-Accepted node re-parenting revokes prior land consent through the recorded
-`node.parent-accepted` fact. Holds survive. Readiness evaluates landing policy
-against the new effective parent before another landing can proceed.
+Accepted node re-parenting revokes prior merge consent through the recorded
+`node.parent-accepted` fact. Holds survive. Readiness evaluates merge policy
+against the new effective parent before another merge can proceed.
 
 Parent identity changes invalidate eligibility even at identical SHAs; historical
 verification evidence remains immutable.
 
 Self/ancestor cycles (including pending effective ancestry), unopened or terminal
-destination generations, landing/closing sources and unsupported forge retargeting
+destination generations, merging/closing sources and unsupported forge retargeting
 are refused with a reason. Busy writer reservations defer external changes and
 refuse synchronous mutations. Direct provider edits receive durable, revision-
 deduplicated `node.parent-rejected` diagnostics when invalid, preserving effective
@@ -2401,12 +2401,12 @@ refused before any combined patch is written: abort and re-dispatch is the
 supported path. Unclaimed tickets retain ordinary target editing.
 
 **Demand-driven restacking and node writers.** Nodes observe parent movement durably but restack only on demand: before a
-complete nonempty node verifies; before landing if its parent moved; when queued
+complete nonempty node verifies; before merge if its parent moved; when queued
 dependency presence requires an ancestor change; on `ab restack <node>`; or on
 accepted re-parenting. There is no eager mode or cadence option. Nested nodes
 need their own demand. Existing frozen transactions, including ones reserved
 before upgrade, finish first; later demand coalesces onto the latest parent.
-Leaves keep verify-entry and awaiting-landing restacks for every target.
+Leaves keep verify-entry and awaiting-merge restacks for every target.
 
 Presence demand uses change identities, never ticket resolution alone. It follows
 only the path from the nearest proven ancestor source down to the dependent's
@@ -2424,11 +2424,11 @@ Both dashboards show `parent N commits ahead`, `parent current`, or
 `parent distance unknown`. Distance counts commits reachable from the observed
 parent but not the last confirmed contribution base; it is not elapsed time or
 poll count. Samples are invalidated by replay or re-parenting. A stale node
-cannot verify or land; inventory and child landings continue while it collects.
+cannot verify or merge; inventory and child merges continue while it collects.
 
 Node branches have one writer at a time. A distinct mutable node writer lease
 (serialized independently of runner execution leases) guards both restacks and
-controlled child landings. A revision-checked `node.writer-reserved` fact freezes
+controlled child merges. A revision-checked `node.writer-reserved` fact freezes
 the operation, original expected head, parent snapshot, previous contribution
 boundary, immutable archives, ordered changes, and merge proofs. Expiry permits
 recovery of that reservation, never an incompatible operation. Each change has
@@ -2453,7 +2453,7 @@ Missing source artifacts or invalid identities escalate. Foreign conflicts suppl
 commit metadata and a diff, with escalation when intent is unclear. Completion
 validates exactly one commit on that item's replay base, retaining its original
 identity or foreign status. The agent never publishes the stack; the dispatcher
-resumes only after session and execution settlement. Automatic landing policy
+resumes only after session and execution settlement. Automatic merge policy
 remains outside this grammar.
 
 **Foreign merge safety for node replay.** A node contribution is enumerated
@@ -2473,7 +2473,7 @@ delta, including merge-resolution content and an empty result when necessary;
 its side identities remain inherited from the parent.
 
 A merge carrying its own identity is anomalous: the kernel never creates merges,
-and legacy reconcile merges were squashed at landing. It is refused regardless
+and legacy reconcile merges were squashed at merge. It is refused regardless
 of side-history safety. Never strip, move or reinterpret its identity trailer.
 An absent upstream side identity, ambiguous or malformed identity, or an
 identity-bearing merge refuses the entire restack before replay or publication.
@@ -2598,8 +2598,8 @@ backfill, and migration reruns preserve counters. Hosted reads use one GET
 repository before reading and support repositories with builds but no journal.
 
 Durable operator settings (intake, repository pause, harvest gate) survive
-restarts through the repository journal. Per-landing hold and land commands
-live in the build log. Landing policy is declarative dispatcher configuration
+restarts through the repository journal. Per-merge hold and merge commands
+live in the build log. Merge policy is declarative dispatcher configuration
 (§15.7); there is no writable repository auto-merge default.
 
 The **operator sandbox** is the third execution kind beside build and harvest
@@ -2733,7 +2733,7 @@ rejection is `EventValidationError`.
    This is what makes cross-sandbox resume work (§15.6-C) and keeps the
    store lean. SHAs are momentary evidence, not change identity: a forge
    or future history rewrite can mint a new object id for the same change.
-   The immutable build slug in the landed commit's terminal Git trailer
+   The immutable build slug in the merged commit's terminal Git trailer
    `Autobuild-Build: <slug>` identifies the build's change across such rewrites
    (RFC 0001 §5). Branch presence is determined by exact parsed trailer values
    in reachable history, not recorded SHA ancestry. Kernel-owned single-change
@@ -2768,7 +2768,7 @@ with illustrative members:
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
-| Landing policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
+| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent and budget ceiling); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -2850,7 +2850,7 @@ be advisory; new semantics requiring old kernels to stop use a new decisive type
 Build reductions retain reader-relative unknown and decisive counts, unsupported
 types and producer versions. Unknown facts advance raw cursors, including when
 they trail the last known fact. Unknown decisive facts defer claims, phase
-routing, integration and landing/publication decisions for that build only;
+routing, integration and merge/publication decisions for that build only;
 read-only status/context/dashboard reads retain the lifecycle status. The
 kernel or dispatcher records advisory `build.compatibility-deferred` with the
 decisive boundary, types, versions and diagnostic, deduplicated per boundary.
@@ -2907,13 +2907,13 @@ observation, complete replay prefix, active source item and merge proofs.
 `integration.observed` optionally carries display-only `children` entries
 (source/id, optional title and contribution build identity). Open-child and
 contribution arrays remain the membership authorities; resolved tickets without
-contributions do not become landed children. Dashboards list open children first
-with current live phase or `queued`, then contributions as `landed`. They show
+contributions do not become merged children. Dashboards list open children first
+with current live phase or `queued`, then contributions as `merged`. They show
 expected verification steps with exact current-cycle/head/parent outcomes and
-landing mode/rule/consent instructions. Optional `files` on `node.item-conflicted`
+merge mode/rule/consent instructions. Optional `files` on `node.item-conflicted`
 and conflicted `restack.replayed` records unmerged paths at replay. Legacy events
 remain readable with explicit unavailable-title/file fallbacks; display metadata
-never authorizes collection or landing.
+never authorizes collection or merge.
 A rewrite receipt alone never promotes the boundary; only completed settlement
 does. CLI status exposes pending/active work, reachable build identities and
 node-owned foreign changes. A node stays `collecting` while its narrow reconcile
@@ -2975,8 +2975,8 @@ finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.com
 **Interrupted dispatch:** if the log stops after `build.created`, a later
 ordinary dispatcher tick provisions the workspace, atomically imports the spec,
 posts the ticket notice once, and launches the runner. New claims do not
-materialize auto-merge-default attribution as a human request. Landing policy
-is recorded at readiness; consent is an explicit land command. A failed boundary appends `dispatch.failed
+materialize auto-merge-default attribution as a human request. Merge policy
+is recorded at readiness; consent is an explicit merge command. A failed boundary appends `dispatch.failed
 {stage,attempt,error}` and stays queued for another tick until its budget is
 exhausted. Dispatch failures share a `[policy].maxDispatchAttempts` budget
 (default 3) across
@@ -3118,7 +3118,7 @@ durable remote branch: a match repairs the missing completion fact before the
 replacement starts, covering a lost post-push acknowledgement; otherwise the
 commit existed only in the deleted sandbox, the request is abandoned, and the
 phase rerun must issue a new request. A crash while closing several sessions
-lands no attachment;
+merges no attachment;
 the next recovery closes only those still open, so repeated takeover converges.
 Historical orphan-only logs remain valid and require no repair.
 
@@ -3200,7 +3200,7 @@ ticket*, never a reopened build.
 **Merge standard: one change per build, replay at reconcile.**
 
 - **Root-target leaf PR → configured root: squash merge.** One commit per
-  leaf build keeps the root linear. Node-target children and nodes landing into
+  leaf build keeps the root linear. Node-target children and nodes merge into
   local-git roots use guarded fast-forwards; GitHub root nodes use guarded PR
   rebase merge with fencing/audit provenance (§13.1), preserving contributions.
 - **Conflicted build → refreshed base: restack.** The kernel collapses the
@@ -3216,9 +3216,9 @@ Rewrites used to sever event-recorded SHAs; immutable archives and durable
 rewrite facts retain them. Ordinary per-WIP-commit rebase remains inappropriate.
 Existing historical merge reconciliations retain their original replay/display
 semantics and supply the promoted contribution base for a later restack. Resumed
-builds use current engine routing at newly reached replay and landing boundaries;
+builds use current engine routing at newly reached replay and merge boundaries;
 there is no claim-version guarantee that in-flight builds finish under the old
-merge standard. Execution configuration remains pinned, while landing policy
+merge standard. Execution configuration remains pinned, while merge policy
 is live dispatcher configuration. Operators requiring old execution behavior
 should drain work before upgrading rather than run mixed-version writers.
 
@@ -3285,34 +3285,34 @@ unchanged-base no-progress budget before completion. Classified transient public
 failures instead use the independent durable publication retry budget described
 in Forge failure recovery; publication intent and frozen target remain unchanged.
 
-**Stable landed identity.** A root-target leaf kernel landing remains one squash commit and
+**Stable merged identity.** A root-target leaf kernel merge remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
 identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
 Implementation commits and deposited PR descriptions are unchanged. The janitor
-records `pr.merged { sha, buildTrailerPresent? }` from the actual landed message,
-including human landings. True and false are successful observations; historical
+records `pr.merged { sha, buildTrailerPresent? }` from the actual merged message,
+including human merges. True and false are successful observations; historical
 logs, unsupported inspection, and transient read failures leave evidence absent.
 A failed inspection records an actionable observation and never blocks merge
 completion. This evidence does not change reduction or display semantics.
 
-A node-target child landing instead fast-forwards its already canonical
+A node-target child merge instead fast-forwards its already canonical
 single-change commit, preserving exactly one terminal source-build identity.
 The guarded destination write is authoritative: its pushed SHA and identity
-produce the durable landing receipt independently of forge PR state. PR
+produce the durable merge receipt independently of forge PR state. PR
 acknowledgement is best-effort: observe a provider-reported merge, or comment
-with the landed SHA and close a still-open review. Acknowledgement failure never
-retries or fails the landing.
+with the merged SHA and close a still-open review. Acknowledgement failure never
+retries or fails the merge.
 
 GitHub uses its authoritative viewer squash headline and body with an expected
 head guard. Native auto-merge messages are checked against fresh server defaults
 on eligible polls even after consent acknowledgement, and repaired through
 consent-guarded disable/enable. Repeated polling covers later head or metadata
 changes; it cannot make a future push atomic with an already armed native merge.
-Merge queues ignore message overrides, so identity-aware kernel landing defers
+Merge queues ignore message overrides, so identity-aware kernel merge defers
 with `unproven-gate-state` rather than bypassing the queue. Human merges remain
 observable regardless of trailer evidence.
 
-Ordered `[[landing]]` rules in `autobuild.toml` decide authorization. Each rule
+Ordered `[[merge]]` rules in `autobuild.toml` decide authorization. Each rule
 requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
 <node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
 `label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
@@ -3328,23 +3328,23 @@ rule and index (or explicit default). Editing configuration cannot change this
 recorded decision. A replacement candidate gets a new decision once ready.
 Policy is live dispatcher configuration, outside the pinned execution pipeline.
 
-`ab hold <slug>` durably suppresses landing and revokes previous consent, even
-before readiness. `ab land <slug>` requires readiness, clears hold, and consents
-to this build/node landing into its frozen destination. Consent survives head
+`ab hold <slug>` durably suppresses merge and revokes previous consent, even
+before readiness. `ab merge <slug>` requires readiness, clears hold, and consents
+to this build/node merge into its frozen destination. Consent survives head
 replacement, restacking, verification and re-finalization until another hold or
-completion. It is consent to the landing, not approval of an immutable diff.
+completion. It is consent to the merge, not approval of an immutable diff.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
-requires confirmed native cancellation, while land acknowledgement accepts
+requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
-through the MCP/operator build-control tools. The terminal uses `l` for land and
-`o` for hold on the selected landing. The web has no consent controls.
+through the MCP/operator build-control tools. The terminal uses `l` for merge and
+`o` for hold on the selected merge. The web offers **Merge** and **Hold** on a merge awaiting consent.
 
 The repository auto-merge default and its fan-out are retired. Historical events
 still replay; explicit old per-build commands map to consent/hold until a new
-landing command supersedes them, while old default seeds confer no consent.
+merge command supersedes them, while old default seeds confer no consent.
 `ab upgrade` samples the target repository's configured journal and writes leaf
 auto for old ON, leaf consent for old OFF (including no fact), and node consent
-in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
+in either case. Explicit merge arrays remain byte-for-byte unchanged; explicit deprecated landing arrays are renamed to merge without changing policy values or order. Both spellings together are rejected. Missing
 configuration or unavailable journals fail with recovery guidance. Fresh init
 uses the no-rules fallback.
 
@@ -3355,13 +3355,13 @@ During forge cooldown it stays pending; cancellation makes no further provider
 request until recovery. A confirmed cancellation's disabled receipt can retain
 retry timing. Retries back off from 30 seconds exponentially to a five-minute
 maximum interval, surviving dispatcher restarts, and honor any later repository
-reset. A new candidate or land command resets the application delay; hold wakes
+reset. A new candidate or merge command resets the application delay; hold wakes
 janitor backoff but provider cancellation still honors repository cooldown.
 Quiet polls append no attempt facts. Native application receipts and janitor
 bookkeeping are not pipeline execution progress.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
-landing state using the native state in the existing PR read, without additional
+merge state using the native state in the existing PR read, without additional
 forge reads. A native write is issued only when observed and desired state disagree. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
 through the forge's expected-head guard. Every replacement publication confirms
@@ -3372,19 +3372,19 @@ poll reconciliation. This is an explicitly bounded failure model: native merge
 is used only behind a merge-blocking gate, and checks on a replacement head must
 take far longer than one poll interval, allowing cancellation before they pass.
 There is no durable native-effect reservation protocol. An undesired forge
-landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
+merge is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
 state with no enable in flight or indeterminate means a deliberate human forge
-landing, which supplies consent. Record whether it overrode a hold: an unheld
-human landing needs no operator attention; overriding a hold is informational.
+merge, which supplies consent. Record whether it overrode a hold: an unheld
+human merge needs no operator attention; overriding a hold is informational.
 If native auto-merge was armed, or an enable was in flight or indeterminate,
-record a possible stale-enable landing as contrary to policy and raise operator
+record a possible stale-enable merge as contrary to policy and raise operator
 attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
 
-**Merge gates are never bypassed.** Landing authorization comes from recorded
+**Merge gates are never bypassed.** Merge authorization comes from recorded
 policy or explicit consent. For root-target leaves, whenever the base branch has
 any real merge-blocking gate, authorization is applied as GitHub-native auto-merge, so the
-forge's own checks decide when the PR lands. Only when the forge
+forge's own checks decide when the PR merges. Only when the forge
 authoritatively reports no gate may the janitor perform a normal,
 head-guarded squash itself — never admin, force, or rebase — and only after
 all verification and finalize work is complete. GitHub's exact documented
@@ -3398,7 +3398,7 @@ when the classic protection response is incomplete, while an incomplete classic
 response with no proven ruleset gate still fails closed with a reason naming
 the missing subsection.
 
-Serialized node-target landing has a stricter path: native auto-merge is
+Serialized node-target merge has a stricter path: native auto-merge is
 cancelled and cancellation confirmed, never enabled. Under the destination
 writer reservation, refresh the PR's actual base and head and inspect gates on
 that exact frozen destination immediately before mutation. Only proved-ungated
@@ -3406,7 +3406,7 @@ branches permit the guarded fast-forward, regardless of token bypass privileges.
 Gated branches defer with `gated-node-destination`; unknown or unreadable policy
 defers with `unproven-gate-state`. Both leave the PR open with actionable human
 guidance, and every later attempt obtains fresh proof. No native fallback can
-participate in node serialization. Human node landing remains observable.
+participate in node serialization. Human node merge remains observable.
 
 Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
 creation failure: finalize still records the open PR and completes, and consent
@@ -3432,15 +3432,15 @@ the adapter resolves both identities through Git. If either is unavailable,
 consent remains pending and one reason-bearing follow-up names the missing
 `user.name` / `user.email` configuration; later polls retry after the operator
 configures it. When the base branch is checked out, Git's two-tree
-`read-tree -m -u` transition preflights and lands the old-to-squash tree:
+`read-tree -m -u` transition preflights and merges the old-to-squash tree:
 tracked/index changes on untouched paths and
 untracked non-colliding files survive, while a tracked or untracked overwrite
 leaves consent pending and records one path-bearing follow-up instead of failing
-the dispatcher. Its durable pending-landing record is written before moving the
-base ref. A poll after a crash retries that same old-to-landed transition without
+the dispatcher. Its durable pending-merge record is written before moving the
+base ref. A poll after a crash retries that same old-to-merged transition without
 rolling back the ref or overwriting operator work; the PR remains open and
 retryable until checkout repair succeeds. No merge is ever assumed: a build
-reaches `merged` only when a later poll observes the landing and any required
+reaches `merged` only when a later poll observes the merge and any required
 checkout synchronization. Without authorization, the local branch and PR record
 remain open for inspection with ordinary Git.
 
@@ -3531,7 +3531,7 @@ The dispatcher emits an actionable operator notice without repeating it for the
 same failure. Restoring a valid `autobuild.toml` clears the rejection and
 ordinary boundary reload resumes.
 
-Landing policy is an ordered `[[landing]]` array. Each rule requires
+Merge policy is an ordered `[[merge]]` array. Each rule requires
 `mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,
 `from = "leaf" | "node"`, and an exact, case-sensitive `label`. Predicates
 within a rule are ANDed; omitted predicates are wildcards; first match wins.
@@ -3659,7 +3659,7 @@ decide where a build's effective configuration is composed from:
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The execution checkout at each verification cycle; launch deposits use the branch head or recorded workspace base until a cycle capture exists. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
-| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `landing`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `merge`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
@@ -3750,7 +3750,7 @@ Enabled steps still follow plan selection and path rules. Excluded steps record
 and a reason naming the setting. Dashboards and PR summaries call this
 "skipped by post-reconcile policy"; it is never a pass. Forge-side required
 checks and branch protections still gate merge. For excluded steps, merged code
-is not re-verified, so breakage that only exists in the combination can land.
+is not re-verified, so breakage that only exists in the combination can merge.
 
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 
@@ -4035,13 +4035,13 @@ and destination validation. See [the migration procedure](docs/ticket-migration.
 ### Tree and consent operator reads
 
 The shared dashboard projection supplies root, node, target, integration build,
-landing, restack and consent vocabulary. The terminal groups ready decisions in
-one consent queue, retaining build-slug selection for land/hold controls. Nodes
+merge, restack and consent vocabulary. The terminal groups ready decisions in
+one consent queue, retaining build-slug selection for merge/hold controls. Nodes
 show stored open children/completeness diagnostics, restack state, current-cycle
-verification and landing readiness. Ordinary repositories omit empty tree sections.
+verification and merge readiness. Ordinary repositories omit empty tree sections.
 The web dashboard consumes shared terminology without introducing a tree surface.
 
-`ab landings [--json] [--store <ref>]` and registry `landings.list` expose the
+`ab merges [--json] [--store <ref>]` and registry `merges.list` expose the
 same deterministic, repository-scoped ready consent/held candidates. A recorded
 current decision is required; auto-authorized and consented candidates are absent.
 Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listing
@@ -4052,9 +4052,9 @@ and conflicted `restack.replayed`. Derived `build.consent-ready` observations
 carry target, branch, candidate and the durable readiness entry position in the
 existing cursor envelope. Cursor identities retain readiness episodes across
 restart; a new candidate or exit/re-entry can wake again. Explicit event globs
-remain event-only. Wait adds `consent`, `node-landed`, `restack-conflicted`, and
+remain event-only. Wait adds `consent`, `node-merged`, `restack-conflicted`, and
 includes these in attention; current-state waits return immediately, backlog
-replay retains event ordering, including landing before terminal completion.
+replay retains event ordering, including merge before terminal completion.
 
 Consent/hold readiness is signalled exclusively by `build.consent-ready`,
 including first discovery in a repository-wide watch. `build.merge-decision`
@@ -4089,7 +4089,7 @@ clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery
 request, and only success clears degradation. A further limit extends cooldown.
-Native landing application failures keep candidate-specific retry eligibility,
+Native merge application failures keep candidate-specific retry eligibility,
 including automatic decisions without a human command. Retries recheck consent,
 holds, verification and the exact candidate. Uncertain enables remain pending
 until cancellation can be confirmed after cooldown. Publication retries reuse
@@ -4113,12 +4113,12 @@ using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
-keeps its existing cadence. Readiness and landing inspections remain fresh.
+keeps its existing cadence. Readiness and merge inspections remain fresh.
 
 Opened integration nodes poll every tick until their durable activity has been
 quiet for `policy.nodeIdleAfterSeconds` (default 600 seconds), then poll every
 `policy.nodeIdlePollSeconds` (default 120 seconds). Holds and waiting for consent
-qualify normally. Child claims, PR and landing activity, operator commands
+qualify normally. Child claims, PR and merge activity, operator commands
 (including repeated holds), restack requests and answers wake the next tick.
 GitHub-only changes are discovered on the next due check, within the idle
 interval plus normal tick scheduling while the dispatcher is running; failure,

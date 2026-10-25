@@ -630,7 +630,7 @@ test('completed contribution metadata refreshes without rereading terminal histo
   title = 'Current title'
   reader.resetCalls()
   const refreshed = await cache.refresh()
-  expect(child(refreshed)).toMatchObject({ id: 'LANDED', title: 'Current title', state: 'landed' })
+  expect(child(refreshed)).toMatchObject({ id: 'LANDED', title: 'Current title', state: 'merged' })
   expect(child(initial).title).toBe('Original title')
   expect(reader.eventCalls.some((call) => call.slug === 'landed')).toBe(false)
 })

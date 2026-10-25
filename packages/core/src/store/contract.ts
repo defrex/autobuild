@@ -672,7 +672,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('build digests (repo-scoped batch read, AUT-487)', () => {
-      test('compact admission evidence retains landing SHAs and recovered node contributions', async () => {
+      test('compact admission evidence retains merge SHAs and recovered node contributions', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/dg-presence'
           const slug = 'dg-presence'

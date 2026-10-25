@@ -58,7 +58,7 @@ evidence is not.
 
 Every build pays a fixed cost no matter how small its diff: spec, plan and
 plan review, code review, the repository's full verify suite, finalize,
-landing, and a restack for everything queued behind it. Ten small tickets pay
+merge, and a restack for everything queued behind it. Ten small tickets pay
 that cost ten times, and a blocker chain pays it in series. Prefer fewer,
 larger tickets: one ticket per coherent change, as large as one plan and one
 review pass can hold without the quality bar slipping.
@@ -68,7 +68,7 @@ or fix a reviewer can judge in a single pass, one plan can cover it without
 deferring a design decision to a later build, and its out-of-scope list is
 short and obvious. It is too big when its criteria fall into groups that share
 no behavior, when part of it waits on a decision nobody has made, or when its
-parts need different landing — one can ship now while another needs consent
+parts need different merge — one can ship now while another needs consent
 or must wait.
 
 Do not split:
@@ -103,7 +103,7 @@ A cut at a seam pays twice:
 
 If no seam exists where the work divides, keep it as one ticket, or make the
 first ticket establish the contract with tests at the boundary and block the
-tickets on either side of it until it lands. After that, they can build
+tickets on either side of it until it merges. After that, they can build
 concurrently.
 
 State the seam in each ticket as behavior, not structure: what the contract
@@ -117,7 +117,7 @@ a planner reading one ticket knows what its siblings own.
 A split feature takes as long as its longest blocker chain, not as long as
 its ticket count. A wave of independent tickets finishes in about one build's
 time; the same tickets in a chain take one build per link. Prefer cuts that
-let tickets start together. When one ticket must land first — usually the one
+let tickets start together. When one ticket must merge first — usually the one
 that establishes a shared contract — keep it to that contract and its tests,
 so the wave behind it starts sooner, and fold nothing unrelated into it.
 Add a blocker only for a real prerequisite, never to express a preferred
@@ -143,10 +143,10 @@ Each kernel `spec.revised` records the exact artifact and operator identity
 Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
 The node recollects and verifies the new revision, including on the same head
 and parent after a failed cycle. Earlier cycles remain historical evidence
-and cannot block or authorize landing under the replacement. Children keep
+and cannot block or authorize merge under the replacement. Children keep
 their specs, claims and targets; contributions are not restarted.
 Active verification/reconcile or writer work, restack/reparent work, pause,
-pending controls, landing intent and ended PRs refuse the no-escalation path.
+pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.

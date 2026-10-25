@@ -91,15 +91,15 @@ const localContractFactory: ForgeContractFactory = async () => {
 describeForgeContract('LocalGitForge', localContractFactory)
 
 describe('LocalGitForge', () => {
-  test('persists records across instances, snapshots local base, and lands exact squash content', async () => {
+  test('persists records across instances, snapshots local base, and merges exact squash content', async () => {
     const f = await fixture()
-    const description = '# Local landing\n\nExact body for the squash commit.\n'
+    const description = '# Local merge\n\nExact body for the squash commit.\n'
     await f.forge.pushBranch(f.workspace, f.head)
     const pr = await f.forge.openPr({
       workspacePath: f.workspace,
       head: f.head,
       base: 'main',
-      title: 'Local landing',
+      title: 'Local merge',
       body: 'Exact body for the squash commit.',
       mergeMessage: description,
     })
@@ -140,7 +140,7 @@ describe('LocalGitForge', () => {
     expect(await git(f.root, 'rev-parse', `refs/heads/${f.head}`)).toBe(pr.headSha)
   })
 
-  test('missing Git identity defers without landing and retries under the configured identity', async () => {
+  test('missing Git identity defers without merge and retries under the configured identity', async () => {
     const f = await fixture()
     const pr = await f.forge.openPr({
       workspacePath: f.workspace,
@@ -215,7 +215,7 @@ describe('LocalGitForge', () => {
     })
   })
 
-  test('lands over non-overlapping tracked, staged, and untracked work without cleaning it', async () => {
+  test('merges over non-overlapping tracked, staged, and untracked work without cleaning it', async () => {
     const f = await fixture()
     await writeFile(join(f.root, 'index-only.txt'), 'index base\n')
     await git(f.root, 'add', 'index-only.txt')
@@ -253,17 +253,17 @@ describe('LocalGitForge', () => {
     expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('feature\n')
   })
 
-  test('tracked and untracked landing collisions defer with a path and retry after cleanup', async () => {
+  test('tracked and untracked merge collisions defer with a path and retry after cleanup', async () => {
     for (const collision of ['tracked', 'untracked'] as const) {
       const f = await fixture()
       if (collision === 'tracked') {
-        await writeFile(join(f.workspace, 'shared.txt'), 'landed shared\n')
+        await writeFile(join(f.workspace, 'shared.txt'), 'merged shared\n')
         await git(f.workspace, 'add', 'shared.txt')
       } else {
-        await writeFile(join(f.workspace, 'added.txt'), 'landed add\n')
+        await writeFile(join(f.workspace, 'added.txt'), 'merged add\n')
         await git(f.workspace, 'add', 'added.txt')
       }
-      await git(f.workspace, 'commit', '-m', `${collision} collision landing`)
+      await git(f.workspace, 'commit', '-m', `${collision} collision merge`)
       const pr = await f.forge.openPr({
         workspacePath: f.workspace,
         head: f.head,
@@ -292,7 +292,7 @@ describe('LocalGitForge', () => {
       const landed = await git(f.root, 'rev-parse', 'main')
       expect(await f.forge.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
       expect(await Bun.file(join(f.root, path)).text()).toBe(
-        collision === 'tracked' ? 'landed shared\n' : 'landed add\n',
+        collision === 'tracked' ? 'merged shared\n' : 'merged add\n',
       )
       expect(await git(f.root, 'show', '-s', '--format=%P', landed)).toBe(before)
       expect(await git(f.root, 'rev-list', '--count', `${before}..main`)).toBe('1')
@@ -397,15 +397,15 @@ test('marked summaries replace one private-ref entry across adapters and recreat
   expect((await read()).comments).toEqual(['unrelated', `${marker}\nlatest`])
 })
 
-test('stable landing identity survives rewritten ancestry and finds non-first-parent history', async () => {
+test('stable merge identity survives rewritten ancestry and finds non-first-parent history', async () => {
   const f = await fixture()
   const original = await git(f.root, 'rev-parse', 'main')
-  const body = '# Stable landing\n\nDescription\n\nCo-authored-by: A <a@example.test>\n'
+  const body = '# Stable merge\n\nDescription\n\nCo-authored-by: A <a@example.test>\n'
   const pr = await f.forge.openPr({
     workspacePath: f.workspace,
     head: f.head,
     base: 'main',
-    title: 'Stable landing',
+    title: 'Stable merge',
     body: 'Description',
     mergeMessage: body,
   })
@@ -452,7 +452,7 @@ test('stable landing identity survives rewritten ancestry and finds non-first-pa
   await expect(f.forge.containsBuild(f.root, '--all', 'stable-build')).rejects.toThrow()
 })
 
-test('pre-upgrade pending candidate is rebuilt before landing, but landed history is never rewritten', async () => {
+test('pre-upgrade pending candidate is rebuilt before merge, but merged history is never rewritten', async () => {
   const f = await fixture()
   const pr = await f.forge.openPr({
     workspacePath: f.workspace,
@@ -518,7 +518,7 @@ test('node opening adopts advanced history and reachability distinguishes a movi
 })
 
 for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
-  test(`controlled node landing uses guarded identity-preserving fast-forward: ${mode}`, async () => {
+  test(`controlled node merge uses guarded identity-preserving fast-forward: ${mode}`, async () => {
     const { MemoryBuildStore } = await import('../../store/memory')
     const { sampleBuildInput } = await import('../../store/contract')
     const { readBuildFacts } = await import('../../store/reduced-reads')

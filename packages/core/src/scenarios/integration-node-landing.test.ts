@@ -41,10 +41,10 @@ async function seedContributors(h: Awaited<ReturnType<typeof makeHarness>>, repo
   }
 }
 
-test('nested node landing preserves both child commits and parent lands the stack without wrappers', async () => {
+test('nested node merge preserves both child commits and parent merges the stack without wrappers', async () => {
   const h = await makeHarness({
     localGitForge: true,
-    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
@@ -102,7 +102,7 @@ test('nested node landing preserves both child commits and parent lands the stac
 test('native terminal states, partial listings and reopening govern completeness', async () => {
   const h = await makeHarness({
     localGitForge: true,
-    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [
       { ...readyTicket('NODE', { title: 'Release integration' }), kind: 'node' },
@@ -125,7 +125,7 @@ test('native terminal states, partial listings and reopening govern completeness
         action: { kind: 'land' },
         ticketSource: async () => h.tickets,
       }),
-    ).rejects.toThrow('Landing is not ready')
+    ).rejects.toThrow('Merge is not ready')
     await h.tickets.transition('TRIAGE', 'Ready')
     expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([
       'TRIAGE',
@@ -144,7 +144,7 @@ test('native terminal states, partial listings and reopening govern completeness
 test('a verification-blocked node admits a repair child and verifies the repaired head', async () => {
   const h = await makeHarness({
     localGitForge: true,
-    configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
     handlers: happyHandlers(),
     tickets: [{ ...readyTicket('NODE', { title: 'Repairable integration' }), kind: 'node' }],
   })
@@ -381,11 +381,11 @@ test('integration agent verification receives exact commit range without produce
 })
 
 test.each([false, true])(
-  'recorded migration preserves nested landing and ticket cleanup (remap=%s)',
+  'recorded migration preserves nested merge and ticket cleanup (remap=%s)',
   async (remap) => {
     const h = await makeHarness({
       localGitForge: true,
-      configToml: `${CONFIG_TOML}\n[[landing]]\nfrom = "leaf"\nmode = "consent"\n`,
+      configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
       handlers: happyHandlers(),
       tickets: [
         { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
@@ -592,10 +592,7 @@ test('agent verification failure reports the exact node cycle once without an es
     const cwd = join(h.tmp, 'hand-pushed')
     await git(['worktree', 'add', cwd, node.branch!], h.origin)
     try {
-      await Bun.write(
-        join(cwd, 'repair-intent.txt'),
-        'Review the integrated feature before landing.',
-      )
+      await Bun.write(join(cwd, 'repair-intent.txt'), 'Review the integrated feature before merge.')
       handPushedSha = await commitAll(cwd, message)
     } finally {
       await git(['worktree', 'remove', cwd], h.origin)

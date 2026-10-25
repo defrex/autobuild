@@ -473,7 +473,7 @@ requires. A held request's authentication, token scope, and version-skew rules
 are identical to the immediate form: a `401`, `403`, or `409` identity failure
 is answered immediately, never held.
 
-The parameter is purely additive in the version it landed in (protocol `2`,
+The parameter is purely additive in the version it merged in (protocol `2`,
 where the event-wait rules were introduced): a server
 that ignores `wait` remains conforming — its immediate empty answers only raise
 the client's request rate — and a client that sends `wait` to such a server
@@ -514,13 +514,13 @@ creation operation and must not reset timestamps, events, artifacts, or lease
 state when the repository already exists. Event sequence numbering starts at 1
 for each repository independently of every build and other repository.
 
-A `BuildDigest` projects terminal, observation, and compact landing evidence
+A `BuildDigest` projects terminal, observation, and compact merge evidence
 from one build's log:
 
 ```jsonc
 // BuildDigest
 {
-  "integrationAuditPending": true, // optional: kernel landing audit requested, not yet settled
+  "integrationAuditPending": true, // optional: kernel merge audit requested, not yet settled
   "slug": "ab-fix-login-3",
   "terminal": "done",               // optional: "done" | "aborted", omitted while the log has neither
   "observations": [                 // ascending-seq pairs for the log's observation.recorded events
@@ -528,7 +528,7 @@ from one build's log:
     { "seq": 4, "ts": "2026-07-15T12:00:04.000Z" }
   ],
   "merged": "2026-07-15T12:00:06.000Z", // optional: ts of the log's latest pr.merged, omitted when none
-  "mergedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // optional: that merge's actual landing SHA
+  "mergedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // optional: that merge's actual merge SHA
   "nodeContribution": {              // optional: latest node.contribution-recorded payload
     "landing": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -539,7 +539,7 @@ from one build's log:
 ```
 
 The optional `mergedSha` and `nodeContribution` fields let admission index
-confirmed landing evidence without fetching every historical build's full facts.
+confirmed merge evidence without fetching every historical build's full facts.
 A node contribution is usable only when its `landing` matches `mergedSha`;
 recording or recovering a contribution advances `readinessChangeSeq`. These
 members are additive: older peers can omit them, leaving presence unproven rather
@@ -896,7 +896,7 @@ by this rule (their retention belongs to the open archival thread), and open
 streams are never pruned. A read of a stream whose chunks were pruned returns
 no chunks, `status: "closed"`, and the artifact reference.
 
-These additions were purely additive in the version they landed in (protocol
+These additions were purely additive in the version they merged in (protocol
 `2`, where the stream routes were introduced), and a
 conforming server implements the stream routes together with this document's
 rules exactly as it does for the event and artifact routes.

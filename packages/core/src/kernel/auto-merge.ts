@@ -275,7 +275,7 @@ const DEFERRAL_SUMMARIES = {
     'GitHub rulesets are unavailable because of the repository account plan',
   'repository-auto-merge-disabled': 'repository-level auto-merge is disabled',
   'gated-node-destination':
-    'node destination has merge-blocking gates; serialized landing requires human action',
+    'node destination has merge-blocking gates; serialized merge requires human action',
   'unproven-gate-state': 'merge-gate state or native auto-merge application could not be proven',
   'merge-conflicts': 'the PR has merge conflicts with its base branch',
   'mergeability-uncomputed':
@@ -343,7 +343,7 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
   if (state.pr && state.landing?.forgeMerge?.classification === 'possible-stale-enable')
     return {
       pr: state.pr,
-      reason: 'Landing contrary to policy: possible stale native enable; inspect the target',
+      reason: 'Merge contrary to policy: possible stale native enable; inspect the target',
     }
   if (
     !state.finalizeCompletedSeq ||

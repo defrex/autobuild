@@ -128,7 +128,7 @@ readyLabels = ["autobuild"]
 # file source's canonicalization is exercised in dispatcher-file-tickets.test.ts.
 readyState = "Ready"
 
-[[landing]]
+[[merge]]
 mode = "consent"
 `
 
@@ -3508,7 +3508,7 @@ describe('abDispatch watch build-runner coordination', () => {
       actor: DISPATCHER,
       type: 'build.created',
       payload: {
-        ticket: { source: 'fake', id: 'T-landed', title: 'landed publication' },
+        ticket: { source: 'fake', id: 'T-landed', title: 'merged publication' },
         repo: fx.origin,
         baseBranch: 'main',
       },
@@ -3530,14 +3530,14 @@ describe('abDispatch watch build-runner coordination', () => {
         { kind: 'spec', content: '# Spec' },
         { kind: 'plan', content: '# Plan' },
         { kind: 'plan-review', content: 'approved' },
-        { kind: 'implement-notes', content: 'landed remotely' },
+        { kind: 'implement-notes', content: 'merged remotely' },
       ],
       (deposited) => ({
         actor: DISPATCHER,
         type: 'spec.imported',
         payload: {
           artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          ticket: { source: 'fake', id: 'T-landed', title: 'landed publication' },
+          ticket: { source: 'fake', id: 'T-landed', title: 'merged publication' },
         },
       }),
     )

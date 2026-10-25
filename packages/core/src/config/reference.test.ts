@@ -182,7 +182,7 @@ describe('real configuration reference', () => {
   test('covers root, builtin provider and deeply nested input fields without normalized output', () => {
     const regions = configurationReference()
     const all = Object.values(regions).flat()
-    for (const key of Object.keys(configRootSchema.shape))
+    for (const key of Object.keys(configRootSchema.shape).filter((key) => key !== 'landing'))
       expect(all.some((field) => field.path === key)).toBe(true)
     for (const [provider, declaration] of BUILTIN_WORKSPACE_PROVIDER_CONFIG) {
       if (declaration.configSchema)

@@ -74,7 +74,7 @@ distribution root (`--root DIR` overrides) — this deployment passes
 root while the trace step below and the Next config's
 `outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`
 resolve against the deployment build's working directory, where the archive
-must land beside the built output. The Next.js config's
+must merge beside the built output. The Next.js config's
 `outputFileTracingIncludes` records the intent to include that directory in the cron route's bundle, but
 Next 16's default Turbopack builds never apply `outputFileTracingIncludes`
 (only webpack builds do), so a deployment cannot rely on the config alone. The

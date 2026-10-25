@@ -3026,8 +3026,7 @@ export class Dispatcher {
         nativeCancelled || prState.nativeAutoMerge === false
           ? { kind: 'applied' as const }
           : await forge.setAutoMerge(workspacePath, pr.number, false)
-      if (cancellation.kind !== 'applied')
-        throw new Error('Native landing cancellation unconfirmed')
+      if (cancellation.kind !== 'applied') throw new Error('Native merge cancellation unconfirmed')
       nativeCancelled = true
     }
     if (isReady) {
@@ -3042,11 +3041,11 @@ export class Dispatcher {
           state = current
           break
         }
-        if (!record.ticket) throw new Error('Landing policy requires a readable source ticket')
+        if (!record.ticket) throw new Error('Merge policy requires a readable source ticket')
         const ticket = await tickets.get(await this.currentTicketId(record))
         if (!ticket)
           throw new Error(
-            `Landing policy source ticket ${record.ticket.id} is unavailable; retrying on next poll`,
+            `Merge policy source ticket ${record.ticket.id} is unavailable; retrying on next poll`,
           )
         const input = {
           from: integration ? ('node' as const) : ('leaf' as const),
@@ -3090,7 +3089,7 @@ export class Dispatcher {
           ? { kind: 'applied' as const }
           : await forge.setAutoMerge(workspacePath, pr.number, false)
       if (result.kind !== 'applied')
-        throw new Error('Native landing cancellation unconfirmed; retrying')
+        throw new Error('Native merge cancellation unconfirmed; retrying')
       const current = (await store.buildFacts(record.slug)).state
       if (current.landing?.native?.enabled !== false)
         await store.append(record.slug, {
@@ -3232,7 +3231,7 @@ export class Dispatcher {
               type: 'integration.abandoned',
               payload: {
                 id: intent.id,
-                reason: 'Nested landing eligibility changed before reservation',
+                reason: 'Nested merge eligibility changed before reservation',
               },
             })
           return
@@ -3296,7 +3295,7 @@ export class Dispatcher {
           {
             code: 'unproven-gate-state',
             detail:
-              'Frozen destination node generation is unavailable or disagrees with its branch. Native landing is withheld; human action required.',
+              'Frozen destination node generation is unavailable or disagrees with its branch. Native merge is withheld; human action required.',
           },
           pr.number,
           commandSeq,
@@ -3341,7 +3340,7 @@ export class Dispatcher {
         if (enableSeq === undefined) return
         const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
         if (cancelled.kind !== 'applied')
-          throw new Error('Native landing cancellation unconfirmed; retrying')
+          throw new Error('Native merge cancellation unconfirmed; retrying')
         const attempt = (retry?.attempt ?? 0) + 1
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -3559,7 +3558,7 @@ export class Dispatcher {
                 id: this.deps.ids('obs'),
                 kind: 'followup',
                 summary:
-                  'Landing contrary to policy: native auto-merge was armed or indeterminate when the forge merged without landing authorization. Operator attention required; the target has not been rewritten.',
+                  'Merge contrary to policy: native auto-merge was armed or indeterminate when the forge merged without merge authorization. Operator attention required; the target has not been rewritten.',
                 refs: ['landing-contrary-to-policy'],
               },
             })
@@ -4982,7 +4981,7 @@ export class Dispatcher {
     if (state.pendingCommands.some((c) => c.command === 'abort'))
       return `target node ${ticket.target} is closing`
     if (state.integration?.intent && !state.integration.landing)
-      return `target node ${ticket.target} is landing`
+      return `target node ${ticket.target} is merging`
     if (!digest.nodeOpened || !record.branch) return `target node ${ticket.target} is not yet open`
     return {
       target: {
@@ -5593,7 +5592,7 @@ export class Dispatcher {
         head: record.branch,
         base: state.baseBranch,
         title: `Integration: ${record.ticket?.id ?? record.slug}`,
-        body: `Integration build ${record.slug}. Target: ${state.target?.ticket.id ?? state.baseBranch}. Human landing required.`,
+        body: `Integration build ${record.slug}. Target: ${state.target?.ticket.id ?? state.baseBranch}. Human merge required.`,
       })
     } catch (error) {
       if (
@@ -5640,7 +5639,7 @@ export class Dispatcher {
           if (!landing || entry.digest.nodeContribution?.landing === landing) return
           const state = inputs.states.get(slug)!
           if (!state.pr || !forge.inspectLandingPr)
-            throw new Error('cannot establish landed node source head')
+            throw new Error('cannot establish merged node source head')
           visiting.add(slug)
           const pr = await forge.inspectLandingPr(path, state.pr.number)
           const head = pr.headSha

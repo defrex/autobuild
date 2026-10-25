@@ -12,7 +12,7 @@ content and blocker relationships. The default file source needs no secret.
 ## Node tickets and targets
 
 Use a spec-standard charter for the node's integration goal, whole-level
-completion and policy-controlled landing; put feature specifics in children.
+completion and policy-controlled merge; put feature specifics in children.
 While the node is open, iterate by adding spec-standard children targeting its
 ticket id, pushing small maintainer-authorized tweaks to its recorded branch
 with meaningful intent in commit messages, or explicitly revising its charter.

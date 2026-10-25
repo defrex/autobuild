@@ -67,8 +67,8 @@ export function nodeParentBusy(state: BuildState): string | undefined {
   )
     return 'node is no longer open'
   if (state.pendingCommands.some((c) => c.command === 'abort')) return 'node is closing'
-  if (state.integration?.intent && !state.integration.landing) return 'node is landing'
-  if (state.nodeRestack?.active?.operation === 'landing') return 'node has a reserved child landing'
+  if (state.integration?.intent && !state.integration.landing) return 'node is merging'
+  if (state.nodeRestack?.active?.operation === 'landing') return 'node has a reserved child merge'
   return undefined
 }
 export async function validateNodeParent(

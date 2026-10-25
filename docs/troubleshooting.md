@@ -71,7 +71,7 @@ bun ab harvest status
 
 **Symptom.** A build stops advancing, often after an interruption.
 
-**Cause.** Escalated, paused, waiting on landing gates, starting a runner, or recovering an expired lease. A quiet log isn't a crash.
+**Cause.** Escalated, paused, waiting on merge gates, starting a runner, or recovering an expired lease. A quiet log isn't a crash.
 
 **Fix.** Inspect the build, reading status, progress and lease health separately:
 

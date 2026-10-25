@@ -68,3 +68,28 @@ export function nodeLandingRuleDisplay(
     ? 'default rule for integration builds: consent'
     : `rule ${rule.index + 1}: ${JSON.stringify(rule.snapshot)}`
 }
+
+/** Public merge vocabulary shared by terminal and web renderers. */
+export const mergeVocabulary = {
+  title: 'Merge',
+  label: 'merge',
+  merged: 'merged',
+  consent: 'Merge awaits consent. Merge releases this build; Hold keeps it waiting.',
+} as const
+
+export function mergeSummary(build: {
+  landing?: BuildState['landing']
+  autoMerge: string
+}): string {
+  const landing = build.landing
+  const status =
+    landing?.command?.kind === 'hold'
+      ? 'held'
+      : landing?.decision?.mode === 'consent' && landing.command?.kind !== 'land'
+        ? 'awaiting consent'
+        : build.autoMerge
+  return `${mergeVocabulary.label} ${status}`
+}
+export function mergedChildren(merged: number, total: number): string {
+  return `${merged}/${total} ${mergeVocabulary.merged}`
+}

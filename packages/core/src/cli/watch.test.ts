@@ -2749,7 +2749,7 @@ test.each([true, false])(
 )
 
 test.each(['consent', 'held', 'stale', 'auto'] as const)(
-  'default watch uses one readiness signal for later %s landings',
+  'default watch uses one readiness signal for later %s merges',
   async (mode) => {
     const store = makeStore()
     await seedRunningBuild(store, 'later')

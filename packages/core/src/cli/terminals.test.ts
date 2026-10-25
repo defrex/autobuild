@@ -806,12 +806,12 @@ describe('ab done — implement', () => {
       {
         file: 'target-one.ts',
         content: 'export const targetOne = true\n',
-        message: 'target: first landed change',
+        message: 'target: first merged change',
       },
       {
         file: 'target-two.ts',
         content: 'export const targetTwo = true\n',
-        message: 'target: second landed change',
+        message: 'target: second merged change',
       },
     ])
     const incorporatedRef = 'refs/autobuild/test/incorporated-target'
@@ -862,8 +862,8 @@ describe('ab done — implement', () => {
     expect(focusedSubjects).toContain('feature work')
     expect(focusedSubjects).toContain('merge target history')
     expect(focusedSubjects).toContain('feature follow-up')
-    expect(focusedSubjects).toContain('target: first landed change')
-    expect(focusedSubjects).toContain('target: second landed change')
+    expect(focusedSubjects).toContain('target: first merged change')
+    expect(focusedSubjects).toContain('target: second merged change')
     expect(
       (await store.getEvents(BUILD))
         .filter((event) => event.type === 'implement.completed')

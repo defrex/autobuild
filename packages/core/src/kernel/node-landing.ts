@@ -38,7 +38,7 @@ export async function preflightNodeLanding(
   })
   if (!forge.rewrite || !forge.inspectLandingGate || !forge.inspectLandingPr)
     return defer(
-      `Node landing requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
+      `Node merge requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
     )
   const pr = await forge.inspectLandingPr(workspacePath, prNumber)
   if (!pr.open || pr.base !== destination || pr.head !== branch)
@@ -63,7 +63,7 @@ export async function landIntoNode(
   })
   if (!forge.rewrite || !forge.inspectLandingGate || !forge.inspectLandingPr)
     return defer(
-      `Node landing requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
+      `Node merge requires rewrite, inspectLandingGate and inspectLandingPr capabilities; upgrade ${forge.name}. Native auto-merge is withheld to serialize node writes.`,
     )
   if (
     (await deferMixedVersion(store, deps.slug, KERNEL)) ||
@@ -92,14 +92,14 @@ export async function landIntoNode(
     )
       throw new Error('destination node no longer admits writes')
     if (!(await store.renewNodeWriter(node, deps.holder)))
-      throw new Error('node landing writer lease lost')
+      throw new Error('node merge writer lease lost')
     return state
   }
   let revision: number
   const append = async (event: EventWrite) => {
     await authority()
     const written = await store.appendIfCurrent(node, revision, event)
-    if (!written) throw new Error('node landing reservation advanced')
+    if (!written) throw new Error('node merge reservation advanced')
     revision = written.seq
   }
   try {
@@ -141,7 +141,7 @@ export async function landIntoNode(
         cwd: workspacePath,
       })
       if (parents.exitCode !== 0 || message.exitCode !== 0)
-        throw new Error('cannot inspect canonical node landing')
+        throw new Error('cannot inspect canonical node merge')
       if (
         deps.stack
           ? expected !== deps.stack.parent || candidate !== deps.stack.head
@@ -163,7 +163,7 @@ export async function landIntoNode(
         !deps.stack &&
         JSON.stringify(buildTrailers(message.stdout)) !== JSON.stringify([deps.slug])
       )
-        throw new Error('node landing requires exactly one canonical source identity')
+        throw new Error('node merge requires exactly one canonical source identity')
       if (deps.stack) {
         const source = (await readBuildFacts(store, deps.slug)).value.state
         if (source.nodeRestack?.parentRequest || source.nodeRestack?.parentChange) return undefined
@@ -261,7 +261,7 @@ export async function landIntoNode(
         pr.headSha !== active.parent
       ) {
         await abandon()
-        return defer('Reserved node landing no longer matches the PR; human action required.')
+        return defer('Reserved node merge no longer matches the PR; human action required.')
       }
       const gate = await forge.inspectLandingGate(deps.destination)
       if (gate.kind !== 'proved-ungated') {
@@ -363,7 +363,7 @@ export async function acknowledgeNodeLanding(
         await forge.commentOnPr?.(
           workspacePath,
           number,
-          `Landed by Autobuild at commit ${sha}. Closing the review after the guarded fast-forward.`,
+          `Merged by Autobuild at commit ${sha}. Closing the review after the guarded fast-forward.`,
         )
       } catch {
         /* Still attempt closure when the comment service is unavailable. */

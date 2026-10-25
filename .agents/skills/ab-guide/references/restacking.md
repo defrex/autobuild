@@ -19,7 +19,7 @@ Destination observations are durable `target.moved` facts, including while an
 agent runs. Verify-entry restack freezes a current base before verification;
 path selection excludes upstream-only paths. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
-are canonicalized before guarded landing even when the target SHA is unchanged.
+are canonicalized before guarded merge even when the target SHA is unchanged.
 Clean replay starts no agent. A clean waiting leaf rewrite preserves completed
 verification when build-owned config is unchanged, even when replay replaces
 the pin commit's ancestry. Reports retain their actual cycle base/head.
@@ -31,12 +31,12 @@ reconcile and verification, and initial verification cannot be skipped through
 post-reconcile policy.
 
 Nodes observe parent movement durably but restack only on demand: before a
-complete nonempty node verifies; before landing if its parent moved; when queued
+complete nonempty node verifies; before merge if its parent moved; when queued
 dependency presence requires an ancestor change; on `ab restack <node>`; or on
 accepted re-parenting. There is no eager mode or cadence option. Nested nodes
 need their own demand. Existing frozen transactions, including ones reserved
 before upgrade, finish first; later demand coalesces onto the latest parent.
-Leaves keep verify-entry and awaiting-landing restacks for every target.
+Leaves keep verify-entry and awaiting-merge restacks for every target.
 
 For observation cadence, durable wakes and last-check evidence, see
 [node polling and status](integration-tree.md#polling-and-status).
@@ -57,7 +57,7 @@ Both dashboards show `parent N commits ahead`, `parent current`, or
 `parent distance unknown`. Distance counts commits reachable from the observed
 parent but not the last confirmed contribution base; it is not elapsed time or
 poll count. Samples are invalidated by replay or re-parenting. A stale node
-cannot verify or land; inventory and child landings continue while it collects.
+cannot verify or merge; inventory and child merges continue while it collects.
 
 Restack and reconcile publication reject tracked modifications with the existing
 clean-worktree error. Nonignored untracked files do not block publication and
@@ -92,7 +92,7 @@ Ordered source identities survive, and identities already reachable upstream
 are dropped. Untagged commits, including empty ones, are foreign.
 
 A separate node writer lease and durable reservation serialize restacks and
-child landings. Reservations freeze expected head, parent, contribution boundary,
+child merges. Reservations freeze expected head, parent, contribution boundary,
 archives, changes and merge proofs. Lease expiry recovers the same operation,
 not a competing one. Prepared/conflicted/replayed item receipts, publication
 intent, proven replacement and settlement distinguish each recovery boundary.
@@ -120,12 +120,12 @@ identity refuses the whole restack. The branch and contribution boundary remain
 untouched and the integration build escalates with offending evidence. The kernel
 never preserves merge topology or decomposes an unsafe merge automatically.
 
-See [integration trees](integration-tree.md), [landing](landing-policy.md), and
+See [integration trees](integration-tree.md), [merge](merge-policy.md), and
 [migration](migration-1.0.md).
 
 Native cancellation receipts are candidate- and operation-specific. Publication
 retries confirm forge state before reusing a receipt; external re-enables require
-another confirmed cancellation. Classified transient landing failures retain
+another confirmed cancellation. Classified transient merge failures retain
 retry eligibility and recheck authorization after repository forge cooldown.
 
 ## Leaf publication retry recovery

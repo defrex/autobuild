@@ -10,5 +10,5 @@ test('the integration figure is the website node as ab ticket tree prints it', (
   expect(text).toContain('$ bun ab ticket tree')
   expect(text).toContain('  AUT-837 [node] Website for 1.0')
   expect(text.match(/^ {4}AUT-\d+ \[work\] \(Done\) /gm)).toHaveLength(11)
-  expect(text).toContain('11 tickets landed on ab-node/website-integration')
+  expect(text).toContain('11 tickets merged on ab-node/website-integration')
 })
