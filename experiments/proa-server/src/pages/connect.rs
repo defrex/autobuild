@@ -63,7 +63,7 @@ impl<L: DataLoader> WebRenderSync<L> for ConnectPage {
     }
 }
 pub fn canonical_code(raw: &str) -> String {
-    raw.trim().to_ascii_uppercase()
+    raw.trim().replace('-', "").to_ascii_uppercase()
 }
 fn display_code(code: &str) -> String {
     if code.len() == 10 && code.is_ascii() {
@@ -145,6 +145,10 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn manual_entry_accepts_display_grouping() {
+        assert_eq!(canonical_code(" 7f3a-c91e-2b "), "7F3AC91E2B");
+    }
     #[test]
     fn pending_form_submits_canonical_code_and_explicit_decision_without_script() {
         let page = ConnectPage {
