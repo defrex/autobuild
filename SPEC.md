@@ -582,7 +582,8 @@ finalize and its post-steps, an observed target move also schedules a restack.
 For a node-targeted leaf, published finalize-step commits also schedule one
 waiting restack, even when the target SHA is unchanged, so guarded landing
 preserves one canonical build identity.
-Clean waiting restacks retain existing verification; conflicts use reconcile and
+Clean waiting restacks retain existing verification while the configuration pin
+remains valid (§16.1); conflicts use reconcile and
 its captured post-reconcile policy. A conflict before initial verification cannot
 skip initial checks through that policy.
 

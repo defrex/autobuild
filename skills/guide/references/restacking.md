@@ -21,7 +21,11 @@ path selection excludes upstream-only paths. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
 are canonicalized before guarded landing even when the target SHA is unchanged.
 Clean replay starts no agent. A clean waiting leaf rewrite preserves prior
-verification; reports retain their actual cycle base/head. Conflicted replay
+verification while its configuration pin remains valid; reports retain their
+actual cycle base/head. Changed build-owned config or a known pin commit that
+is no longer an ancestor starts a fresh verification cycle at the next settled
+boundary. This config supersession is separate from replay and reconcile.
+Conflicted replay
 runs reconcile and verification, and initial verification cannot be skipped
 through post-reconcile policy.
 
