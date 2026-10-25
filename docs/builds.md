@@ -48,13 +48,13 @@ Two limits park the build for an answer:
 
 ## Verify, then publish
 
-After code review approves, Autobuild prepares the build's single net change on the sampled destination and runs the `verify:*` steps in order:
+After code review approves, Autobuild prepares the build's single net change on the sampled destination and runs ordered verification stages. Each stage's `verify:*` members may run concurrently; the next stage waits until every member passes or skips:
 
 - **Check verifiers** run a command; the exit code decides.
 - **Agent verifiers** record a pass, a failure report, or a skip reason.
 - **Applicability rules** can skip a step with a recorded reason.
 
-A failure sends the build, with its report, back through implementation, code review, and verification. See [Verification](verification.md).
+A failed stage settles before sending the build, with every failed member's report, back through implementation, code review, and verification. By default siblings finish; a failing `failFast` member cancels unfinished siblings. See [Verification](verification.md).
 
 Once verification passes, the finalize agent writes the PR description; Autobuild publishes the branch and opens the PR. Optional `finalize:*` post-steps, such as a changelog or ticket link, run after PR creation; a failed post-step records an observation instead of failing the build. `verify:*` and `finalize:*` are the only configurable extension points.
 

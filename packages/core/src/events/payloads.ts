@@ -912,6 +912,7 @@ export const eventPayloadSchemas = {
   'plan-review.verdict': reviewVerdictPayload,
   'implement.started': z.strictObject({
     round,
+    verifyStageFailure: z.number().int().positive().optional(),
     /** Carries routed feedback for this producer occurrence. Guidance remains
      * recoverable until a matching `session.started` records launch. */
     feedback: feedbackSchema.optional(),
@@ -960,6 +961,27 @@ export const eventPayloadSchemas = {
       }),
   }),
   'verify.completed': verifyCompletedPayloadSchema,
+  'verify.cancelled': z.strictObject({
+    ...verifyCompletionBase,
+    cause: z.strictObject({ step: z.string().min(1) }),
+  }),
+  'verify.stage-failed': z.strictObject({
+    attempt,
+    cycle: z.number().int().nonnegative(),
+    stage: z.array(z.string().min(1)).min(1),
+    baseSha: gitOid.optional(),
+    headSha: gitOid.optional(),
+    restackId: z.string().min(1).optional(),
+    failed: z.array(
+      z.strictObject({ step: z.string().min(1), report: artifactRefSchema.optional() }),
+    ),
+    cancelled: z.array(
+      z.strictObject({
+        step: z.string().min(1),
+        cause: z.strictObject({ step: z.string().min(1) }),
+      }),
+    ),
+  }),
   'finalize.started': empty,
   'finalize.completed': z.strictObject({
     pr: z.strictObject({

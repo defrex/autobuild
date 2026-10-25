@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import { describe, expect, test } from 'bun:test'
@@ -174,7 +174,90 @@ function corpora(): unknown[][] {
     seq: index + 1,
     ts: '2026-10-21T00:00:00Z',
   }))
+  const verifyStageCorpus = [
+    {
+      type: 'execution.started',
+      payload: { instance: 'old', provider: 'test', workspaceRef: '/stage' },
+    },
+    { type: 'verify.started', payload: { step: 'types', attempt: 1 } },
+    { type: 'verify.started', payload: { step: 'unit', attempt: 1 } },
+    {
+      type: 'session.started',
+      payload: { session: 's_stage', role: 'unit', runner: 'test', phase: 'verify:unit', round: 1 },
+    },
+    {
+      type: 'escalation.raised',
+      actor: { kind: 'agent', role: 'unit', session: 's_stage' },
+      payload: {
+        id: 'stage-question',
+        source: 'agent',
+        phase: 'verify:unit',
+        round: 1,
+        question: 'question',
+      },
+    },
+    {
+      type: 'escalation.answered',
+      actor: { kind: 'human', user: 'operator' },
+      payload: { id: 'stage-question', resolution: 'guidance', answer: 'retry' },
+    },
+    {
+      type: 'verify.completed',
+      payload: {
+        step: 'types',
+        attempt: 1,
+        outcome: 'fail',
+        report: { kind: 'verify-report:types', rev: 0 },
+      },
+    },
+    { type: 'verify.cancelled', payload: { step: 'unit', attempt: 1, cause: { step: 'types' } } },
+    {
+      type: 'verify.stage-failed',
+      payload: {
+        attempt: 1,
+        cycle: 0,
+        stage: ['types', 'unit'],
+        failed: [{ step: 'types', report: { kind: 'verify-report:types', rev: 0 } }],
+        cancelled: [{ step: 'unit', cause: { step: 'types' } }],
+      },
+    },
+    {
+      type: 'implement.started',
+      payload: {
+        round: 2,
+        verifyStageFailure: 9,
+        feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
+      },
+    },
+    {
+      type: 'execution.started',
+      payload: { instance: 'new', provider: 'test', workspaceRef: '/stage' },
+    },
+    {
+      type: 'escalation.raised',
+      actor: { kind: 'agent', role: 'unit', session: 's_stage' },
+      payload: {
+        id: 'late-stage-question',
+        source: 'agent',
+        phase: 'verify:unit',
+        round: 1,
+        question: 'late question',
+      },
+    },
+    {
+      type: 'escalation.answered',
+      actor: { kind: 'human', user: 'operator' },
+      payload: { id: 'late-stage-question', resolution: 'abort', answer: 'stale' },
+    },
+  ].map((event, index) => ({
+    build: 'stage-fixture',
+    actor: { kind: 'kernel' },
+    seq: index + 1,
+    ts: '2026-10-24T00:00:00Z',
+    ...event,
+  }))
   return [
+    verifyStageCorpus,
     rollbackCorpus.slice(0, 1),
     rollbackCorpus,
     drainCorpus,
@@ -390,14 +473,14 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 21,
+        "build": 22,
         "buildDelegation": 1,
         "buildDigest": 10,
-        "buildReadFacts": 61,
-        "buildStreamSeed": 31,
+        "buildReadFacts": 63,
+        "buildStreamSeed": 32,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
-        "dashboardFacts": 2,
+        "dashboardFacts": 3,
         "dispatchFailureBudget": 1,
         "dispatchFrontend": 4,
         "dispatchSettings": 1,
@@ -423,7 +506,7 @@ describe('reducer registry', () => {
         "openTick": 1,
         "openWorkspace": 1,
         "pendingPrAttachmentReclaims": 1,
-        "phaseFailures": 2,
+        "phaseFailures": 3,
         "pinnedAssets": 2,
         "provisionMarker": 1,
         "publicationState": 5,
@@ -440,7 +523,7 @@ describe('reducer registry', () => {
         "setupStreak": 1,
         "summaryBoundary": 1,
         "summaryRequests": 1,
-        "terminalGuard": 2,
+        "terminalGuard": 3,
         "ticketMigrations": 1,
         "ticketSourceHealth": 2,
         "verifyDiffBase": 2,
@@ -458,6 +541,13 @@ describe('reducer registry', () => {
     )
     // Direct JSON equality preserves the complete shape guard. Bun's external
     // snapshot assertion fails after module mocks load, even for identical shapes.
+    // Regenerate using these same deterministic corpora after reviewing the
+    // version bumps: AB_UPDATE_REDUCER_SHAPES=1 bun test <this file> --update-snapshots.
+    if (process.env.AB_UPDATE_REDUCER_SHAPES === '1')
+      writeFileSync(
+        new URL('./__snapshots__/reducer-accumulator-shapes.json', import.meta.url),
+        `${JSON.stringify(shapes, null, 2)}\n`,
+      )
     const expected = JSON.parse(
       readFileSync(
         new URL('./__snapshots__/reducer-accumulator-shapes.json', import.meta.url),

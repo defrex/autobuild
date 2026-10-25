@@ -1932,17 +1932,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return this.environmentSupervisedHandle(name, sandbox, command)
   }
 
-  /** Liveness of a previously recorded execution, from provider state alone:
-   * one bounded facade.get, one command lookup, and, when the lookup shows no
-   * exit, one bounded wait on that command. A missing sandbox, a session that
-   * is no longer running, or a command the current (resumed) session no
-   * longer knows is `lost`; a non-null exit code — from the lookup or from
-   * the bounded wait it triggered — is `ended`; an interrupted or timed-out
-   * wait leaves the execution `running`. The lifetime bound (session expiry
-   * plus the shared stop/snapshot margin) runs before the lookup and fails
-   * with the environment named instead of waiting. Unknown provider errors
-   * propagate — callers treat an unresolvable observation as running and
-   * never reap on it. */
+  /** Observe a recovered execution and confirm whole-environment teardown
+   * before exposing a terminal observation. Command exit alone does not prove
+   * descendants have stopped writing to the shared workspace. Stop failures
+   * propagate so settlement retains the execution and lease and retries. */
   private async observeExecution(identity: BuildExecutionIdentity): Promise<ExecutionObservation> {
     if (identity.commandId === undefined) {
       throw new Error(
@@ -1951,13 +1944,40 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     const sandbox = await this.facade.get(identity.workspaceRef, this.operationSignal())
     if (sandbox === null) return { state: 'lost' }
-    if (sandbox.sessionStatus !== undefined && sandbox.sessionStatus !== 'running') {
-      return { state: 'lost' }
+    const settled = async (observation: ExecutionObservation): Promise<ExecutionObservation> => {
+      try {
+        await sandbox.stop({ signal: this.operationSignal() })
+      } catch (error) {
+        if (!isMissingVercelSandbox(error)) {
+          this.uncertain.add(identity.workspaceRef)
+          this.sessions.delete(identity.workspaceRef)
+          throw error
+        }
+      }
+      this.active.delete(identity.workspaceRef)
+      this.uncertain.delete(identity.workspaceRef)
+      this.sessions.delete(identity.workspaceRef)
+      return observation
     }
-    // Mirrors the command path's VM-lifetime bound: past the environment's
-    // session expiry (plus the shared stop/snapshot margin) the execution
-    // cannot still be running, so re-issuing the long-poll would only end in
-    // a generic transport failure. Fail with the environment named instead.
+    const currentSession = sandbox.currentSession?.().sessionId
+    if (
+      identity.sessionId !== undefined &&
+      currentSession !== undefined &&
+      currentSession !== identity.sessionId
+    )
+      return { state: 'lost' }
+    // Terminal provider status proves the recorded incarnation is stopped.
+    // Never stop a newer resumed session or demand a second stop of one that
+    // the provider already confirms stopped.
+    if (
+      sandbox.sessionStatus === 'stopped' ||
+      sandbox.sessionStatus === 'aborted' ||
+      sandbox.sessionStatus === 'failed'
+    )
+      return { state: 'lost' }
+    if (sandbox.sessionStatus !== undefined && sandbox.sessionStatus !== 'running') {
+      return settled({ state: 'lost' })
+    }
     if (sandbox.sessionExpiresAt !== undefined) {
       const deadline = sandbox.sessionExpiresAt + VERCEL_LIFETIME_MARGIN_MS
       if (Date.now() > deadline) {
@@ -1968,36 +1988,36 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         )
       }
     }
+    let observation: ExecutionObservation
     try {
       const command = await sandbox.getCommand(identity.commandId, {
         signal: this.operationSignal(),
       })
-      if (command.exitCode !== null) return { state: 'ended', exitCode: command.exitCode }
-      // The provider's plain lookup reports no exit code for a command that
-      // finished while no client was waiting on it, and keeps reporting none
-      // until some client waits — so "null" alone proves nothing. One bounded
-      // wait turns it into evidence: a resolved wait is a proved end, an
-      // interrupted or timed-out wait leaves the guest unobserved (`running`),
-      // and a missing sandbox is `lost`. Never re-issued here; the next tick
-      // retries. The bound composes the provider operation signal so one
-      // observation never approaches the tick's operation timeout.
-      try {
-        const finished = await command.wait({
-          signal: AbortSignal.any([
-            AbortSignal.timeout(this.observeWaitMs),
-            this.operationSignal(),
-          ]),
-        })
-        return { state: 'ended', exitCode: finished.exitCode }
-      } catch (error) {
-        if (isMissingVercelSandbox(error)) return { state: 'lost' }
-        if (isInterruptedLongPoll(error)) return { state: 'running' }
-        throw error
+      if (command.exitCode !== null) {
+        observation = { state: 'ended', exitCode: command.exitCode }
+      } else {
+        try {
+          const finished = await command.wait({
+            signal: AbortSignal.any([
+              AbortSignal.timeout(this.observeWaitMs),
+              this.operationSignal(),
+            ]),
+          })
+          observation = { state: 'ended', exitCode: finished.exitCode }
+        } catch (error) {
+          if (isMissingVercelSandbox(error)) observation = { state: 'lost' }
+          else if (isInterruptedLongPoll(error)) return { state: 'running' }
+          else throw error
+        }
       }
     } catch (error) {
-      if (isMissingVercelSandbox(error)) return { state: 'lost' }
-      throw error
+      if (isMissingVercelSandbox(error)) observation = { state: 'lost' }
+      else throw error
     }
+    // Deliberately outside the lookup/wait catch: an ambiguous stop must not
+    // become proof of loss or command exit, even when its error resembles a
+    // transport interruption.
+    return settled(observation)
   }
 
   // ── Operator sandbox capability (AUT-340) ─────────────────────────

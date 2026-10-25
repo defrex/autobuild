@@ -1,3 +1,4 @@
+import { verifyMemberKey } from '../kernel/verify-stage-state'
 import { contextDirectory } from '../context-directory'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import type { RuntimeIdentity } from '../events/runtime'
@@ -279,6 +280,7 @@ interface SessionSpec {
   /** Rendered into the continue message; the CLI context (`ab context`) is
    * the real carrier — the message just names the session directory inputs. */
   feedback?: Feedback
+  verifyFailure?: import('../kernel/verify-stage-state').VerifyStageFailure
   /** phase.failed count for this phase+round at decision time (D5). */
   priorFailures: number
   /** Phase-specific terminal recognizer; the session-scoped `escalation.
@@ -369,7 +371,7 @@ export interface PhaseFailureTally {
   lastProviderAttempts?: readonly ProviderAttempt[]
 }
 
-export const PHASE_FAILURES_REDUCER_VERSION = 2
+export const PHASE_FAILURES_REDUCER_VERSION = 3
 
 /**
  * phase.failed tally for one phase+round — D5's retry-guard input. A factory
@@ -387,7 +389,9 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
   return defineReducer<
     {
       /** id → the raise's reset semantics — answers are matched by id (§15.3). */
-      raised: Record<string, PhaseFailureResetEscalation>
+      raised: Record<string, PhaseFailureResetEscalation & { session?: string }>
+      owners: Record<string, string>
+      cancelled: Record<string, boolean>
       count: number
       lastError?: string
       lastWillRetry?: boolean
@@ -397,10 +401,20 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
     PhaseFailureTally
   >({
     version: PHASE_FAILURES_REDUCER_VERSION,
-    initial: () => ({ raised: {}, count: 0 }),
+    initial: () => ({ raised: {}, owners: {}, cancelled: {}, count: 0 }),
     fold(acc, events) {
       for (const event of events) {
         switch (event.type) {
+          case 'session.started':
+            if (event.payload.phase?.startsWith('verify:') && event.payload.round !== undefined)
+              acc.owners[event.payload.session] = verifyMemberKey(
+                event.payload.phase.slice(7),
+                event.payload.round,
+              )
+            break
+          case 'verify.cancelled':
+            acc.cancelled[verifyMemberKey(event.payload.step, event.payload.attempt)] = true
+            break
           case 'phase.deferral-escalated':
             acc.raised[event.payload.id] = {
               phase: event.payload.phase,
@@ -413,6 +427,7 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
             acc.raised[event.payload.id] = {
               phase: event.payload.phase,
               source: event.payload.source,
+              ...(event.actor.kind === 'agent' ? { session: event.actor.session } : {}),
               ...(event.payload.policyCause !== undefined
                 ? { policyCause: event.payload.policyCause }
                 : {}),
@@ -421,6 +436,7 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
             break
           case 'escalation.answered': {
             const raise = acc.raised[event.payload.id]
+            if (raise?.session && acc.cancelled[acc.owners[raise.session] ?? '']) break
             if (raise !== undefined && resetsPhaseFailureBudget(raise, phase, round)) {
               acc.count = 0
               delete acc.lastError
@@ -611,6 +627,23 @@ function roundMatches(event: AbEvent, round: number): boolean {
  * the message is a pointer, the CLI context is the real carrier.
  */
 function continueMessage(spec: SessionSpec): string {
+  const base = continueMessageBase(spec)
+  if (!spec.verifyFailure) return base
+  return (
+    base +
+    ' Stage feedback: ' +
+    [
+      ...spec.verifyFailure.failed.map(
+        (f) => `verify:${f.step} failed${f.report ? ` (${f.report.kind}@${f.report.rev})` : ''}`,
+      ),
+      ...spec.verifyFailure.cancelled.map(
+        (c) => `verify:${c.step} not run: cancelled by verify:${c.cause.step}`,
+      ),
+    ].join('; ') +
+    '. Read every report and the cancelled members in $AB_CONTEXT_DIR/context.json.'
+  )
+}
+function continueMessageBase(spec: SessionSpec): string {
   const refresh =
     'run `ab context` to refresh $AB_CONTEXT_DIR/, then finish with your terminal command'
   const { feedback } = spec
@@ -653,6 +686,10 @@ function isPublicationBoundary(event: AbEvent, spec: SessionSpec, session: strin
 }
 
 function recoveryMatches(decision: Decision, session: OpenSession): boolean {
+  if (decision.kind === 'run-verify-stage')
+    return decision.members.some((member) =>
+      recoveryMatches(member.kind === 'evaluate-verify' ? member.action : member, session),
+    )
   return decision.kind === 'run-phase'
     ? session.phase === decision.phase && session.round === decision.round
     : decision.kind === 'run-agent-verify'
@@ -663,6 +700,24 @@ function recoveryMatches(decision: Decision, session: OpenSession): boolean {
 }
 
 export class BuildRunner {
+  private verifyWrites = { tail: Promise.resolve() }
+  private async withVerifyWrite<T>(write: () => Promise<T>): Promise<T> {
+    const previous = this.verifyWrites.tail
+    let release!: () => void
+    this.verifyWrites.tail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await write()
+    } finally {
+      release()
+    }
+  }
+  private readonly stageRecoveries = new Map<
+    string,
+    { session: OpenSession; cause: 'shutdown' | 'pause' | 'runner-loss' }
+  >()
   private recovery: OpenSession | undefined
   private recoveryBoundaryMs = 0
   private recoveryCause: 'shutdown' | 'pause' | 'runner-loss' = 'runner-loss'
@@ -914,8 +969,13 @@ export class BuildRunner {
     const candidates = [...state.sessions.suspended, ...state.sessions.open]
       .filter((session) => recoveryMatches(decision, session))
       .sort((a, b) => b.seq - a.seq)
-    const candidate = candidates[0]
-    if (candidate) {
+    const retained = new Set<string>()
+    for (const candidate of decision.kind === 'run-verify-stage'
+      ? candidates.filter(
+          (s, i, all) =>
+            all.findIndex((other) => other.phase === s.phase && other.round === s.round) === i,
+        )
+      : candidates.slice(0, 1)) {
       const handle = candidate.nativeHandle
       const reason =
         this.deps.workspaceProvider !== 'git-worktree' || this.deps.workspaceRemote === true
@@ -937,14 +997,22 @@ export class BuildRunner {
         })
       else {
         this.recoveryBoundaryMs = this.deps.clock().getTime()
-        this.recovery = candidate
+        retained.add(candidate.session)
+        if (decision.kind === 'run-verify-stage')
+          this.stageRecoveries.set(verifyMemberKey(candidate.phase!.slice(7), candidate.round!), {
+            session: candidate,
+            cause: state.sessions.suspended.some((s) => s.session === candidate.session)
+              ? (candidate.suspensionCause ?? 'shutdown')
+              : 'runner-loss',
+          })
+        else this.recovery = candidate
         this.recoveryCause = state.sessions.suspended.some((s) => s.session === candidate.session)
           ? (candidate.suspensionCause ?? 'shutdown')
           : 'runner-loss'
       }
     }
     for (const session of [...state.sessions.open, ...state.sessions.suspended]) {
-      if (session.session === this.recovery?.session) continue
+      if (retained.has(session.session)) continue
       await store.append(slug, {
         actor: KERNEL,
         type: 'session.ended',
@@ -1155,6 +1223,23 @@ export class BuildRunner {
     }
     try {
       switch (decision.kind) {
+        case 'restart-execution':
+          return decision
+        case 'run-verify-stage':
+          await this.runVerifyStage(decision)
+          return decision
+        case 'cancel-verify-stage':
+          await this.cancelVerifyStage(decision)
+          await this.endCancelledVerifySessions(decision)
+          return decision
+        case 'record-verify-stage-failure':
+          await store.appendIfCurrent(slug, facts.state.lastSeq, {
+            actor: KERNEL,
+            type: 'verify.stage-failed',
+            payload: decision.failure,
+          })
+          await reportIntegrationFailures(store, slug)
+          return decision
         case 'restack':
           await this.restack(decision)
           return decision
@@ -1312,6 +1397,7 @@ export class BuildRunner {
           if (await this.settlePauseInterruption()) continue
           break
         }
+        if (decision.kind === 'restart-execution') break
         if (decision.kind === 'wait') {
           if (decision.reason === 'mixed-version')
             await this.requestRelaunch(
@@ -1601,6 +1687,13 @@ export class BuildRunner {
       ...(spec.kind === 'producer' ? { producerPhase: phase } : {}),
       ...(decision.feedback !== undefined ? { feedback: decision.feedback } : {}),
       priorFailures: failures.count,
+      ...(decision.verifyStageFailure === undefined
+        ? {}
+        : {
+            verifyFailure: (
+              await readBuildFacts(store, slug)
+            ).value.state.verifyStage.failures.find((f) => f.seq === decision.verifyStageFailure),
+          }),
       isTerminal: (event) => event.type === spec.terminalEvent && roundMatches(event, round),
     })
     if (phase === 'reconcile') await this.settleLocalReconcile()
@@ -2019,7 +2112,11 @@ export class BuildRunner {
    * a canonical kernel-authored skip and launches no command or session.
    * Inclusion delegates to the existing verifier path unchanged.
    */
-  private async evaluateVerify(decision: EvaluateVerifyDecision): Promise<void> {
+  private async resolveVerify(
+    decision: EvaluateVerifyDecision,
+  ): Promise<
+    Exclude<import('../kernel/engine').VerifyMemberDecision, { kind: 'evaluate-verify' }>
+  > {
     const { exec, workspacePath } = this.deps
     const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     const baseSha =
@@ -2044,21 +2141,195 @@ export class BuildRunner {
       changedPaths,
     )
     if (applicability.applies === false) {
-      await this.skipVerify({
+      return {
         kind: 'skip-verify',
         step: decision.step,
         attempt: decision.attempt,
         reason: applicability.reason,
-      })
-      return
+      }
     }
 
-    if (decision.action.kind === 'run-check') {
-      await this.runCheck(decision.action)
-      await reportIntegrationFailures(this.deps.store, this.deps.slug)
-    } else {
-      await this.runAgentVerify(decision.action)
-      await reportIntegrationFailures(this.deps.store, this.deps.slug)
+    return decision.action
+  }
+
+  private async evaluateVerify(decision: EvaluateVerifyDecision): Promise<void> {
+    const resolved = await this.resolveVerify(decision)
+    if (resolved.kind === 'skip-verify') await this.skipVerify(resolved)
+    else if (resolved.kind === 'run-check') await this.runCheck(resolved)
+    else if (resolved.kind === 'run-agent-verify') await this.runAgentVerify(resolved)
+    await reportIntegrationFailures(this.deps.store, this.deps.slug)
+  }
+
+  private async cancelVerifyStage(
+    decision: Extract<Decision, { kind: 'cancel-verify-stage' }>,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    await this.withVerifyWrite(async () => {
+      for (const step of decision.steps) {
+        for (;;) {
+          const latest = (await readBuildFacts(store, slug)).value
+          const key = verifyMemberKey(step, decision.attempt)
+          if (latest.state.verifyStage.outcomes[key] || latest.state.verifyStage.cancellations[key])
+            break
+          if (
+            await store.appendIfCurrent(slug, latest.state.lastSeq, {
+              actor: KERNEL,
+              type: 'verify.cancelled',
+              payload: {
+                ...(await this.verifyEvidence()),
+                step,
+                attempt: decision.attempt,
+                cause: { step: decision.cause },
+              },
+            })
+          )
+            break
+        }
+      }
+    })
+  }
+
+  private async endCancelledVerifySessions(
+    decision: Extract<Decision, { kind: 'cancel-verify-stage' }>,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    for (;;) {
+      const { state } = (await readBuildFacts(store, slug)).value
+      const session = [...state.sessions.open, ...state.sessions.suspended].find((session) => {
+        const key = state.verifyStage.owners[session.session]
+        const cancelled = key === undefined ? undefined : state.verifyStage.cancellations[key]
+        return cancelled?.attempt === decision.attempt && decision.steps.includes(cancelled.step)
+      })
+      if (!session) return
+      await store.appendIfCurrent(slug, state.lastSeq, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: session.session,
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: this.deps.instance, resumedFromSeq: state.lastSeq },
+        },
+      })
+    }
+  }
+
+  /** Handles live only here; every scheduling and barrier decision is read
+   * from durable facts. A child runner isolates each occurrence's recovery,
+   * provider fallback, stream and retry state without another workspace. */
+  private async runVerifyStage(
+    initial: Extract<Decision, { kind: 'run-verify-stage' }>,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    type MemberExecution = {
+      runner: BuildRunner
+      done: boolean
+      agent: boolean
+      pending?: Promise<void>
+      error?: unknown
+    }
+    const inFlight = new Map<string, MemberExecution>()
+    const interrupted = new AbortController()
+    let revision = 0
+    const onShutdown = () => {
+      revision += 1
+      wake?.()
+    }
+    this.deps.shutdownSignal?.addEventListener('abort', onShutdown, { once: true })
+    let wake: (() => void) | undefined
+    const unsubscribe = store.subscribe(
+      slug,
+      { fromSeq: (await readBuildFacts(store, slug)).value.state.lastSeq, pollMs: 25 },
+      () => {
+        revision += 1
+        wake?.()
+      },
+    )
+    let decision: Decision = initial
+    try {
+      for (;;) {
+        const observed = revision
+        if (this.deps.shutdownSignal?.aborted) return
+        if (decision.kind !== 'run-verify-stage') {
+          if (decision.kind === 'cancel-verify-stage') {
+            await this.cancelVerifyStage(decision)
+            await this.endCancelledVerifySessions(decision)
+          }
+          return
+        }
+        const members = await Promise.all(
+          decision.members.map((member) =>
+            member.kind === 'evaluate-verify' ? this.resolveVerify(member) : member,
+          ),
+        )
+        for (const member of members) {
+          const key = verifyMemberKey(member.step, member.attempt)
+          const active = inFlight.get(key)
+          if (active && !active.done) continue
+          if (active?.error) throw active.error
+          const child = new BuildRunner({
+            ...this.deps,
+            config: this.boundaryConfig,
+            shutdownSignal: this.deps.shutdownSignal
+              ? AbortSignal.any([this.deps.shutdownSignal, interrupted.signal])
+              : interrupted.signal,
+          })
+          child.verifyWrites = this.verifyWrites
+          const recovery = this.stageRecoveries.get(key)
+          child.recovery = recovery?.session
+          child.recoveryBoundaryMs = this.recoveryBoundaryMs
+          child.recoveryCause = recovery?.cause ?? 'runner-loss'
+          this.stageRecoveries.delete(key)
+          const entry: MemberExecution = {
+            runner: child,
+            done: false,
+            agent: member.kind === 'run-agent-verify',
+          }
+          inFlight.set(key, entry)
+          const work =
+            member.kind === 'run-check'
+              ? child.runCheck(member)
+              : member.kind === 'run-agent-verify'
+                ? child.runAgentVerify(member)
+                : member.kind === 'skip-verify'
+                  ? child.skipVerify(member)
+                  : Promise.resolve()
+          entry.pending = work.then(
+            () => {
+              entry.done = true
+              revision += 1
+              wake?.()
+            },
+            (error) => {
+              entry.done = true
+              entry.error = error
+              revision += 1
+              wake?.()
+            },
+          )
+        }
+        if (revision === observed)
+          await new Promise<void>((resolve) => {
+            wake = resolve
+            if (revision !== observed) resolve()
+          })
+        wake = undefined
+        const facts = (await readBuildFacts(store, slug)).value
+        decision = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
+        for (const entry of inFlight.values()) if (entry.error) throw entry.error
+      }
+    } finally {
+      unsubscribe()
+      this.deps.shutdownSignal?.removeEventListener('abort', onShutdown)
+      interrupted.abort()
+      for (const entry of inFlight.values()) {
+        // Fail-fast must reach whole-execution teardown even when an adapter
+        // ignores abort. Its cancelled brackets are already durably ended;
+        // the supervisor, rather than a per-member reaper, owns descendants.
+        if (entry.agent && decision.kind !== 'cancel-verify-stage') await entry.pending
+        for (const stream of entry.runner.bracketStreams.values())
+          entry.runner.closeBracketStream(stream, 'aborted')
+        await entry.runner.closeProducerSessions()
+      }
     }
   }
 
@@ -2085,24 +2356,29 @@ export class BuildRunner {
 
   private async skipVerify(decision: SkipVerifyDecision): Promise<void> {
     const { store, slug } = this.deps
-    const evidence = await this.verifyEvidence()
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.started',
-      payload: { ...evidence, step: decision.step, attempt: decision.attempt },
-    } satisfies EventWrite<'verify.started'>)
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'verify.completed',
-      payload: {
-        step: decision.step,
-        attempt: decision.attempt,
-        ...evidence,
-        outcome: 'skipped',
-        reason: decision.reason,
-        ...(decision.skipCause !== undefined ? { skipCause: decision.skipCause } : {}),
-      },
-    } satisfies EventWrite<'verify.completed'>)
+    await this.withVerifyWrite(async () => {
+      const { state } = (await readBuildFacts(store, slug)).value
+      const key = verifyMemberKey(decision.step, decision.attempt)
+      if (state.verifyStage.cancellations[key] || state.verifyStage.outcomes[key]) return
+      const evidence = await this.verifyEvidence()
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { ...evidence, step: decision.step, attempt: decision.attempt },
+      } satisfies EventWrite<'verify.started'>)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: {
+          step: decision.step,
+          attempt: decision.attempt,
+          ...evidence,
+          outcome: 'skipped',
+          reason: decision.reason,
+          ...(decision.skipCause !== undefined ? { skipCause: decision.skipCause } : {}),
+        },
+      } satisfies EventWrite<'verify.completed'>)
+    })
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
@@ -2118,45 +2394,54 @@ export class BuildRunner {
         payload: { ...evidence, step, attempt },
       } satisfies EventWrite<'verify.started'>)
 
-    const result = await exec(['sh', '-c', command], { cwd: workspacePath })
-    if (result.exitCode === 0) {
-      await store.append(slug, {
-        actor: KERNEL,
-        type: 'verify.completed',
-        payload: { ...evidence, step, attempt, outcome: 'pass' },
-      } satisfies EventWrite<'verify.completed'>)
-      return
-    }
-
-    const output = [result.stdout, result.stderr].filter((s) => s !== '').join('\n')
-    const content = output.length > REPORT_TAIL_CHARS ? output.slice(-REPORT_TAIL_CHARS) : output
-    // Atomic deposit (D6): report artifact + verify.completed in one bundle;
-    // the report routes back to implement via the engine (§15.6-A).
-    await store.appendWithArtifacts(
-      slug,
-      [
-        {
-          kind: verifyReportKind(step),
-          content: content || '(no output)',
-          metadata: { step, attempt, command, exitCode: result.exitCode },
-        },
-      ],
-      (deposited) => {
-        const meta = deposited[0]
-        if (!meta) throw new Error('verify report deposit returned no metadata')
-        return {
+    const result = await exec(['sh', '-c', command], {
+      cwd: workspacePath,
+      ...(this.deps.shutdownSignal ? { signal: this.deps.shutdownSignal } : {}),
+    })
+    if (this.deps.shutdownSignal?.aborted) return
+    await this.withVerifyWrite(async () => {
+      const state = (await readBuildFacts(store, slug)).value.state
+      const key = verifyMemberKey(step, attempt)
+      if (state.verifyStage.cancellations[key] || state.verifyStage.outcomes[key]) return
+      if (result.exitCode === 0) {
+        await store.append(slug, {
           actor: KERNEL,
           type: 'verify.completed',
-          payload: {
-            step,
-            attempt,
-            ...evidence,
-            outcome: 'fail',
-            report: { kind: meta.kind, rev: meta.revision },
+          payload: { ...evidence, step, attempt, outcome: 'pass' },
+        } satisfies EventWrite<'verify.completed'>)
+        return
+      }
+
+      const output = [result.stdout, result.stderr].filter((s) => s !== '').join('\n')
+      const content = output.length > REPORT_TAIL_CHARS ? output.slice(-REPORT_TAIL_CHARS) : output
+      // Atomic deposit (D6): report artifact + verify.completed in one bundle;
+      // the report routes back to implement via the engine (§15.6-A).
+      await store.appendWithArtifacts(
+        slug,
+        [
+          {
+            kind: verifyReportKind(step),
+            content: content || '(no output)',
+            metadata: { step, attempt, command, exitCode: result.exitCode },
           },
-        } satisfies EventWrite<'verify.completed'>
-      },
-    )
+        ],
+        (deposited) => {
+          const meta = deposited[0]
+          if (!meta) throw new Error('verify report deposit returned no metadata')
+          return {
+            actor: KERNEL,
+            type: 'verify.completed',
+            payload: {
+              step,
+              attempt,
+              ...evidence,
+              outcome: 'fail',
+              report: { kind: meta.kind, rev: meta.revision },
+            },
+          } satisfies EventWrite<'verify.completed'>
+        },
+      )
+    })
   }
 
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
@@ -2193,8 +2478,9 @@ export class BuildRunner {
       skill,
       abPhase: `verify:${step}@${attempt}`,
       priorFailures: failures.count,
+      ...(feedback ? { feedback } : {}),
       isTerminal: (event) =>
-        event.type === 'verify.completed' &&
+        (event.type === 'verify.completed' || event.type === 'verify.cancelled') &&
         event.payload.step === step &&
         event.payload.attempt === attempt,
     })
@@ -3928,15 +4214,22 @@ export class BuildRunner {
     // its terminal is refused). Do not turn deferral into a consumed retry.
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       throw new MixedVersionDeferral()
-    const deferred = (
-      await readBuildFacts(this.deps.store, this.deps.slug)
-    ).value.log.readDeferrals.find((item) => item.phase === phase && item.round === round)
+    const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+    const member = phase.startsWith('verify:') ? verifyMemberKey(phase.slice(7), round) : undefined
+    if (
+      member !== undefined &&
+      (facts.state.verifyStage.cancellations[member] || facts.state.verifyStage.outcomes[member])
+    )
+      return
+    const deferred = facts.log.readDeferrals.find(
+      (item) => item.phase === phase && item.round === round,
+    )
     if (deferred) {
       await this.settleReadDeferral(deferred.session)
       return
     }
     const attempt = priorFailures + 1
-    await this.deps.store.append(this.deps.slug, {
+    const write = {
       actor: KERNEL,
       type: 'phase.failed',
       payload: {
@@ -3947,7 +4240,16 @@ export class BuildRunner {
         willRetry: mayRetry && attempt < this.maxPhaseAttempts,
         ...(providerAttempts !== undefined ? { providerAttempts: [...providerAttempts] } : {}),
       },
-    } satisfies EventWrite<'phase.failed'>)
+    } satisfies EventWrite<'phase.failed'>
+    if (member === undefined) {
+      await this.deps.store.append(this.deps.slug, write)
+      return
+    }
+    for (;;) {
+      const { state } = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+      if (state.verifyStage.cancellations[member] || state.verifyStage.outcomes[member]) return
+      if (await this.deps.store.appendIfCurrent(this.deps.slug, state.lastSeq, write)) return
+    }
   }
 
   /** A provider/runner-declared permanent failure parks immediately. The fact
@@ -4038,6 +4340,9 @@ export class BuildRunner {
           type: 'implement.started',
           payload: {
             round,
+            ...(decision.verifyStageFailure === undefined
+              ? {}
+              : { verifyStageFailure: decision.verifyStageFailure }),
             ...(decision.feedback !== undefined ? { feedback: decision.feedback } : {}),
           },
         } satisfies EventWrite<'implement.started'>
