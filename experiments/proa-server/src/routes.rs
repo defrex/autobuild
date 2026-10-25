@@ -24,6 +24,10 @@ pub fn router(state: AppState) -> Router {
     let (router, metadata) = router_from_spec(vec![
         // proa:route-specs:start
         Route::endpoint("/", get(pages::home::handler)),
+        Route::endpoint(
+            "/oauth/consent",
+            get(pages::consent::handler).post(pages::consent::submit),
+        ),
         Route::endpoint("/connect", get(pages::connect::handler)),
         Route::endpoint("/dashboard/builds/:slug", get(pages::build::handler)),
         // proa:route-specs:end
@@ -34,8 +38,8 @@ pub fn router(state: AppState) -> Router {
         import_map: HashMap::new(),
         ssr_bundle: None,
     });
-    let security = SecurityHeadersConfig::new().with_content_security_policy(
-        "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    let security = SecurityHeadersConfig::new()
+        .with_content_security_policy(crate::layouts::browser_csp(None));
     let security = if state.auth.config.origin.scheme() == "https" {
         security.with_hsts_max_age_secs(31536000)
     } else {
@@ -94,6 +98,12 @@ pub fn router(state: AppState) -> Router {
             browser.clone()
         };
         async move {
+            if request.uri().path() == "/mcp" {
+                return Ok(proa_server::mcp::http::handle(browser_state, request).await);
+            }
+            if proa_server::oauth::http::is_public_path(request.uri().path()) {
+                return Ok(proa_server::oauth::http::handle(browser_state, request).await);
+            }
             if browser_connection {
                 return Ok(endpoints::connect::browser(browser_state, request).await);
             }

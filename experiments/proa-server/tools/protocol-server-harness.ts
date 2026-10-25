@@ -18,7 +18,12 @@ async function externalTarget(environment: Environment) {
   const listed = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain'], { cwd: root })
   if (listed.exitCode) throw new Error('Cannot verify protocol Cargo cache location')
   for (const match of listed.stdout.toString().matchAll(/^worktree (.+)$/gm)) {
-    const tree = await realpath(match[1]!)
+    // Git may retain prunable records after another isolated test removes a worktree.
+    // Keep checking its lexical location; resolve symlinks for every existing tree.
+    const tree = await realpath(match[1]!).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      return resolve(match[1]!)
+    })
     if (target === tree || target.startsWith(`${tree}/`))
       throw new Error('Protocol Cargo cache must be outside every worktree')
   }
