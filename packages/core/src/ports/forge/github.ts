@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { isForgeFailure, type ForgeRequestObserver } from '../forge-failure'
+import {
+  classifyGitNetworkFailure,
+  ForgeFailure,
+  isForgeFailure,
+  type ForgeRequestObserver,
+} from '../forge-failure'
 import {
   forgeRequestContext,
   guardedForgeRequest,
@@ -621,9 +626,23 @@ export class GitHubForge implements Forge {
           GIT_CONFIG_VALUE_6: '',
         },
       })
-      return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
+      const safe = { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
+      if (
+        result.exitCode !== 0 &&
+        cmd.some((arg) => ['push', 'fetch', 'ls-remote'].includes(arg))
+      ) {
+        const original = new Error(safe.stderr || safe.stdout)
+        const classified = classifyGitNetworkFailure(original)
+        if (classified !== original) throw classified
+      }
+      return safe
     } catch (error) {
-      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
+      if (error instanceof ForgeRequestDeferred) throw error
+      const classified = cmd.some((arg) => ['push', 'fetch', 'ls-remote'].includes(arg))
+        ? classifyGitNetworkFailure(error)
+        : error
+      if (isForgeFailure(classified))
+        throw new ForgeFailure(redact(classified.message), classified.details)
       throw new Error(redact(error instanceof Error ? error.message : String(error)))
     }
   }

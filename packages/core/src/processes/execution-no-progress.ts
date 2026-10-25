@@ -81,6 +81,8 @@ export const executionProgress = {
   'finalize.step-started': 'progress',
   'publication.requested': 'progress',
   'publication.lost': 'progress',
+  'publication.retry-scheduled': 'failure',
+  'publication.retry-exhausted': 'failure',
   'abort.remote-branch-deleted': 'progress',
   'abort.local-branch-deleted': 'progress',
   'abort.ticket-returned': 'progress',
@@ -155,7 +157,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 5,
+  version: 6,
   initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {

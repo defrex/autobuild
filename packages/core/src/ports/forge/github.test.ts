@@ -2706,3 +2706,27 @@ test('GraphQL query variables containing mutation do not invalidate an observati
   })
   expect(branches).toBe(1)
 })
+
+test('trusted Git transient diagnostics are typed after credential redaction', async () => {
+  const { isForgeFailure } = await import('../forge-failure')
+  for (const thrown of [false, true]) {
+    const forge = new GitHubForge({
+      repository: 'acme/private',
+      token: 'secret-token',
+      exec: async () => {
+        const message = 'HTTP 503 Service Unavailable secret-token'
+        if (thrown) throw new Error(message)
+        return { exitCode: 128, stdout: '', stderr: message }
+      },
+    })
+    let failure: unknown
+    try {
+      await forge.kernelExec(['git', 'fetch', 'origin'], {})
+    } catch (error) {
+      failure = error
+    }
+    expect(isForgeFailure(failure)).toBe(true)
+    expect((failure as Error).message).toContain('[redacted]')
+    expect((failure as Error).message).not.toContain('secret-token')
+  }
+})
