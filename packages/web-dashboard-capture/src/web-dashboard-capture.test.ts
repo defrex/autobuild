@@ -724,3 +724,28 @@ test('pending node consent frames preserve Land/Hold and disable both while the 
     expect(html).toMatch(/class="btn" disabled="">Hold<\/button>/)
   }
 })
+
+test('report uses actual image dimensions and packaged font bindings', async () => {
+  const { report } = await import('./web-dashboard-capture')
+  const text = report(
+    [
+      {
+        id: 'long-narrow',
+        width: 390,
+        height: 4567,
+        ground: 'dark',
+        htmlPath: '/frames/long.html',
+        pngPath: '/frames/long.png',
+      },
+    ],
+    '/chromium',
+    '/frames',
+  )
+  expect(text).toContain('390×4567')
+  expect(text).toContain(
+    'packaged Atkinson Hyperlegible Next and JetBrains Mono files bound through FONT_FILES',
+  )
+  expect(text).toContain('may exceed the initial viewport')
+  expect(text).not.toContain('locally installed')
+  expect(text).not.toContain('DejaVu')
+})

@@ -1,3 +1,4 @@
+import { fullDocumentScreenshot } from './full-document'
 import { verifyStagesCapture } from '../../../tools/verify-stages-capture'
 import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
@@ -1118,12 +1119,7 @@ export function checkEvidence(spec: WebFrameSpec, html: string): void {
   }
 }
 
-/**
- * Bind `--font-mono` for the capture without the network: the installed
- * JetBrains Mono when the host has it, otherwise the DejaVu Sans Mono the
- * terminal renderer already depends on. Frames are judged for coherence, not
- * compared to golden pixels, so the face may differ between hosts.
- */
+/** Bind the packaged Atkinson Hyperlegible Next and JetBrains Mono files offline. */
 export function fontFaceCss(repoRoot = REPO_ROOT): string {
   return `${Object.entries(FONT_FILES)
     .map(
@@ -1162,9 +1158,7 @@ export function chromiumBinary(
   return undefined
 }
 
-/** Attempts per frame. Headless Chrome occasionally exits 0 without writing
- * its screenshot on a loaded guest; a second launch on a fresh profile is
- * cheap and keeps the capture deterministic without hiding a real failure. */
+/** Retry transient browser failures once, with a fresh isolated profile. */
 const SCREENSHOT_ATTEMPTS = 2
 
 async function screenshot(
@@ -1173,56 +1167,26 @@ async function screenshot(
   pngPath: string,
   spec: WebFrameSpec,
   profileDir: string,
-): Promise<void> {
+): Promise<{ width: number; height: number }> {
   let failure: Error | undefined
   for (let attempt = 1; attempt <= SCREENSHOT_ATTEMPTS; attempt += 1) {
     try {
-      await screenshotOnce(chromium, htmlPath, pngPath, spec, `${profileDir}-${attempt}`)
-      return
+      return await fullDocumentScreenshot(
+        chromium,
+        pathToFileURL(htmlPath).href,
+        pngPath,
+        spec.width,
+        spec.height,
+        `${profileDir}-${attempt}`,
+      )
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error))
       await rm(pngPath, { force: true })
     }
   }
-  throw failure ?? new Error(`web dashboard capture ${spec.id}: no screenshot attempt ran`)
-}
-
-async function screenshotOnce(
-  chromium: string,
-  htmlPath: string,
-  pngPath: string,
-  spec: WebFrameSpec,
-  profileDir: string,
-): Promise<void> {
-  const proc = Bun.spawn(
-    [
-      chromium,
-      '--headless=new',
-      '--hide-scrollbars',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-extensions',
-      '--run-all-compositor-stages-before-draw',
-      '--disable-features=PaintHolding',
-      `--user-data-dir=${profileDir}`,
-      '--force-device-scale-factor=1',
-      `--window-size=${spec.width},${spec.height}`,
-      '--virtual-time-budget=5000',
-      `--screenshot=${pngPath}`,
-      pathToFileURL(htmlPath).href,
-    ],
-    { stdout: 'ignore', stderr: 'pipe', timeout: 90_000 },
+  throw new Error(
+    `web dashboard capture ${spec.id}: ${failure?.message ?? 'no screenshot attempt ran'}`,
   )
-  const stderr = await new Response(proc.stderr).text()
-  const code = await proc.exited
-  if (code !== 0 || !existsSync(pngPath)) {
-    throw new Error(
-      `web dashboard capture ${spec.id}: Chromium exited ${code}${
-        proc.signalCode ? ` (${proc.signalCode})` : ''
-      } without a screenshot at ${pngPath}\n${stderr.trim() || '(no stderr)'}`,
-    )
-  }
 }
 
 function assertOutputUnderScratch(repoRoot: string, outputDir: string): void {
@@ -1289,7 +1253,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
   }
 }
 
-function report(frames: WebDashboardFrame[], chromium: string, outputDir: string): string {
+export function report(frames: WebDashboardFrame[], chromium: string, outputDir: string): string {
   const lines = [
     '# Web dashboard visual verification',
     '',
@@ -1297,8 +1261,8 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     "Frames render the operator web app's pure views (OperatorShell, BuildsView, SignIn, the OAuth consent page)",
     'over the scripted dispatch models from',
     '`tools/dashboard-capture.ts` (`headline-happy-wide` and `mixed-wide`), the real',
-    '`packages/hosted-store-service/app/globals.css`, and a locally installed monospace face (JetBrains Mono when',
-    'the host has it, otherwise DejaVu Sans Mono). Nothing here is a golden image:',
+    '`packages/hosted-store-service/app/globals.css`, and the packaged Atkinson Hyperlegible Next and JetBrains Mono files bound through FONT_FILES.',
+    'Captures include the full document, which may exceed the initial viewport. Nothing here is a golden image:',
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
     'The wide rest/hover pair uses one model so row coordinates can be compared.',
@@ -1364,14 +1328,18 @@ export async function captureWebDashboardFrames(
       const htmlPath = join(outputDir, `${frameName(spec)}.html`)
       const pngPath = join(outputDir, `${frameName(spec)}.png`)
       await writeFile(htmlPath, html)
-      // Chromium can leave profile child processes alive briefly after its CLI exits.
-      // Isolating each frame prevents a later capture from attaching to stale paint state.
-      await screenshot(chromium, htmlPath, pngPath, spec, join(userDataDir, frameName(spec)))
+      // Isolate each frame and retry from stale browser state.
+      const dimensions = await screenshot(
+        chromium,
+        htmlPath,
+        pngPath,
+        spec,
+        join(userDataDir, frameName(spec)),
+      )
       frames.push({
         id: frameName(spec),
         ground: spec.ground,
-        width: spec.width,
-        height: spec.height,
+        ...dimensions,
         htmlPath,
         pngPath,
       })
