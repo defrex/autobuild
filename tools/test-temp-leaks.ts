@@ -65,11 +65,9 @@ export async function runInspected(
         process.off('SIGINT', interrupt)
         process.off('SIGTERM', terminate)
       }
-      const leaked = (await readdir(scratch, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() && !before.has(entry.name))
-        .map((entry) => entry.name)
+      const leaked = (await readdir(scratch)).filter((name) => !before.has(name))
       if (leaked.length)
-        report(`Temporary directory leaks after ${command.join(' ')}: ${leaked.join(', ')}`)
+        report(`Temporary entry leaks after ${command.join(' ')}: ${leaked.join(', ')}`)
       if (code !== 0) return code
       if (leaked.length) return 1
     }

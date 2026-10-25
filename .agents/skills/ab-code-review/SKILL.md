@@ -12,9 +12,11 @@ goes nowhere.
 
 Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
 not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
-directories, browser profiles, and database copies. Configure `TMPDIR`, `PGDATA`,
-`CARGO_TARGET_DIR`, and explicit browser profile paths for scratch subprocesses as
-appropriate. Do not relocate required installed tooling or retained evidence;
+directories, browser profiles, and database copies. Configure `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for those resources.
+Keep `TMPDIR` outside the worktree for test suites and commands that discover
+repositories or configuration through parent directories, including focused tests
+and Git probes. Do not relocate required installed tooling or retained evidence;
 manifest-directed artifact paths remain authoritative. Never commit scratch.
 
 ## Session shape

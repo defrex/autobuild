@@ -47,6 +47,41 @@ test('leaks fail successful children, failed children retain exit status, and la
   }
 })
 
+test.each(['file', 'socket', 'symlink'])(
+  'reports a leaked %s before removing the owned inspection root',
+  async (kind) => {
+    const fixture = await inspectionRoot()
+    try {
+      const record = join(fixture, 'root')
+      const reports: string[] = []
+      const code = await runInspected(
+        [
+          inline(`
+          import {tmpdir} from 'node:os';
+          import {writeFileSync,symlinkSync} from 'node:fs';
+          import {createServer} from 'node:net';
+          writeFileSync(${JSON.stringify(record)},tmpdir());
+          const path=tmpdir()+'/leaked-${kind}';
+          if (${JSON.stringify(kind)} === 'file') writeFileSync(path,'leak');
+          if (${JSON.stringify(kind)} === 'symlink') symlinkSync('missing-target',path);
+          if (${JSON.stringify(kind)} === 'socket') {
+            const server=createServer();
+            await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(path,resolve)});
+          }
+          process.exit(0);
+        `),
+        ],
+        { report: (message) => reports.push(message) },
+      )
+      expect(code).toBe(1)
+      expect(reports.join()).toContain(`leaked-${kind}`)
+      await expect(stat(await readFile(record, 'utf8'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
+  },
+)
+
 test('each integration stage is inspected before rehearsal starts', async () => {
   const reports: string[] = []
   expect(
