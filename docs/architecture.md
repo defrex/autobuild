@@ -876,7 +876,13 @@ admission at every asynchronous read stage; the kernel uses its original store
 and independent tick timers. Cached clock paints perform no reads. The mode
 ledger owns focus reporting through teardown and catchable faults; job-control
 suspension restores modes and input before stopping and reactivates with assumed
-focus on resume. Plain, non-TTY, and once runs never enable focus reporting.
+focus on resume. Plain, non-TTY, and once runs never enable focus reporting. The active
+`processTerminalInput` subscription synchronously reasserts raw mode on activation
+and every 100 ms with adjacent false/true calls, bypassing Bun's cached `isRaw`
+after a retired generation restores shared termios at exit. Its unreferenced
+timer is disarmed before cleanup restores prior raw/flow state; release,
+suspension and shutdown therefore leave no raw-mode maintenance behind. Timer
+failures tear down the subscription best-effort; activation failures propagate.
 
 `packages/core/src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
 inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its

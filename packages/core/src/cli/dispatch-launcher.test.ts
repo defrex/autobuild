@@ -142,7 +142,7 @@ test('real launcher returns the PTY to the shell on Ctrl-Z and fg resumes the da
     'forge = "local-git"\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
   )
   const script = `
-import os, pty, select, sys, time, shlex, signal
+import os, pty, select, sys, time, shlex, signal, termios
 pid, fd = pty.fork()
 if pid == 0:
  os.chdir(sys.argv[1])
@@ -158,6 +158,20 @@ def until(marker, timeout=40):
   if select.select([fd], [], [], .05)[0]: output += os.read(fd, 65536)
 try:
  until(b'SHELL_READY> ')
+ def mode(raw):
+  global output
+  if raw:
+   time.sleep(.35)
+   flags = termios.tcgetattr(fd)[3]
+   assert flags & (termios.ICANON | termios.ECHO | termios.ISIG) == 0, repr(flags)
+  else:
+   # Bash readline itself disables ICANON/ECHO at the prompt. Inspect the
+   # shell's restored settings in a foreground command instead.
+   output = b''
+   probe = "import termios,time; time.sleep(.35); mask=termios.ICANON|termios.ECHO|termios.ISIG; flags=termios.tcgetattr(0)[3]; assert flags & mask == mask, repr(flags); print('COOKED_'+'OK')"
+   os.write(fd, (shlex.join(['python3', '-c', probe])+'\\n').encode())
+   until(b'COOKED_OK')
+   until(b'SHELL_READY> ')
  output = b''
  command = shlex.join(sys.argv[2:])
  os.write(fd, (command+'\\n').encode())
@@ -172,15 +186,17 @@ try:
  os.write(fd, b'\\x1a')
  until(b'SHELL_READY> ', 5)
  assert b'Stopped' in output, output
+ mode(False)
  with open('/proc/'+str(kernel)+'/stat') as f: assert f.read().split(') ')[1][0] != 'T'
  output = b''
  os.write(fd, b'fg\\n')
  until(b'\\x1b[?1049h', 5)
- time.sleep(.3)
+ mode(True)
  output = b''
  os.write(fd, b'\\x03')
  until(b'SHELL_READY> ')
  assert output.count(b'\\x1b[?1049l') == 1, repr(output)
+ mode(False)
  # --plain on a TTY never owned an alternate screen.
  output = b''
  os.write(fd, (command+' --plain\\n').encode())
