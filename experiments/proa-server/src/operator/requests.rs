@@ -35,8 +35,12 @@ mod tests {
             if observation["status"] != 400 {
                 continue;
             }
-            let body = &fixture["scenario"]["requests"][0]["body"];
-            let error = session_body(&serde_json::to_vec(body).unwrap(), operation).unwrap_err();
+            let request = &fixture["scenario"]["requests"][0];
+            let bytes = match request["rawBody"].as_str() {
+                Some(raw) => raw.as_bytes().to_vec(),
+                None => serde_json::to_vec(&request["body"]).unwrap(),
+            };
+            let error = session_body(&bytes, operation).unwrap_err();
             assert_eq!(
                 serde_json::to_value(error).unwrap(),
                 observation["body"],
