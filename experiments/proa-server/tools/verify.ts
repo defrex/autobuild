@@ -6,6 +6,18 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 export const project = resolve(import.meta.dir, '..')
 export const root = resolve(project, '../..')
+export function assertLockfileClean(repository = root): void {
+  const lockfile = 'experiments/proa-server/Cargo.lock'
+  const result = Bun.spawnSync(['git', 'diff', '--quiet', 'HEAD', '--', lockfile], {
+    cwd: repository,
+  })
+  if (result.exitCode === 0) return
+  if (result.exitCode === 1 && !result.stderr.length)
+    throw new Error(`${lockfile} differs from HEAD; commit the normalized lockfile.`)
+  throw new Error(
+    `Cannot check Cargo.lock against HEAD: ${result.stderr.toString().trim() || `git exited ${result.exitCode}`}`,
+  )
+}
 export async function run(
   args: string[],
   cwd = project,
@@ -195,11 +207,27 @@ if (import.meta.main) {
     const script = process.argv[3]!
     const timings = []
     let index = 0
-    for (const command of await Bun.file(script).json()) {
-      const started = performance.now()
-      await run(command, project, process.env, join(dirname(script), `step-${index++}.log`))
-      timings.push({ command, seconds: (performance.now() - started) / 1000 })
-      await Bun.write(join(dirname(script), 'timings.json'), JSON.stringify(timings, null, 2))
+    let commandFailure: unknown
+    try {
+      for (const command of await Bun.file(script).json()) {
+        const started = performance.now()
+        await run(command, project, process.env, join(dirname(script), `step-${index++}.log`))
+        timings.push({ command, seconds: (performance.now() - started) / 1000 })
+        await Bun.write(join(dirname(script), 'timings.json'), JSON.stringify(timings, null, 2))
+      }
+    } catch (error) {
+      commandFailure = error
     }
+    try {
+      assertLockfileClean()
+    } catch (error) {
+      if (commandFailure)
+        throw new AggregateError(
+          [commandFailure, error],
+          'Verification command failed and Cargo.lock check failed',
+        )
+      throw error
+    }
+    if (commandFailure) throw commandFailure
   } else console.log(await build(process.argv.includes('--capture-build')))
 }
