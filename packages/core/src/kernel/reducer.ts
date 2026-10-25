@@ -709,6 +709,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       // pending publication. Recovery runs through the existing
       // abandoned-publication flow (abandonedPublicationPending), which re-runs
       // the phase — the reducer needs no state from it.
+      case 'publication.retry-scheduled':
+      case 'publication.retry-exhausted':
       case 'publication.lost':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':

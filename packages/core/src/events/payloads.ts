@@ -663,6 +663,23 @@ export const eventPayloadSchemas = {
     disposition: z.enum(['attempted', 'skipped', 'deferred']),
   }),
   'finalize.step-started': z.strictObject({ step: z.string().min(1) }),
+  'publication.retry-scheduled': z.strictObject({
+    operation: z.enum(['restack', 'reconcile']),
+    rewriteId: z.string().min(1),
+    round: round,
+    anchor: z.number().int().nonnegative(),
+    failure: z.number().int().min(1).max(6),
+    error: z.string().min(1),
+    retryAt: z.iso.datetime(),
+  }),
+  'publication.retry-exhausted': z.strictObject({
+    operation: z.enum(['restack', 'reconcile']),
+    rewriteId: z.string().min(1),
+    round: round,
+    anchor: z.number().int().nonnegative(),
+    failure: z.literal(7),
+    error: z.string().min(1),
+  }),
   /** Remote phases deposit their output and park before trusted publication.
    * The dispatcher settles the request only after the VM session and execution
    * lease are gone, then appends the ordinary phase completion fact. */

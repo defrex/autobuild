@@ -15,6 +15,7 @@ export const POLICY_PHASE_FAILURE_RESET_SCOPES = {
   'execution-no-progress': 'none',
   'setup-failure-limit': 'none',
   'infrastructure-failure-limit': 'none',
+  'publication-retry-limit': 'none',
   'phase-attempt-limit': 'matching-round',
   'non-retryable-phase-failure': 'matching-round',
 } as const satisfies Record<PolicyEscalationCause, PhaseFailureBudgetResetScope>

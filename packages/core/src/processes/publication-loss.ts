@@ -1,3 +1,4 @@
+import { PublicationRetryPersistenceError } from '../kernel/publication-retry'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 /**
@@ -63,7 +64,11 @@ export async function settlePublicationFactsBeforeRelease(
       try {
         await deps.settlePublication?.(slug)
       } catch (error) {
-        if (error instanceof ForgeRequestDeferred) throw error
+        if (
+          error instanceof ForgeRequestDeferred ||
+          error instanceof PublicationRetryPersistenceError
+        )
+          throw error
         /* Summary is best effort. */
       }
       return (await readBuildFacts(deps.store, slug)).value
@@ -73,7 +78,8 @@ export async function settlePublicationFactsBeforeRelease(
   try {
     await deps.settlePublication?.(slug)
   } catch (error) {
-    if (error instanceof ForgeRequestDeferred) throw error
+    if (error instanceof ForgeRequestDeferred || error instanceof PublicationRetryPersistenceError)
+      throw error
     /* Record loss before release. */
   }
   const refreshed = (await readBuildFacts(deps.store, slug)).value

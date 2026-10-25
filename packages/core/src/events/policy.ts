@@ -82,6 +82,8 @@ export const buildEventPolicy = {
   'finalize.step-started': 'decisive',
   'publication.requested': 'decisive',
   'publication.lost': 'decisive',
+  'publication.retry-scheduled': 'decisive',
+  'publication.retry-exhausted': 'decisive',
   'abort.remote-branch-deleted': 'decisive',
   'abort.local-branch-deleted': 'decisive',
   'abort.ticket-returned': 'decisive',

@@ -111,7 +111,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **Restacking and epilogue.** The kernel replays one net leaf change at verify
   entry and when its destination moves while awaiting landing. Clean replay
   starts no agent; conflicts enter `reconcile`, then verification. The leaf
-  terminates **merged** or **closed**. See the [replay reference](references/restacking.md).
+  terminates **merged** or **closed**. Transient leaf publication failures park
+  on a durable six-retry schedule, independently of agent phase attempts.
+  See the [replay reference](references/restacking.md).
 
 Integration builds use collect → verify → land → close, with demand-driven node restacking,
 repair children and source-aware reconcile as needed. Their exact-head/parent
@@ -831,6 +833,9 @@ Ordinary silence, provider failures and session timeouts retain the runner's
 phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
 an internal runner option, not an accepted `[policy]` TOML key. Reconcile
 execution and unchanged-base progress budgets retain their existing accounting.
+Classified transient leaf restack/reconcile publication uses its own six-retry
+budget and durable deadlines; answering `publication-retry-limit` resets only
+that publication episode.
 
 ### `[finalize]`
 
@@ -1066,7 +1071,8 @@ own-build-read deferral and its answer resets no phase failures; reconcile no-pr
 while `round` remains occurrence scope. Answering a runner-failure cause re-arms
 only its matching phase and round. The phase-level `verify-failure-limit` cause
 explicitly re-arms all rounds for its verify target, while
-`reconcile-no-progress` and the setup-only cause reset no phase-runner failures.
+`reconcile-no-progress`, `publication-retry-limit` and the setup-only cause reset
+no phase-runner failures.
 The closed cause map forces every future policy condition to choose one of these
 semantics instead of inheriting behavior from a missing `round`. Runner failures
 while checking progress or refreshing the base therefore remain counted after a
@@ -2549,6 +2555,20 @@ Use `expectedRevision` on MCP `tickets.update`, `tickets.move`, `tickets.block`
 and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.
 
 ## Forge failure recovery
+
+Leaf restack and reconcile publication retry classified transient forge or transport
+failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
+300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
+identity, episode anchor, failure ordinal, last error and absolute retry time;
+restart resumes that schedule without rerunning the resolver. These retries do
+not consume `maxPhaseAttempts`. A seventh transient failure records
+`publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
+error and six retries. Answering that escalation opens a fresh publication episode
+for the same retained intent without resetting agent phase failures. Pending
+publication keeps its workspace through backoff and unresolved exhaustion.
+Classified rate limits retain repository cooldown and consume no publication
+retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
+errors retain their existing behavior.
 
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
