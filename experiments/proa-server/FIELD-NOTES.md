@@ -481,3 +481,127 @@ both grounds and widths: callout paragraphs/previews, restored PR state, wrappin
 tree indentation, menu and detail remain readable. Final capture recorded 329
 reads including 260 metadata reads. Its logger now explicitly includes the
 Postgres module and capture fails if any expected metadata category is missing.
+
+## Operator controls: native foundation checkpoint
+
+The operator port keeps writes on a separate PostgreSQL connection; the existing
+reader transactions remain SELECT-only. Session policies are reusable library
+operations: the bearer and browser transports will supply verified identity and
+validated input. Native policy tests consume real TypeScript HTTP oracle cases,
+including the distinct archive and approval refusal texts, with complete ordered
+session facts and reduced post-state. The fixture inventory explicitly records
+unimplemented control coverage so source freshness cannot be mistaken for parity.
+
+This checkpoint changes no rendered surface. Proa forms, polling/mutation races
+and progressive enhancement have not yet been measured; their browser and visual
+proofs remain required before the build can finish. The ticket attribution gap
+`obs_675b94d9` is retained as an explicit TypeScript storage-parity exception rather
+than filled with a new experiment-only audit schema.
+
+## Operator controls: forms and progressive enhancement
+
+The form surface renders synchronously. A request-scoped loader supplies one
+fresh dashboard/detail snapshot, and the authenticated Viewer supplies the CSRF
+field and sign-off on both initial HTML and polling fragments. No bearer token
+or machine signing key enters the page. Browser POSTs recheck the live session,
+registered project, canonical Origin/Referer and CSRF before sharing native
+operator policy. Confirmation renders a second ordinary form; that first POST
+writes no lifecycle intent. Successful ordinary mutations use a 303 GET, while
+enhanced requests receive the same rendered page fragment.
+
+A draft, a refusal and a destructive confirmation are page state as well as
+server state. Polling preserves their controls subtree; submitting aborts an
+older poll and advances a generation so its response cannot overwrite the
+acknowledgment. Mutation handlers never optimistically change lifecycle words.
+The enhancement delegates to the forms, disables only the submitted form's
+buttons and restores focus after replacing the fragment. Concurrent local
+submissions are suppressed while a mutation is pending.
+
+Proa needs an explicit `raw_text_ok` around deliberate textarea interpolation,
+just as around the existing document title. This suppresses a warning, not HTML
+escaping: the render test checks a `</textarea><script>` draft and revised body
+cannot break out. Proa 0.1.3/0.3.0 also rejects a label/input anywhere inside a
+`details` element as nested interactive content, although the HTML disclosure
+content model permits it. A plain fieldset with a legend carries the extra
+answer options without disabling the compiler's accessibility checks. Reproduce
+with `html_sync! { <details><summary>"Options"</summary><label for="x">"Value"</label><input id="x"/></details> }`.
+
+The seeded Chromium run exercised eight build operations in each script mode
+(16 real mutations): pause, cancel-pause, resume, abort, discard, guidance, retry
+and finding dismissal. The TypeScript store accepted every resulting native fact
+with `operator@example.com` as the human actor and no delegated `via`. Both
+confirmation first steps left event counts unchanged. Enhanced acknowledgments
+arrived in the original document; a guidance draft, a stale-answer refusal and
+a confirmation survived a polling interval. Wrong CSRF and Origin returned 403;
+a valid registered but foreign project returned 404; all three left events
+unchanged. The 40-frame visual matrix retained the ANSI grounds, local faces,
+inline red states and narrow wrapping with no overflow.
+
+The browser proof caught a DOM API trap: form controls named `action` shadow
+`HTMLFormElement.action`. Enhancement must read `getAttribute('action')`, while
+native no-JavaScript submission already follows the attribute. The CDP driver
+also waits for deferred scripts before enhanced clicks and reacquires nodes
+retired by a poll or navigation; neither timing is evidence of a server failure.
+
+Extended browser proofs exposed the other native-form boundary: HTML serializes
+textarea newlines as CRLF, whereas the enhanced path reads the DOM's LF value.
+Without adapter normalization the same supplied spec produced different immutable
+artifact bytes in the two modes. The browser adapter now recovers the DOM LF
+representation for textarea text/body only, preserving whitespace and all other
+characters. The JSON operator API continues to preserve its supplied bytes.
+
+The extended seeded browser run passed all 18 additional submissions against the
+actual native debug executable: intake, bulk pause/resume, harvest enablement,
+harvest run resume/acknowledgment, review ceiling, supplied spec revision and
+ticket spec revision in both script modes. Together with the baseline this is
+34 mutations and three unchanged auth/resource refusals. The proof checked
+ordered durable facts against the TypeScript validators and source actor
+sequence, exact specification bytes and asset metadata, and same-document
+enhanced acknowledgments. This development evidence is recorded separately
+from the linked Proa capture provenance.
+
+## Native mutations and contract completion
+
+The native port's completion check uses executed oracle cases, not route names.
+This distinction caught a misspelled registry tool whose requests otherwise
+looked like successful refusal coverage. A coverage result must have no missing
+routes, actions, answer variants, tools or executable suite cases, and its native
+and TypeScript source hashes must still match.
+
+JSON object order matters in two different places. Zod embeds ordered issue
+objects in error strings; preserving insertion order reproduces those bytes.
+Polling fingerprints remain canonical, so the reducer explicitly sorts their
+objects recursively. The full reducer corpus caught the interaction. Generated
+Unicode fixtures escape non-ASCII code points so staged formatting cannot replace
+an interior U+FEFF with a replacement character. Actual Bun Request.json rejects
+a leading BOM while the effective-config TextDecoder consumes it; their native
+adapters deliberately keep those different byte contracts. Integral JSON forms
+such as `5.0` normalize to the same integer as the TypeScript parser.
+
+Native snapshots are checked by TypeScript's real consumer, including multi-chunk
+binary files, zero-byte entries, directories and tombstones. Failure timing uses
+only test-owned SQL triggers and a held signed upload proxy; native publication
+remains inert when a concurrent terminal fact or fence/tail guard wins. The
+isolated dispatcher proof also checks the real terminal renderer after native
+browser pause/resume, with no live dispatcher process management.
+
+### Live controls after an enhanced reply
+
+A fragment acknowledgment must not pin the controls section during later polls.
+Retain the operator's draft fields and refusal text within the fresh render;
+refresh lifecycle/repository actions from durable state. Expire success notices
+on the next full poll and retain a destructive confirmation only while its
+corresponding action is still offered. Capture now acknowledges a pause, appends
+the dispatcher acknowledgment, and requires Resume without navigation; it also
+checks later escalations, external intake changes, and refusal-plus-draft
+retention while action availability changes.
+
+### Manual Cargo cache and root documentation scans
+
+The root Pi provisioning documentation test walks ignored native `target/`
+directories. A 12 GB manual-build cache made that test exceed its five-second
+timeout during the full suite. Moving the generated cache into root `.ab/`,
+which the walker excludes, reduced the isolated 30-test file from about four
+seconds to 157 ms without changing assertions or timeouts. Manual setup now
+exports `CARGO_TARGET_DIR` into `.ab/` and puts its executable there too. The
+automated gate already uses a shared cache outside all worktrees.
