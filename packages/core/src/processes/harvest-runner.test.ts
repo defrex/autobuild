@@ -1,5 +1,6 @@
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } from '../cli/harvest'
@@ -20,6 +21,8 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import { HARVEST_PROPOSAL_LABEL, HarvestRunner } from './harvest-runner'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const roots: string[] = []
 const KIMI_QUOTA =

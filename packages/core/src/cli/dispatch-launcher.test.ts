@@ -1,10 +1,13 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdir, writeFile, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { distributionPath } from '../distribution'
 import { openLocalStore } from '../store/local/store'
 import { GENERATION_SIGNALS } from './dispatch-launch-contract'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 for (const signal of GENERATION_SIGNALS)
   test(`production launcher drains ${signal} and records the original signal`, async () => {

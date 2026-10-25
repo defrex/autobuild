@@ -1,3 +1,4 @@
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { readVerifyPipeline } from '../config/pipeline-source'
 import { ForgeFailure } from '../ports/forge-failure'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
@@ -12,8 +13,8 @@ import { done } from '../cli/terminals'
 import { parseAbPhase } from '../cli/env'
 import { defaultTurnResult } from '../ports/runner/fake'
 import { ScriptedAgentRunner } from '../ports/runner/fake'
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
@@ -26,6 +27,8 @@ import { leafRestackLog } from '../kernel/generators/leaf-restack-log'
 import { BuildRunner, selectVerifyDiffBase } from './build-runner'
 import { readBuildFacts } from '../store/reduced-reads'
 import { settlePendingPublication } from '../cli/publication-settlement'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const CONFIG_TOML = `
 [roles.default]

@@ -6,6 +6,15 @@ disable-model-invocation: true
 
 # Verify documentation drift
 
+Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
+not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
+directories, browser profiles, and database copies. Configure `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for those resources.
+Keep `TMPDIR` outside the worktree for test suites and commands that discover
+repositories or configuration through parent directories, including focused tests
+and Git probes. Do not relocate required installed tooling or retained evidence;
+manifest-directed artifact paths remain authoritative. Never commit scratch.
+
 Run `ab context`, then resolve `context_dir="${AB_CONTEXT_DIR:-.ab}"`
 (unset or empty falls back to `.ab`). Read the printed manifest, normally
 `"$context_dir/context.json"`, and its materialized inputs from that context

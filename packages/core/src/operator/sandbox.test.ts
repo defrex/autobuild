@@ -1,11 +1,12 @@
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 /**
  * Contract tests for the operator sandbox service (AUT-340): validation,
  * per-environment serialization, journal facts, truncation, reset/release
  * sequences, and the credential-free provider contract — all against the
  * FakeWorkspaceProvider's filesystem-backed sandbox.
  */
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from '../ports/workspace/operator-sandbox'
@@ -20,6 +21,8 @@ import {
   truncateSandboxOutput,
   type OperatorSandboxService,
 } from './sandbox'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 async function fixture(opts?: {
   clock?: () => Date

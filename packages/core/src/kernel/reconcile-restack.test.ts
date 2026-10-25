@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
@@ -16,6 +17,8 @@ import {
 import { FakeForge } from '../ports/forge/fake'
 import { humanActor } from '../events/envelope'
 import { buildTrailers } from './build-identity'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 for (const mode of ['clean', 'conflict', 'empty'] as const) {
   test(`single-change replay: ${mode}, durable recovery, archives and CAS`, async () => {

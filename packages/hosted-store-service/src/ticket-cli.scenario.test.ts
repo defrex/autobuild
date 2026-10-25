@@ -1,12 +1,15 @@
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { ticketProject } from './testing/ticket-project'
-import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { abTicket } from '@defrex/autobuild/testing'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import type { TicketSourceFactory } from '@defrex/autobuild/testing'
 import { createHostedStoreService } from './service'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 interface ScenarioResult {
   output: unknown[]

@@ -15,8 +15,8 @@ import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-public
  * are spot-checked where the rule lives (feedback, attempts, transcript
  * metadata, actor kinds).
  */
-import { describe, expect, test, spyOn } from 'bun:test'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, test, spyOn } from 'bun:test'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildContext } from '../cli/context'
@@ -373,6 +373,12 @@ interface HarnessOptions {
   getConfig?: () => Config
 }
 
+const harnessRoots: string[] = []
+afterEach(async () => {
+  await Promise.all(
+    harnessRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  )
+})
 let nextHarnessWorkspace = 0
 
 class ManualSessionBudgetScheduler {
@@ -420,10 +426,13 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const clock = options.clock ?? steppingClock()
   const store = options.store ?? new OneShotPostAppendFaultStore({ clock })
   nextHarnessWorkspace += 1
+  const workspaceRoot = join(tmpdir(), `ab-build-runner-${process.pid}-${nextHarnessWorkspace}`)
+  // Logical providers allocate lazily when a scripted phase writes its context.
+  harnessRoots.push(workspaceRoot)
   const workspaces = new FakeWorkspaceProvider({
     mode: 'logical',
     base: { source: 'remote', sha: '0'.repeat(40) },
-    root: join(tmpdir(), `ab-build-runner-${process.pid}-${nextHarnessWorkspace}`),
+    root: workspaceRoot,
   })
   const handle = await workspaces.provision({
     repo: 'acme/app',

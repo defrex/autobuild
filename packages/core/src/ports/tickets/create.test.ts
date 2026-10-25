@@ -1,6 +1,7 @@
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
 /** TicketSource selection and construction tests. */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { TicketSource } from '../types'
@@ -12,6 +13,8 @@ import { FakeTicketSource } from './fake'
 import { FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
 import { HostedTicketSource } from './remote'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const LINEAR_CONFIG = {
   source: 'linear' as const,

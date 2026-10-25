@@ -4,13 +4,18 @@
  * deposited effective config plus injected seams. Construction-only
  * assertions — no provider SDK calls, no network.
  */
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { FakeForge } from '../ports/forge/fake'
 import { GitHubApiError } from '../ports/forge/github-transport'
 import { MemoryBuildStore } from '../store/memory'
 import { buildRegistry } from './registry'
 import { createHostedOperatorSandboxService, remoteBranchHeadFromForge } from './sandbox-host'
+
+const services: Array<{ dispose(): Promise<void> }> = []
+afterEach(async () => {
+  await Promise.all(services.splice(0).map((service) => service.dispose()))
+})
 
 const REPO = 'https://github.com/acme/widgets'
 
@@ -64,6 +69,7 @@ async function compose(opts: {
     storeToken: STORE_TOKEN,
     ...(opts.forge !== undefined ? { forge: opts.forge } : {}),
   })
+  services.push(service)
   return { store, service }
 }
 
@@ -227,4 +233,50 @@ steps = []
       }),
     ).rejects.toThrow('unknown forge adapter "not-a-forge"')
   })
+})
+
+test('default scratch lifetime, construction rejection, and caller-owned scratch', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const parent = await mkdtemp(join(tmpdir(), 'ab-host-lifetime-'))
+  try {
+    const script = `
+      import {createHostedOperatorSandboxService} from ${JSON.stringify(join(import.meta.dir, 'sandbox-host.ts'))};
+      import {parseConfig} from ${JSON.stringify(join(import.meta.dir, '../config/load.ts'))};
+      import {MemoryBuildStore} from ${JSON.stringify(join(import.meta.dir, '../store/memory.ts'))};
+      import {FakeForge} from ${JSON.stringify(join(import.meta.dir, '../ports/forge/fake.ts'))};
+      import {readdir,mkdir,stat} from 'node:fs/promises';
+      import {tmpdir} from 'node:os';
+      const options={store:new MemoryBuildStore(),repo:'https://github.com/acme/widgets',
+        config:parseConfig('[tickets]\\nsource="file"\\nreadyState="ready"'),env:{},storeRef:'https://store.test',storeToken:'token',forge:new FakeForge()};
+      const service=await createHostedOperatorSandboxService(options);
+      const names=await readdir(tmpdir());
+      if(names.length!==1 || !names[0].startsWith('autobuild-sandbox-host-'))throw Error('missing default root');
+      await stat(tmpdir()+'/'+names[0]);
+      await Promise.all([service.dispose(),service.dispose()]);
+      if((await readdir(tmpdir())).length)throw Error('default scratch leaked');
+      const broken={...options,forge:{}};
+      try {await createHostedOperatorSandboxService(broken);throw Error('must reject')} catch(error) {
+        if(!String(error).includes('remote branch heads'))throw error;
+      }
+      if((await readdir(tmpdir())).length)throw Error('construction leaked');
+      const scratchRoot=tmpdir()+'/caller'; await mkdir(scratchRoot);
+      const caller=await createHostedOperatorSandboxService({...options,scratchRoot});
+      await caller.dispose(); await stat(scratchRoot);
+      try {await createHostedOperatorSandboxService({...broken,scratchRoot});throw Error('must reject')}catch(error){
+        if(!String(error).includes('remote branch heads'))throw error;
+      }
+      await stat(scratchRoot);
+    `
+    const child = Bun.spawn([process.execPath, '-e', script], {
+      env: { ...process.env, TMPDIR: parent, TMP: parent, TEMP: parent },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+    expect(code, stderr).toBe(0)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
 })

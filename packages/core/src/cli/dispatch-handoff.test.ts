@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { openLocalStore } from '../store/local/store'
@@ -7,6 +8,8 @@ import { DISPATCHER } from '../events/envelope'
 import { readHandoff } from './dispatch-handoff'
 import { repositoryNeedsAttention } from './attention'
 import { projectRepositoryStatus, renderRepositoryStatus } from './repository-status'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('handoff reader follows only its stopped run and rejects operator stop; status exposes failure', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'ab-handoff-'))

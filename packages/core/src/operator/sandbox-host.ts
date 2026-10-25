@@ -14,7 +14,7 @@
  * a broken or unsupported config degrades the sandbox tools of one binding,
  * never the orchestrator itself.
  */
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Config } from '../config/schema'
@@ -52,7 +52,8 @@ export interface HostedOperatorSandboxOptions {
   storeToken: string
   /** Scratch root for the composition's filesystem seams (worktree root,
    * repo root, sandbox root). Default: a fresh `mkdtemp` under the OS temp
-   * directory. The builtin providers only touch these paths through host-git
+   * directory, removed on construction failure or dispose(). A supplied root
+   * remains caller-owned. The builtin providers only touch these paths through host-git
    * or local-scratch paths the injected seams bypass; a plugin-provider config
    * fails construction before any path use. */
   scratchRoot?: string
@@ -88,6 +89,10 @@ export function remoteBranchHeadFromForge(
   }
 }
 
+export interface HostedOperatorSandboxService extends OperatorSandboxService {
+  dispose(): Promise<void>
+}
+
 /** Build the hosted operator-sandbox backend from the effective config and
  * injected seams. Throws on every construction failure (unknown provider or
  * forge, missing Vercel SDK credential, forbidden forwarded env name,
@@ -95,46 +100,65 @@ export function remoteBranchHeadFromForge(
  * contains and degrades to serving without the sandbox tools. */
 export async function createHostedOperatorSandboxService(
   options: HostedOperatorSandboxOptions,
-): Promise<OperatorSandboxService> {
+): Promise<HostedOperatorSandboxService> {
+  const ownsScratch = options.scratchRoot === undefined
   const scratch = options.scratchRoot ?? (await mkdtemp(join(tmpdir(), 'autobuild-sandbox-host-')))
-  const forge =
-    options.forge ??
-    (await createForge({
-      name: options.config.forge,
-      registry: createPluginRegistry(),
-      env: options.env,
-      repoRoot: scratch,
-      repository: options.repo,
-    }))
-  if (forge.remoteBranchSha === undefined) {
-    throw new Error(
-      `the configured forge "${options.config.forge}" does not resolve remote branch heads; ` +
-        'the hosted sandbox backend has no checkout to resolve base heads against',
-    )
+  let disposal: Promise<void> | undefined
+  const dispose = () => {
+    disposal ??= ownsScratch ? rm(scratch, { recursive: true, force: true }) : Promise.resolve()
+    return disposal
   }
-  // Builtin-only registry: a plugin-provider config fails construction here
-  // (unknown provider in the empty registry) and the caller contains it.
-  const provider = await createWorkspaceProvider(options.config.workspace, {
-    registry: createPluginRegistry(),
-    worktreeRoot: scratch,
-    repoRoot: scratch,
-    env: options.env,
-    storeRef: options.storeRef,
-    storeToken: options.storeToken,
-    origin: async () => options.repo,
-    remoteBranchHead: remoteBranchHeadFromForge(forge),
-    sandboxSetupCommand: options.config.commands.setup,
-    sandboxRoot: join(scratch, 'orchestrator-sandboxes'),
-    sandboxEnvironmentVariables: options.config.orchestrator.sandbox.environmentVariables,
-    orchestratorSandboxEnabled: true,
-  })
-  return createOperatorSandboxService({
-    store: options.store,
-    repo: options.repo,
-    provider,
-    sandbox: options.config.orchestrator.sandbox,
-    baseBranch: options.config.baseBranch,
-    forge,
-    ...(options.clock !== undefined ? { clock: options.clock } : {}),
-  })
+  try {
+    const forge =
+      options.forge ??
+      (await createForge({
+        name: options.config.forge,
+        registry: createPluginRegistry(),
+        env: options.env,
+        repoRoot: scratch,
+        repository: options.repo,
+      }))
+    if (forge.remoteBranchSha === undefined) {
+      throw new Error(
+        `the configured forge "${options.config.forge}" does not resolve remote branch heads; ` +
+          'the hosted sandbox backend has no checkout to resolve base heads against',
+      )
+    }
+    // Builtin-only registry: a plugin-provider config fails construction here
+    // (unknown provider in the empty registry) and the caller contains it.
+    const provider = await createWorkspaceProvider(options.config.workspace, {
+      registry: createPluginRegistry(),
+      worktreeRoot: scratch,
+      repoRoot: scratch,
+      env: options.env,
+      storeRef: options.storeRef,
+      storeToken: options.storeToken,
+      origin: async () => options.repo,
+      remoteBranchHead: remoteBranchHeadFromForge(forge),
+      sandboxSetupCommand: options.config.commands.setup,
+      sandboxRoot: join(scratch, 'orchestrator-sandboxes'),
+      sandboxEnvironmentVariables: options.config.orchestrator.sandbox.environmentVariables,
+      orchestratorSandboxEnabled: true,
+    })
+    const service = await createOperatorSandboxService({
+      store: options.store,
+      repo: options.repo,
+      provider,
+      sandbox: options.config.orchestrator.sandbox,
+      baseBranch: options.config.baseBranch,
+      forge,
+      ...(options.clock !== undefined ? { clock: options.clock } : {}),
+    })
+    return Object.assign(service, { dispose })
+  } catch (error) {
+    try {
+      await dispose()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Hosted sandbox construction and cleanup failed',
+      )
+    }
+    throw error
+  }
 }
