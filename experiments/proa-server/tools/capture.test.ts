@@ -3,14 +3,31 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureFrames, decodePng } from './capture'
-import { checkRoutes, checkFrameMatrix, frames, palette, dataFontFallback } from './capture-cases'
+import {
+  checkRoutes,
+  checkCaptureCapabilities,
+  checkFrameMatrix,
+  checkMachineNamespaces,
+  machineNamespaces,
+  frames,
+  palette,
+  dataFontFallback,
+} from './capture-cases'
 import { project } from './verify'
 
 test('route inventory rejects new and unsupported route declarations', async () => {
   const source = await Bun.file(join(project, 'src/routes.rs')).text()
-  expect(() => checkRoutes(source)).not.toThrow()
-  expect(() => checkRoutes(`${source}\n.route("/new", get(page))`)).toThrow('Unclassified')
-  expect(() => checkRoutes(`${source}\n.route(path, get(page))`)).toThrow('Unclassified')
+  const machine = await Bun.file(join(project, 'src/protocol/router.rs')).text()
+  expect(() => checkRoutes(source, machine)).not.toThrow()
+  expect(() => checkRoutes(`${source}\n.route("/new", get(page))`, machine)).toThrow('Unclassified')
+  expect(() => checkRoutes(`${source}\n.route(path, get(page))`, machine)).toThrow('Unclassified')
+  for (const declaration of [
+    '.nest("/new",other)',
+    '.route_service("/new",other)',
+    '.merge(other)',
+    'Route::page("/new",other)',
+  ])
+    expect(() => checkRoutes(`${source}\n${declaration}`, machine)).toThrow('Unclassified')
   expect(new Set(frames.map((f) => f.id)).size).toBe(40)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
@@ -18,6 +35,70 @@ test('route inventory rejects new and unsupported route declarations', async () 
         expect(
           frames.some((f) => f.width === width && f.theme === theme && f.state === state),
         ).toBe(true)
+})
+test('machine namespaces and fallback services require explicit evidence classification', async () => {
+  const source = await Bun.file(join(project, 'src/routes.rs')).text()
+  const machine = await Bun.file(join(project, 'src/protocol/router.rs')).text()
+  expect(Object.keys(machineNamespaces).sort()).toEqual([
+    'builds',
+    'credentials',
+    'repos',
+    'sessions',
+    'streams',
+  ])
+  expect(() =>
+    checkMachineNamespaces(
+      machine.replace(/(pub const MACHINE_NAMESPACES[^;]*?)"builds"/, '$1"builds", "tickets"'),
+    ),
+  ).toThrow('Unclassified machine namespace')
+  expect(() =>
+    checkMachineNamespaces(
+      machine.replace(/(pub const MACHINE_NAMESPACES[^;]*?)"builds"/, '$1NEW_NAMESPACE'),
+    ),
+  ).toThrow('Unclassified machine namespace')
+  expect(() =>
+    checkMachineNamespaces(
+      machine.replace('pub const MACHINE_NAMESPACES', 'const MACHINE_NAMESPACES'),
+    ),
+  ).toThrow('Unclassified machine namespace')
+  expect(() => checkRoutes(`${source}\n.fallback(other)`, machine)).toThrow('Unclassified fallback')
+  expect(() => checkRoutes(`${source}\n.fallback_service(other)`, machine)).toThrow(
+    'Unclassified fallback',
+  )
+  expect(() =>
+    checkRoutes(
+      source.replace('protocol::router::is_machine_path(request.uri().path())', 'true'),
+      machine,
+    ),
+  ).toThrow('Unclassified fallback')
+})
+test('readiness preflight is classified separately from page database capabilities', async () => {
+  const health = await Bun.file(join(project, 'src/endpoints/health.rs')).text()
+  expect(() =>
+    checkCaptureCapabilities('none', { 'src/endpoints/health.rs': health }),
+  ).not.toThrow()
+  expect(() => checkCaptureCapabilities('postgres', {})).toThrow('Unsupported database')
+  expect(() => checkCaptureCapabilities('none', { 'src/pages/new.rs': 'state.data' })).toThrow(
+    'Unsupported database',
+  )
+  expect(() =>
+    checkCaptureCapabilities('none', {
+      'src/endpoints/new.rs': 'reader.postgres()',
+    }),
+  ).toThrow('Unsupported database')
+  expect(() =>
+    checkCaptureCapabilities('none', {
+      'src/endpoints/health.rs': `${health}\npub async fn extra(){let _=state.data;}`,
+    }),
+  ).toThrow('Unsupported database')
+  expect(() =>
+    checkCaptureCapabilities('none', {
+      'src/endpoints/health.rs': health.replace(
+        'reader.postgres().preflight()',
+        'reader.postgres().query()',
+      ),
+    }),
+  ).toThrow('Unsupported readiness')
 })
 test('palette comes from immutable reference for each ground', async () => {
   const ref = await Bun.file(join(project, 'design/ansi/index.html')).text()

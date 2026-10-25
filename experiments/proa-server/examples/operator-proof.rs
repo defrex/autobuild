@@ -1,4 +1,5 @@
 //! Test-only JSON-lines bridge. Production routes never expose raw event append.
+mod operator_state;
 use chrono::{DateTime, Utc};
 use proa_server::{
     data::{config::DataConfig, reader::DataReader, writer::PostgresWriter},
@@ -14,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let competing = PostgresWriter::connect(&config.database_url).await?;
     let reader = DataReader::connect(config).await?;
     let auth = proa_server::config::Config::parse(|_| None)?.auth;
-    let app = proa_server::app::AppState::from_env(auth).await?;
+    let app = operator_state::from_env(auth).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let router = proa_server::operator::http::router_with_clock(std::sync::Arc::new(|| {

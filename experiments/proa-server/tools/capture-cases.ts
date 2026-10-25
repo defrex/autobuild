@@ -1,11 +1,11 @@
 export const routes = {
   '/': 'html',
-  '/builds/:slug': 'detail-html',
+  '/dashboard/builds/:slug': 'detail-html',
   '/refresh': 'endpoint',
   '/controls': 'browser-control',
   '/frame': 'endpoint',
   '/index.md': 'representation',
-  '/health': 'endpoint',
+  '/health': 'machine-health',
   '/readyz': 'endpoint',
   '/static': 'static',
   '/sign-in': 'public-html',
@@ -14,6 +14,74 @@ export const routes = {
   '/auth/sign-out': 'auth',
   '/auth/dev-session': 'development-issuer',
 } as const
+// Entire machine namespaces bypass browser rendering and cookie/origin middleware.
+// They have protocol integration evidence rather than screenshot frames.
+export const machineNamespaces = {
+  builds: 'machine-store',
+  repos: 'machine-store',
+  sessions: 'machine-store',
+  streams: 'machine-store',
+  credentials: 'machine-credential',
+} as const
+export function checkMachineNamespaces(source: string) {
+  const definitions = [
+    ...source.matchAll(
+      /pub\s+const\s+MACHINE_NAMESPACES\s*:\s*&\s*\[\s*&str\s*\]\s*=\s*&\[([\s\S]*?)\]\s*;/g,
+    ),
+  ]
+  if (definitions.length !== 1) throw Error('Unclassified machine namespace declaration')
+  const declaration = definitions[0]![1]!
+  const discovered = [...declaration.matchAll(/"([^"\\]+)"/g)].map((m) => m[1]!).sort()
+  if (
+    declaration.replace(/"[^"\\]+"/g, '').replace(/[\s,]/g, '') !== '' ||
+    JSON.stringify(discovered) !== JSON.stringify(Object.keys(machineNamespaces).sort())
+  )
+    throw Error('Unclassified machine namespace: extend protocol classification and evidence')
+}
+export const databaseProbeEndpoints = {
+  'src/endpoints/health.rs': 'ready',
+} as const
+export function checkCaptureCapabilities(driver: string, sources: Record<string, string>) {
+  if (driver !== 'none')
+    throw Error('Unsupported database capability; add a seed adapter; see tools/README.md')
+  for (const [path, original] of Object.entries(sources)) {
+    let source = original
+    if (path in databaseProbeEndpoints) {
+      const signature = /pub\s+async\s+fn\s+ready\s*\(/.exec(source)
+      if (!signature) throw Error('Unsupported readiness endpoint; inspect capability inventory')
+      const open = source.indexOf('{', signature.index)
+      let depth = 1,
+        end = open + 1
+      for (; end < source.length && depth > 0; end++) {
+        if (source[end] === '{') depth++
+        if (source[end] === '}') depth--
+      }
+      if (depth !== 0) throw Error('Unsupported readiness endpoint; inspect capability inventory')
+      const ready = source.slice(open, end)
+      if (
+        (ready.match(/state\.data/g) || []).length !== 1 ||
+        (ready.match(/reader\.postgres\(\)\.preflight\(\)/g) || []).length !== 1 ||
+        /sqlx|DATABASE_URL|\.(?:query|execute|connect)\(/i.test(ready)
+      )
+        throw Error('Unsupported readiness database capability; inspect endpoint preflight')
+      source = source.slice(0, signature.index) + source.slice(end)
+    }
+    // These live surfaces are backed by the isolated withCaptureSeed adapter.
+    if (
+      [
+        'src/pages/home.rs',
+        'src/pages/build.rs',
+        'src/endpoints/live.rs',
+        'src/endpoints/controls.rs',
+      ].includes(path)
+    )
+      continue
+    if (/sqlx|postgres|DATABASE_URL|state\.data/i.test(source))
+      throw Error(
+        `Unsupported database capability in ${path}; add a seed adapter; see tools/README.md`,
+      )
+  }
+}
 export const frames = [1440, 390].flatMap((width) =>
   ['light', 'dark'].flatMap((theme) =>
     [
@@ -35,7 +103,7 @@ export const frames = [1440, 390].flatMap((width) =>
           : state === 'refused'
             ? '/auth/dev-session'
             : state === 'detail' || state.startsWith('control-')
-              ? '/builds/:slug'
+              ? '/dashboard/builds/:slug'
               : '/',
       width,
       theme,
@@ -43,7 +111,25 @@ export const frames = [1440, 390].flatMap((width) =>
     })),
   ),
 )
-export function checkRoutes(source: string) {
+export function checkRoutes(source: string, machineSource: string) {
+  checkMachineNamespaces(machineSource)
+  // These two operator routers have their own executable contract gate.
+  for (const router of ['http', 'delegation']) {
+    const merge = `.merge(proa_server::operator::${router}::router())`
+    if (source.split(merge).length !== 2) throw Error('Unclassified operator router')
+    source = source.replace(merge, '')
+  }
+  if (
+    /\.(?:nest|route_service|merge)\(/.test(source) ||
+    /Route::(?!endpoint\()[A-Za-z_]+\(/.test(source)
+  )
+    throw Error('Unclassified route composition: extend route classification and capture cases')
+  if (
+    (source.match(/\.fallback_service\(/g) || []).length !== 1 ||
+    /\.fallback\(/.test(source) ||
+    !source.includes('protocol::router::is_machine_path(request.uri().path())')
+  )
+    throw Error('Unclassified fallback route: preserve explicit machine/browser dispatch')
   const discovered = [
     ...source.matchAll(/(?:Route::endpoint|\.route|\.nest_service)\(\s*"([^"]+)"/g),
   ]

@@ -331,6 +331,7 @@ mod tests {
                 writer: None,
                 blobs: None,
                 operator_secret: None,
+                machine: None,
             },
             list,
         )
@@ -637,6 +638,7 @@ mod failure_tests {
                 writer: None,
                 blobs: None,
                 operator_secret: None,
+                machine: None,
             };
             let response = routes::router(state.clone())
                 .oneshot(

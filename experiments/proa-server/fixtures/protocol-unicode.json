@@ -1,0 +1,743 @@
+{
+  "format": 1,
+  "valid": [
+    {
+      "name": "null",
+      "input": "null",
+      "stringifyUnits": [110, 117, 108, 108],
+      "fingerprint": { "type": "null" }
+    },
+    {
+      "name": "boolean",
+      "input": "true",
+      "stringifyUnits": [116, 114, 117, 101],
+      "fingerprint": { "type": "boolean", "value": true }
+    },
+    {
+      "name": "empty",
+      "input": "\"\"",
+      "stringifyUnits": [34, 34],
+      "fingerprint": { "type": "string", "units": [] }
+    },
+    {
+      "name": "ascii",
+      "input": "\"plain\"",
+      "stringifyUnits": [34, 112, 108, 97, 105, 110, 34],
+      "fingerprint": { "type": "string", "units": [112, 108, 97, 105, 110] }
+    },
+    {
+      "name": "bmp",
+      "input": "\"雪é\"",
+      "stringifyUnits": [34, 38634, 233, 34],
+      "fingerprint": { "type": "string", "units": [38634, 233] }
+    },
+    {
+      "name": "astral",
+      "input": "\"💩\"",
+      "stringifyUnits": [34, 55357, 56489, 34],
+      "fingerprint": { "type": "string", "units": [55357, 56489] }
+    },
+    {
+      "name": "escaped-pair",
+      "input": "\"\\ud83d\\udca9\"",
+      "stringifyUnits": [34, 55357, 56489, 34],
+      "fingerprint": { "type": "string", "units": [55357, 56489] }
+    },
+    {
+      "name": "high",
+      "input": "\"\\ud800\"",
+      "stringifyUnits": [34, 92, 117, 100, 56, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [55296] }
+    },
+    {
+      "name": "low",
+      "input": "\"\\udfff\"",
+      "stringifyUnits": [34, 92, 117, 100, 102, 102, 102, 34],
+      "fingerprint": { "type": "string", "units": [57343] }
+    },
+    {
+      "name": "high-high",
+      "input": "\"\\ud800\\ud800\"",
+      "stringifyUnits": [34, 92, 117, 100, 56, 48, 48, 92, 117, 100, 56, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [55296, 55296] }
+    },
+    {
+      "name": "low-high",
+      "input": "\"\\udc00\\ud800\"",
+      "stringifyUnits": [34, 92, 117, 100, 99, 48, 48, 92, 117, 100, 56, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [56320, 55296] }
+    },
+    {
+      "name": "mixed",
+      "input": "\"a\\ud800雪\\udfff💩\"",
+      "stringifyUnits": [
+        34, 97, 92, 117, 100, 56, 48, 48, 38634, 92, 117, 100, 102, 102, 102, 55357, 56489, 34
+      ],
+      "fingerprint": { "type": "string", "units": [97, 55296, 38634, 57343, 55357, 56489] }
+    },
+    {
+      "name": "escape-controls",
+      "input": "\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\\\/\"",
+      "stringifyUnits": [
+        34, 92, 117, 48, 48, 48, 48, 92, 98, 92, 102, 92, 110, 92, 114, 92, 116, 92, 34, 92, 92, 47,
+        34
+      ],
+      "fingerprint": { "type": "string", "units": [0, 8, 12, 10, 13, 9, 34, 92, 47] }
+    },
+    {
+      "name": "line-separators",
+      "input": "\"  \"",
+      "stringifyUnits": [34, 8232, 8233, 34],
+      "fingerprint": { "type": "string", "units": [8232, 8233] }
+    },
+    {
+      "name": "nested-lones",
+      "input": "{\"x\":[\"\\ud800\",{\"\\udfff\":\"\\ud800\"}]}",
+      "stringifyUnits": [
+        123, 34, 120, 34, 58, 91, 34, 92, 117, 100, 56, 48, 48, 34, 44, 123, 34, 92, 117, 100, 102,
+        102, 102, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125, 93, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [120],
+            "value": {
+              "type": "array",
+              "items": [
+                { "type": "string", "units": [55296] },
+                {
+                  "type": "object",
+                  "entries": [
+                    { "keyUnits": [57343], "value": { "type": "string", "units": [55296] } }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-key",
+      "input": "{\"a\":1,\"b\":2,\"a\":3}",
+      "stringifyUnits": [123, 34, 97, 34, 58, 51, 44, 34, 98, 34, 58, 50, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          { "keyUnits": [97], "value": { "type": "number", "json": "3", "negativeZero": false } },
+          { "keyUnits": [98], "value": { "type": "number", "json": "2", "negativeZero": false } }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-surrogate-key",
+      "input": "{\"\\ud800\":1,\"x\":2,\"\\uD800\":3}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 56, 48, 48, 34, 58, 51, 44, 34, 120, 34, 58, 50, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [55296],
+            "value": { "type": "number", "json": "3", "negativeZero": false }
+          },
+          { "keyUnits": [120], "value": { "type": "number", "json": "2", "negativeZero": false } }
+        ]
+      }
+    },
+    {
+      "name": "pair-key-equivalence",
+      "input": "{\"💩\":1,\"\\ud83d\\udca9\":2}",
+      "stringifyUnits": [123, 34, 55357, 56489, 34, 58, 50, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [55357, 56489],
+            "value": { "type": "number", "json": "2", "negativeZero": false }
+          }
+        ]
+      }
+    },
+    {
+      "name": "distinct-replacement-key",
+      "input": "{\"\\ud800\":1,\"�\":2,\"\\udfff\":3}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 56, 48, 48, 34, 58, 49, 44, 34, 65533, 34, 58, 50, 44, 34, 92, 117,
+        100, 102, 102, 102, 34, 58, 51, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [55296],
+            "value": { "type": "number", "json": "1", "negativeZero": false }
+          },
+          {
+            "keyUnits": [65533],
+            "value": { "type": "number", "json": "2", "negativeZero": false }
+          },
+          { "keyUnits": [57343], "value": { "type": "number", "json": "3", "negativeZero": false } }
+        ]
+      }
+    },
+    {
+      "name": "prototype-key",
+      "input": "{\"__proto__\":{\"polluted\":true},\"constructor\":1,\"prototype\":2}",
+      "stringifyUnits": [
+        123, 34, 95, 95, 112, 114, 111, 116, 111, 95, 95, 34, 58, 123, 34, 112, 111, 108, 108, 117,
+        116, 101, 100, 34, 58, 116, 114, 117, 101, 125, 44, 34, 99, 111, 110, 115, 116, 114, 117,
+        99, 116, 111, 114, 34, 58, 49, 44, 34, 112, 114, 111, 116, 111, 116, 121, 112, 101, 34, 58,
+        50, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [95, 95, 112, 114, 111, 116, 111, 95, 95],
+            "value": {
+              "type": "object",
+              "entries": [
+                {
+                  "keyUnits": [112, 111, 108, 108, 117, 116, 101, 100],
+                  "value": { "type": "boolean", "value": true }
+                }
+              ]
+            }
+          },
+          {
+            "keyUnits": [99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114],
+            "value": { "type": "number", "json": "1", "negativeZero": false }
+          },
+          {
+            "keyUnits": [112, 114, 111, 116, 111, 116, 121, 112, 101],
+            "value": { "type": "number", "json": "2", "negativeZero": false }
+          }
+        ]
+      }
+    },
+    {
+      "name": "private-number-key",
+      "input": "{\"$serde_json::private::Number\":\"1e999\"}",
+      "stringifyUnits": [
+        123, 34, 36, 115, 101, 114, 100, 101, 95, 106, 115, 111, 110, 58, 58, 112, 114, 105, 118,
+        97, 116, 101, 58, 58, 78, 117, 109, 98, 101, 114, 34, 58, 34, 49, 101, 57, 57, 57, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [
+              36, 115, 101, 114, 100, 101, 95, 106, 115, 111, 110, 58, 58, 112, 114, 105, 118, 97,
+              116, 101, 58, 58, 78, 117, 109, 98, 101, 114
+            ],
+            "value": { "type": "string", "units": [49, 101, 57, 57, 57] }
+          }
+        ]
+      }
+    },
+    {
+      "name": "private-number-object",
+      "input": "{\"$serde_json::private::Number\":{\"\\ud800\":1}}",
+      "stringifyUnits": [
+        123, 34, 36, 115, 101, 114, 100, 101, 95, 106, 115, 111, 110, 58, 58, 112, 114, 105, 118,
+        97, 116, 101, 58, 58, 78, 117, 109, 98, 101, 114, 34, 58, 123, 34, 92, 117, 100, 56, 48, 48,
+        34, 58, 49, 125, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          {
+            "keyUnits": [
+              36, 115, 101, 114, 100, 101, 95, 106, 115, 111, 110, 58, 58, 112, 114, 105, 118, 97,
+              116, 101, 58, 58, 78, 117, 109, 98, 101, 114
+            ],
+            "value": {
+              "type": "object",
+              "entries": [
+                {
+                  "keyUnits": [55296],
+                  "value": { "type": "number", "json": "1", "negativeZero": false }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "index-order",
+      "input": "{\"4294967295\":1,\"2\":2,\"01\":3,\"0\":4,\"4294967294\":5,\"1\":6,\"-0\":7}",
+      "stringifyUnits": [
+        123, 34, 48, 34, 58, 52, 44, 34, 49, 34, 58, 54, 44, 34, 50, 34, 58, 50, 44, 34, 52, 50, 57,
+        52, 57, 54, 55, 50, 57, 52, 34, 58, 53, 44, 34, 52, 50, 57, 52, 57, 54, 55, 50, 57, 53, 34,
+        58, 49, 44, 34, 48, 49, 34, 58, 51, 44, 34, 45, 48, 34, 58, 55, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          { "keyUnits": [48], "value": { "type": "number", "json": "4", "negativeZero": false } },
+          { "keyUnits": [49], "value": { "type": "number", "json": "6", "negativeZero": false } },
+          { "keyUnits": [50], "value": { "type": "number", "json": "2", "negativeZero": false } },
+          {
+            "keyUnits": [52, 50, 57, 52, 57, 54, 55, 50, 57, 52],
+            "value": { "type": "number", "json": "5", "negativeZero": false }
+          },
+          {
+            "keyUnits": [52, 50, 57, 52, 57, 54, 55, 50, 57, 53],
+            "value": { "type": "number", "json": "1", "negativeZero": false }
+          },
+          {
+            "keyUnits": [48, 49],
+            "value": { "type": "number", "json": "3", "negativeZero": false }
+          },
+          {
+            "keyUnits": [45, 48],
+            "value": { "type": "number", "json": "7", "negativeZero": false }
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-index-order",
+      "input": "{\"2\":1,\"1\":2,\"a\":3,\"2\":4,\"0\":5}",
+      "stringifyUnits": [
+        123, 34, 48, 34, 58, 53, 44, 34, 49, 34, 58, 50, 44, 34, 50, 34, 58, 52, 44, 34, 97, 34, 58,
+        51, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [
+          { "keyUnits": [48], "value": { "type": "number", "json": "5", "negativeZero": false } },
+          { "keyUnits": [49], "value": { "type": "number", "json": "2", "negativeZero": false } },
+          { "keyUnits": [50], "value": { "type": "number", "json": "4", "negativeZero": false } },
+          { "keyUnits": [97], "value": { "type": "number", "json": "3", "negativeZero": false } }
+        ]
+      }
+    },
+    {
+      "name": "number-0",
+      "input": "0",
+      "stringifyUnits": [48],
+      "fingerprint": { "type": "number", "json": "0", "negativeZero": false }
+    },
+    {
+      "name": "number-1",
+      "input": "-0",
+      "stringifyUnits": [48],
+      "fingerprint": { "type": "number", "json": "0", "negativeZero": true }
+    },
+    {
+      "name": "number-2",
+      "input": "0.0",
+      "stringifyUnits": [48],
+      "fingerprint": { "type": "number", "json": "0", "negativeZero": false }
+    },
+    {
+      "name": "number-3",
+      "input": "-0.0",
+      "stringifyUnits": [48],
+      "fingerprint": { "type": "number", "json": "0", "negativeZero": true }
+    },
+    {
+      "name": "number-4",
+      "input": "1",
+      "stringifyUnits": [49],
+      "fingerprint": { "type": "number", "json": "1", "negativeZero": false }
+    },
+    {
+      "name": "number-5",
+      "input": "-1",
+      "stringifyUnits": [45, 49],
+      "fingerprint": { "type": "number", "json": "-1", "negativeZero": false }
+    },
+    {
+      "name": "number-6",
+      "input": "1.5",
+      "stringifyUnits": [49, 46, 53],
+      "fingerprint": { "type": "number", "json": "1.5", "negativeZero": false }
+    },
+    {
+      "name": "number-7",
+      "input": "1e-7",
+      "stringifyUnits": [49, 101, 45, 55],
+      "fingerprint": { "type": "number", "json": "1e-7", "negativeZero": false }
+    },
+    {
+      "name": "number-8",
+      "input": "1e-6",
+      "stringifyUnits": [48, 46, 48, 48, 48, 48, 48, 49],
+      "fingerprint": { "type": "number", "json": "0.000001", "negativeZero": false }
+    },
+    {
+      "name": "number-9",
+      "input": "1e20",
+      "stringifyUnits": [
+        49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48
+      ],
+      "fingerprint": { "type": "number", "json": "100000000000000000000", "negativeZero": false }
+    },
+    {
+      "name": "number-10",
+      "input": "1e21",
+      "stringifyUnits": [49, 101, 43, 50, 49],
+      "fingerprint": { "type": "number", "json": "1e+21", "negativeZero": false }
+    },
+    {
+      "name": "number-11",
+      "input": "1e30",
+      "stringifyUnits": [49, 101, 43, 51, 48],
+      "fingerprint": { "type": "number", "json": "1e+30", "negativeZero": false }
+    },
+    {
+      "name": "number-12",
+      "input": "-1e30",
+      "stringifyUnits": [45, 49, 101, 43, 51, 48],
+      "fingerprint": { "type": "number", "json": "-1e+30", "negativeZero": false }
+    },
+    {
+      "name": "number-13",
+      "input": "1e308",
+      "stringifyUnits": [49, 101, 43, 51, 48, 56],
+      "fingerprint": { "type": "number", "json": "1e+308", "negativeZero": false }
+    },
+    {
+      "name": "number-14",
+      "input": "1e309",
+      "stringifyUnits": [110, 117, 108, 108],
+      "fingerprint": { "type": "number", "json": "null", "negativeZero": false }
+    },
+    {
+      "name": "number-15",
+      "input": "-1e309",
+      "stringifyUnits": [110, 117, 108, 108],
+      "fingerprint": { "type": "number", "json": "null", "negativeZero": false }
+    },
+    {
+      "name": "number-16",
+      "input": "5e-324",
+      "stringifyUnits": [53, 101, 45, 51, 50, 52],
+      "fingerprint": { "type": "number", "json": "5e-324", "negativeZero": false }
+    },
+    {
+      "name": "number-17",
+      "input": "1e-324",
+      "stringifyUnits": [48],
+      "fingerprint": { "type": "number", "json": "0", "negativeZero": false }
+    },
+    {
+      "name": "number-18",
+      "input": "2.2250738585072014e-308",
+      "stringifyUnits": [
+        50, 46, 50, 50, 53, 48, 55, 51, 56, 53, 56, 53, 48, 55, 50, 48, 49, 52, 101, 45, 51, 48, 56
+      ],
+      "fingerprint": { "type": "number", "json": "2.2250738585072014e-308", "negativeZero": false }
+    },
+    {
+      "name": "number-19",
+      "input": "9007199254740991",
+      "stringifyUnits": [57, 48, 48, 55, 49, 57, 57, 50, 53, 52, 55, 52, 48, 57, 57, 49],
+      "fingerprint": { "type": "number", "json": "9007199254740991", "negativeZero": false }
+    },
+    {
+      "name": "number-20",
+      "input": "9007199254740992",
+      "stringifyUnits": [57, 48, 48, 55, 49, 57, 57, 50, 53, 52, 55, 52, 48, 57, 57, 50],
+      "fingerprint": { "type": "number", "json": "9007199254740992", "negativeZero": false }
+    },
+    {
+      "name": "number-21",
+      "input": "9007199254740993",
+      "stringifyUnits": [57, 48, 48, 55, 49, 57, 57, 50, 53, 52, 55, 52, 48, 57, 57, 50],
+      "fingerprint": { "type": "number", "json": "9007199254740992", "negativeZero": false }
+    },
+    {
+      "name": "number-22",
+      "input": "9223372036854775807",
+      "stringifyUnits": [
+        57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 54, 48, 48, 48
+      ],
+      "fingerprint": { "type": "number", "json": "9223372036854776000", "negativeZero": false }
+    },
+    {
+      "name": "number-23",
+      "input": "18446744073709551615",
+      "stringifyUnits": [
+        49, 56, 52, 52, 54, 55, 52, 52, 48, 55, 51, 55, 48, 57, 53, 53, 50, 48, 48, 48
+      ],
+      "fingerprint": { "type": "number", "json": "18446744073709552000", "negativeZero": false }
+    },
+    {
+      "name": "number-24",
+      "input": "0.100000000000000005",
+      "stringifyUnits": [48, 46, 49],
+      "fingerprint": { "type": "number", "json": "0.1", "negativeZero": false }
+    },
+    {
+      "name": "number-25",
+      "input": "1.234567890123456789",
+      "stringifyUnits": [49, 46, 50, 51, 52, 53, 54, 55, 56, 57, 48, 49, 50, 51, 52, 53, 54, 55],
+      "fingerprint": { "type": "number", "json": "1.2345678901234567", "negativeZero": false }
+    },
+    {
+      "name": "unit-0",
+      "input": "\"\\u0000\"",
+      "stringifyUnits": [34, 92, 117, 48, 48, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [0] }
+    },
+    {
+      "name": "key-0",
+      "input": "{\"\\u0000\":\"\\u0000\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 48, 48, 48, 48, 34, 58, 34, 92, 117, 48, 48, 48, 48, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [0], "value": { "type": "string", "units": [0] } }]
+      }
+    },
+    {
+      "name": "unit-1",
+      "input": "\"\\u0001\"",
+      "stringifyUnits": [34, 92, 117, 48, 48, 48, 49, 34],
+      "fingerprint": { "type": "string", "units": [1] }
+    },
+    {
+      "name": "key-1",
+      "input": "{\"\\u0001\":\"\\u0001\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 48, 48, 48, 49, 34, 58, 34, 92, 117, 48, 48, 48, 49, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [1], "value": { "type": "string", "units": [1] } }]
+      }
+    },
+    {
+      "name": "unit-31",
+      "input": "\"\\u001f\"",
+      "stringifyUnits": [34, 92, 117, 48, 48, 49, 102, 34],
+      "fingerprint": { "type": "string", "units": [31] }
+    },
+    {
+      "name": "key-31",
+      "input": "{\"\\u001f\":\"\\u001f\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 48, 48, 49, 102, 34, 58, 34, 92, 117, 48, 48, 49, 102, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [31], "value": { "type": "string", "units": [31] } }]
+      }
+    },
+    {
+      "name": "unit-32",
+      "input": "\"\\u0020\"",
+      "stringifyUnits": [34, 32, 34],
+      "fingerprint": { "type": "string", "units": [32] }
+    },
+    {
+      "name": "key-32",
+      "input": "{\"\\u0020\":\"\\u0020\"}",
+      "stringifyUnits": [123, 34, 32, 34, 58, 34, 32, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [32], "value": { "type": "string", "units": [32] } }]
+      }
+    },
+    {
+      "name": "unit-127",
+      "input": "\"\\u007f\"",
+      "stringifyUnits": [34, 127, 34],
+      "fingerprint": { "type": "string", "units": [127] }
+    },
+    {
+      "name": "key-127",
+      "input": "{\"\\u007f\":\"\\u007f\"}",
+      "stringifyUnits": [123, 34, 127, 34, 58, 34, 127, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [127], "value": { "type": "string", "units": [127] } }]
+      }
+    },
+    {
+      "name": "unit-128",
+      "input": "\"\\u0080\"",
+      "stringifyUnits": [34, 128, 34],
+      "fingerprint": { "type": "string", "units": [128] }
+    },
+    {
+      "name": "key-128",
+      "input": "{\"\\u0080\":\"\\u0080\"}",
+      "stringifyUnits": [123, 34, 128, 34, 58, 34, 128, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [128], "value": { "type": "string", "units": [128] } }]
+      }
+    },
+    {
+      "name": "unit-55295",
+      "input": "\"\\ud7ff\"",
+      "stringifyUnits": [34, 55295, 34],
+      "fingerprint": { "type": "string", "units": [55295] }
+    },
+    {
+      "name": "key-55295",
+      "input": "{\"\\ud7ff\":\"\\ud7ff\"}",
+      "stringifyUnits": [123, 34, 55295, 34, 58, 34, 55295, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [55295], "value": { "type": "string", "units": [55295] } }]
+      }
+    },
+    {
+      "name": "unit-55296",
+      "input": "\"\\ud800\"",
+      "stringifyUnits": [34, 92, 117, 100, 56, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [55296] }
+    },
+    {
+      "name": "key-55296",
+      "input": "{\"\\ud800\":\"\\ud800\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 56, 48, 48, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [55296], "value": { "type": "string", "units": [55296] } }]
+      }
+    },
+    {
+      "name": "unit-56319",
+      "input": "\"\\udbff\"",
+      "stringifyUnits": [34, 92, 117, 100, 98, 102, 102, 34],
+      "fingerprint": { "type": "string", "units": [56319] }
+    },
+    {
+      "name": "key-56319",
+      "input": "{\"\\udbff\":\"\\udbff\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 98, 102, 102, 34, 58, 34, 92, 117, 100, 98, 102, 102, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [56319], "value": { "type": "string", "units": [56319] } }]
+      }
+    },
+    {
+      "name": "unit-56320",
+      "input": "\"\\udc00\"",
+      "stringifyUnits": [34, 92, 117, 100, 99, 48, 48, 34],
+      "fingerprint": { "type": "string", "units": [56320] }
+    },
+    {
+      "name": "key-56320",
+      "input": "{\"\\udc00\":\"\\udc00\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 99, 48, 48, 34, 58, 34, 92, 117, 100, 99, 48, 48, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [56320], "value": { "type": "string", "units": [56320] } }]
+      }
+    },
+    {
+      "name": "unit-57343",
+      "input": "\"\\udfff\"",
+      "stringifyUnits": [34, 92, 117, 100, 102, 102, 102, 34],
+      "fingerprint": { "type": "string", "units": [57343] }
+    },
+    {
+      "name": "key-57343",
+      "input": "{\"\\udfff\":\"\\udfff\"}",
+      "stringifyUnits": [
+        123, 34, 92, 117, 100, 102, 102, 102, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 125
+      ],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [57343], "value": { "type": "string", "units": [57343] } }]
+      }
+    },
+    {
+      "name": "unit-57344",
+      "input": "\"\\ue000\"",
+      "stringifyUnits": [34, 57344, 34],
+      "fingerprint": { "type": "string", "units": [57344] }
+    },
+    {
+      "name": "key-57344",
+      "input": "{\"\\ue000\":\"\\ue000\"}",
+      "stringifyUnits": [123, 34, 57344, 34, 58, 34, 57344, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [57344], "value": { "type": "string", "units": [57344] } }]
+      }
+    },
+    {
+      "name": "unit-65535",
+      "input": "\"\\uffff\"",
+      "stringifyUnits": [34, 65535, 34],
+      "fingerprint": { "type": "string", "units": [65535] }
+    },
+    {
+      "name": "key-65535",
+      "input": "{\"\\uffff\":\"\\uffff\"}",
+      "stringifyUnits": [123, 34, 65535, 34, 58, 34, 65535, 34, 125],
+      "fingerprint": {
+        "type": "object",
+        "entries": [{ "keyUnits": [65535], "value": { "type": "string", "units": [65535] } }]
+      }
+    }
+  ],
+  "invalid": [
+    { "name": "invalid-0", "inputUnits": [], "rejected": true },
+    {
+      "name": "invalid-1",
+      "inputUnits": [117, 110, 100, 101, 102, 105, 110, 101, 100],
+      "rejected": true
+    },
+    { "name": "invalid-2", "inputUnits": [78, 97, 78], "rejected": true },
+    {
+      "name": "invalid-3",
+      "inputUnits": [73, 110, 102, 105, 110, 105, 116, 121],
+      "rejected": true
+    },
+    { "name": "invalid-4", "inputUnits": [48, 49], "rejected": true },
+    { "name": "invalid-5", "inputUnits": [43, 49], "rejected": true },
+    { "name": "invalid-6", "inputUnits": [49, 46], "rejected": true },
+    { "name": "invalid-7", "inputUnits": [49, 101], "rejected": true },
+    { "name": "invalid-8", "inputUnits": [91, 49, 44, 93], "rejected": true },
+    { "name": "invalid-9", "inputUnits": [123, 34, 120, 34, 58, 49, 44, 125], "rejected": true },
+    { "name": "invalid-10", "inputUnits": [123, 34, 120, 34, 32, 49, 125], "rejected": true },
+    { "name": "invalid-11", "inputUnits": [34, 92, 117, 68, 56, 48, 34], "rejected": true },
+    { "name": "invalid-12", "inputUnits": [34, 92, 120, 52, 49, 34], "rejected": true },
+    {
+      "name": "invalid-13",
+      "inputUnits": [34, 117, 110, 99, 108, 111, 115, 101, 100],
+      "rejected": true
+    },
+    { "name": "invalid-14", "inputUnits": [34, 97, 10, 98, 34], "rejected": true },
+    {
+      "name": "invalid-15",
+      "inputUnits": [110, 117, 108, 108, 32, 102, 97, 108, 115, 101],
+      "rejected": true
+    },
+    { "name": "invalid-16", "inputUnits": [123], "rejected": true },
+    { "name": "invalid-17", "inputUnits": [91], "rejected": true },
+    { "name": "invalid-18", "inputUnits": [65279, 123, 125], "rejected": true }
+  ],
+  "utf8": [
+    { "name": "ff", "bytes": [255], "units": [65533] },
+    { "name": "overlong", "bytes": [192, 175], "units": [65533, 65533] },
+    { "name": "surrogate", "bytes": [237, 160, 128], "units": [65533, 65533, 65533] },
+    { "name": "truncated", "bytes": [226, 130], "units": [65533] },
+    { "name": "replacement", "bytes": [239, 191, 189], "units": [65533] },
+    { "name": "astral", "bytes": [240, 159, 146, 169], "units": [55357, 56489] },
+    { "name": "bad-continuation", "bytes": [226, 65, 130], "units": [65533, 65, 65533] },
+    { "name": "too-high", "bytes": [244, 144, 128, 128], "units": [65533, 65533, 65533, 65533] },
+    { "name": "stray-continuations", "bytes": [128, 191], "units": [65533, 65533] },
+    { "name": "bom", "bytes": [239, 187, 191, 65], "units": [65] }
+  ]
+}

@@ -1,10 +1,13 @@
 //! Stored-event decoding uses a generated, closed catalog. Producer schemas are
 //! recorded by the corpus tool; adding a TS event requires regenerating them.
+#[path = "events_lossless.rs"]
+mod lossless;
 use super::{error::DataError, reducers::Scope};
+pub use lossless::{decode as decode_lossless, decode_payload as decode_payload_lossless};
 use serde_json::Value;
 use std::{collections::HashMap, sync::OnceLock};
 
-fn schemas() -> &'static Value {
+pub(super) fn schemas() -> &'static Value {
     static SCHEMAS: OnceLock<Value> = OnceLock::new();
     SCHEMAS.get_or_init(|| {
         serde_json::from_str(include_str!("../../fixtures/event-schemas.json"))

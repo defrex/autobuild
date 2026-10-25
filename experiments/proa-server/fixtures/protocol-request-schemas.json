@@ -1,0 +1,1239 @@
+{
+  "newBuild": {
+    "type": "object",
+    "shape": {
+      "slug": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "repoOrigin": { "type": "optional", "inner": { "type": "string" } },
+      "ticket": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "url": { "type": "optional", "inner": { "type": "string" } },
+            "title": { "type": "optional", "inner": { "type": "string" } }
+          },
+          "strict": true
+        }
+      },
+      "branch": {
+        "type": "optional",
+        "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+      },
+      "created": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "compatibility": {
+              "type": "optional",
+              "inner": {
+                "type": "object",
+                "shape": {
+                  "writerVersion": {
+                    "type": "string",
+                    "checks": [{ "check": "min_length", "minimum": 1 }]
+                  },
+                  "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+                },
+                "strict": true
+              }
+            },
+            "actor": { "type": "unknown" },
+            "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "payload": { "type": "unknown" }
+          },
+          "strict": false
+        }
+      }
+    },
+    "strict": false
+  },
+  "ensureRepo": {
+    "type": "object",
+    "shape": { "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": false
+  },
+  "leaseClaim": {
+    "type": "object",
+    "shape": {
+      "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "ttlMs": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      }
+    },
+    "strict": false
+  },
+  "leaseHolder": {
+    "type": "object",
+    "shape": {
+      "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+    },
+    "strict": false
+  },
+  "newSession": {
+    "type": "object",
+    "shape": {
+      "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "title": { "type": "optional", "inner": { "type": "string" } }
+    },
+    "strict": false
+  },
+  "eventWrite": {
+    "type": "object",
+    "shape": {
+      "compatibility": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "writerVersion": {
+              "type": "string",
+              "checks": [{ "check": "min_length", "minimum": 1 }]
+            },
+            "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+          },
+          "strict": true
+        }
+      },
+      "actor": { "type": "unknown" },
+      "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "payload": { "type": "unknown" }
+    },
+    "strict": false
+  },
+  "conditionalEvent": {
+    "type": "object",
+    "shape": {
+      "expectedSeq": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      },
+      "event": {
+        "type": "object",
+        "shape": {
+          "compatibility": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "writerVersion": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+              },
+              "strict": true
+            }
+          },
+          "actor": { "type": "unknown" },
+          "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "payload": { "type": "unknown" }
+        },
+        "strict": false
+      }
+    },
+    "strict": false
+  },
+  "snapshotPut": {
+    "type": "object",
+    "shape": {
+      "version": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 1, "inclusive": true }
+        ]
+      },
+      "cursor": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      },
+      "state": { "type": "unknown" }
+    },
+    "strict": false
+  },
+  "operatorPresence": {
+    "type": "object",
+    "shape": {
+      "id": {
+        "type": "string",
+        "checks": [
+          { "check": "trim" },
+          { "check": "min_length", "minimum": 1 },
+          { "check": "max_length", "maximum": 256 }
+        ]
+      },
+      "host": {
+        "type": "string",
+        "checks": [
+          { "check": "trim" },
+          { "check": "min_length", "minimum": 1 },
+          { "check": "max_length", "maximum": 256 }
+        ]
+      },
+      "pid": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": false },
+          { "check": "number_format", "format": "safeint" }
+        ]
+      },
+      "startedAt": {
+        "type": "string",
+        "checks": [
+          {
+            "check": "string_format",
+            "format": "datetime",
+            "source": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "flags": "",
+            "pattern": "/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/"
+          }
+        ]
+      }
+    },
+    "strict": true
+  },
+  "putArtifact": {
+    "type": "object",
+    "shape": {
+      "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "contentBase64": { "type": "string" },
+      "metadata": {
+        "type": "optional",
+        "inner": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } }
+      }
+    },
+    "strict": false
+  },
+  "deposits": {
+    "type": "object",
+    "shape": {
+      "expectedSeq": {
+        "type": "optional",
+        "inner": {
+          "type": "number",
+          "checks": [
+            { "check": "number_format", "format": "safeint" },
+            { "check": "greater_than", "value": 0, "inclusive": true }
+          ]
+        }
+      },
+      "artifacts": {
+        "type": "array",
+        "element": {
+          "type": "object",
+          "shape": {
+            "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "contentBase64": { "type": "string" },
+            "metadata": {
+              "type": "optional",
+              "inner": {
+                "type": "record",
+                "key": { "type": "string" },
+                "value": { "type": "unknown" }
+              }
+            }
+          },
+          "strict": false
+        }
+      },
+      "event": {
+        "type": "object",
+        "shape": {
+          "compatibility": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "writerVersion": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+              },
+              "strict": true
+            }
+          },
+          "actor": { "type": "unknown" },
+          "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "payload": { "type": "unknown" }
+        },
+        "strict": false
+      }
+    },
+    "strict": false
+  },
+  "finishRepoTick": {
+    "type": "object",
+    "shape": {
+      "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "completion": {
+        "type": "union",
+        "discriminator": "outcome",
+        "options": [
+          {
+            "type": "object",
+            "shape": {
+              "outcome": { "type": "literal", "values": ["completed"] },
+              "counters": {
+                "type": "object",
+                "shape": {
+                  "forgeRequests": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "object",
+                      "shape": {
+                        "restPrimary": {
+                          "type": "optional",
+                          "inner": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": true }
+                            ]
+                          }
+                        },
+                        "restNotModified": {
+                          "type": "optional",
+                          "inner": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": true }
+                            ]
+                          }
+                        },
+                        "graphql": {
+                          "type": "optional",
+                          "inner": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": true }
+                            ]
+                          }
+                        },
+                        "total": {
+                          "type": "number",
+                          "checks": [
+                            { "check": "number_format", "format": "safeint" },
+                            { "check": "greater_than", "value": 0, "inclusive": true }
+                          ]
+                        },
+                        "unattributed": {
+                          "type": "number",
+                          "checks": [
+                            { "check": "number_format", "format": "safeint" },
+                            { "check": "greater_than", "value": 0, "inclusive": true }
+                          ]
+                        },
+                        "builds": {
+                          "type": "array",
+                          "checks": [{ "check": "max_length", "maximum": 10 }],
+                          "element": {
+                            "type": "object",
+                            "shape": {
+                              "build": {
+                                "type": "string",
+                                "checks": [{ "check": "min_length", "minimum": 1 }]
+                              },
+                              "requests": {
+                                "type": "number",
+                                "checks": [
+                                  { "check": "number_format", "format": "safeint" },
+                                  { "check": "greater_than", "value": 0, "inclusive": false }
+                                ]
+                              }
+                            },
+                            "strict": true
+                          }
+                        },
+                        "complete": { "type": "boolean" }
+                      },
+                      "strict": true
+                    }
+                  },
+                  "merged": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "closed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "conflicted": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "abandoned": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "discarded": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "janitorFailed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "recovered": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "dispatchFailed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "resumed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "swept": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "dispatched": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "authored": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "bounced": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "claimRaces": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "invalidTickets": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "creationWithheld": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "dependencyBlocked": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "dependencyCheckFailed": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "settled": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "provisioning": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "sandboxIdleStops": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "sandboxSettleFailures": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "orchestratorSandboxFailures": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    }
+                  },
+                  "harvestStarted": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "harvestResumed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "harvestCompleted": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "harvestEscalated": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  },
+                  "harvestFailed": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  }
+                },
+                "strict": true
+              }
+            },
+            "strict": false
+          },
+          {
+            "type": "object",
+            "shape": {
+              "outcome": { "type": "literal", "values": ["failed"] },
+              "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "forgeRequests": {
+                "type": "optional",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "restPrimary": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "restNotModified": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "graphql": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "unattributed": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "builds": {
+                      "type": "array",
+                      "checks": [{ "check": "max_length", "maximum": 10 }],
+                      "element": {
+                        "type": "object",
+                        "shape": {
+                          "build": {
+                            "type": "string",
+                            "checks": [{ "check": "min_length", "minimum": 1 }]
+                          },
+                          "requests": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": false }
+                            ]
+                          }
+                        },
+                        "strict": true
+                      }
+                    },
+                    "complete": { "type": "boolean" }
+                  },
+                  "strict": true
+                }
+              }
+            },
+            "strict": false
+          }
+        ]
+      },
+      "events": {
+        "type": "array",
+        "element": {
+          "type": "object",
+          "shape": {
+            "actor": {
+              "type": "union",
+              "discriminator": "kind",
+              "options": [
+                {
+                  "type": "object",
+                  "shape": { "kind": { "type": "literal", "values": ["kernel"] } },
+                  "strict": true
+                },
+                {
+                  "type": "object",
+                  "shape": {
+                    "kind": { "type": "literal", "values": ["agent"] },
+                    "role": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    },
+                    "session": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                },
+                {
+                  "type": "object",
+                  "shape": {
+                    "kind": { "type": "literal", "values": ["human"] },
+                    "user": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    },
+                    "via": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "union",
+                        "discriminator": "kind",
+                        "options": [
+                          {
+                            "type": "object",
+                            "shape": {
+                              "kind": { "type": "literal", "values": ["session"] },
+                              "id": {
+                                "type": "string",
+                                "checks": [{ "check": "min_length", "minimum": 1 }]
+                              }
+                            },
+                            "strict": true
+                          },
+                          {
+                            "type": "object",
+                            "shape": {
+                              "kind": { "type": "literal", "values": ["mcp"] },
+                              "client": {
+                                "type": "string",
+                                "checks": [{ "check": "min_length", "minimum": 1 }]
+                              }
+                            },
+                            "strict": true
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "strict": true
+                },
+                {
+                  "type": "object",
+                  "shape": { "kind": { "type": "literal", "values": ["dispatcher"] } },
+                  "strict": true
+                },
+                {
+                  "type": "object",
+                  "shape": {
+                    "kind": { "type": "literal", "values": ["ingester"] },
+                    "source": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              ]
+            },
+            "type": { "type": "string" },
+            "payload": { "type": "unknown" }
+          },
+          "strict": false
+        }
+      }
+    },
+    "strict": false
+  },
+  "tickCompletion": {
+    "type": "union",
+    "discriminator": "outcome",
+    "options": [
+      {
+        "type": "object",
+        "shape": {
+          "outcome": { "type": "literal", "values": ["completed"] },
+          "counters": {
+            "type": "object",
+            "shape": {
+              "forgeRequests": {
+                "type": "optional",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "restPrimary": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "restNotModified": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "graphql": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "unattributed": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "builds": {
+                      "type": "array",
+                      "checks": [{ "check": "max_length", "maximum": 10 }],
+                      "element": {
+                        "type": "object",
+                        "shape": {
+                          "build": {
+                            "type": "string",
+                            "checks": [{ "check": "min_length", "minimum": 1 }]
+                          },
+                          "requests": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": false }
+                            ]
+                          }
+                        },
+                        "strict": true
+                      }
+                    },
+                    "complete": { "type": "boolean" }
+                  },
+                  "strict": true
+                }
+              },
+              "merged": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "closed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "conflicted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "abandoned": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "discarded": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "janitorFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "recovered": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dispatchFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "resumed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "swept": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dispatched": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "authored": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "bounced": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "claimRaces": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "invalidTickets": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "creationWithheld": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "dependencyBlocked": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dependencyCheckFailed": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "settled": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "provisioning": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "sandboxIdleStops": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "sandboxSettleFailures": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "orchestratorSandboxFailures": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "harvestStarted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestResumed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestCompleted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestEscalated": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": false
+      },
+      {
+        "type": "object",
+        "shape": {
+          "outcome": { "type": "literal", "values": ["failed"] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "forgeRequests": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "restPrimary": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  }
+                },
+                "restNotModified": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  }
+                },
+                "graphql": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  }
+                },
+                "total": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                },
+                "unattributed": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                },
+                "builds": {
+                  "type": "array",
+                  "checks": [{ "check": "max_length", "maximum": 10 }],
+                  "element": {
+                    "type": "object",
+                    "shape": {
+                      "build": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "requests": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": false }
+                        ]
+                      }
+                    },
+                    "strict": true
+                  }
+                },
+                "complete": { "type": "boolean" }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": false
+      }
+    ]
+  },
+  "createStream": {
+    "type": "object",
+    "shape": { "label": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": false
+  },
+  "appendStream": {
+    "type": "object",
+    "shape": {
+      "parts": {
+        "type": "array",
+        "checks": [{ "check": "min_length", "minimum": 1 }],
+        "element": {
+          "type": "object",
+          "shape": {
+            "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "strict": false,
+          "catchall": { "type": "unknown" }
+        }
+      }
+    },
+    "strict": false
+  },
+  "closeStream": {
+    "type": "object",
+    "shape": { "outcome": { "type": "enum", "values": ["completed", "aborted"] } },
+    "strict": false
+  },
+  "putTicketAsset": {
+    "type": "object",
+    "shape": {
+      "kind": { "type": "string" },
+      "name": { "type": "string" },
+      "layout": { "type": "enum", "values": ["file", "tree"] },
+      "entries": {
+        "type": "array",
+        "element": {
+          "type": "union",
+          "discriminator": "type",
+          "options": [
+            {
+              "type": "object",
+              "shape": {
+                "type": { "type": "literal", "values": ["file"] },
+                "path": { "type": "string" },
+                "contentBase64": { "type": "string" }
+              },
+              "strict": false
+            },
+            {
+              "type": "object",
+              "shape": {
+                "type": { "type": "literal", "values": ["dir"] },
+                "path": { "type": "string" }
+              },
+              "strict": false
+            }
+          ]
+        }
+      }
+    },
+    "strict": false
+  },
+  "removeTicketAsset": {
+    "type": "object",
+    "shape": { "kind": { "type": "string" }, "name": { "type": "string" } },
+    "strict": false
+  }
+}

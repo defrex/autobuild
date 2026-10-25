@@ -25,7 +25,7 @@ export async function runExtendedBrowserProof(options: {
     await driver.scripts(fixture.mode === 'js')
     const beforeBuild = (await store.getEvents(fixture.build)).length
     const beforeRepository = (await store.getRepoEvents(fixture.project)).length
-    const path = fixture.slug ? `/builds/${fixture.slug}` : '/'
+    const path = fixture.slug ? `/dashboard/builds/${fixture.slug}` : '/'
     await driver.navigate(
       `${options.origin}${path}?${new URLSearchParams({ project: fixture.project })}`,
     )

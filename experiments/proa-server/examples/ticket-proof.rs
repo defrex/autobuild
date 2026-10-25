@@ -1,4 +1,5 @@
 //! Test-only JSON-lines ticket bridge. This is never registered as a server route.
+mod operator_state;
 use chrono::{DateTime, Utc};
 use proa_server::{
     data::writer::PostgresWriter,
@@ -14,7 +15,7 @@ use std::io::{self, BufRead, Write};
 async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--http") {
         let config = proa_server::config::Config::parse(|_| None)?;
-        let state = proa_server::app::AppState::from_env(config.auth).await?;
+        let state = operator_state::from_env(config.auth).await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         println!(
             "{}",

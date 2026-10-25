@@ -376,7 +376,8 @@ pub enum TicketMutation<'a> {
 impl TicketService<'_> {
     async fn client(
         &self,
-    ) -> Result<tokio::sync::MutexGuard<'_, crate::data::writer::Connection>, OperatorError> {
+    ) -> Result<tokio::sync::MappedMutexGuard<'_, crate::data::writer::Connection>, OperatorError>
+    {
         let connection = self.writer.client().await.map_err(storage)?;
         // Ticket tables have an independently versioned schema marker.
         let rows = connection

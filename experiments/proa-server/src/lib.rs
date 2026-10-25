@@ -5,3 +5,4 @@ pub mod dashboard;
 pub mod data;
 
 pub mod operator;
+pub mod protocol;
