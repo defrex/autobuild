@@ -127,24 +127,24 @@ designed behavior).
 
 ### Tree and consent reads
 
-`landings.list` takes `{repo}` and returns slug-sorted ready consent or held
-landings, with effective target, source branch, candidate, verification receipts
+`merges.list` takes `{repo}` and returns slug-sorted ready consent or held
+merges, with effective target, source branch, candidate, verification receipts
 and node completeness/children. It reads reduced durable state; `builds.control`
-with `land` rechecks readiness and live completeness. `hold` remains available
+with `merge` rechecks readiness and live completeness. `hold` remains available
 before readiness. `tickets.tree` takes `{repo}` and returns `{root, children,
 diagnostics}` from exhaustive configured-source enumeration. Source ancestry is
 separate from frozen build ancestry. Both tools are read-only and repository scoped.
 
-The CLI equivalents are `ab landings [--json] [--store <ref>]` and
-`ab ticket tree [--json]`. Default `ab watch` attention includes node landings,
+The CLI equivalents are `ab merges [--json] [--store <ref>]` and
+`ab ticket tree [--json]`. Default `ab watch` attention includes node merges,
 restack conflicts and derived `build.consent-ready` observations with durable
-cursor positions. `ab wait` supports `consent`, `node-landed` and
+cursor positions. `ab wait` supports `consent`, `node-merged` and
 `restack-conflicted`; current-state conditions return immediately. Explicit
 watch event globs emit durable events only. A readiness episode changes on a
 new candidate or exit/re-entry, and cursor resume suppresses its duplicate.
 
 Consent and hold readiness produce only `build.consent-ready`; merge attention is
 reserved for current gate deferrals and unsafe forge outcomes. Named and
-repository-wide watches report an already-ready landing on first discovery.
+repository-wide watches report an already-ready merge on first discovery.
 Readiness observations use the same `{kind, branch, ticket?, build?}` effective
 target shape as queue entries.

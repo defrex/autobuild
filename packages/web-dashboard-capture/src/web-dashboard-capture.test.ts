@@ -151,7 +151,7 @@ function models(): WebFixtureModels {
             openChildren: [],
             children: { known: false },
             verified: false,
-            steps: [{ label: 'land', state: 'pending', qualifier: 'consent' }],
+            steps: [{ label: 'merge', state: 'pending', qualifier: 'consent' }],
           },
         }),
         ...['integration-with-pr', 'queue-conflict', 'queue-failed', 'queue-ready-node'].map(
@@ -179,7 +179,7 @@ function models(): WebFixtureModels {
                 ],
                 verification: 'unit failed — file a repair child targeting node',
                 verifySteps: [{ step: 'unit', outcome: 'fail' }],
-                landing: 'consent — press l, or ab land node',
+                landing: 'consent — press l, or ab merge node',
               },
             }),
         ),
@@ -219,7 +219,7 @@ function models(): WebFixtureModels {
             steps: [],
             alert: {
               tone: 'yellow',
-              text: 'ready to land into main — press l, or ab land integration-ready',
+              text: 'ready to merge into main — press l, or ab merge integration-ready',
             },
           },
         }),
@@ -560,13 +560,13 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
   if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
-  const reason = 'Landing awaits consent'
+  const reason = 'Merge awaits consent'
   // Both surfaces, same words: the row register and the open detail register.
   expect(evidenceText(html).split(reason)).toHaveLength(4)
-  expect(evidenceText(html)).toContain('ab land complete-dashboard-evidence')
-  expect(evidenceText(html)).toContain('landing consent')
-  expect(evidenceText(html)).not.toContain('landing not ready')
-  expect(evidenceText(html)).not.toContain('landing policy pending')
+  expect(evidenceText(html)).toContain('ab merge complete-dashboard-evidence')
+  expect(evidenceText(html)).toContain('merge consent')
+  expect(evidenceText(html)).not.toContain('merge not ready')
+  expect(evidenceText(html)).not.toContain('merge policy pending')
   expect(evidenceText(html)).not.toContain('use l on the build row')
   expect(html).not.toContain('data-mismatch')
 })
@@ -580,8 +580,8 @@ test('landing detail distinguishes a pending policy decision from a hold', async
       landing: held ? { command: { kind: 'hold', seq: 1 } } : undefined,
     }))
     const text = evidenceText(await renderWebFrame(spec, fixtures, { css: '', fontCss: '' }))
-    expect(text).toContain(held ? 'landing held' : 'landing policy pending')
-    expect(text).not.toContain('landing not ready')
+    expect(text).toContain(held ? 'merge held' : 'merge policy pending')
+    expect(text).not.toContain('merge not ready')
   }
 })
 
@@ -720,7 +720,7 @@ test('pending node consent frames preserve Land/Hold and disable both while the 
   )) {
     const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
     expect(html).toContain('class="signoff landing"')
-    expect(html).toMatch(/class="btn primary" disabled="">Land<\/button>/)
+    expect(html).toMatch(/class="btn primary" disabled="">Merge<\/button>/)
     expect(html).toMatch(/class="btn" disabled="">Hold<\/button>/)
   }
 })

@@ -60,7 +60,7 @@ in your tracker. From then on, that skill is how work goes in.
 
 ## How it works
 
-Finite [integration trees](docs/integration-tree.md) collect related work before landing it under your chosen policy.
+Finite [integration trees](docs/integration-tree.md) collect related work before merging it under your chosen policy.
 
 ### Work tickets run the pipeline
 
@@ -113,7 +113,7 @@ pipeline stays the same.
 | dispatcher | what starts builds    | local process, scheduled (hosted)          |
 | workspace  | where a build runs    | git worktree, Vercel Sandbox, plugin       |
 | runtime    | who does the thinking | Claude Code, Codex, Pi, plugin             |
-| forge      | where code lands      | local git, GitHub, plugin                  |
+| forge      | where code merges     | local git, GitHub, plugin                  |
 | store      | where state lives     | SQLite, Postgres, any HTTP store           |
 | operators  | how you watch         | terminal, web UI, MCP                      |
 
@@ -128,7 +128,7 @@ browser dashboard, a [scheduled dispatcher](docs/hosted-dispatcher.md), an
 ## Built for throughput, not latency
 
 One build may take longer than a chat with an agent. The trade is far more
-changes landing every day, with much greater reliability.
+changes merging every day, with much greater reliability.
 
 - **File it and walk away.** Nothing in the pipeline waits on you. You don't
   approve tool calls, paste errors back, or watch a terminal. A build
@@ -140,8 +140,8 @@ changes landing every day, with much greater reliability.
 Headless is safe because the pipeline is deterministic code, not model
 judgment. State lives in a typed, append-only event log, phase transitions
 are owned by tested code, and every build leaves a queryable paper trail. Your
-merge gates are never bypassed: a PR lands when your required checks and your
-consent say it lands.
+merge gates are never bypassed: a PR merges when your required checks and your
+consent say it merges.
 
 ## Let the queue fill itself
 

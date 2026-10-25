@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "a14eca7b9ef5cd51b418317d4c82c8793160640637bcbf07dd8ea52bf899cb83",
+    "textHash": "e932f9240afb2183cc5ca3a13e7749729e2b04d85519bf45cdae3e8535c2a289",
     "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
@@ -15,7 +15,7 @@
     "title": "Getting started",
     "group": "start",
     "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-    "textHash": "1ea375a1c38cc832da665ce27d8345c591b18c6f3d024e5015e9521a102166ef",
+    "textHash": "a6a9a125c4fb51bdf9dd3eea10020ddaac4d799914a88ca296bd487fb79bc381",
     "headings": [
       "1. Install in the repository",
       "2. Initialize and configure",
@@ -29,8 +29,8 @@
     "label": "Builds",
     "title": "One build, end to end",
     "group": "concepts",
-    "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "e1e522154005b885c371f0169f84a5856cffbdf53593ee8394bdfdf19896a359",
+    "description": "Follow a work ticket through planning, review, verification, pull request creation, and merge.",
+    "textHash": "66e9e9505e37e11e7b71169495b6f1fe5150d3785a020a4a452669cb4003bdd0",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -50,7 +50,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "106c0f851a55a9deddcdd4853329ccc8fc94e85411fe89db3f4dbc04b00bff75",
+    "textHash": "8fcf72a2db6064301cae4f832740fc1bb9d3cfe4220c69d7edb50cfdf50da8a4",
     "headings": [
       "Ready work becomes a build",
       "The log is the source of truth",
@@ -64,18 +64,18 @@
     "label": "Integration",
     "title": "Integrating related work",
     "group": "concepts",
-    "description": "Collect work in an integration tree, preserve change identity through restacks, and land under explicit policy.",
-    "textHash": "85272b3e2830793456fcfef34ea4d5d2986099518e0cfb71c0c880cb8f8cc4a5",
+    "description": "Collect work in an integration tree, preserve change identity through restacks, and merge under explicit policy.",
+    "textHash": "585a8fd5ff3e217b39c4f0b699292d7ca3228eb6b49c6e5977e9d2ea5ed382d4",
     "headings": [
       "Targets form the tree",
       "One identity per leaf change",
       "Blockers are a separate graph",
-      "Policy authorizes landing"
+      "Policy authorizes merge"
     ],
     "code": [
       "bun ab ticket create \"Checkout redesign\" --body checkout.md --kind node\nbun ab ticket create \"Cart summary\" --body cart.md --target <node-id>",
       "bun ab ticket block <id> <blocker-id>",
-      "# Leaves land on the root automatically; everything else needs consent.\n[[landing]]\nfrom = \"leaf\"\ninto = \"root\"\nmode = \"auto\"\n\n[[landing]]\nmode = \"consent\""
+      "# Leaves merge on the root automatically; everything else needs consent.\n[[merge]]\nfrom = \"leaf\"\ninto = \"root\"\nmode = \"auto\"\n\n[[merge]]\nmode = \"consent\""
     ]
   },
   {
@@ -84,7 +84,7 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "70fd1fb2dca8c0749085cdd5db4e7c0a6293a70ecd8cc5a5abe35bae45aaa646",
+    "textHash": "a991ab2de9bd468bacc8e6212dbe13467a2ae6e225ca636da8ccf0f6ee08ec68",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -119,7 +119,7 @@
     "title": "Skills",
     "group": "concepts",
     "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-    "textHash": "71398257d23466694d1c53b1c85ad540d86bb4e06dbe5aa97687a1c055391608",
+    "textHash": "5dc45bbe13b088f00d4babc35bc0156fda6923f1a713f90868b7e5828eac7330",
     "headings": [
       "Strong defaults, yours to edit",
       "The shipped skills",
@@ -158,15 +158,15 @@
     "label": "Working with your operator agent",
     "title": "Working with your operator agent",
     "group": "guides",
-    "description": "Delegate specs, tickets, monitoring, and landing to your agent while keeping product decisions and authority with you.",
-    "textHash": "3bbbf840e65fec1330cf62ab8fff7dfcdf08393afe25abfdad2326699dadcc31",
+    "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
+    "textHash": "4558306bb1da8115774ebbbe337a32abba12fb65ed558b2156787d8ed24427cb",
     "headings": [
       "Choose a harness",
       "Give the agent memory",
       "Give steering that sticks",
       "Watch for attention",
       "Answer and pause",
-      "Authorize landing",
+      "Authorize merge",
       "Choose an operator surface",
       "An example session"
     ],
@@ -175,7 +175,7 @@
       "bun ab wait my-build --for attention --json --timeout 5m",
       "bun ab answer my-build \"Keep the public API compatible\"",
       "bun ab pause my-build\nbun ab resume my-build",
-      "bun ab land my-build\nbun ab hold my-build"
+      "bun ab merge my-build\nbun ab hold my-build"
     ]
   },
   {
@@ -199,12 +199,12 @@
     "label": "Configuration",
     "title": "Repository configuration",
     "group": "reference",
-    "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "296fbeaacbc73068e8157ecd406b96acec953c084a0c33acf276689884d76d81",
+    "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, merge policy, and editable skills.",
+    "textHash": "2954bbf8cb8031c455a4069a0f6780962a988b5fd4ea7d2fe25da75c622d2f78",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",
-      "Admission and landing",
+      "Admission and merge",
       "Editable skills and installation"
     ],
     "code": [

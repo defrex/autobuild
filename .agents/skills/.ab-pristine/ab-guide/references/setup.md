@@ -555,7 +555,7 @@ performs test pushes.
 Require **linear history** on protected root and node target branches to prevent
 merge commits from GitHub's update-branch action. On the configured root, enable
 **Require branches to be up to date before merging**, with nonempty required
-checks enforced for all merge actors. This makes root node landings fenced;
+checks enforced for all merge actors. This makes root node merges fenced;
 without it they are best-effort. Both are recommendations, so missing settings
 produce warnings rather than hard failures.
 

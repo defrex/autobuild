@@ -19,7 +19,7 @@ import { openLocalStore } from '../store/local/store'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
-const TOOL_NAMES = 25
+const TOOL_NAMES = 26
 
 let tmp: string
 let storeDir: string
@@ -66,7 +66,7 @@ async function connect(env: Record<string, string> = bareEnv()): Promise<Client>
   return client
 }
 
-test('ab mcp advertises the registry: 25 tools with schemas and annotations', async () => {
+test('ab mcp advertises the registry: 26 tools with schemas and annotations', async () => {
   await seed()
   const client = await connect()
   try {
@@ -455,4 +455,91 @@ test('MCP node spec revision needs no escalation and retains transport identity'
     },
   })
   await reopened.close()
+})
+
+test('canonical and deprecated merge tools and actions work through the stdio SDK', async () => {
+  const repo = await realpath(tmp)
+  const store = openLocalStore(storeDir)
+  try {
+    for (const action of ['merge', 'land']) {
+      const slug = `consent-${action}`
+
+      await store.createBuild({ slug, repo, branch: `branch/${slug}` })
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'runner', host: 'host' },
+      })
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'local',
+          ref: 'local',
+          path: '/workspace',
+          branch: `branch/${slug}`,
+          base: { source: 'local', remoteError: 'offline', sha: 'base' },
+        },
+      })
+      const finalized = await store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+      })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'head', parent: 'base', cycle: String(finalized.seq) },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
+      })
+    }
+  } finally {
+    await store.close()
+  }
+  const client = await connect({ ...bareEnv(), USER: 'merge-operator' })
+  try {
+    const { tools } = await client.listTools()
+    expect(tools.find((t) => t.name === 'landings.list')?.description).toContain(
+      'Deprecated alias for merges.list',
+    )
+    expect(tools.some((t) => t.name === 'merges.list')).toBe(true)
+    const modern = await client.callTool({ name: 'merges.list', arguments: { repo } })
+    const legacy = await client.callTool({ name: 'landings.list', arguments: { repo } })
+    expect(modern.isError).toBeUndefined()
+    expect(legacy).toEqual(modern)
+    for (const action of ['merge', 'land']) {
+      const slug = `consent-${action}`
+      const result = await client.callTool({
+        name: 'builds.control',
+        arguments: { repo, slug, action },
+      })
+      expect(result.isError).toBeUndefined()
+      expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+        kind: 'command',
+        command: 'land',
+        slug,
+      })
+    }
+  } finally {
+    await client.close()
+  }
+  const durable = openLocalStore(storeDir)
+  try {
+    for (const action of ['merge', 'land']) {
+      const facts = await durable.getEvents(`consent-${action}`)
+      expect(facts.at(-1)).toMatchObject({
+        type: 'build.land-requested',
+        actor: { kind: 'human', user: 'merge-operator' },
+        payload: { decisionSeq: 4 },
+      })
+    }
+  } finally {
+    await durable.close()
+  }
 })

@@ -1,7 +1,7 @@
 ---
 title: "Repository configuration"
 group: "reference"
-description: "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills."
+description: "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, merge policy, and editable skills."
 label: "Configuration"
 order: 8
 slug: "configuration"
@@ -64,10 +64,10 @@ sessionBudgetSeconds = 3600
 - **Policy limits** bound review rounds, retries and session budgets, and decide when automation stops for attention.
 
 
-## Admission and landing
+## Admission and merge
 
 - **Tickets.** `[tickets]` sets the source and readiness criteria for admitting work.
-- **Landing.** Ordered, first-match `[[landing]]` rules on source and destination select automatic landing or explicit consent. See [Integrating related work](integration-overview.md#policy-authorizes-landing) for matching and defaults, [Working with your operator agent](operating.md) for consent and hold commands.
+- **Merge.** Ordered, first-match `[[merge]]` rules on source and destination select automatic merge or explicit consent. See [Integrating related work](integration-overview.md#policy-authorizes-merge) for matching and defaults, [Working with your operator agent](operating.md) for consent and hold commands.
 - **Reloads.** Build execution configuration is pinned; dispatcher policy and role settings reload live.
 - **Secrets** stay out of committed TOML.
 

@@ -91,16 +91,16 @@ test('integration list uses shared words and qualifiers, accessible states and f
       { label: 'open', state: 'done' },
       { label: 'collect', state: 'current' },
       { label: 'verify', state: 'pending' },
-      { label: 'land', state: 'pending', qualifier: 'consent' },
+      { label: 'merge', state: 'pending', qualifier: 'consent' },
     ],
-    alert: { tone: 'yellow', text: 'ready to land into main — press l, or ab land demo' },
+    alert: { tone: 'yellow', text: 'ready to merge into main — press l, or ab merge demo' },
   }
   const html = renderBuildsView(row)
   expect(html).toContain('integration into NODE-900 release-1.0')
-  expect(html).toContain('8/11 landed')
+  expect(html).toContain('8/11 merged')
   expect(html).toContain('2 building')
   expect(html).toContain('1 queued')
-  expect(html).toContain('land<span class="note">(consent)</span>')
+  expect(html).toContain('merge<span class="note">(consent)</span>')
   expect(html).toContain('class="sr-only">, current')
   expect(html).toContain('integration-alert warn')
   expect(html).toContain('old-detail-step')
@@ -145,11 +145,11 @@ test('integration detail uses the shared facts and text progress within the exis
         state: 'implement',
         landed: false,
       },
-      { source: 'fake', id: 'B', title: 'Completed work', state: 'landed', landed: true },
+      { source: 'fake', id: 'B', title: 'Completed work', state: 'merged', landed: true },
     ],
     verification: 'unit failed — file a repair child targeting NODE',
     verifySteps: [{ step: 'unit', outcome: 'fail' }],
-    landing: 'consent — press l, or ab land demo',
+    landing: 'consent — press l, or ab merge demo',
   }
   const html = renderBuildsView(build)
   for (const fact of [
@@ -163,11 +163,11 @@ test('integration detail uses the shared facts and text progress within the exis
     'implement',
     'Completed work',
     'Verification',
-    'Landing',
+    'Merge',
     'repair child',
-    'ab land demo',
+    'ab merge demo',
     'src/a file.ts',
-    '1/2 landed',
+    '1/2 merged',
   ])
     expect(html).toContain(fact)
   expect(html).toContain('text-overflow:ellipsis')
@@ -239,7 +239,7 @@ test('failed integration nodes keep their integration alert without a duplicate 
   expect(html).not.toContain('class="composer"')
 })
 
-test('landing sign-off requires the recorded consent decision and current waiting merge', () => {
+test('merge sign-off requires the recorded consent decision and current waiting merge', () => {
   const row = pinnedBuild({})
   row.pr = { url: 'https://forge.example/pr/1', state: 'open' }
   row.steps = [{ label: 'merge', state: 'current', qualifier: 'waiting' }]
@@ -257,7 +257,7 @@ test('landing sign-off requires the recorded consent decision and current waitin
   }
   expect(awaitingConsent(row)).toBe(true)
   const html = renderBuildsView(row)
-  expect(html).toContain('>Land</button>')
+  expect(html).toContain('>Merge</button>')
   expect(html).toContain('>Hold</button>')
   row.status = 'paused'
   expect(awaitingConsent(row)).toBe(false)
@@ -269,7 +269,7 @@ test('landing sign-off requires the recorded consent decision and current waitin
   expect(awaitingConsent(row)).toBe(false)
 })
 
-test('Land and Hold forward the existing typed actions and both disable while pending', () => {
+test('Merge and Hold forward the existing typed actions and both disable while pending', () => {
   const requests: string[] = []
   const create = (pending: boolean) =>
     LandingSignoff({
@@ -284,7 +284,7 @@ test('Land and Hold forward the existing typed actions and both disable while pe
     expect(control.props.disabled).toBe(true)
 })
 
-test('node landing sign-off follows projected readiness, never an open PR or current merge alone', () => {
+test('node merge sign-off follows projected readiness, never an open PR or current merge alone', () => {
   const row = pinnedBuild({})
   row.kind = 'integration'
   row.status = 'collecting'
@@ -311,7 +311,7 @@ test('node landing sign-off follows projected readiness, never an open PR or cur
     'collecting',
     'verifying',
     'verification failed',
-    'ready to land',
+    'ready to merge',
     'reparenting',
   ] as const) {
     row.integration = state
@@ -322,7 +322,7 @@ test('node landing sign-off follows projected readiness, never an open PR or cur
   expect(awaitingConsent(row)).toBe(true)
   const html = renderBuildsView(row)
   expect(html).toContain('class="signoff landing"')
-  expect(html).toContain('>Land</button>')
+  expect(html).toContain('>Merge</button>')
   expect(html).toContain('>Hold</button>')
   row.status = 'paused'
   expect(awaitingConsent(row)).toBe(false)

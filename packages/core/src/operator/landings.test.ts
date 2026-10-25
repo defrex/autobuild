@@ -212,3 +212,37 @@ test('CLI queue text takes its labels from the shared vocabulary', async () => {
     Object.assign(treeVocabulary, original)
   }
 })
+
+test('CLI canonical merge commands and deprecated aliases share behavior and keep JSON stdout clean', async () => {
+  const { runCli } = await import('../cli/main')
+  const store = new MemoryBuildStore()
+  for (const slug of ['modern', 'legacy']) await ready(store, slug, '/repo')
+  const out: string[] = [],
+    err: string[] = []
+  const deps = {
+    workspacePath: '/repo',
+    processEnv: {},
+    openStore: () => store,
+    stdout: (line: string) => out.push(line),
+    stderr: (line: string) => err.push(line),
+    exec: async (cmd: readonly string[]) =>
+      cmd[1] === 'remote'
+        ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+        : { stdout: '/repo/.git\n/repo/.git\n/repo\n', stderr: '', exitCode: 0 },
+  }
+  expect(await runCli(['merges', '--json'], deps)).toBe(0)
+  const listing = JSON.parse(out.pop()!)
+  expect(err).toEqual([])
+  expect(await runCli(['landings', '--json'], deps)).toBe(0)
+  expect(JSON.parse(out.pop()!)).toEqual(listing)
+  expect(err.splice(0)).toEqual(['ab landings is deprecated; use ab merges'])
+  expect(await runCli(['merge', 'modern'], deps)).toBe(0)
+  expect(err).toEqual([])
+  expect(await runCli(['land', 'legacy'], deps)).toBe(0)
+  expect(err).toEqual(['ab land is deprecated; use ab merge'])
+  for (const slug of ['modern', 'legacy'])
+    expect((await store.getEvents(slug)).at(-1)).toMatchObject({
+      type: 'build.land-requested',
+      payload: { decisionSeq: 4 },
+    })
+})

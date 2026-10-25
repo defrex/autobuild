@@ -113,7 +113,7 @@ export function projectIntegrationRow(
         : ready && mode === 'consent' && state.landing?.command?.kind !== 'land'
           ? {
               tone: 'yellow',
-              text: `ready to land into ${destination} — press l, or ab land ${record.slug}`,
+              text: `ready to merge into ${destination} — press l, or ab merge ${record.slug}`,
             }
           : undefined
   return {
@@ -144,7 +144,7 @@ export function projectIntegrationRow(
             ? `${passed}/${expected.length}`
             : undefined,
       ),
-      step('land', !!state.integration?.landing, ready, mode),
+      step('merge', !!state.integration?.landing, ready, mode),
     ],
     ...(alert ? { alert } : {}),
   }
@@ -204,7 +204,7 @@ export function enrichIntegrationRows(
           child.title === 'title unavailable'
             ? (active?.collectionIdentity?.title ?? historical?.ticket?.title ?? child.title)
             : child.title,
-        state: child.landed ? 'landed' : (active?.collectionIdentity?.phase ?? 'queued'),
+        state: child.landed ? 'merged' : (active?.collectionIdentity?.phase ?? 'queued'),
       }
     })
     // Historical contribution records can resolve several build slugs to the

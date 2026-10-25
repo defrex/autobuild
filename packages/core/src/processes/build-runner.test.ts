@@ -907,7 +907,7 @@ describe('attach', () => {
     expect(reduceBuild(events).sessions.open).toEqual([])
   })
 
-  test('an interrupted multi-session reclaim lands no attachment and retry closes only the remainder', async () => {
+  test('an interrupted multi-session reclaim merges no attachment and retry closes only the remainder', async () => {
     const h = await makeHarness()
     for (const session of ['s_dead_1', 's_dead_2']) {
       await h.store.append(SLUG, {
@@ -4039,7 +4039,7 @@ describe('phase-session budget', () => {
     if (currentPlanSession === undefined) throw new Error('continued plan bracket was not recorded')
     await h.store.appendWithArtifacts(
       SLUG,
-      [{ kind: 'plan', content: 'plan round 2 landed before abort observation' }],
+      [{ kind: 'plan', content: 'plan round 2 merged before abort observation' }],
       (deposited) => ({
         actor: agentActor('plan', currentPlanSession.payload.session),
         type: 'plan.completed',
@@ -4102,7 +4102,7 @@ describe('phase-session budget', () => {
     if (started === undefined) throw new Error('plan session did not start')
     await h.store.appendWithArtifacts(
       SLUG,
-      [{ kind: 'plan', content: 'terminal landed while runtime stayed busy' }],
+      [{ kind: 'plan', content: 'terminal merged while runtime stayed busy' }],
       (deposited) => ({
         actor: agentActor('plan', started.payload.session),
         type: 'plan.completed',
@@ -4474,7 +4474,7 @@ describe('no-terminal retry policy (D5)', () => {
     })
   }
 
-  test('a silent session fails the phase; the transcript and session.ended still land', async () => {
+  test('a silent session fails the phase; the transcript and session.ended still merge', async () => {
     const h = await makeHarness({
       handlers: () => ({ plan: () => defaultTurnResult('rambled and exited') }),
     })
@@ -5811,7 +5811,7 @@ describe('frozen post-reconcile verification policy', () => {
 })
 
 describe('native identity recording', () => {
-  test('the fact lands before the native turn completes and deduplicates within a bracket', async () => {
+  test('the fact merges before the native turn completes and deduplicates within a bracket', async () => {
     const { nativeHandle } = await import('../ports/runner/native-session')
     let unblock!: () => void
     const blocked = new Promise<void>((resolve) => {
@@ -6503,7 +6503,7 @@ describe('native suspension and continuation', () => {
     expect(ofType(log, 'plan.completed')).toHaveLength(1)
   })
 
-  test('a phase terminal landing during pause cleanup wins over suspension', async () => {
+  test('a phase terminal merge during pause cleanup wins over suspension', async () => {
     let ready!: () => void
     const observed = new Promise<void>((resolve) => {
       ready = resolve
@@ -6974,7 +6974,7 @@ describe('native continuation budget and stale acceptance', () => {
     })
 })
 
-test('a phase terminal landing after attachment settles the old bracket before starting the next phase', async () => {
+test('a phase terminal merge after attachment settles the old bracket before starting the next phase', async () => {
   const { nativeHandle } = await import('../ports/runner/native-session')
   const h = await makeHarness({ workspaceProvider: 'git-worktree', clock: () => new Date() })
   await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })

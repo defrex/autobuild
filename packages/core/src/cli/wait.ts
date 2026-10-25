@@ -89,7 +89,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 /** The `--for` condition vocabulary, in the order the help documents it. */
 const CONDITION_VOCABULARY =
   'blocked, paused, running, collecting, done, aborted, terminal, pr=open, pr=merged, pr=closed, ' +
-  'consent, node-landed, restack-conflicted, pr=conflicted, phase=<phase> (a core phase or verify:<step>), attention'
+  'consent, node-merged, restack-conflicted, pr=conflicted, phase=<phase> (a core phase or verify:<step>), attention'
 
 // ── Conditions ───────────────────────────────────────────────────────────────
 
@@ -99,7 +99,7 @@ type ConditionBody =
   | { kind: 'pr'; prState: PrLifecycle }
   | { kind: 'phase'; phase: Phase }
   | { kind: 'attention' }
-  | { kind: 'consent' | 'node-landed' | 'restack-conflicted' }
+  | { kind: 'consent' | 'node-merged' | 'restack-conflicted' }
 
 interface WaitCondition {
   /** The original `--for` value — what a matching record's `condition` names. */
@@ -135,7 +135,11 @@ export function parseConditions(
         ` — ${WAIT_USAGE}`,
     )
   const conditions = forValues.map((value): WaitCondition => {
-    if (value === 'consent' || value === 'node-landed' || value === 'restack-conflicted')
+    if (value === 'node-landed') {
+      console.error('node-landed is deprecated; use node-merged')
+      value = 'node-merged'
+    }
+    if (value === 'consent' || value === 'node-merged' || value === 'restack-conflicted')
       return { text: value, cond: { kind: value } }
     if (value === 'terminal') return { text: value, cond: { kind: 'terminal' } }
     if (value === 'attention') return { text: value, cond: { kind: 'attention' } }
@@ -214,7 +218,7 @@ function stateSatisfies(
       )
     case 'consent':
       return awaitsConsent(state, restack)
-    case 'node-landed':
+    case 'node-merged':
       return !!state.integration?.landing
     case 'restack-conflicted':
       return !!state.nodeRestack?.conflict || !!(restack.active && restack.replay?.conflicted)
@@ -261,7 +265,7 @@ export function matchEvent(
     | { state: BuildState; deferral: DeferralLedger; restack?: LeafRestackState } = [],
 ): string | null {
   for (const { text, cond } of conditions) {
-    if (cond.kind === 'node-landed' && event.type === 'integration.landed') return text
+    if (cond.kind === 'node-merged' && event.type === 'integration.landed') return text
     if (
       cond.kind === 'restack-conflicted' &&
       (event.type === 'node.item-conflicted' ||
@@ -308,7 +312,7 @@ function matchFirst(
 ): string | null {
   for (const { text, cond } of conditions) {
     if (stateSatisfies(cond, state, events)) return text
-    if (cond.kind === 'node-landed' && event.type === 'integration.landed') return text
+    if (cond.kind === 'node-merged' && event.type === 'integration.landed') return text
     if (
       cond.kind === 'restack-conflicted' &&
       (event.type === 'node.item-conflicted' ||

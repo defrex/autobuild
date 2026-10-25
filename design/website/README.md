@@ -487,3 +487,14 @@ GitHub only; the Changelog link is removed. `reference-desktop.png` and
 the masthead is the only difference (391 pixels). The phone references are
 byte-identical to the capture and were not changed. `reference.html` never
 carried a Changelog link.
+
+
+## Merge vocabulary (merge-vocabulary)
+
+The approved product spec replaces the Git integration terms land/landing/landed
+with merge/merging/merged. The landing page retains its visual system and layout;
+its forge caption, throughput sentence, shared terminal hero and integration
+figure now use merge vocabulary. The four desktop/phone local/remote reference
+PNGs are refreshed from the real website capture. Reviewed all 36 website frames
+in overview sheets and the phone page at full resolution; captures report no
+sideways overflow at 390px, unchanged section gaps and zero animated figures.

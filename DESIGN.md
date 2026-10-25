@@ -148,9 +148,9 @@ A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the
 
 ### Decision regions
 
-**The Sign-off Rule.** Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; landing consent uses amber on the plain ground, never on the well.
+**The Sign-off Rule.** Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; merge consent uses amber on the plain ground, never on the well.
 
-Escalations show the red question followed by the factual sentence explaining that a human answer resumes work. Landing consent retains Land / Hold. Answer forms and destructive confirmations stay inline; primary/secondary control hierarchy remains clear while pending. Auth and connection pages use the same frame, sans help, mono identities and square controls, with accurate access copy.
+Escalations show the red question followed by the factual sentence explaining that a human answer resumes work. Merge consent retains Merge / Hold. Answer forms and destructive confirmations stay inline; primary/secondary control hierarchy remains clear while pending. Auth and connection pages use the same frame, sans help, mono identities and square controls, with accurate access copy.
 
 ### Organization reading pages
 
