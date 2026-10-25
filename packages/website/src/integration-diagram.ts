@@ -1,7 +1,7 @@
 import { COLOR, esc } from './svg'
 
 const DESCRIPTION =
-  'ab ticket tree output: the node ticket AUT-837, Website for 1.0, under main, with the eleven finished work tickets that built this website beneath it. Each landed on the node’s branch; main receives the node once, as one pull request.'
+  'ab ticket tree output: the node ticket AUT-837, Website for 1.0, under main, with the eleven finished work tickets that built this website beneath it. Each merged on the node’s branch; main receives the node once, as one pull request.'
 
 /** The node that built this website, as `ab ticket tree` prints it. */
 const NODE = { id: 'AUT-837', title: 'Website for 1.0', branch: 'ab-node/website-integration' }
@@ -34,7 +34,7 @@ export function integrationDiagram(): string {
     '',
     span(
       COLOR.slack,
-      `${CHILDREN.length} tickets landed on ${NODE.branch} · main receives one pull request`,
+      `${CHILDREN.length} tickets merged on ${NODE.branch} · main receives one pull request`,
     ),
   ]
   return `<div data-capture-figure="integration-tree"><div class="scroll" tabindex="0" role="region" aria-label="${esc(DESCRIPTION)}"><pre class="frame">${lines.join('\n')}</pre></div></div>`

@@ -392,7 +392,7 @@ restores ordinary verification. Policy exclusions precede plan/path applicabilit
 and carry `skipCause: "post-reconcile-policy"` plus a setting-specific reason.
 The shared dashboard model renders that reason, as does the PR summary.
 Excluded steps do not re-verify merged code, so combination-only breakage can
-land; forge requirements and reconcile budgets remain independent.
+merge; forge requirements and reconcile budgets remain independent.
 For enabled steps,
 `packages/core/src/kernel/plan-verify-selection.ts` resolves an approved plan's front-matter
 selection (applied at the planner's `ab done` in `packages/core/src/cli/terminals.ts`,
@@ -699,7 +699,7 @@ dispatcher — requires an exported token before any side effect and never consu
 a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
 injects that same token.
 
-**Stable build identity.** The forge landing seam accepts optional build identity at operation time. Both
+**Stable build identity.** The forge merge seam accepts optional build identity at operation time. Both
 built-in adapters preserve their squash message and normalize a final
 `Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub
 adapter reads the viewer's squash headline/body and head in one GraphQL query;
@@ -711,7 +711,7 @@ any repair. Body comparison tolerates provider trimming of trailing whitespace
 while preserving the complete headline, body content, and squash method.
 
 Optional `Forge.readCommitMessage` and `Forge.containsBuild` capabilities expose
-actual landed messages and exact trailer presence in reachable branch history.
+actual merged messages and exact trailer presence in reachable branch history.
 The janitor records optional `pr.merged.buildTrailerPresent` for normal and abort
 cleanup observations. Unsupported or failed inspection leaves evidence unknown;
 a read failure also records an observation without preventing completion. Old
@@ -723,10 +723,10 @@ Its branch hint is checked against the PR's actual base, with a bounded re-query
 after a retarget rather than assuming the repository default is the base.
 Kernel auto-merge therefore
 returns an actionable `unproven-gate-state` deferral for queue-protected bases;
-it never bypasses the queue. Human queue landings still settle normally with
+it never bypasses the queue. Human queue merges still settle normally with
 inspected trailer evidence when available. Expected-head guards and recurring
 polls bound native message freshness, but cannot prevent a push and automatic
-landing from both completing between polls.
+merge from both completing between polls.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
@@ -763,16 +763,16 @@ factory, and preserves the returned adapter's optional capabilities. The
 local-git adapter in `packages/core/src/ports/forge/local-git.ts` stores versioned JSON PR
 records as blobs behind private `refs/autobuild/local-git/` refs in the shared
 Git database. It computes mergeability with `git merge-tree`, leaves the build
-branch reachable, and lands a guarded single-parent squash locally. Immediately
-before offering an ungated landing candidate, `git var GIT_AUTHOR_IDENT` and
+branch reachable, and merges a guarded single-parent squash locally. Immediately
+before offering an ungated merge candidate, `git var GIT_AUTHOR_IDENT` and
 `git var GIT_COMMITTER_IDENT` prove that ordinary Git identity resolution can
 succeed; a failure becomes a reason-bearing, retryable consent deferral. The
 `git commit-tree` seam inherits that resolved identity without injecting an
-Autobuild author or committer, while `-c commit.gpgSign=false` keeps the landing
+Autobuild author or committer, while `-c commit.gpgSign=false` keeps the merge
 unsigned. For a checked-out base, dry-run and real
-`git read-tree -m -u <old> <landed>` calls
+`git read-tree -m -u <old> <merged>` calls
 let Git carry forward non-overlapping operator changes and report colliding
-paths. The pending landing precedes the guarded ref update; a later poll retries
+paths. The pending merge precedes the guarded ref update; a later poll retries
 the same two-tree checkout transition across the crash window and observes the
 PR as merged only after synchronization succeeds. Forge-native base snapshotting lets
 it pin the current local base without `origin`, while capability-less adapters
@@ -1289,7 +1289,7 @@ compatibility facade. Metadata is excluded from hosted persistence/protocols.
 ### Integration node dispatch
 
 The product dispatcher owns the workspace-free node lifecycle:
-spec → node.opening → node.opened → collecting → complete → verify:* → consent → land.
+spec → node.opening → node.opened → collecting → complete → verify:* → consent → merge.
 The ordinary work pipeline is unchanged. `build.created` freezes kind, target
 ticket/build identity and resolved parent in `baseBranch`. Integration facts
 are projected by the shared reducer and digests, including collecting/empty
@@ -1375,8 +1375,8 @@ revision, target and reason fields so JSONB key ordering cannot defeat deduplica
 preserving its history.
 
 Accepted parent facts update node target/base projections while creation facts
-remain provenance. Pending requests and moves fence verification, child landing
-and source landing, and count against both parents' completeness. Existing writer
+remain provenance. Pending requests and moves fence verification, child merge
+and source merge, and count against both parents' completeness. Existing writer
 reservations settle before activation. The existing replay transaction freezes the
 new destination and retains the old contribution boundary until completion, even
 for distinct parents at the same SHA. Afterwards the dispatcher retargets the same
@@ -1401,8 +1401,8 @@ receive-pack path.
 `kernel/node-landing.ts` shares the node writer lease and reservation with
 restacking. It cancels native auto-merge, refreshes actual PR refs, proves the
 exact destination ungated and fast-forwards the canonical child commit under
-CAS. The destination write proves landing; provider PR reconciliation is
-best-effort and never decides or retries that write. Root landing retains squash
+CAS. The destination write proves merge; provider PR reconciliation is
+best-effort and never decides or retries that write. Root merge retains squash
 semantics. Store adapters expose node writer claim, renewal and holder-checked
 release separately from execution leases; Postgres schema version 15 adds their
 columns. Reservations live in the event stream and survive lease expiry.
@@ -1416,11 +1416,11 @@ both inventory and active items, retaining original identities after rewrites.
 
 Integration completion is sampled by `kernel/integration-completeness.ts` from
 exhaustive source listings, frozen claims and retained contribution identities.
-`integration.*` events retain observations, immutable cycle inputs, landing
+`integration.*` events retain observations, immutable cycle inputs, merge
 intents, provenance and tree audits. The build reducer projects these facts and
 `engine.ts` routes nodes directly through verification, without producer phases.
 The shared `cli/dashboard/integration-detail.ts` projection supplies both
-dashboards with all child titles/states, current verification outcomes, landing
+dashboards with all child titles/states, current verification outcomes, merge
 rule explanations and restack files. Optional `integration.observed.children`
 metadata stores source/id, title and contribution identity without changing the
 authoritative membership arrays. Completed build records supply legacy title
@@ -1430,7 +1430,7 @@ NUL-delimited unmerged Git paths; historical missing filenames remain explicit.
 Repository enrichment refreshes live child phases even without a parent delta.
 Failed cycles park for repair children. The dispatcher temporarily provisions
 verification resources and rechecks head, parent, controls and completeness
-before publication. `integration-landing.ts` owns source-reserved root landing
+before publication. `integration-landing.ts` owns source-reserved root merge
 and immutable result audits; nested nodes use the destination writer transaction
 in `node-landing.ts`. GitHub uses guarded PR rebase; local-git validates
 fast-forward shape against the frozen parent. Exact authoritative head readback
@@ -1439,14 +1439,14 @@ acknowledge an unconfirmed candidate. Shared status vocabulary exposes provenanc
 and mismatch attention in both frontends. Human forge merges remain observable
 escape hatches independent of completeness and verification.
 
-### Landing authorization
+### Merge authorization
 
-The pure evaluator in `kernel/landing-policy.ts` chooses the first matching
-`[[landing]]` rule. `kernel/landing-state.ts` reduces immutable candidate
-decisions and persistent hold/land commands. The dispatcher owns readiness,
+The pure evaluator in `kernel/merge-policy.ts` chooses the first matching
+`[[merge]]` rule. `kernel/landing-state.ts` reduces immutable candidate
+decisions and persistent hold/merge commands. The dispatcher owns readiness,
 ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
 confirms native cancellation at local and trusted remote head-publication seams.
-Node landings retain the existing writer serialization and gate proof.
+Node merges retain the existing writer serialization and gate proof.
 
 Build native session handles are kernel-authored `session.native-handle-recorded`
 facts. The build reducer retains them by bracket session id after session end;
@@ -1533,7 +1533,7 @@ clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery
 request, and only success clears degradation. A further limit extends cooldown.
-Native landing application failures keep candidate-specific retry eligibility,
+Native merge application failures keep candidate-specific retry eligibility,
 including automatic decisions without a human command. Retries recheck consent,
 holds, verification and the exact candidate. Uncertain enables remain pending
 until cancellation can be confirmed after cooldown. Publication retries reuse
@@ -1557,7 +1557,7 @@ using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
-keeps its existing cadence. Readiness and landing inspections remain fresh.
+keeps its existing cadence. Readiness and merge inspections remain fresh.
 
 For node cadence, durable wakes, restart behavior and CLI evidence, see
 [node polling and status](integration-tree.md#polling-and-status).
@@ -1592,10 +1592,10 @@ Each kernel `spec.revised` records the exact artifact and operator identity
 Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
 The node recollects and verifies the new revision, including on the same head
 and parent after a failed cycle. Earlier cycles remain historical evidence
-and cannot block or authorize landing under the replacement. Children keep
+and cannot block or authorize merge under the replacement. Children keep
 their specs, claims and targets; contributions are not restarted.
 Active verification/reconcile or writer work, restack/reparent work, pause,
-pending controls, landing intent and ended PRs refuse the no-escalation path.
+pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.

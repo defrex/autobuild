@@ -542,7 +542,7 @@ describe('operator behavioral parity contract', () => {
     ).rejects.toThrow('retired')
     await expect(api(store).setAutoMergeDefault(REPO, true)).rejects.toMatchObject({
       status: 409,
-      message: 'Auto-merge default is retired; configure [[landing]] rules in autobuild.toml',
+      message: 'Auto-merge default is retired; configure [[merge]] rules in autobuild.toml',
     })
     expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([])
   })

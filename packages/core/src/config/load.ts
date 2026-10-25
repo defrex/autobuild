@@ -70,7 +70,11 @@ function describeIssue(issue: z.core.$ZodIssue): string {
   return `  ${formatPath(path)}: ${message}`
 }
 
-export function parseConfig(tomlText: string, source = 'autobuild.toml'): Config {
+export function parseConfig(
+  tomlText: string,
+  source = 'autobuild.toml',
+  warn: (message: string) => void = console.error,
+): Config {
   let table: unknown
   try {
     table = parseToml(tomlText)
@@ -101,6 +105,9 @@ export function parseConfig(tomlText: string, source = 'autobuild.toml'): Config
     // stay what validation actually reported.
     const details = expandIssues(result.error.issues).map(describeIssue).join('\n')
     throw new ConfigError(`${source}: invalid config\n${details}`, result.error.issues)
+  }
+  if (table && typeof table === 'object' && Object.hasOwn(table, 'landing')) {
+    warn(`${source}: [[landing]] is deprecated; use [[merge]] instead`)
   }
   return result.data
 }

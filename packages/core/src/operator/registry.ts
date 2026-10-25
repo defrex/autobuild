@@ -266,9 +266,9 @@ const buildControlInput = z.strictObject({
   repo: repoField,
   slug: slugField,
   action: z
-    .enum(['pause', 'cancel-pause', 'resume', 'land', 'hold', 'abort', 'discard'])
+    .enum(['pause', 'cancel-pause', 'resume', 'merge', 'land', 'hold', 'abort', 'discard'])
     .describe(
-      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "land" for landing consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
+      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
     ),
 })
 
@@ -479,8 +479,15 @@ function defineTool(
  * two stay in lockstep. */
 export const TOOLS: readonly ToolEntry[] = [
   defineTool(
+    'merges.list',
+    'List ready merges awaiting consent or held, with frozen effective targets and verification evidence.',
+    repositoryStatusInput,
+    'JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.',
+    async (raw, ctx) => listOperatorLandings({ store: ctx.store, ...(raw as { repo: string }) }),
+  ),
+  defineTool(
     'landings.list',
-    'List ready landings awaiting consent or held, with frozen effective targets and verification evidence.',
+    'Deprecated alias for merges.list. List ready merges awaiting consent or held, with frozen effective targets and verification evidence.',
     repositoryStatusInput,
     'JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.',
     async (raw, ctx) => listOperatorLandings({ store: ctx.store, ...(raw as { repo: string }) }),
@@ -591,11 +598,15 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.',
+    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate; hold withdraws merge consent.',
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {
-      const input = raw as z.infer<typeof buildControlInput>
+      const received = raw as z.infer<typeof buildControlInput>
+      const input = {
+        ...received,
+        action: received.action === 'merge' ? ('land' as const) : received.action,
+      }
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
       // The route maps BOTH pause and cancel-pause to `dashboard-pause`:
       // on a running build it requests a pause, and on a build with a pending
@@ -695,7 +706,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'repository.bulk_control',
     'Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.',
     bulkControlInput,
-    '{direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code "bulk-partial" and a progress object naming what landed.',
+    '{direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code "bulk-partial" and a progress object naming what merged.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof bulkControlInput>
       return bulkControlRepository({

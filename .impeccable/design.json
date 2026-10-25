@@ -479,7 +479,7 @@
       },
       {
         "name": "The Sign-off Rule",
-        "body": "Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; landing consent uses amber on the plain ground, never on the well.",
+        "body": "Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; merge consent uses amber on the plain ground, never on the well.",
         "section": "components"
       }
     ],

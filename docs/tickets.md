@@ -66,9 +66,9 @@ bun ab answer <slug> --revise-spec-from-ticket
 | Kind | Describes | Runs |
 |---|---|---|
 | Work | an individual change | the build pipeline |
-| Node | a finite integration point | collects related work, verifies it together, lands into its parent |
+| Node | a finite integration point | collects related work, verifies it together, merges into its parent |
 
-Both kinds need conforming specs; a node's intent alone isn't a buildable contract. Set the kind with `ab ticket create` or `ab ticket update --kind work|node`. See [integrating related work](integration-overview.md) for targets, node admission and landing.
+Both kinds need conforming specs; a node's intent alone isn't a buildable contract. Set the kind with `ab ticket create` or `ab ticket update --kind work|node`. See [integrating related work](integration-overview.md) for targets, node admission and merge.
 
 Outside signals and agent discoveries enter through [Intake and harvest](intake.md) as proposals, groomed before they become ready work.
 

@@ -100,7 +100,7 @@ function parseError(toml: string, source?: string): ConfigError {
 }
 
 describe('parseConfig — complete flattened surface', () => {
-  test('every field lands where expected', () => {
+  test('every field merges where expected', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       upgrade: { automatic: true },
       landing: [],
@@ -1157,7 +1157,9 @@ alternates = []
     const root = parseError(`${READY}[polcy]\nstallRounds = 3\n`)
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
-    expect(root.message).toContain('known tables: store, upgrade, landing, pr, workspace, commands')
+    expect(root.message).toContain(
+      'known tables: store, upgrade, merge, landing, pr, workspace, commands',
+    )
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')
     expect(parseError(`${READY}[roles.default]\nmdel = "x"\n`).message).toContain('"mdel"')
@@ -1332,17 +1334,17 @@ test('hosted lifecycle roles may overlap and doneState must be nonblank', () => 
   )
 })
 
-describe('ordered landing configuration', () => {
+describe('ordered merge configuration', () => {
   test('normalizes absent rules and preserves written rule order', () => {
     expect(parseConfig(READY).landing).toEqual([])
     expect(
       parseConfig(`${READY}
-[[landing]]
+[[merge]]
 into = "root"
 from = "node"
 label = "release"
 mode = "consent"
-[[landing]]
+[[merge]]
 mode = "auto"
 `).landing,
     ).toEqual([{ into: 'root', from: 'node', label: 'release', mode: 'consent' }, { mode: 'auto' }])

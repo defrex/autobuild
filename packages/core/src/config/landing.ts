@@ -26,5 +26,5 @@ documentFields(landingRuleSchema, {
   into: 'Optional destination: `root`, any `node`, or an exact frozen destination node ticket id.',
   from: 'Restrict this rule to one source build kind; omission matches all kinds.',
   label: 'Optional exact, case-sensitive label on the source ticket. Blank labels are invalid.',
-  mode: 'Choose automatic landing or require recorded consent.',
+  mode: 'Choose automatic merge or require recorded consent.',
 })

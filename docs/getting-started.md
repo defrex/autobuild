@@ -48,13 +48,13 @@ Run this yourself and leave it running. The dispatcher shows a live dashboard an
 
 Open your coding agent at the repository root, then ask in plain language:
 
-> Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through landing. Ask me before granting landing consent.
+> Help me specify a small retry-budget change. Ask me about the behavior and limits, file and groom the ticket when we agree, and watch it through merge. Ask me before granting merge consent.
 
 The agent works out acceptance criteria, scope, and evidence with you.
 
 - Keep the first change small, with checks that demonstrate success. The [spec standard](tickets.md#groom-a-buildable-spec) defines a buildable ticket.
 - With dispatch running, a ticket moved to ready is eligible for claim immediately.
 - Your agent watches progress and answers build questions within your instructions, bringing unresolved decisions back to you.
-- Landing follows the configured policy and gates; a green build doesn't guarantee immediate merge.
+- Merge follows the configured policy and gates; a green build doesn't guarantee immediate merge.
 
 Continue with [Working with your operator agent](operating.md) and the [configuration reference](configuration-overview.md).

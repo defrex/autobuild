@@ -659,7 +659,7 @@ describe('settlePendingPublication: the publication.lost backstop (AUT-328)', ()
     const h = await seed()
     const artifact = await h.store.putArtifact(SLUG, {
       kind: 'implement-notes',
-      content: 'never landed',
+      content: 'never merged',
     })
     const requested = await h.store.append(SLUG, {
       actor: agentActor('implement', 'session-1'),
@@ -706,7 +706,7 @@ describe('settlePendingPublication: the publication.lost backstop (AUT-328)', ()
     const h = await seed()
     const artifact = await h.store.putArtifact(SLUG, {
       kind: 'implement-notes',
-      content: 'landed before the release',
+      content: 'merged before the release',
     })
     await h.store.append(SLUG, {
       actor: agentActor('implement', 'session-1'),

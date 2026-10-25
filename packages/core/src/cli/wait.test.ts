@@ -1957,7 +1957,7 @@ test('collecting is an accepted wait status condition', () => {
 })
 
 test.each(['human', 'possible-stale-enable'] as const)(
-  'terminal forge landing attention follows durable classification: %s',
+  'terminal forge merge attention follows durable classification: %s',
   async (classification) => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
@@ -1986,31 +1986,34 @@ test.each(['human', 'possible-stale-enable'] as const)(
   },
 )
 
-test('tree conditions parse and node landing is delivered before terminal completion', async () => {
-  const store = makeStore()
-  await seedRunningBuild(store, 'tree')
-  const h = harness(store, {
-    slugs: ['tree'],
-    forValues: ['node-landed'],
-    timeout: '2s',
-    onTick: async () => {
-      await store.append('tree', {
-        actor: DISPATCHER,
-        type: 'integration.landed',
-        payload: {
-          head: 'head',
-          landed: 'landed',
-          provenance: 'kernel',
-          verified: true,
-          fenced: true,
-        },
-      })
-      await appendCompletion(store, 'tree')
-    },
-  })
-  expect(await abWait(h.base)).toBe(0)
-  expect(JSON.parse(h.out[0]!).event.type).toBe('integration.landed')
-})
+test.each(['node-merged', 'node-landed'])(
+  'tree condition %s delivers node merge before terminal completion',
+  async (condition) => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'tree')
+    const h = harness(store, {
+      slugs: ['tree'],
+      forValues: [condition],
+      timeout: '2s',
+      onTick: async () => {
+        await store.append('tree', {
+          actor: DISPATCHER,
+          type: 'integration.landed',
+          payload: {
+            head: 'head',
+            landed: 'landed',
+            provenance: 'kernel',
+            verified: true,
+            fenced: true,
+          },
+        })
+        await appendCompletion(store, 'tree')
+      },
+    })
+    expect(await abWait(h.base)).toBe(0)
+    expect(JSON.parse(h.out[0]!).event.type).toBe('integration.landed')
+  },
+)
 
 test('attention backlog recognizes a conflicted replay and ignores a clean replay', async () => {
   const { reduceBuild } = await import('../kernel/reducer')

@@ -36,7 +36,9 @@ const runtimes: RuntimeRegistry = {
 
 describe('live dispatcher config', () => {
   test('classifies every root key and pins only startup adapter fields', () => {
-    expect(Object.keys(CONFIG_RELOAD_CLASSIFICATION).sort()).toEqual([...TOP_LEVEL_KEYS].sort())
+    expect(Object.keys(CONFIG_RELOAD_CLASSIFICATION).sort()).toEqual(
+      [...TOP_LEVEL_KEYS].filter((key) => key !== 'merge').sort(),
+    )
     const startup = parseConfig(base)
     const candidate = parseConfig(
       base
@@ -295,9 +297,9 @@ test('ticket scan cadence reloads and belongs to the deployment configuration', 
   expect(live.current().config.ticketScanIntervalSeconds).toBe(23)
 })
 
-describe('live landing policy', () => {
+describe('live merge policy', () => {
   test('rejects malformed replacement rules and retains the last accepted policy', async () => {
-    const initial = `${base}\n[[landing]]\nmode = "consent"\n`
+    const initial = `${base}\n[[merge]]\nmode = "consent"\n`
     const live = new LiveConfig(
       'autobuild.toml',
       parseConfig(initial),
@@ -311,8 +313,8 @@ describe('live landing policy', () => {
   })
 
   test('build composition keeps current dispatcher policy rather than the pinned branch policy', () => {
-    const pipeline = parseConfig(`${base}\n[[landing]]\nmode = "consent"\n`)
-    const current = parseConfig(`${base}\n[[landing]]\nmode = "auto"\n`)
+    const pipeline = parseConfig(`${base}\n[[merge]]\nmode = "consent"\n`)
+    const current = parseConfig(`${base}\n[[merge]]\nmode = "auto"\n`)
     expect(composeBuildConfig(pipeline, current).landing).toEqual([{ mode: 'auto' }])
     expect(BUILD_OWNED_CONFIG_PATHS).not.toContain('landing')
   })
@@ -335,4 +337,27 @@ test('upgrade drain policy defaults, validates and hot reloads after publication
   expect((await live.refresh(`${base}\n[policy]\nupgradeDrainSeconds=30`)).kind).toBe('adopted')
   expect(published).toEqual([30])
   expect(live.current().config.policy.upgradeDrainSeconds).toBe(30)
+})
+
+test('renaming policy spelling keeps effective policy and reload classification unchanged', async () => {
+  const legacy = `${base}\n[[landing]]\nmode = "consent"\n`
+  const modern = legacy.replace('[[landing]]', '[[merge]]')
+  const publications: { effectiveChanged: boolean; restartRequired: readonly string[] }[] = []
+  const live = new LiveConfig(
+    'autobuild.toml',
+    parseConfig(legacy, 'autobuild.toml', () => {}),
+    legacy,
+    runtimes,
+    async (input) => {
+      publications.push(input)
+    },
+  )
+  const initial = live.current().config
+  const result = await live.refresh(modern)
+  expect(result.kind).toBe('adopted')
+  expect(publications).toEqual([
+    expect.objectContaining({ effectiveChanged: false, restartRequired: [] }),
+  ])
+  expect(live.current().config).toEqual(initial)
+  expect(await live.refresh(modern)).toEqual({ kind: 'unchanged' })
 })

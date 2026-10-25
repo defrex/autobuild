@@ -391,7 +391,8 @@ function openMapEnumeration(summary: string): string[] {
 /** Owning prose sections remain explicit; accepted fields come from the schema walker. */
 const TABLE_HEADINGS: Record<string, string> = {
   upgrade: '`[upgrade]`',
-  landing: '`[[landing]]`',
+  merge: '`[[merge]]`',
+  landing: '`[[merge]]`',
   store: '`[store]`',
   pr: '`[pr]`',
   workspace: '`[workspace]`',
@@ -725,7 +726,7 @@ describe('docs/configuration.md — schema coverage', () => {
   })
 
   test('gives every top-level table an exact section and every input field its own block', () => {
-    for (const table of TOP_LEVEL_TABLES) {
+    for (const table of TOP_LEVEL_TABLES.filter((key) => key !== 'landing')) {
       expectFieldBlocks(
         `docs/configuration.md / [${table}]`,
         tableSection(table),
@@ -776,12 +777,17 @@ describe('docs/configuration.md — schema coverage', () => {
     const section = headingSection(doc, 2, 'Reloading a running dispatcher')
     expect(section).toBeDefined()
     const classifiedRoots = Object.keys(CONFIG_RELOAD_CLASSIFICATION)
-    expect(classifiedRoots.sort()).toEqual([...TOP_LEVEL_KEYS].sort())
+    expect(classifiedRoots.sort()).toEqual(
+      [...TOP_LEVEL_KEYS].filter((key) => key !== 'merge').sort(),
+    )
 
     const classified: Array<{ path: string; behavior: 'hot' | 'restart' }> = []
     const visit = (value: unknown, path: string[] = []): void => {
       if (value === 'hot' || value === 'restart') {
-        classified.push({ path: path.join('.'), behavior: value })
+        classified.push({
+          path: path.map((p) => (p === 'landing' ? 'merge' : p)).join('.'),
+          behavior: value,
+        })
         return
       }
       for (const [key, child] of Object.entries(value as Record<string, unknown>)) {

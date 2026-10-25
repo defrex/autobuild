@@ -65,7 +65,8 @@ function escapeRegex(literal: string): string {
  */
 const TABLE_FIELDS: Record<string, string[]> = {
   upgrade: ['automatic'],
-  landing: Object.keys(landingRuleSchema.shape),
+  merge: Object.keys(landingRuleSchema.shape),
+  landing: [],
   store: ['url'],
   pr: Object.keys(prSchema.shape),
   workspace: Object.keys(workspaceSchema.shape),
@@ -403,7 +404,7 @@ describe('ab-guide — durable build-control coverage', () => {
     const forms: [string, RegExp][] = [
       ['pause', /`ab pause <slug> \[--store <ref>\]`/],
       ['resume', /`ab resume <slug> \[--store <ref>\]`/],
-      ['land', /`ab land <slug> \[--store <ref>\]`/],
+      ['merge', /`ab merge <slug> \[--store <ref>\]`/],
       ['hold', /`ab hold <slug> \[--store <ref>\]`/],
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
@@ -452,7 +453,7 @@ describe('ab-guide — durable build-control coverage', () => {
   // The operator-side account of `ab answer` has to join up with the agent-side
   // contract the receiving skills state, or the guide teaches a mechanism that
   // appears to end at the event log.
-  test('says where an answer lands for the agent and which phase consumes it', () => {
+  test('says where an answer merges for the agent and which phase consumes it', () => {
     const section = headingSection('### Durable build controls: CLI and dashboard')
     expect(section).toBeDefined()
     for (const claim of [
