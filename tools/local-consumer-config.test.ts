@@ -63,6 +63,8 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
     'ui-app',
     'ui-website',
     'docs',
+    'proa-rust',
+    'ui-proa',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
   expect(config.verify.stepConfigs.build).toEqual({
