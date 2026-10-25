@@ -6,6 +6,12 @@ import { DISPATCHER, KERNEL } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { seedStore, BUILD, makeEnv } from './testkit'
 import { collectNodeVerificationProvenance } from './node-verification-provenance'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
+import { readBuildFacts } from '../store/reduced-reads'
+import {
+  NODE_VERIFICATION_CONTEXT,
+  prepareNodeVerificationContext,
+} from '../kernel/node-verification-context'
 import { buildContext } from './context'
 
 let workspace: string
@@ -32,6 +38,34 @@ async function source(slug: string, repo = 'acme/app', kind: 'work' | 'node' = '
     actor: DISPATCHER,
     type: 'spec.imported',
     payload: { ticket, artifact: { kind: 'spec', rev: 0 } },
+  })
+}
+async function prepare(id: string, parent: string, head: string) {
+  const cycle = { id, parent, head }
+  const state = (await readBuildFacts(store, 'node')).value.state
+  const content = await prepareNodeVerificationContext(store, 'acme/app', cycle, state, {
+    exec: spawnExec,
+    workspacePath: workspace,
+  })
+  await store.appendWithArtifacts(
+    'node',
+    [{ kind: NODE_VERIFICATION_CONTEXT, content }],
+    ([artifact]) => ({
+      actor: KERNEL,
+      type: 'integration.prepared',
+      payload: {
+        ...cycle,
+        config: 'config',
+        context: { kind: NODE_VERIFICATION_CONTEXT, rev: artifact!.revision },
+      },
+    }),
+  )
+}
+function scoped() {
+  return scopeLocalStoreToPhaseSession(store.scopeBuild('node'), {
+    kind: 'build',
+    id: 'node',
+    session: 's_test',
   })
 }
 beforeEach(async () => {
@@ -138,16 +172,29 @@ test('node context materializes allocated paths and removes stale contributions'
   await git('add', 'autobuild.toml')
   await git('commit', '-m', 'config')
   await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'integration.prepared',
-    payload: { id: 'cycle-1', parent: base, head, config: 'config' },
-  })
+  await prepare('cycle-1', base, head)
   const deps = {
-    store,
+    store: scoped(),
     env: makeEnv({ build: 'node', phase: 'verify:visual' }),
     workspacePath: workspace,
     exec: spawnExec,
+  }
+  for (const restricted of [
+    scoped(),
+    scopeLocalStoreToPhaseSession(store, { kind: 'build', id: 'node', session: 's_test' }),
+  ]) {
+    await expect(
+      collectNodeVerificationProvenance(
+        restricted,
+        'acme/app',
+        { base, head },
+        { exec: spawnExec, workspacePath: workspace },
+        { contributionBase: base },
+      ),
+    ).rejects.toThrow('forbids getBuild')
+    await expect(
+      restricted.putArtifact(BUILD, { kind: 'spec', content: 'forbidden' }),
+    ).rejects.toThrow()
   }
   const manifest = await buildContext(deps)
   const intent = [
@@ -174,11 +221,7 @@ test('node context materializes allocated paths and removes stale contributions'
       .commits,
   ).toEqual([{ sha: contributed, build: BUILD }, { sha: head }])
   await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'integration.prepared',
-    payload: { id: 'cycle-2', parent: head, head, config: 'config' },
-  })
+  await prepare('cycle-2', head, head)
   expect((await buildContext(deps)).nodeVerification!.contributions).toEqual([])
   expect(await Bun.file(join(workspace, contribution.specPath)).exists()).toBe(false)
 })
@@ -187,25 +230,25 @@ test('missing specs and rejected reads fail without publishing a partial manifes
   await source('node', 'acme/app', 'node')
   const base = await commit('base')
   const head = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  await writeFile(
+    join(workspace, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
+  )
   await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'integration.prepared',
-    payload: { id: 'cycle', parent: base, head, config: 'config' },
-  })
+  await prepare('cycle', base, head)
   const original = store.getArtifact.bind(store)
   store.getArtifact = async (build, kind, rev) =>
-    build === BUILD ? null : original(build, kind, rev)
+    kind === NODE_VERIFICATION_CONTEXT ? null : original(build, kind, rev)
   const deps = {
-    store,
+    store: scoped(),
     env: makeEnv({ build: 'node', phase: 'verify:visual' }),
     workspacePath: workspace,
     exec: spawnExec,
   }
-  await expect(buildContext(deps)).rejects.toThrow('missing spec@0')
+  await expect(buildContext(deps)).rejects.toThrow('prepared context artifact is missing')
   expect(await Bun.file(join(workspace, '.ab/verify-visual/context.json')).exists()).toBe(false)
   store.getArtifact = async (build, kind, rev) => {
-    if (build === BUILD) throw new Error('store unavailable')
+    if (kind === NODE_VERIFICATION_CONTEXT) throw new Error('store unavailable')
     return original(build, kind, rev)
   }
   await expect(buildContext(deps)).rejects.toThrow('store unavailable')
@@ -221,11 +264,7 @@ test('self identity retains own spec, and leaf context has no provenance reads',
     '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
   )
   await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
-  await store.append('node', {
-    actor: KERNEL,
-    type: 'integration.prepared',
-    payload: { id: 'cycle', parent: base, head, config: 'config' },
-  })
+  await prepare('cycle', base, head)
   await buildContext({
     store,
     env: makeEnv({ build: 'node', phase: 'verify:visual' }),
@@ -320,21 +359,184 @@ test('owned hand-pushed intent excludes inherited and side history and survives 
   ).toEqual([])
 })
 
-test('missing durable node ownership boundary fails context hydration', async () => {
+test('missing durable node ownership boundary fails preparation', async () => {
   await source('node', 'acme/app', 'node')
   const base = await commit('base')
   const head = await commit('intent')
+  await expect(prepare('cycle', base, head)).rejects.toThrow(
+    'missing its durable contribution boundary',
+  )
+})
+
+test('exact citation survives spec revisions, later deposits, and replacement sessions', async () => {
+  await source('node', 'acme/app', 'node')
+  const base = await commit('base')
+  const head = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  await writeFile(
+    join(workspace, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
+  )
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await prepare('cycle', base, head)
+  const hydrate = async () =>
+    buildContext({
+      store: scoped(),
+      env: makeEnv({ build: 'node', phase: 'verify:visual' }),
+      workspacePath: workspace,
+      exec: spawnExec,
+    })
+  const first = await hydrate()
+  const original = await readFile(
+    join(workspace, first.nodeVerification!.contributions[0]!.specPath),
+    'utf8',
+  )
+  await store.putArtifact(BUILD, { kind: 'spec', content: 'revised authority' })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'spec.revised',
+    payload: { escalation: 1, artifact: { kind: 'spec', rev: 1 } },
+  })
+  await store.putArtifact('node', {
+    kind: NODE_VERIFICATION_CONTEXT,
+    content: 'uncited corruption',
+  })
+  const resumed = await hydrate()
+  expect(
+    await readFile(join(workspace, resumed.nodeVerification!.contributions[0]!.specPath), 'utf8'),
+  ).toBe(original)
+  await prepare('next-cycle', base, head)
+  const fresh = await hydrate()
+  expect(
+    await readFile(join(workspace, fresh.nodeVerification!.contributions[0]!.specPath), 'utf8'),
+  ).toBe('revised authority')
+})
+
+test('invalid prepared inputs fail closed without publishing a manifest', async () => {
+  await source('node', 'acme/app', 'node')
+  const base = await commit('base')
+  const head = await commit(`change\n\nAutobuild-Build: ${BUILD}`)
+  await writeFile(
+    join(workspace, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = ["visual"]\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
+  )
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  const cycle = { id: 'cycle', parent: base, head }
+  const state = (await readBuildFacts(store, 'node')).value.state
+  const valid = JSON.parse(
+    await prepareNodeVerificationContext(store, 'acme/app', cycle, state, {
+      exec: spawnExec,
+      workspacePath: workspace,
+    }),
+  )
+  for (const content of [
+    'invalid json',
+    JSON.stringify({ ...valid, cycle: 'old' }),
+    JSON.stringify({ ...valid, range: { base: head, head } }),
+    JSON.stringify({ ...valid, specs: {} }),
+  ]) {
+    await store.appendWithArtifacts(
+      'node',
+      [{ kind: NODE_VERIFICATION_CONTEXT, content }],
+      ([artifact]) => ({
+        actor: KERNEL,
+        type: 'integration.prepared',
+        payload: {
+          ...cycle,
+          config: 'config',
+          context: { kind: NODE_VERIFICATION_CONTEXT, rev: artifact!.revision },
+        },
+      }),
+    )
+    await expect(
+      buildContext({
+        store: scoped(),
+        env: makeEnv({ build: 'node', phase: 'verify:visual' }),
+        workspacePath: workspace,
+        exec: spawnExec,
+      }),
+    ).rejects.toThrow()
+    expect(await Bun.file(join(workspace, '.ab/verify-visual/context.json')).exists()).toBe(false)
+  }
   await store.append('node', {
     actor: KERNEL,
     type: 'integration.prepared',
-    payload: { id: 'cycle', parent: base, head, config: 'config' },
+    payload: { ...cycle, config: 'config' },
   })
   await expect(
     buildContext({
-      store,
+      store: scoped(),
       env: makeEnv({ build: 'node', phase: 'verify:visual' }),
       workspacePath: workspace,
       exec: spawnExec,
     }),
-  ).rejects.toThrow('missing its durable contribution boundary')
+  ).rejects.toThrow('missing prepared context input')
+})
+
+test('preparation works in a bare kernel repository without a guest object database', async () => {
+  await source('node', 'acme/app', 'node')
+  await source('nested')
+  const base = await commit('base')
+  await git('checkout', '-b', 'side')
+  await commit('nested contribution\n\nAutobuild-Build: nested')
+  await git('checkout', '-')
+  await commit(`child contribution\n\nAutobuild-Build: ${BUILD}`)
+  await git('merge', '--no-ff', 'side', '-m', 'merge')
+  const head = await git('rev-parse', 'HEAD')
+  const bare = join(workspace, 'kernel.git')
+  await git('clone', '--bare', '.', bare)
+  const content = await prepareNodeVerificationContext(
+    store,
+    'acme/app',
+    { id: 'bare', parent: base, head },
+    { nodeOpened: { sha: base } },
+    { exec: spawnExec, workspacePath: bare },
+  )
+  const payload = JSON.parse(content)
+  expect(payload.index.contributions.map((c: { build: string }) => c.build).sort()).toEqual(
+    [BUILD, 'nested'].sort(),
+  )
+  expect(payload.specs.nested).toBe('Authorize nested')
+})
+
+test('concurrent agent members hydrate the same cited input without Git discovery', async () => {
+  await source('node', 'acme/app', 'node')
+  await source('nested')
+  const base = await commit('base')
+  await commit(`child\n\nAutobuild-Build: ${BUILD}`)
+  const head = await commit('nested\n\nAutobuild-Build: nested')
+  await store.append('node', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await writeFile(
+    join(workspace, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n[verify]\nsteps = [["one", "two"]]\n[verify.one]\nkind = "agent"\nskill = "one"\n[verify.two]\nkind = "agent"\nskill = "two"\n',
+  )
+  await prepare('parallel', base, head)
+  const expected = await collectNodeVerificationProvenance(
+    store,
+    'acme/app',
+    { base, head },
+    { exec: spawnExec, workspacePath: workspace },
+    { contributionBase: base },
+  )
+  const manifests = await Promise.all(
+    ['one', 'two'].map((step) =>
+      buildContext({
+        store: scoped(),
+        env: makeEnv({ build: 'node', phase: `verify:${step}` }),
+        workspacePath: workspace,
+      }),
+    ),
+  )
+  for (const manifest of manifests) {
+    const index = JSON.parse(
+      await readFile(join(workspace, manifest.nodeVerification!.indexPath), 'utf8'),
+    )
+    expect({
+      ...index,
+      contributions: index.contributions.map((c: { specPath: string }) => ({ ...c, specPath: '' })),
+    }).toEqual(expected.index)
+    for (const contribution of manifest.nodeVerification!.contributions)
+      expect(await readFile(join(workspace, contribution.specPath), 'utf8')).toBe(
+        expected.specs.get(contribution.build)!,
+      )
+  }
 })
