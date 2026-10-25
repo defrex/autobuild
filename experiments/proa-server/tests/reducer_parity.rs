@@ -68,6 +68,44 @@ fn typescript_corpus_matches_native_reducers_and_incremental_splits() {
         let scope = scope(fixture["scope"].as_str().unwrap());
         let events = fixture["events"].as_array().unwrap();
         let mut acc = Accumulator::new(scope);
+        if let Some(unreadable) = fixture.get("rustUnreadable") {
+            let catalog: Value =
+                serde_json::from_str(include_str!("../fixtures/event-schemas.json")).unwrap();
+            let unknown = events
+                .iter()
+                .find(|event| {
+                    catalog[scope.name()]
+                        .get(event["type"].as_str().unwrap_or(""))
+                        .is_none()
+                })
+                .expect("unreadable fixture must mechanically contain an unknown event");
+            if let Some(kind) = unreadable.get("type") {
+                assert_eq!(kind, &unknown["type"], "{name}: negative event type");
+            }
+            if let Some(seq) = unreadable.get("seq") {
+                assert_eq!(seq, &unknown["seq"], "{name}: negative event seq");
+            }
+            let before = acc.finish();
+            assert!(
+                acc.advance(events).is_err(),
+                "{name}: unknown fact accepted"
+            );
+            assert_eq!(
+                acc.finish(),
+                before,
+                "{name}: error committed partial state"
+            );
+            continue;
+        }
+        if fixture.get("expectedError").is_some() {
+            let before = acc.finish();
+            assert!(
+                acc.advance(events).is_err(),
+                "{name}: corrupt history accepted"
+            );
+            assert_eq!(acc.finish(), before);
+            continue;
+        }
         if let Err(err) = acc.advance(events) {
             failures.push(format!("{name}: {err}"));
             continue;
