@@ -1004,3 +1004,45 @@ its serialized OAuth store, in-memory browser-session lifetime, cold linked-buil
 cost and operational key rotation need consideration before adoption. My judgment
 is that rendering and native protocol reuse fit; the accumulated parity machinery
 and operational burden are material costs, not evidence that migration is free.
+
+## 2026-10-25 — refreshing the TypeScript oracles after node integration
+
+This is maintenance of the repository experiment. The refresh started at
+22:41 UTC from `7ec03b79c71f2c3e03c4b897e613c8983838090a`, the integrated
+Proa node over TypeScript main `b140507a`. The initial tooling run found
+27 failures and one loading error, rather than treating the historical node's
+26 failures as a new measurement. Installing the existing locked dependencies
+resolved the missing local S3 dependency.
+
+The actual drift included #747's removed hosted runner (obsolete config imports,
+validation and HTTP session wake inheritance); #748's verify configuration pins,
+cycle boundaries and grouped-stage serialization; #751's publication retry
+ledger; and #755's presence withdrawal and protocol 6 identity. #750's publication
+policy and #752's orderly handoff behavior changed the pinned source closure;
+existing native replay/attention boundaries are retained and checked against the
+new source-produced cases. #754 adds stage serialization regression coverage.
+The older super-user environment rename also exposed stale MCP seeds: the oracle
+now injects the source's explicit test access adapter and uses the current
+super-user setting, without consulting a production organization database.
+
+Every tracked fixture family was regenerated through its own tool. The base
+capture produced 19,642 provenance aliases in 6,003 distinct cases, including the
+actual dispatcher-upgrade and reducer tests. Subsidiary generators include all
+42 named reducers, 4,195 persisted Unicode payload cases and 25,814 persisted
+replays. MCP retains the real SDK descriptors, original execution schemas and
+all 33 tools. The base capture took about eight and a half minutes; the first
+39 subsidiary invocations took 14.7 seconds. MCP needed a second invocation
+after control generation because its positive seed reads `control-corpus.json`.
+This dependency is now documented. No expected response bytes were edited by
+hand; repository formatting was applied to generated JSON.
+
+Native repairs cover both scalar and lossless verify-stage/log-index/publication folds,
+including member ownership, cancellation/superseded escalation state and running
+member projection; captured artifact revisions in read/dashboard/landing projections; grouped-stage
+normalization and duplicate diagnostics, inert HTTP session creation, and exact
+scoped presence deletion. New executable cases cover older pinned config versus
+a newer deposit, superseded receipts, stage groups and removed config fields,
+encoded/trimmed IDs, idempotence, neighboring rows, delegated/project refusal
+and identity-before-auth ordering. Historical persisted runner facts still
+replay. The established ticket-attribution exception remains; no new exclusion
+was introduced.

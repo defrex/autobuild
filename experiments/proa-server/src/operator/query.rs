@@ -301,13 +301,18 @@ async fn row(
     let mut pipeline = None;
     let mut metadata = None;
     if pinned && crate::dashboard::model::effective_status(&build.state) != "done" {
+        let pin = &build.state["verify"]["configPin"]["artifact"];
+        let kind = pin["kind"]
+            .as_str()
+            .unwrap_or("build-runner-effective-config");
+        let revision = pin["rev"].as_i64();
         if let Ok(Some(meta)) = reader
             .postgres()
             .artifact(
                 repo,
                 Scope::Build(build.record["slug"].as_str().unwrap_or_default()),
-                "build-runner-effective-config",
-                None,
+                kind,
+                revision,
             )
             .await
         {
@@ -315,15 +320,12 @@ async fn row(
                 .artifact(
                     repo,
                     Scope::Build(build.record["slug"].as_str().unwrap_or_default()),
-                    "build-runner-effective-config",
+                    kind,
                     meta["revision"].as_i64(),
                 )
                 .await
             {
-                if let Ok(config) = decode_config(
-                    &bytes,
-                    &format!("build-runner-effective-config@{}", meta["revision"]),
-                ) {
+                if let Ok(config) = decode_config(&bytes, &format!("{kind}@{}", meta["revision"])) {
                     let mut composed = live.clone();
                     for key in ["verify", "finalize", "commands", "workspace"] {
                         if let Some(value) = config.get(key) {

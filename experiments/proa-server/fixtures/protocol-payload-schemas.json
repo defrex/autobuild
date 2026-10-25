@@ -737,6 +737,23 @@
           "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
           "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
           "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "context": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "kind": { "type": "literal", "values": ["node-verification-context"] },
+                "rev": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          },
           "config": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
         },
         "strict": true
@@ -1432,6 +1449,73 @@
         "type": "object",
         "shape": {
           "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "publication.retry-scheduled": {
+        "type": "object",
+        "shape": {
+          "operation": { "type": "enum", "values": ["restack", "reconcile"] },
+          "rewriteId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "anchor": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "failure": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 1, "inclusive": true },
+              { "check": "less_than", "value": 6, "inclusive": true }
+            ]
+          },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "retryAt": {
+            "type": "string",
+            "checks": [
+              {
+                "check": "string_format",
+                "format": "datetime",
+                "source": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "flags": "",
+                "pattern": "/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$/"
+              }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "publication.retry-exhausted": {
+        "type": "object",
+        "shape": {
+          "operation": { "type": "enum", "values": ["restack", "reconcile"] },
+          "rewriteId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "anchor": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "failure": { "type": "literal", "values": [7] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
         },
         "strict": true
       },
@@ -3266,6 +3350,16 @@
               { "check": "greater_than", "value": 0, "inclusive": false }
             ]
           },
+          "verifyStageFailure": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          },
           "feedback": {
             "type": "optional",
             "inner": {
@@ -3435,6 +3529,94 @@
         },
         "strict": true
       },
+      "verify.config-captured": {
+        "type": "object",
+        "shape": {
+          "cycle": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "head": {
+            "type": "string",
+            "checks": [
+              {
+                "check": "string_format",
+                "format": "regex",
+                "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "flags": "",
+                "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+              }
+            ]
+          },
+          "identity": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "source": {
+            "type": "object",
+            "shape": {
+              "ref": { "type": "enum", "values": ["branch-head", "worktree-dirty"] },
+              "commit": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "check": "string_format",
+                      "format": "regex",
+                      "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                      "flags": "",
+                      "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                    }
+                  ]
+                }
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "verify.config-superseded": {
+        "type": "object",
+        "shape": {
+          "captureSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "head": {
+            "type": "string",
+            "checks": [
+              {
+                "check": "string_format",
+                "format": "regex",
+                "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "flags": "",
+                "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+              }
+            ]
+          },
+          "identity": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
       "verify.started": {
         "type": "object",
         "shape": {
@@ -3543,6 +3725,16 @@
       "verify.reconcile-policy-captured": {
         "type": "object",
         "shape": {
+          "cycle": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          },
           "reconcileSeq": {
             "type": "number",
             "checks": [
@@ -3856,6 +4048,170 @@
             ]
           }
         ]
+      },
+      "verify.cancelled": {
+        "type": "object",
+        "shape": {
+          "baseSha": {
+            "type": "optional",
+            "inner": {
+              "type": "string",
+              "checks": [
+                {
+                  "check": "string_format",
+                  "format": "regex",
+                  "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "flags": "",
+                  "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                }
+              ]
+            }
+          },
+          "headSha": {
+            "type": "optional",
+            "inner": {
+              "type": "string",
+              "checks": [
+                {
+                  "check": "string_format",
+                  "format": "regex",
+                  "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "flags": "",
+                  "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                }
+              ]
+            }
+          },
+          "restackId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "cause": {
+            "type": "object",
+            "shape": {
+              "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "verify.stage-failed": {
+        "type": "object",
+        "shape": {
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "cycle": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "stage": {
+            "type": "array",
+            "checks": [{ "check": "min_length", "minimum": 1 }],
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "baseSha": {
+            "type": "optional",
+            "inner": {
+              "type": "string",
+              "checks": [
+                {
+                  "check": "string_format",
+                  "format": "regex",
+                  "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "flags": "",
+                  "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                }
+              ]
+            }
+          },
+          "headSha": {
+            "type": "optional",
+            "inner": {
+              "type": "string",
+              "checks": [
+                {
+                  "check": "string_format",
+                  "format": "regex",
+                  "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "flags": "",
+                  "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                }
+              ]
+            }
+          },
+          "restackId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "failed": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "report": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "object",
+                    "shape": {
+                      "kind": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "rev": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "strict": true
+                  }
+                }
+              },
+              "strict": true
+            }
+          },
+          "cancelled": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "cause": {
+                  "type": "object",
+                  "shape": {
+                    "step": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
       },
       "finalize.started": { "type": "object", "shape": {}, "strict": true },
       "finalize.completed": {
@@ -5205,6 +5561,7 @@
                 "execution-no-progress",
                 "setup-failure-limit",
                 "infrastructure-failure-limit",
+                "publication-retry-limit",
                 "phase-attempt-limit",
                 "non-retryable-phase-failure"
               ]

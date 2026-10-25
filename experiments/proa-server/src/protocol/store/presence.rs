@@ -101,6 +101,28 @@ impl Store {
             .map_err(storage_error)?;
         Ok(presence(&row))
     }
+    pub async fn remove_operator_presence(
+        &self,
+        repo: &str,
+        id: &str,
+    ) -> Result<(), ProtocolError> {
+        let normalized = crate::protocol::validation::validate_request_field(
+            "operatorPresence",
+            "id",
+            &json!(id),
+        )
+        .map_err(|message| ProtocolError::new(500, "internal", message))?;
+        let id = normalized.as_str().unwrap();
+        let client = self.database.client().await?;
+        client
+            .execute(
+                "DELETE FROM operator_presence WHERE repo=$1 AND id=$2",
+                &[&repo, &id],
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(())
+    }
     pub async fn list_operator_presence(&self, repo: &str) -> Result<Value, ProtocolError> {
         let cutoff = self.now() - Duration::milliseconds(OPERATOR_PRESENCE_TTL_MS);
         let client = self.database.client().await?;

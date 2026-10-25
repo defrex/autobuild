@@ -164,7 +164,7 @@ export async function replay(
         kind: 'dispatcher-effective-config',
         content: JSON.stringify({
           ...root,
-          verify: { steps: verify.steps, ...verify.stepConfigs },
+          verify: { steps: verify.stages ?? verify.steps, ...verify.stepConfigs },
           finalize: { steps: finalize.steps, ...finalize.stepConfigs },
         }),
       },
