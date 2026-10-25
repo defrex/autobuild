@@ -53,6 +53,29 @@ fn validate(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
         value: input.cloned(),
         ..Default::default()
     };
+    if schema.as_object().is_some_and(|o| {
+        o.keys().all(|key| {
+            [
+                "description",
+                "title",
+                "$schema",
+                "deprecated",
+                "readOnly",
+                "writeOnly",
+            ]
+            .contains(&key.as_str())
+        })
+    }) {
+        return result;
+    }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        for branch in branches {
+            let parsed = validate(branch, input, path);
+            result.aborted |= parsed.aborted;
+            result.issues.extend(parsed.issues);
+        }
+        return result;
+    }
     if input.is_none() {
         if let Some(value) = schema.get("default") {
             result.value = Some(value.clone());
@@ -143,7 +166,13 @@ fn validate(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
     if !valid {
         result.issues.push(type_error(
             input,
-            if kind == "integer" { "number" } else { kind },
+            if kind == "integer" {
+                "number"
+            } else if schema.get("propertyNames").is_some() {
+                "record"
+            } else {
+                kind
+            },
             path,
         ));
         result.aborted = true;
@@ -152,7 +181,8 @@ fn validate(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
     let input = input.unwrap();
     match kind {
         "object" => {
-            let props = schema["properties"].as_object().expect("schema properties");
+            let empty = serde_json::Map::new();
+            let props = schema["properties"].as_object().unwrap_or(&empty);
             let required = schema["required"].as_array();
             for (key, child) in props {
                 if input.get(key).is_none() && required.is_none_or(|r| !r.contains(&json!(key))) {
@@ -171,6 +201,18 @@ fn validate(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
                 }
                 if let Some(value) = parsed.value {
                     result.value.as_mut().unwrap()[key] = value;
+                }
+            }
+            if let Some(additional) = schema.get("additionalProperties").filter(|s| s.is_object()) {
+                for (key, value) in input
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .filter(|(k, _)| !props.contains_key(*k))
+                {
+                    let parsed = validate(additional, Some(value), &path_at(path, json!(key)));
+                    result.aborted |= parsed.aborted;
+                    result.issues.extend(parsed.issues);
                 }
             }
             let keys: Vec<&String> = input
@@ -272,6 +314,13 @@ fn parse_value(name: &str, input: Option<&Value>) -> Result<Value, OperatorError
         .get(name)
         .or_else(|| tool_contract()["schemas"].get(name))
         .ok_or_else(OperatorError::internal)?;
+    parse_schema(name, schema, input)
+}
+pub fn parse_schema(
+    name: &str,
+    schema: &Value,
+    input: Option<&Value>,
+) -> Result<Value, OperatorError> {
     let mut input = input.cloned();
     // JSON Schema cannot encode string transforms or the two custom refinements.
     if let Some(value) = input.as_mut() {
