@@ -47,7 +47,10 @@ under root `.ab/` before running the root tests.
 Default binding is `127.0.0.1:3000`. Set `PORT=4567` to change the port and
 `PROA_HOST=::1` to change the IP address. Invalid/zero ports fail explicitly.
 `GET /health` returns JSON with status and the crate version. `/readyz` is the
-scaffold readiness endpoint. `/?project=<id>` selects a configured project; `/builds/<slug>?project=<id>` reads its build trail. `/refresh` returns changed SSR fragments and `/frame` resolves scoped stored image references. `/index.md` and Markdown content
+scaffold readiness endpoint. `/?project=<id>` selects a configured project; `/dashboard/builds/<slug>?project=<id>` reads its build trail. `/refresh` returns changed SSR fragments and `/frame` resolves scoped stored image references. `/index.md` and Markdown content
+`GET /health` returns the public BuildStore protocol health response, including
+release/protocol identity, without contacting storage. `/readyz` checks the
+configured storage schema (503 when unavailable), or reports ready without storage. `/` is Builds; `/index.md` and Markdown content
 negotiation expose its textual representation. Assets are under `/static/`.
 
 ```sh
@@ -141,7 +144,9 @@ Proa's development reload injection.
 With no database/blob environment the server starts its offline shell. To initialize
 `AppState.data`, set `AB_POSTGRES_URL` (or `DATABASE_URL`) and the blob variables used
 by the TypeScript service. Partial configuration fails. Schema version 17 and its
-checksum are checked before the listener binds; unknown versions refuse startup.
+checksum are checked before each initial or replacement connection is used.
+Unknown versions refuse data operations and readiness without blocking public
+health. The explicit reader evidence executable retains eager startup preflight.
 The reader performs SELECTs in read-only transactions and never initializes schema,
 writes events or reads snapshots.
 
@@ -151,6 +156,9 @@ S3: `AB_BLOB_BACKEND=s3`, `AB_S3_BUCKET`, `AB_S3_REGION`,
 `AB_BLOB_BACKEND=vercel`, `AB_VERCEL_BLOB_ACCESS=public|private`, and either
 `BLOB_READ_WRITE_TOKEN` or both `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`.
 `AB_BLOB_PREFIX` is shared by both backends and normalized exactly as in TypeScript.
+`AB_ARTIFACT_RETENTION_MAX_REVISIONS` sets the positive integer revision bound
+for managed artifact kinds (default 200), using the TypeScript configuration
+parser’s trimming and Number conversion. Invalid values fail configuration.
 See [the pinned provider contract](BLOB-CONTRACT.md).
 
 The library exposes project/build/session metadata, scoped artifact bytes, and
@@ -227,3 +235,18 @@ Ordinary forms work without JavaScript. With JavaScript, those same forms replac
 server-rendered fragments while polling preserves drafts, focus and refusals.
 Abort and discard require explicit confirmation. The browser has no landing
 consent controls or ticket authoring pages.
+The remote BuildStore implementation under `src/protocol/` is mounted on the
+normal server alongside the browser router. The five machine namespaces use
+release negotiation and bearer authority; browser paths retain cookie and origin
+protection. Configured storage requires a nonblank `AB_STORE_SECRET` for signed
+runner/phase credentials; project credentials remain database-backed. Backend
+connections open lazily and preflight before use, so public health remains
+available during a database outage. Without storage configuration, machine paths
+fail closed. Open authority and injected clocks exist only in private test
+examples. The maintained acceptance gate covers the unchanged shared contract,
+cross-language credentials and persistence, all named reducers, historical
+clients and a finite delegated dispatch with production reader evidence. Rendering
+the dispatched build on the sibling Builds page remains a node integration check
+after file-131, per the approved scope ruling. This is a nonshipping experiment.
+See [the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
+for fixture generation, isolated proofs and evidence.

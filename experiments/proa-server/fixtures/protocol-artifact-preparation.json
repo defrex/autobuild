@@ -1,0 +1,5227 @@
+{
+  "sources": {
+    "packages/core/src/store/remote/protocol.ts": "61b3d66440ac72c664e040207fa4a1e57c2aec52121202289a5b9690789a1562",
+    "experiments/proa-server/tools/protocol-artifact-preparation-fixtures.ts": "680f91484f95455c7c5fb284fc6d21c6600d3c5b744d5a7a380b3bbd8a2365c7"
+  },
+  "decode": [
+    {
+      "id": "decode/0",
+      "input": { "kind": "notes", "contentBase64": "" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "",
+          "blobRef": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/1",
+      "input": { "kind": "notes", "contentBase64": "Zg==", "metadata": { "n": 1 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "66",
+          "blobRef": "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111",
+          "metadata": { "n": 1 }
+        }
+      }
+    },
+    {
+      "id": "decode/2",
+      "input": { "kind": "notes", "contentBase64": "Zm8=" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "666f",
+          "blobRef": "9c3aee7110b787f0fb5f81633a36392bd277ea945d44c874a9a23601aefe20cf",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/3",
+      "input": { "kind": "notes", "contentBase64": "Zm9v", "metadata": { "n": 3 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "666f6f",
+          "blobRef": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+          "metadata": { "n": 3 }
+        }
+      }
+    },
+    {
+      "id": "decode/4",
+      "input": { "kind": "notes", "contentBase64": "AAECAwQF" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "000102030405",
+          "blobRef": "17e88db187afd62c16e5debf3e6527cd006bc012bc90b51a810cd80c2d511f43",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/5",
+      "input": { "kind": "notes", "contentBase64": "AA==", "metadata": { "n": 5 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "00",
+          "blobRef": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "metadata": { "n": 5 }
+        }
+      }
+    },
+    {
+      "id": "decode/6",
+      "input": { "kind": "notes", "contentBase64": "/w==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ff",
+          "blobRef": "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/7",
+      "input": { "kind": "notes", "contentBase64": "////", "metadata": { "n": 7 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ffffff",
+          "blobRef": "5ae7e6a42304dc6e4176210b83c43024f99a0bce9a870c3b6d2c95fc8ebfb74c",
+          "metadata": { "n": 7 }
+        }
+      }
+    },
+    {
+      "id": "decode/8",
+      "input": { "kind": "notes", "contentBase64": "Zg" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/9",
+      "input": { "kind": "notes", "contentBase64": "Zg=", "metadata": { "n": 9 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/10",
+      "input": { "kind": "notes", "contentBase64": "Zg===" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/11",
+      "input": { "kind": "notes", "contentBase64": "Zg====", "metadata": { "n": 11 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/12",
+      "input": { "kind": "notes", "contentBase64": "Zh==" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/13",
+      "input": { "kind": "notes", "contentBase64": "Zm9=", "metadata": { "n": 13 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/14",
+      "input": { "kind": "notes", "contentBase64": "Zg==\n" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/15",
+      "input": { "kind": "notes", "contentBase64": " Zg==", "metadata": { "n": 15 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/16",
+      "input": { "kind": "notes", "contentBase64": "Zg== " },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/17",
+      "input": { "kind": "notes", "contentBase64": "Zg==\r\n", "metadata": { "n": 17 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/18",
+      "input": { "kind": "notes", "contentBase64": "Zg-_" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/19",
+      "input": { "kind": "notes", "contentBase64": "-w==", "metadata": { "n": 19 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/20",
+      "input": { "kind": "notes", "contentBase64": "_w==" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/21",
+      "input": { "kind": "notes", "contentBase64": "A===", "metadata": { "n": 21 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/22",
+      "input": { "kind": "notes", "contentBase64": "====" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/23",
+      "input": { "kind": "notes", "contentBase64": "a", "metadata": { "n": 23 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/24",
+      "input": { "kind": "notes", "contentBase64": "\u0000" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/25",
+      "input": { "kind": "notes", "contentBase64": "éééé", "metadata": { "n": 25 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/26",
+      "input": { "kind": "notes", "contentBase64": "😀😀" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/27",
+      "input": { "kind": "notes", "contentBase64": "Z g=", "metadata": { "n": 27 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/28",
+      "input": { "kind": "notes", "contentBase64": "AA=A" },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/29",
+      "input": { "kind": "notes", "contentBase64": "AAA=", "metadata": { "n": 29 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0000",
+          "blobRef": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+          "metadata": { "n": 29 }
+        }
+      }
+    },
+    {
+      "id": "decode/30",
+      "input": { "kind": "notes", "contentBase64": "AAAA" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "000000",
+          "blobRef": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/31",
+      "input": { "kind": "notes", "contentBase64": "AAAA=", "metadata": { "n": 31 } },
+      "oracle": {
+        "rejected": {
+          "status": 400,
+          "kind": "validation",
+          "error": "artifact content is not valid base64"
+        }
+      }
+    },
+    {
+      "id": "decode/32",
+      "input": { "kind": "notes", "contentBase64": "AA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "00",
+          "blobRef": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/33",
+      "input": { "kind": "notes", "contentBase64": "AQ==", "metadata": { "n": 33 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "01",
+          "blobRef": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
+          "metadata": { "n": 33 }
+        }
+      }
+    },
+    {
+      "id": "decode/34",
+      "input": { "kind": "notes", "contentBase64": "Ag==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "02",
+          "blobRef": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/35",
+      "input": { "kind": "notes", "contentBase64": "Aw==", "metadata": { "n": 35 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "03",
+          "blobRef": "084fed08b978af4d7d196a7446a86b58009e636b611db16211b65a9aadff29c5",
+          "metadata": { "n": 35 }
+        }
+      }
+    },
+    {
+      "id": "decode/36",
+      "input": { "kind": "notes", "contentBase64": "BA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "04",
+          "blobRef": "e52d9c508c502347344d8c07ad91cbd6068afc75ff6292f062a09ca381c89e71",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/37",
+      "input": { "kind": "notes", "contentBase64": "BQ==", "metadata": { "n": 37 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "05",
+          "blobRef": "e77b9a9ae9e30b0dbdb6f510a264ef9de781501d7b6b92ae89eb059c5ab743db",
+          "metadata": { "n": 37 }
+        }
+      }
+    },
+    {
+      "id": "decode/38",
+      "input": { "kind": "notes", "contentBase64": "Bg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "06",
+          "blobRef": "67586e98fad27da0b9968bc039a1ef34c939b9b8e523a8bef89d478608c5ecf6",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/39",
+      "input": { "kind": "notes", "contentBase64": "Bw==", "metadata": { "n": 39 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "07",
+          "blobRef": "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
+          "metadata": { "n": 39 }
+        }
+      }
+    },
+    {
+      "id": "decode/40",
+      "input": { "kind": "notes", "contentBase64": "CA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "08",
+          "blobRef": "beead77994cf573341ec17b58bbf7eb34d2711c993c1d976b128b3188dc1829a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/41",
+      "input": { "kind": "notes", "contentBase64": "CQ==", "metadata": { "n": 41 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "09",
+          "blobRef": "2b4c342f5433ebe591a1da77e013d1b72475562d48578dca8b84bac6651c3cb9",
+          "metadata": { "n": 41 }
+        }
+      }
+    },
+    {
+      "id": "decode/42",
+      "input": { "kind": "notes", "contentBase64": "Cg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0a",
+          "blobRef": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/43",
+      "input": { "kind": "notes", "contentBase64": "Cw==", "metadata": { "n": 43 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0b",
+          "blobRef": "e7cf46a078fed4fafd0b5e3aff144802b853f8ae459a4f0c14add3314b7cc3a6",
+          "metadata": { "n": 43 }
+        }
+      }
+    },
+    {
+      "id": "decode/44",
+      "input": { "kind": "notes", "contentBase64": "DA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0c",
+          "blobRef": "ef6cbd2161eaea7943ce8693b9824d23d1793ffb1c0fca05b600d3899b44c977",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/45",
+      "input": { "kind": "notes", "contentBase64": "DQ==", "metadata": { "n": 45 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0d",
+          "blobRef": "9d1e0e2d9459d06523ad13e28a4093c2316baafe7aec5b25f30eba2e113599c4",
+          "metadata": { "n": 45 }
+        }
+      }
+    },
+    {
+      "id": "decode/46",
+      "input": { "kind": "notes", "contentBase64": "Dg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0e",
+          "blobRef": "4d7b3ef7300acf70c892d8327db8272f54434adbc61a4e130a563cb59a0d0f47",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/47",
+      "input": { "kind": "notes", "contentBase64": "Dw==", "metadata": { "n": 47 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "0f",
+          "blobRef": "dc0e9c3658a1a3ed1ec94274d8b19925c93e1abb7ddba294923ad9bde30f8cb8",
+          "metadata": { "n": 47 }
+        }
+      }
+    },
+    {
+      "id": "decode/48",
+      "input": { "kind": "notes", "contentBase64": "EA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "10",
+          "blobRef": "c555eab45d08845ae9f10d452a99bfcb06f74a50b988fe7e48dd323789b88ee3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/49",
+      "input": { "kind": "notes", "contentBase64": "EQ==", "metadata": { "n": 49 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "11",
+          "blobRef": "4a64a107f0cb32536e5bce6c98c393db21cca7f4ea187ba8c4dca8b51d4ea80a",
+          "metadata": { "n": 49 }
+        }
+      }
+    },
+    {
+      "id": "decode/50",
+      "input": { "kind": "notes", "contentBase64": "Eg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "12",
+          "blobRef": "f299791cddd3d6664f6670842812ef6053eb6501bd6282a476bbbf3ee91e750c",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/51",
+      "input": { "kind": "notes", "contentBase64": "Ew==", "metadata": { "n": 51 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "13",
+          "blobRef": "ab897fbdedfa502b2d839b6a56100887dccdc507555c282e59589e06300a62e2",
+          "metadata": { "n": 51 }
+        }
+      }
+    },
+    {
+      "id": "decode/52",
+      "input": { "kind": "notes", "contentBase64": "FA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "14",
+          "blobRef": "83891d7fe85c33e52c8b4e5814c92fb6a3b9467299200538a6babaa8b452d879",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/53",
+      "input": { "kind": "notes", "contentBase64": "FQ==", "metadata": { "n": 53 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "15",
+          "blobRef": "2f0fd1e89b8de1d57292742ec380ea47066e307ad645f5bc3adad8a06ff58608",
+          "metadata": { "n": 53 }
+        }
+      }
+    },
+    {
+      "id": "decode/54",
+      "input": { "kind": "notes", "contentBase64": "Fg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "16",
+          "blobRef": "7cb7c4547cf2653590d7a9ace60cc623d25148adfbc88a89aeb0ef88da7839ba",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/55",
+      "input": { "kind": "notes", "contentBase64": "Fw==", "metadata": { "n": 55 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "17",
+          "blobRef": "8f11b05da785e43e713d03774c6bd3405d99cd3024af334ffd68db663aa37034",
+          "metadata": { "n": 55 }
+        }
+      }
+    },
+    {
+      "id": "decode/56",
+      "input": { "kind": "notes", "contentBase64": "GA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "18",
+          "blobRef": "452ba1ddef80246c48be7690193c76c1d61185906be9401014fe14f1be64b74f",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/57",
+      "input": { "kind": "notes", "contentBase64": "GQ==", "metadata": { "n": 57 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "19",
+          "blobRef": "68aa2e2ee5dff96e3355e6c7ee373e3d6a4e17f75f9518d843709c0c9bc3e3d4",
+          "metadata": { "n": 57 }
+        }
+      }
+    },
+    {
+      "id": "decode/58",
+      "input": { "kind": "notes", "contentBase64": "Gg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1a",
+          "blobRef": "58f7b0780592032e4d8602a3e8690fb2c701b2e1dd546e703445aabd6469734d",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/59",
+      "input": { "kind": "notes", "contentBase64": "Gw==", "metadata": { "n": 59 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1b",
+          "blobRef": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+          "metadata": { "n": 59 }
+        }
+      }
+    },
+    {
+      "id": "decode/60",
+      "input": { "kind": "notes", "contentBase64": "HA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1c",
+          "blobRef": "bd4fc42a21f1f860a1030e6eba23d53ecab71bd19297ab6c074381d4ecee0018",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/61",
+      "input": { "kind": "notes", "contentBase64": "HQ==", "metadata": { "n": 61 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1d",
+          "blobRef": "1f18d650d205d71d934c3646ff5fac1c096ba52eba4cf758b865364f4167d3cd",
+          "metadata": { "n": 61 }
+        }
+      }
+    },
+    {
+      "id": "decode/62",
+      "input": { "kind": "notes", "contentBase64": "Hg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1e",
+          "blobRef": "9652595f37edd08c51dfa26567e6cd76e6fa2709c3e578478ca398d316837a7a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/63",
+      "input": { "kind": "notes", "contentBase64": "Hw==", "metadata": { "n": 63 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "1f",
+          "blobRef": "ffe679bb831c95b67dc17819c63c5090d221aac6f4c7bf530f594ab43d21fa1e",
+          "metadata": { "n": 63 }
+        }
+      }
+    },
+    {
+      "id": "decode/64",
+      "input": { "kind": "notes", "contentBase64": "IA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "20",
+          "blobRef": "36a9e7f1c95b82ffb99743e0c5c4ce95d83c9a430aac59f84ef3cbfab6145068",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/65",
+      "input": { "kind": "notes", "contentBase64": "IQ==", "metadata": { "n": 65 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "21",
+          "blobRef": "bb7208bc9b5d7c04f1236a82a0093a5e33f40423d5ba8d4266f7092c3ba43b62",
+          "metadata": { "n": 65 }
+        }
+      }
+    },
+    {
+      "id": "decode/66",
+      "input": { "kind": "notes", "contentBase64": "Ig==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "22",
+          "blobRef": "8a331fdde7032f33a71e1b2e257d80166e348e00fcb17914f48bdb57a1c63007",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/67",
+      "input": { "kind": "notes", "contentBase64": "Iw==", "metadata": { "n": 67 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "23",
+          "blobRef": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b",
+          "metadata": { "n": 67 }
+        }
+      }
+    },
+    {
+      "id": "decode/68",
+      "input": { "kind": "notes", "contentBase64": "JA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "24",
+          "blobRef": "09fc96082d34c2dfc1295d92073b5ea1dc8ef8da95f14dfded011ffb96d3e54b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/69",
+      "input": { "kind": "notes", "contentBase64": "JQ==", "metadata": { "n": 69 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "25",
+          "blobRef": "bbf3f11cb5b43e700273a78d12de55e4a7eab741ed2abf13787a4d2dc832b8ec",
+          "metadata": { "n": 69 }
+        }
+      }
+    },
+    {
+      "id": "decode/70",
+      "input": { "kind": "notes", "contentBase64": "Jg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "26",
+          "blobRef": "951dcee3a7a4f3aac67ec76a2ce4469cc76df650f134bf2572bf60a65c982338",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/71",
+      "input": { "kind": "notes", "contentBase64": "Jw==", "metadata": { "n": 71 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "27",
+          "blobRef": "265fda17a34611b1533d8a281ff680dc5791b0ce0a11c25b35e11c8e75685509",
+          "metadata": { "n": 71 }
+        }
+      }
+    },
+    {
+      "id": "decode/72",
+      "input": { "kind": "notes", "contentBase64": "KA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "28",
+          "blobRef": "32ebb1abcc1c601ceb9c4e3c4faba0caa5b85bb98c4f1e6612c40faa528a91c9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/73",
+      "input": { "kind": "notes", "contentBase64": "KQ==", "metadata": { "n": 73 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "29",
+          "blobRef": "ba5ec51d07a4ac0e951608704431d59a02b21a4e951acc10505a8dc407c501ee",
+          "metadata": { "n": 73 }
+        }
+      }
+    },
+    {
+      "id": "decode/74",
+      "input": { "kind": "notes", "contentBase64": "Kg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2a",
+          "blobRef": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/75",
+      "input": { "kind": "notes", "contentBase64": "Kw==", "metadata": { "n": 75 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2b",
+          "blobRef": "a318c24216defe206feeb73ef5be00033fa9c4a74d0b967f6532a26ca5906d3b",
+          "metadata": { "n": 75 }
+        }
+      }
+    },
+    {
+      "id": "decode/76",
+      "input": { "kind": "notes", "contentBase64": "LA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2c",
+          "blobRef": "d03502c43d74a30b936740a9517dc4ea2b2ad7168caa0a774cefe793ce0b33e7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/77",
+      "input": { "kind": "notes", "contentBase64": "LQ==", "metadata": { "n": 77 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2d",
+          "blobRef": "3973e022e93220f9212c18d0d0c543ae7c309e46640da93a4a0314de999f5112",
+          "metadata": { "n": 77 }
+        }
+      }
+    },
+    {
+      "id": "decode/78",
+      "input": { "kind": "notes", "contentBase64": "Lg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2e",
+          "blobRef": "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/79",
+      "input": { "kind": "notes", "contentBase64": "Lw==", "metadata": { "n": 79 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "2f",
+          "blobRef": "8a5edab282632443219e051e4ade2d1d5bbc671c781051bf1437897cbdfea0f1",
+          "metadata": { "n": 79 }
+        }
+      }
+    },
+    {
+      "id": "decode/80",
+      "input": { "kind": "notes", "contentBase64": "MA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "30",
+          "blobRef": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/81",
+      "input": { "kind": "notes", "contentBase64": "MQ==", "metadata": { "n": 81 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "31",
+          "blobRef": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+          "metadata": { "n": 81 }
+        }
+      }
+    },
+    {
+      "id": "decode/82",
+      "input": { "kind": "notes", "contentBase64": "Mg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "32",
+          "blobRef": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/83",
+      "input": { "kind": "notes", "contentBase64": "Mw==", "metadata": { "n": 83 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "33",
+          "blobRef": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+          "metadata": { "n": 83 }
+        }
+      }
+    },
+    {
+      "id": "decode/84",
+      "input": { "kind": "notes", "contentBase64": "NA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "34",
+          "blobRef": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/85",
+      "input": { "kind": "notes", "contentBase64": "NQ==", "metadata": { "n": 85 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "35",
+          "blobRef": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+          "metadata": { "n": 85 }
+        }
+      }
+    },
+    {
+      "id": "decode/86",
+      "input": { "kind": "notes", "contentBase64": "Ng==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "36",
+          "blobRef": "e7f6c011776e8db7cd330b54174fd76f7d0216b612387a5ffcfb81e6f0919683",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/87",
+      "input": { "kind": "notes", "contentBase64": "Nw==", "metadata": { "n": 87 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "37",
+          "blobRef": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
+          "metadata": { "n": 87 }
+        }
+      }
+    },
+    {
+      "id": "decode/88",
+      "input": { "kind": "notes", "contentBase64": "OA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "38",
+          "blobRef": "2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/89",
+      "input": { "kind": "notes", "contentBase64": "OQ==", "metadata": { "n": 89 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "39",
+          "blobRef": "19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+          "metadata": { "n": 89 }
+        }
+      }
+    },
+    {
+      "id": "decode/90",
+      "input": { "kind": "notes", "contentBase64": "Og==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3a",
+          "blobRef": "e7ac0786668e0ff0f02b62bd04f45ff636fd82db63b1104601c975dc005f3a67",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/91",
+      "input": { "kind": "notes", "contentBase64": "Ow==", "metadata": { "n": 91 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3b",
+          "blobRef": "41b805ea7ac014e23556e98bb374702a08344268f92489a02f0880849394a1e4",
+          "metadata": { "n": 91 }
+        }
+      }
+    },
+    {
+      "id": "decode/92",
+      "input": { "kind": "notes", "contentBase64": "PA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3c",
+          "blobRef": "dabd3aff769f07eb2965401eb029974ebba3407afd02b26ddb564ea5f8efae72",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/93",
+      "input": { "kind": "notes", "contentBase64": "PQ==", "metadata": { "n": 93 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3d",
+          "blobRef": "380918b946a526640a40df5dced6516794f3d97bbd9e6bb553d037c4439f31c3",
+          "metadata": { "n": 93 }
+        }
+      }
+    },
+    {
+      "id": "decode/94",
+      "input": { "kind": "notes", "contentBase64": "Pg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3e",
+          "blobRef": "62b67e1f685b7fef51102005dddd27774be3fee38c42965c53aab035d0b6b221",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/95",
+      "input": { "kind": "notes", "contentBase64": "Pw==", "metadata": { "n": 95 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "3f",
+          "blobRef": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+          "metadata": { "n": 95 }
+        }
+      }
+    },
+    {
+      "id": "decode/96",
+      "input": { "kind": "notes", "contentBase64": "QA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "40",
+          "blobRef": "c3641f8544d7c02f3580b07c0f9887f0c6a27ff5ab1d4a3e29caf197cfc299ae",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/97",
+      "input": { "kind": "notes", "contentBase64": "QQ==", "metadata": { "n": 97 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "41",
+          "blobRef": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+          "metadata": { "n": 97 }
+        }
+      }
+    },
+    {
+      "id": "decode/98",
+      "input": { "kind": "notes", "contentBase64": "Qg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "42",
+          "blobRef": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/99",
+      "input": { "kind": "notes", "contentBase64": "Qw==", "metadata": { "n": 99 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "43",
+          "blobRef": "6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+          "metadata": { "n": 99 }
+        }
+      }
+    },
+    {
+      "id": "decode/100",
+      "input": { "kind": "notes", "contentBase64": "RA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "44",
+          "blobRef": "3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/101",
+      "input": { "kind": "notes", "contentBase64": "RQ==", "metadata": { "n": 101 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "45",
+          "blobRef": "a9f51566bd6705f7ea6ad54bb9deb449f795582d6529a0e22207b8981233ec58",
+          "metadata": { "n": 101 }
+        }
+      }
+    },
+    {
+      "id": "decode/102",
+      "input": { "kind": "notes", "contentBase64": "Rg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "46",
+          "blobRef": "f67ab10ad4e4c53121b6a5fe4da9c10ddee905b978d3788d2723d7bfacbe28a9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/103",
+      "input": { "kind": "notes", "contentBase64": "Rw==", "metadata": { "n": 103 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "47",
+          "blobRef": "333e0a1e27815d0ceee55c473fe3dc93d56c63e3bee2b3b4aee8eed6d70191a3",
+          "metadata": { "n": 103 }
+        }
+      }
+    },
+    {
+      "id": "decode/104",
+      "input": { "kind": "notes", "contentBase64": "SA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "48",
+          "blobRef": "44bd7ae60f478fae1061e11a7739f4b94d1daf917982d33b6fc8a01a63f89c21",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/105",
+      "input": { "kind": "notes", "contentBase64": "SQ==", "metadata": { "n": 105 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "49",
+          "blobRef": "a83dd0ccbffe39d071cc317ddf6e97f5c6b1c87af91919271f9fa140b0508c6c",
+          "metadata": { "n": 105 }
+        }
+      }
+    },
+    {
+      "id": "decode/106",
+      "input": { "kind": "notes", "contentBase64": "Sg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4a",
+          "blobRef": "6da43b944e494e885e69af021f93c6d9331c78aa228084711429160a5bbd15b5",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/107",
+      "input": { "kind": "notes", "contentBase64": "Sw==", "metadata": { "n": 107 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4b",
+          "blobRef": "86be9a55762d316a3026c2836d044f5fc76e34da10e1b45feee5f18be7edb177",
+          "metadata": { "n": 107 }
+        }
+      }
+    },
+    {
+      "id": "decode/108",
+      "input": { "kind": "notes", "contentBase64": "TA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4c",
+          "blobRef": "72dfcfb0c470ac255cde83fb8fe38de8a128188e03ea5ba5b2a93adbea1062fa",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/109",
+      "input": { "kind": "notes", "contentBase64": "TQ==", "metadata": { "n": 109 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4d",
+          "blobRef": "08f271887ce94707da822d5263bae19d5519cb3614e0daedc4c7ce5dab7473f1",
+          "metadata": { "n": 109 }
+        }
+      }
+    },
+    {
+      "id": "decode/110",
+      "input": { "kind": "notes", "contentBase64": "Tg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4e",
+          "blobRef": "8ce86a6ae65d3692e7305e2c58ac62eebd97d3d943e093f577da25c36988246b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/111",
+      "input": { "kind": "notes", "contentBase64": "Tw==", "metadata": { "n": 111 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "4f",
+          "blobRef": "c4694f2e93d5c4e7d51f9c5deb75e6cc8be5e1114178c6a45b6fc2c566a0aa8c",
+          "metadata": { "n": 111 }
+        }
+      }
+    },
+    {
+      "id": "decode/112",
+      "input": { "kind": "notes", "contentBase64": "UA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "50",
+          "blobRef": "5c62e091b8c0565f1bafad0dad5934276143ae2ccef7a5381e8ada5b1a8d26d2",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/113",
+      "input": { "kind": "notes", "contentBase64": "UQ==", "metadata": { "n": 113 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "51",
+          "blobRef": "4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260",
+          "metadata": { "n": 113 }
+        }
+      }
+    },
+    {
+      "id": "decode/114",
+      "input": { "kind": "notes", "contentBase64": "Ug==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "52",
+          "blobRef": "8c2574892063f995fdf756bce07f46c1a5193e54cd52837ed91e32008ccf41ac",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/115",
+      "input": { "kind": "notes", "contentBase64": "Uw==", "metadata": { "n": 115 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "53",
+          "blobRef": "8de0b3c47f112c59745f717a626932264c422a7563954872e237b223af4ad643",
+          "metadata": { "n": 115 }
+        }
+      }
+    },
+    {
+      "id": "decode/116",
+      "input": { "kind": "notes", "contentBase64": "VA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "54",
+          "blobRef": "e632b7095b0bf32c260fa4c539e9fd7b852d0de454e9be26f24d0d6f91d069d3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/117",
+      "input": { "kind": "notes", "contentBase64": "VQ==", "metadata": { "n": 117 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "55",
+          "blobRef": "a25513c7e0f6eaa80a3337ee18081b9e2ed09e00af8531c8f7bb2542764027e7",
+          "metadata": { "n": 117 }
+        }
+      }
+    },
+    {
+      "id": "decode/118",
+      "input": { "kind": "notes", "contentBase64": "Vg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "56",
+          "blobRef": "de5a6f78116eca62d7fc5ce159d23ae6b889b365a1739ad2cf36f925a140d0cc",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/119",
+      "input": { "kind": "notes", "contentBase64": "Vw==", "metadata": { "n": 119 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "57",
+          "blobRef": "fcb5f40df9be6bae66c1d77a6c15968866a9e6cbd7314ca432b019d17392f6f4",
+          "metadata": { "n": 119 }
+        }
+      }
+    },
+    {
+      "id": "decode/120",
+      "input": { "kind": "notes", "contentBase64": "WA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "58",
+          "blobRef": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/121",
+      "input": { "kind": "notes", "contentBase64": "WQ==", "metadata": { "n": 121 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "59",
+          "blobRef": "18f5384d58bcb1bba0bcd9e6a6781d1a6ac2cc280c330ecbab6cb7931b721552",
+          "metadata": { "n": 121 }
+        }
+      }
+    },
+    {
+      "id": "decode/122",
+      "input": { "kind": "notes", "contentBase64": "Wg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5a",
+          "blobRef": "bbeebd879e1dff6918546dc0c179fdde505f2a21591c9a9c96e36b054ec5af83",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/123",
+      "input": { "kind": "notes", "contentBase64": "Ww==", "metadata": { "n": 123 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5b",
+          "blobRef": "245843abef9e72e7efac30138a994bf6301e7e1d7d7042a33d42e863d2638811",
+          "metadata": { "n": 123 }
+        }
+      }
+    },
+    {
+      "id": "decode/124",
+      "input": { "kind": "notes", "contentBase64": "XA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5c",
+          "blobRef": "a9253dc8529dd214e5f22397888e78d3390daa47593e26f68c18f97fd7a3876b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/125",
+      "input": { "kind": "notes", "contentBase64": "XQ==", "metadata": { "n": 125 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5d",
+          "blobRef": "cfae0d4248f7142f7b17f826cd7a519280e312577690e957830d23dcf35a3fff",
+          "metadata": { "n": 125 }
+        }
+      }
+    },
+    {
+      "id": "decode/126",
+      "input": { "kind": "notes", "contentBase64": "Xg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5e",
+          "blobRef": "74cd9ef9c7e15f57bdad73c511462ca65cb674c46c49639c60f1b44650fa1dcb",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/127",
+      "input": { "kind": "notes", "contentBase64": "Xw==", "metadata": { "n": 127 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "5f",
+          "blobRef": "d2e2adf7177b7a8afddbc12d1634cf23ea1a71020f6a1308070a16400fb68fde",
+          "metadata": { "n": 127 }
+        }
+      }
+    },
+    {
+      "id": "decode/128",
+      "input": { "kind": "notes", "contentBase64": "YA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "60",
+          "blobRef": "8d33f520a3c4cef80d2453aef81b612bfe1cb44c8b2025630ad38662763f13d3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/129",
+      "input": { "kind": "notes", "contentBase64": "YQ==", "metadata": { "n": 129 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "61",
+          "blobRef": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "metadata": { "n": 129 }
+        }
+      }
+    },
+    {
+      "id": "decode/130",
+      "input": { "kind": "notes", "contentBase64": "Yg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "62",
+          "blobRef": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/131",
+      "input": { "kind": "notes", "contentBase64": "Yw==", "metadata": { "n": 131 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "63",
+          "blobRef": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+          "metadata": { "n": 131 }
+        }
+      }
+    },
+    {
+      "id": "decode/132",
+      "input": { "kind": "notes", "contentBase64": "ZA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "64",
+          "blobRef": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/133",
+      "input": { "kind": "notes", "contentBase64": "ZQ==", "metadata": { "n": 133 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "65",
+          "blobRef": "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea",
+          "metadata": { "n": 133 }
+        }
+      }
+    },
+    {
+      "id": "decode/134",
+      "input": { "kind": "notes", "contentBase64": "Zg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "66",
+          "blobRef": "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/135",
+      "input": { "kind": "notes", "contentBase64": "Zw==", "metadata": { "n": 135 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "67",
+          "blobRef": "cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29",
+          "metadata": { "n": 135 }
+        }
+      }
+    },
+    {
+      "id": "decode/136",
+      "input": { "kind": "notes", "contentBase64": "aA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "68",
+          "blobRef": "aaa9402664f1a41f40ebbc52c9993eb66aeb366602958fdfaa283b71e64db123",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/137",
+      "input": { "kind": "notes", "contentBase64": "aQ==", "metadata": { "n": 137 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "69",
+          "blobRef": "de7d1b721a1e0632b7cf04edf5032c8ecffa9f9a08492152b926f1a5a7e765d7",
+          "metadata": { "n": 137 }
+        }
+      }
+    },
+    {
+      "id": "decode/138",
+      "input": { "kind": "notes", "contentBase64": "ag==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6a",
+          "blobRef": "189f40034be7a199f1fa9891668ee3ab6049f82d38c68be70f596eab2e1857b7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/139",
+      "input": { "kind": "notes", "contentBase64": "aw==", "metadata": { "n": 139 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6b",
+          "blobRef": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a",
+          "metadata": { "n": 139 }
+        }
+      }
+    },
+    {
+      "id": "decode/140",
+      "input": { "kind": "notes", "contentBase64": "bA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6c",
+          "blobRef": "acac86c0e609ca906f632b0e2dacccb2b77d22b0621f20ebece1a4835b93f6f0",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/141",
+      "input": { "kind": "notes", "contentBase64": "bQ==", "metadata": { "n": 141 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6d",
+          "blobRef": "62c66a7a5dd70c3146618063c344e531e6d4b59e379808443ce962b3abd63c5a",
+          "metadata": { "n": 141 }
+        }
+      }
+    },
+    {
+      "id": "decode/142",
+      "input": { "kind": "notes", "contentBase64": "bg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6e",
+          "blobRef": "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/143",
+      "input": { "kind": "notes", "contentBase64": "bw==", "metadata": { "n": 143 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "6f",
+          "blobRef": "65c74c15a686187bb6bbf9958f494fc6b80068034a659a9ad44991b08c58f2d2",
+          "metadata": { "n": 143 }
+        }
+      }
+    },
+    {
+      "id": "decode/144",
+      "input": { "kind": "notes", "contentBase64": "cA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "70",
+          "blobRef": "148de9c5a7a44d19e56cd9ae1a554bf67847afb0c58f6e12fa29ac7ddfca9940",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/145",
+      "input": { "kind": "notes", "contentBase64": "cQ==", "metadata": { "n": 145 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "71",
+          "blobRef": "8e35c2cd3bf6641bdb0e2050b76932cbb2e6034a0ddacc1d9bea82a6ba57f7cf",
+          "metadata": { "n": 145 }
+        }
+      }
+    },
+    {
+      "id": "decode/146",
+      "input": { "kind": "notes", "contentBase64": "cg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "72",
+          "blobRef": "454349e422f05297191ead13e21d3db520e5abef52055e4964b82fb213f593a1",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/147",
+      "input": { "kind": "notes", "contentBase64": "cw==", "metadata": { "n": 147 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "73",
+          "blobRef": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89",
+          "metadata": { "n": 147 }
+        }
+      }
+    },
+    {
+      "id": "decode/148",
+      "input": { "kind": "notes", "contentBase64": "dA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "74",
+          "blobRef": "e3b98a4da31a127d4bde6e43033f66ba274cab0eb7eb1c70ec41402bf6273dd8",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/149",
+      "input": { "kind": "notes", "contentBase64": "dQ==", "metadata": { "n": 149 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "75",
+          "blobRef": "0bfe935e70c321c7ca3afc75ce0d0ca2f98b5422e008bb31c00c6d7f1f1c0ad6",
+          "metadata": { "n": 149 }
+        }
+      }
+    },
+    {
+      "id": "decode/150",
+      "input": { "kind": "notes", "contentBase64": "dg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "76",
+          "blobRef": "4c94485e0c21ae6c41ce1dfe7b6bfaceea5ab68e40a2476f50208e526f506080",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/151",
+      "input": { "kind": "notes", "contentBase64": "dw==", "metadata": { "n": 151 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "77",
+          "blobRef": "50e721e49c013f00c62cf59f2163542a9d8df02464efeb615d31051b0fddc326",
+          "metadata": { "n": 151 }
+        }
+      }
+    },
+    {
+      "id": "decode/152",
+      "input": { "kind": "notes", "contentBase64": "eA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "78",
+          "blobRef": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/153",
+      "input": { "kind": "notes", "contentBase64": "eQ==", "metadata": { "n": 153 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "79",
+          "blobRef": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa",
+          "metadata": { "n": 153 }
+        }
+      }
+    },
+    {
+      "id": "decode/154",
+      "input": { "kind": "notes", "contentBase64": "eg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7a",
+          "blobRef": "594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/155",
+      "input": { "kind": "notes", "contentBase64": "ew==", "metadata": { "n": 155 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7b",
+          "blobRef": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+          "metadata": { "n": 155 }
+        }
+      }
+    },
+    {
+      "id": "decode/156",
+      "input": { "kind": "notes", "contentBase64": "fA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7c",
+          "blobRef": "cbe5cfdf7c2118a9c3d78ef1d684f3afa089201352886449a06a6511cfef74a7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/157",
+      "input": { "kind": "notes", "contentBase64": "fQ==", "metadata": { "n": 157 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7d",
+          "blobRef": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2",
+          "metadata": { "n": 157 }
+        }
+      }
+    },
+    {
+      "id": "decode/158",
+      "input": { "kind": "notes", "contentBase64": "fg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7e",
+          "blobRef": "7ace431cb61584cb9b8dc7ec08cf38ac0a2d649660be86d349fb43108b542fa4",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/159",
+      "input": { "kind": "notes", "contentBase64": "fw==", "metadata": { "n": 159 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "7f",
+          "blobRef": "620bfdaa346b088fb49998d92f19a7eaf6bfc2fb0aee015753966da1028cb731",
+          "metadata": { "n": 159 }
+        }
+      }
+    },
+    {
+      "id": "decode/160",
+      "input": { "kind": "notes", "contentBase64": "gA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "80",
+          "blobRef": "76be8b528d0075f7aae98d6fa57a6d3c83ae480a8469e668d7b0af968995ac71",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/161",
+      "input": { "kind": "notes", "contentBase64": "gQ==", "metadata": { "n": 161 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "81",
+          "blobRef": "591b7cc95037822dec5a4d593a2e2e8b19c07ddd2570e5699003d17f14c440a6",
+          "metadata": { "n": 161 }
+        }
+      }
+    },
+    {
+      "id": "decode/162",
+      "input": { "kind": "notes", "contentBase64": "gg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "82",
+          "blobRef": "a5ab782c805e8bfbe34cb65742a0471cf5a53a97f0a1160ab6cccbb64c9131ce",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/163",
+      "input": { "kind": "notes", "contentBase64": "gw==", "metadata": { "n": 163 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "83",
+          "blobRef": "5ee0dd4d4840229fab4a86438efbcaf1b9571af94f5ace5acc94de19e98ea9ab",
+          "metadata": { "n": 163 }
+        }
+      }
+    },
+    {
+      "id": "decode/164",
+      "input": { "kind": "notes", "contentBase64": "hA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "84",
+          "blobRef": "aaa8e61e7faf37dd77cc5f907b38146741994b27d5b1978679af68b43f55e7c5",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/165",
+      "input": { "kind": "notes", "contentBase64": "hQ==", "metadata": { "n": 165 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "85",
+          "blobRef": "c00e7f889cfc9216ec818bf2e1682fc6af0d89939c91776669478caf27c9727c",
+          "metadata": { "n": 165 }
+        }
+      }
+    },
+    {
+      "id": "decode/166",
+      "input": { "kind": "notes", "contentBase64": "hg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "86",
+          "blobRef": "3cbdaf66b3dd2b174788a2f17f938b52dda93a2a97440cead19332cbfacba7c8",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/167",
+      "input": { "kind": "notes", "contentBase64": "hw==", "metadata": { "n": 167 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "87",
+          "blobRef": "4bfa260a661d68110a7a0a45264d2d43af9727de925cc2e09fb687b3651efe9d",
+          "metadata": { "n": 167 }
+        }
+      }
+    },
+    {
+      "id": "decode/168",
+      "input": { "kind": "notes", "contentBase64": "iA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "88",
+          "blobRef": "4f362f9093bb8e7012f466224ff1237c0746d8c8f660b16699f5036ccba9c64a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/169",
+      "input": { "kind": "notes", "contentBase64": "iQ==", "metadata": { "n": 169 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "89",
+          "blobRef": "e9b0c031f0493d3fd6b0b668260c79e7efe734bfd4b4115f9d82bc3be609c294",
+          "metadata": { "n": 169 }
+        }
+      }
+    },
+    {
+      "id": "decode/170",
+      "input": { "kind": "notes", "contentBase64": "ig==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8a",
+          "blobRef": "2d3193691934124461809fb9bc7e671215099fc7d961bfbe31943d40d477c890",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/171",
+      "input": { "kind": "notes", "contentBase64": "iw==", "metadata": { "n": 171 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8b",
+          "blobRef": "3ebe1b59762a1c8020c1efe3747dd07f0e30617ed60b4e6a5bee16b6ea421dd0",
+          "metadata": { "n": 171 }
+        }
+      }
+    },
+    {
+      "id": "decode/172",
+      "input": { "kind": "notes", "contentBase64": "jA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8c",
+          "blobRef": "9defb0a9e163278be0e05aa01b312ec78cfa3726869503385e76e3a4b7950648",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/173",
+      "input": { "kind": "notes", "contentBase64": "jQ==", "metadata": { "n": 173 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8d",
+          "blobRef": "075198bfe61765d35f990debe90959d438a943ceeb9d39440e7db5455d449086",
+          "metadata": { "n": 173 }
+        }
+      }
+    },
+    {
+      "id": "decode/174",
+      "input": { "kind": "notes", "contentBase64": "jg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8e",
+          "blobRef": "949f94d858ef6ad1333164d796a0d777fd82f9155ece7d6fad68c0b992f0e7af",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/175",
+      "input": { "kind": "notes", "contentBase64": "jw==", "metadata": { "n": 175 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "8f",
+          "blobRef": "5e37305c587caf07e99a08e1efd0749fd3bbbb855752e4d568ac2dbfc2025464",
+          "metadata": { "n": 175 }
+        }
+      }
+    },
+    {
+      "id": "decode/176",
+      "input": { "kind": "notes", "contentBase64": "kA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "90",
+          "blobRef": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/177",
+      "input": { "kind": "notes", "contentBase64": "kQ==", "metadata": { "n": 177 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "91",
+          "blobRef": "7da59d0dfbe21f43e842e8afb43e12a6445bbac07c2fc26984c71d0de3f99c9c",
+          "metadata": { "n": 177 }
+        }
+      }
+    },
+    {
+      "id": "decode/178",
+      "input": { "kind": "notes", "contentBase64": "kg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "92",
+          "blobRef": "956062137518b270d730d4753000896de17c100a42f9e24f5acee2faa75d5fdd",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/179",
+      "input": { "kind": "notes", "contentBase64": "kw==", "metadata": { "n": 179 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "93",
+          "blobRef": "d16bd22f7196c0a70f4b12aa0b290c4c4acecd5d6ba350ecc8447fbdf4c3819b",
+          "metadata": { "n": 179 }
+        }
+      }
+    },
+    {
+      "id": "decode/180",
+      "input": { "kind": "notes", "contentBase64": "lA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "94",
+          "blobRef": "67c872d4912c71f15d2d6134ddf1d33d46f4bab2b56fe787522e7e4c9b58657d",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/181",
+      "input": { "kind": "notes", "contentBase64": "lQ==", "metadata": { "n": 181 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "95",
+          "blobRef": "5bad0d1132ac152cf657be8918ae163578448d56d40def9a590fe3dcab0c339b",
+          "metadata": { "n": 181 }
+        }
+      }
+    },
+    {
+      "id": "decode/182",
+      "input": { "kind": "notes", "contentBase64": "lg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "96",
+          "blobRef": "84873854dba02cf6a765a6277a311301b2656a7f770851828fe792ecef9092e3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/183",
+      "input": { "kind": "notes", "contentBase64": "lw==", "metadata": { "n": 183 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "97",
+          "blobRef": "2a0ab732b4e9d85ef7dc25303b64ab527c25a4d77815ebb579f396ec6caccad3",
+          "metadata": { "n": 183 }
+        }
+      }
+    },
+    {
+      "id": "decode/184",
+      "input": { "kind": "notes", "contentBase64": "mA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "98",
+          "blobRef": "79bec7ff3e69d1b470eb8684f2005a867a7980222474cbc1afd26a9a4f206d4a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/185",
+      "input": { "kind": "notes", "contentBase64": "mQ==", "metadata": { "n": 185 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "99",
+          "blobRef": "fd9528b920d6d3956e9e16114523e1889c751e8c1e040182116d4c906b43f558",
+          "metadata": { "n": 185 }
+        }
+      }
+    },
+    {
+      "id": "decode/186",
+      "input": { "kind": "notes", "contentBase64": "mg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9a",
+          "blobRef": "0605d1534eb8995fe8fc7dcf1fac025ea5e26fc26d6b1fc2c79aa0f04159ef41",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/187",
+      "input": { "kind": "notes", "contentBase64": "mw==", "metadata": { "n": 187 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9b",
+          "blobRef": "8d36bbb3d6fbf24f38ba020d9ceeef5d4562f5f26629f66b076ff395c438695e",
+          "metadata": { "n": 187 }
+        }
+      }
+    },
+    {
+      "id": "decode/188",
+      "input": { "kind": "notes", "contentBase64": "nA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9c",
+          "blobRef": "6e3faf1e27d45fca70234ae8f6f0a734622cff8a6ea824b7f60d3ffafa2a4654",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/189",
+      "input": { "kind": "notes", "contentBase64": "nQ==", "metadata": { "n": 189 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9d",
+          "blobRef": "9d277175737fb50041e75f641acf94d10df9b9721db8fffe874ab57f8ffb062e",
+          "metadata": { "n": 189 }
+        }
+      }
+    },
+    {
+      "id": "decode/190",
+      "input": { "kind": "notes", "contentBase64": "ng==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9e",
+          "blobRef": "35af2d15ebde4d67b29569ec19749e813c76f02286afc5a2a9871c2bfbdaab32",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/191",
+      "input": { "kind": "notes", "contentBase64": "nw==", "metadata": { "n": 191 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "9f",
+          "blobRef": "1f184f101c67d585ba00d24cfde36863f747fbab9e84af7760ec771e9b36ca51",
+          "metadata": { "n": 191 }
+        }
+      }
+    },
+    {
+      "id": "decode/192",
+      "input": { "kind": "notes", "contentBase64": "oA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a0",
+          "blobRef": "c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/193",
+      "input": { "kind": "notes", "contentBase64": "oQ==", "metadata": { "n": 193 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a1",
+          "blobRef": "8a8950f7623663222542c9469c73be3c4c81bbdf019e2c577590a61f2ce9a157",
+          "metadata": { "n": 193 }
+        }
+      }
+    },
+    {
+      "id": "decode/194",
+      "input": { "kind": "notes", "contentBase64": "og==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a2",
+          "blobRef": "0a43b22d89fa2499be5c7704c9bf273260b0ca9588e4cd1897cd80f9c96cd97a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/195",
+      "input": { "kind": "notes", "contentBase64": "ow==", "metadata": { "n": 195 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a3",
+          "blobRef": "6d90fbacc073ee0b4c43f3a3291cecda33764f6d66d14224ad60f471f2c8334b",
+          "metadata": { "n": 195 }
+        }
+      }
+    },
+    {
+      "id": "decode/196",
+      "input": { "kind": "notes", "contentBase64": "pA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a4",
+          "blobRef": "88aa3e3b1f22c616b1817981215e7d1e75fa32b22233ebb8477f64600a5ace1f",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/197",
+      "input": { "kind": "notes", "contentBase64": "pQ==", "metadata": { "n": 197 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a5",
+          "blobRef": "6922e93e3827642ce4b883c756b31abf80036649d3614bf5fcb3adda43b8ea32",
+          "metadata": { "n": 197 }
+        }
+      }
+    },
+    {
+      "id": "decode/198",
+      "input": { "kind": "notes", "contentBase64": "pg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a6",
+          "blobRef": "fe1dcd3abfcd6b1655a026e60a05d03a7f71e4b6070f36e6c7e9c4b6f3d3bf1b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/199",
+      "input": { "kind": "notes", "contentBase64": "pw==", "metadata": { "n": 199 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a7",
+          "blobRef": "2dbf9365a0b09d85bbd6176d8b2332aa5ae97bef652712473bc69165e74b22ed",
+          "metadata": { "n": 199 }
+        }
+      }
+    },
+    {
+      "id": "decode/200",
+      "input": { "kind": "notes", "contentBase64": "qA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a8",
+          "blobRef": "74e1ade320c66075468e17cfab33f41e8e0eaca45edb6dd7b086c49a358d2a69",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/201",
+      "input": { "kind": "notes", "contentBase64": "qQ==", "metadata": { "n": 201 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "a9",
+          "blobRef": "9e8e8c37a53bac77a653d590b783b2508e8ed2fed040a278bf4f4703bbd5d82d",
+          "metadata": { "n": 201 }
+        }
+      }
+    },
+    {
+      "id": "decode/202",
+      "input": { "kind": "notes", "contentBase64": "qg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "aa",
+          "blobRef": "bceef655b5a034911f1c3718ce056531b45ef03b4c7b1f15629e867294011a7d",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/203",
+      "input": { "kind": "notes", "contentBase64": "qw==", "metadata": { "n": 203 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ab",
+          "blobRef": "087d80f7f182dd44f184aa86ca34488853ebcc04f0c60d5294919a466b463831",
+          "metadata": { "n": 203 }
+        }
+      }
+    },
+    {
+      "id": "decode/204",
+      "input": { "kind": "notes", "contentBase64": "rA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ac",
+          "blobRef": "ee6bb86b44339392bae631c8f61dd8f009243c635adab33c0b20923a2794bf22",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/205",
+      "input": { "kind": "notes", "contentBase64": "rQ==", "metadata": { "n": 205 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ad",
+          "blobRef": "22adaf058a2cb668b15cb4c1f30e7cc720bbe38c146544169db35fbf630389c4",
+          "metadata": { "n": 205 }
+        }
+      }
+    },
+    {
+      "id": "decode/206",
+      "input": { "kind": "notes", "contentBase64": "rg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ae",
+          "blobRef": "19753a9b7681b36104c1f79dfc8a6a1eccc088b8c7d2903a446d81694d2fb3a9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/207",
+      "input": { "kind": "notes", "contentBase64": "rw==", "metadata": { "n": 207 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "af",
+          "blobRef": "5a6e7a4754af8e7f47fc9493040d853e7b01e39d537cb1dd353c93b7ae58eb3d",
+          "metadata": { "n": 207 }
+        }
+      }
+    },
+    {
+      "id": "decode/208",
+      "input": { "kind": "notes", "contentBase64": "sA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b0",
+          "blobRef": "f4f97c88c409dcf3789b5b518da3f7d266c488066e97a606e38a150779880735",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/209",
+      "input": { "kind": "notes", "contentBase64": "sQ==", "metadata": { "n": 209 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b1",
+          "blobRef": "149488d869cbef080602a371ab0d39d97af103fb726aaeb02ccd36c06f494e5d",
+          "metadata": { "n": 209 }
+        }
+      }
+    },
+    {
+      "id": "decode/210",
+      "input": { "kind": "notes", "contentBase64": "sg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b2",
+          "blobRef": "9be3799f24592e94e1f7991e5f312648a509ce2fb1edbafa50a66b65c916539a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/211",
+      "input": { "kind": "notes", "contentBase64": "sw==", "metadata": { "n": 211 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b3",
+          "blobRef": "65f15821061635e6807f06701bf0a12d8e89dcff88df5968bd0822c9dbb52f1c",
+          "metadata": { "n": 211 }
+        }
+      }
+    },
+    {
+      "id": "decode/212",
+      "input": { "kind": "notes", "contentBase64": "tA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b4",
+          "blobRef": "27952171c7fcdf0ddc765ab4f4e1c537cb29e5e533d57b3456257ee785c81711",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/213",
+      "input": { "kind": "notes", "contentBase64": "tQ==", "metadata": { "n": 213 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b5",
+          "blobRef": "892f60b39450a0e770f00a836761c8e964fd74671ae2cc51cff36cde4f914c12",
+          "metadata": { "n": 213 }
+        }
+      }
+    },
+    {
+      "id": "decode/214",
+      "input": { "kind": "notes", "contentBase64": "tg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b6",
+          "blobRef": "ca41841c5c98e34f4a3ae83d9220940395301a9616f69d6672b04ea322f28eb0",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/215",
+      "input": { "kind": "notes", "contentBase64": "tw==", "metadata": { "n": 215 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b7",
+          "blobRef": "4d6a8e90039fc9782a1bbbd3cced923633e38eb83cf857d2e795e9ea13ef7d4d",
+          "metadata": { "n": 215 }
+        }
+      }
+    },
+    {
+      "id": "decode/216",
+      "input": { "kind": "notes", "contentBase64": "uA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b8",
+          "blobRef": "d3bb0d59e354ea843e790801303a46e880219996c6850ddd4c85a83e08c41d92",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/217",
+      "input": { "kind": "notes", "contentBase64": "uQ==", "metadata": { "n": 217 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "b9",
+          "blobRef": "04d6c0c946716aac894fc1653383543a91faab601302cf011607c82f06304651",
+          "metadata": { "n": 217 }
+        }
+      }
+    },
+    {
+      "id": "decode/218",
+      "input": { "kind": "notes", "contentBase64": "ug==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ba",
+          "blobRef": "281c93990bac2c69cf372c9a3b66c406c86cca826d6407b68e644da22eef8186",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/219",
+      "input": { "kind": "notes", "contentBase64": "uw==", "metadata": { "n": 219 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "bb",
+          "blobRef": "cbecda1c7d37d4c0aa5466243bb4a0018c31bf06d74fa7338290dd3068db4fed",
+          "metadata": { "n": 219 }
+        }
+      }
+    },
+    {
+      "id": "decode/220",
+      "input": { "kind": "notes", "contentBase64": "vA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "bc",
+          "blobRef": "26e5bfe4b0686167e3e4e0aac40cbae03515171d375f91ea563c9c044e9c5cc7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/221",
+      "input": { "kind": "notes", "contentBase64": "vQ==", "metadata": { "n": 221 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "bd",
+          "blobRef": "68325720aabd7c82f30f554b313d0570c95accbb7dc4b5aae11204c08ffe732b",
+          "metadata": { "n": 221 }
+        }
+      }
+    },
+    {
+      "id": "decode/222",
+      "input": { "kind": "notes", "contentBase64": "vg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "be",
+          "blobRef": "478508483cbb05defd7dcdac355dadf06282a6f2e14342cccba99e840202f943",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/223",
+      "input": { "kind": "notes", "contentBase64": "vw==", "metadata": { "n": 223 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "bf",
+          "blobRef": "b12dc850a3b0a3b79fc2255e175241ce20489fe45df93ff35c42c6c348df4fbf",
+          "metadata": { "n": 223 }
+        }
+      }
+    },
+    {
+      "id": "decode/224",
+      "input": { "kind": "notes", "contentBase64": "wA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c0",
+          "blobRef": "e4ff5e7d7a7f08e9800a3e25cb774533cb20040df30b6ba10f956f9acd0eb3f7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/225",
+      "input": { "kind": "notes", "contentBase64": "wQ==", "metadata": { "n": 225 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c1",
+          "blobRef": "d1bbd73bb09190bfb883056771e22e997541ed20079793bf33975fe1654581c3",
+          "metadata": { "n": 225 }
+        }
+      }
+    },
+    {
+      "id": "decode/226",
+      "input": { "kind": "notes", "contentBase64": "wg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c2",
+          "blobRef": "c557e71380112b980eaf1145fa80621130dfbdfa1e375d87ae0018b7c60ac16b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/227",
+      "input": { "kind": "notes", "contentBase64": "ww==", "metadata": { "n": 227 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c3",
+          "blobRef": "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+          "metadata": { "n": 227 }
+        }
+      }
+    },
+    {
+      "id": "decode/228",
+      "input": { "kind": "notes", "contentBase64": "xA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c4",
+          "blobRef": "d1211001882d2ce16a8553e449b6c8b7f71e61836efc2e416143808f20e721e7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/229",
+      "input": { "kind": "notes", "contentBase64": "xQ==", "metadata": { "n": 229 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c5",
+          "blobRef": "5a0ec31daa84fa27666da56af259b9351086bba0b9ab4aa6007e3e6fb1866b47",
+          "metadata": { "n": 229 }
+        }
+      }
+    },
+    {
+      "id": "decode/230",
+      "input": { "kind": "notes", "contentBase64": "xg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c6",
+          "blobRef": "49994461d6b46390f014c8c5275a8591ef8764760afe2739cee23f6fbe285778",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/231",
+      "input": { "kind": "notes", "contentBase64": "xw==", "metadata": { "n": 231 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c7",
+          "blobRef": "3340883aad3038dd993b3c94d2d32c3b20e07859969aca411f7f93ab8847c746",
+          "metadata": { "n": 231 }
+        }
+      }
+    },
+    {
+      "id": "decode/232",
+      "input": { "kind": "notes", "contentBase64": "yA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c8",
+          "blobRef": "7c5bd2d144fdde498406edcb9fe60ce65b0dfa5f2dd7a7617f505e3d46d68bdb",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/233",
+      "input": { "kind": "notes", "contentBase64": "yQ==", "metadata": { "n": 233 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "c9",
+          "blobRef": "4fb733bedb74fec8d65bedf056b935189a289e928b3302bec38a281814de523a",
+          "metadata": { "n": 233 }
+        }
+      }
+    },
+    {
+      "id": "decode/234",
+      "input": { "kind": "notes", "contentBase64": "yg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ca",
+          "blobRef": "13598656f10fa962b75f6c4587a61a067c14c1ef7dc9ca3703da76bae4c1beb1",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/235",
+      "input": { "kind": "notes", "contentBase64": "yw==", "metadata": { "n": 235 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "cb",
+          "blobRef": "383e5d7d58caa41ce723cf16af471b38f6ee9065c032d07fa6bef1678cb72f1d",
+          "metadata": { "n": 235 }
+        }
+      }
+    },
+    {
+      "id": "decode/236",
+      "input": { "kind": "notes", "contentBase64": "zA==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "cc",
+          "blobRef": "1dd8312636f6a0bf3d21fa2855e63072507453e93a5ced4301b364e91c9d87d6",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/237",
+      "input": { "kind": "notes", "contentBase64": "zQ==", "metadata": { "n": 237 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "cd",
+          "blobRef": "9a7b7b3a5d50781b4f4768cd7ce223168f6b449b78ad6ac594db5788c3b805d1",
+          "metadata": { "n": 237 }
+        }
+      }
+    },
+    {
+      "id": "decode/238",
+      "input": { "kind": "notes", "contentBase64": "zg==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ce",
+          "blobRef": "c337ded6f56c07205fb7b391654d7d463c9e0c726869523ae6024c9bec878878",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/239",
+      "input": { "kind": "notes", "contentBase64": "zw==", "metadata": { "n": 239 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "cf",
+          "blobRef": "7a4a4b50f5121ed5310ece45a7eeb7af5545af63ee2ae52add4f37788f075b1d",
+          "metadata": { "n": 239 }
+        }
+      }
+    },
+    {
+      "id": "decode/240",
+      "input": { "kind": "notes", "contentBase64": "0A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d0",
+          "blobRef": "d4b0c0a4a8cc6c257aed34d16d39dd3c2d3539ed67fd4badd40aef16c1591715",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/241",
+      "input": { "kind": "notes", "contentBase64": "0Q==", "metadata": { "n": 241 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d1",
+          "blobRef": "b5c9a5f48292e3fbc1b4b3cd495d76cf68697ad02baf09c1740d37250f776599",
+          "metadata": { "n": 241 }
+        }
+      }
+    },
+    {
+      "id": "decode/242",
+      "input": { "kind": "notes", "contentBase64": "0g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d2",
+          "blobRef": "85f97e04d754c81dac21f0ce857adc81170d08c6cfef7cf90edbbabf39d9671a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/243",
+      "input": { "kind": "notes", "contentBase64": "0w==", "metadata": { "n": 243 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d3",
+          "blobRef": "28969cdfa74a12c82f3bad960b0b000aca2ac329deea5c2328ebc6f2ba9802c1",
+          "metadata": { "n": 243 }
+        }
+      }
+    },
+    {
+      "id": "decode/244",
+      "input": { "kind": "notes", "contentBase64": "1A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d4",
+          "blobRef": "528a84ce6b18eb7d0e54be01379122a76dfdca14c97f02e0424aabf0220d9f51",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/245",
+      "input": { "kind": "notes", "contentBase64": "1Q==", "metadata": { "n": 245 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d5",
+          "blobRef": "cdce9374e0fecee1655cbc7207b0ed392201941f084c4b5672e917a99c7b2b26",
+          "metadata": { "n": 245 }
+        }
+      }
+    },
+    {
+      "id": "decode/246",
+      "input": { "kind": "notes", "contentBase64": "1g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d6",
+          "blobRef": "0a2c6ea0370d1d49c411a6e2396695fcd4eab03d96e9e7a8a3ec1ec312d9ab38",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/247",
+      "input": { "kind": "notes", "contentBase64": "1w==", "metadata": { "n": 247 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d7",
+          "blobRef": "414a21e525a759e3ffeb22556be6348a92d5a13e40b61a0805f36f18c2909513",
+          "metadata": { "n": 247 }
+        }
+      }
+    },
+    {
+      "id": "decode/248",
+      "input": { "kind": "notes", "contentBase64": "2A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d8",
+          "blobRef": "af193a8cdcd0e3fb39e71147e59efa5cad40763d2611f5beff34a274f514362f",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/249",
+      "input": { "kind": "notes", "contentBase64": "2Q==", "metadata": { "n": 249 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "d9",
+          "blobRef": "19152ddfba193b5b09fcb80d1bba5248f36027c06e81670db5a7146fb654d4ec",
+          "metadata": { "n": 249 }
+        }
+      }
+    },
+    {
+      "id": "decode/250",
+      "input": { "kind": "notes", "contentBase64": "2g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "da",
+          "blobRef": "5d5c7d20a3aab9c158f23304df4bec3bd9d56c517db3caeaa519d4d05624d7a0",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/251",
+      "input": { "kind": "notes", "contentBase64": "2w==", "metadata": { "n": 251 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "db",
+          "blobRef": "b7d25296e7bc6a6bf66da09b1c5ed273d99e3a9fc6d43e46ccb8b358fa13d4e9",
+          "metadata": { "n": 251 }
+        }
+      }
+    },
+    {
+      "id": "decode/252",
+      "input": { "kind": "notes", "contentBase64": "3A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "dc",
+          "blobRef": "fb95aa98d6e6c5827a57ec17b978d647fcc01d98c357b7e64989af57339e9ac3",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/253",
+      "input": { "kind": "notes", "contentBase64": "3Q==", "metadata": { "n": 253 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "dd",
+          "blobRef": "2795044ce0f83f718bc79c5f2add1e52521978df91ce9b7f82c9097191d33602",
+          "metadata": { "n": 253 }
+        }
+      }
+    },
+    {
+      "id": "decode/254",
+      "input": { "kind": "notes", "contentBase64": "3g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "de",
+          "blobRef": "7941cb07924fdc7b710e11d98d82850e89566e1c3cb980517ffe4b430f86dfd5",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/255",
+      "input": { "kind": "notes", "contentBase64": "3w==", "metadata": { "n": 255 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "df",
+          "blobRef": "2ea970ff63aec5d7a014ca6447ec743d3ba37450b85ebdcbb582b089b0194fa2",
+          "metadata": { "n": 255 }
+        }
+      }
+    },
+    {
+      "id": "decode/256",
+      "input": { "kind": "notes", "contentBase64": "4A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e0",
+          "blobRef": "7d8c5da7fd418379048e430b33dc8ffcda739e44326b8a5d647dc0ad81ed2157",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/257",
+      "input": { "kind": "notes", "contentBase64": "4Q==", "metadata": { "n": 257 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e1",
+          "blobRef": "f031efa58744e97a34555ca98621d4e8a52ceb5f20b891d5c44ccae0daaaa644",
+          "metadata": { "n": 257 }
+        }
+      }
+    },
+    {
+      "id": "decode/258",
+      "input": { "kind": "notes", "contentBase64": "4g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e2",
+          "blobRef": "30a5bfa58e128af9e5a4955725d8ad26d4d574a537b58b7dc6d357acad578572",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/259",
+      "input": { "kind": "notes", "contentBase64": "4w==", "metadata": { "n": 259 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e3",
+          "blobRef": "457e4854863e7efaa03266ad781822ecce69df31a511786118c10771a87e69f2",
+          "metadata": { "n": 259 }
+        }
+      }
+    },
+    {
+      "id": "decode/260",
+      "input": { "kind": "notes", "contentBase64": "5A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e4",
+          "blobRef": "5e1effe9b7bab73dce628ccd9f0cbbb16c1e6efc6c4f311e59992a467bc119fd",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/261",
+      "input": { "kind": "notes", "contentBase64": "5Q==", "metadata": { "n": 261 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e5",
+          "blobRef": "ab61ba11a38b007ff98baa3ab20e2a584e15269fd428db3c857e2a2d568b5725",
+          "metadata": { "n": 261 }
+        }
+      }
+    },
+    {
+      "id": "decode/262",
+      "input": { "kind": "notes", "contentBase64": "5g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e6",
+          "blobRef": "0a3aaee7ccfb1a64f6d7bcd46657c27cb1f4569ae9e7c03445bd6c6fd013109b",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/263",
+      "input": { "kind": "notes", "contentBase64": "5w==", "metadata": { "n": 263 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e7",
+          "blobRef": "d0752b60adb148ca0b3b4d2591874e2dabd346373e731c27463d65b449cc234c",
+          "metadata": { "n": 263 }
+        }
+      }
+    },
+    {
+      "id": "decode/264",
+      "input": { "kind": "notes", "contentBase64": "6A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e8",
+          "blobRef": "e6f207509afa3908da116ce61a7576954248d9fe64a3c652b493cca57ce36e2e",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/265",
+      "input": { "kind": "notes", "contentBase64": "6Q==", "metadata": { "n": 265 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "e9",
+          "blobRef": "de2e331d891ae267a7009cb45b4e8830f170e0c937288ea2731a1941c7a53b0d",
+          "metadata": { "n": 265 }
+        }
+      }
+    },
+    {
+      "id": "decode/266",
+      "input": { "kind": "notes", "contentBase64": "6g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ea",
+          "blobRef": "3ad4e44a4306fb62b2df0ab7069c67b9a0f8c8eff9f1cba8e7f851199df720c9",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/267",
+      "input": { "kind": "notes", "contentBase64": "6w==", "metadata": { "n": 267 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "eb",
+          "blobRef": "f8d20e598df20877e4d826246fc31ffb4615cbc059aec9ec8e5b28951d844a3f",
+          "metadata": { "n": 267 }
+        }
+      }
+    },
+    {
+      "id": "decode/268",
+      "input": { "kind": "notes", "contentBase64": "7A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ec",
+          "blobRef": "45f83d17e10b34fca01eb8f4454dac34a777d9404a464e732cf4abf2c0da94c4",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/269",
+      "input": { "kind": "notes", "contentBase64": "7Q==", "metadata": { "n": 269 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ed",
+          "blobRef": "f3df1f9c358ae8eceb8fce7c00614288d113ad55315f4ebb909774a7daadfc84",
+          "metadata": { "n": 269 }
+        }
+      }
+    },
+    {
+      "id": "decode/270",
+      "input": { "kind": "notes", "contentBase64": "7g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ee",
+          "blobRef": "94455e3ed9f716bea425ef99b51fae47128769a1a0cd04244221e4e14631ab83",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/271",
+      "input": { "kind": "notes", "contentBase64": "7w==", "metadata": { "n": 271 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ef",
+          "blobRef": "4d4d75d742863ab9656f3d5f76dff8589c3922e95a24ea6812157ffe4aaa3b6b",
+          "metadata": { "n": 271 }
+        }
+      }
+    },
+    {
+      "id": "decode/272",
+      "input": { "kind": "notes", "contentBase64": "8A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f0",
+          "blobRef": "fde502858306c235a3121e42326b53228b7ef4690eeed92a2b2eafe73c03a3ef",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/273",
+      "input": { "kind": "notes", "contentBase64": "8Q==", "metadata": { "n": 273 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f1",
+          "blobRef": "d4f09e5c5af99a24c7e304ca7997d26cb00901697de08a49be0d46ab5839b614",
+          "metadata": { "n": 273 }
+        }
+      }
+    },
+    {
+      "id": "decode/274",
+      "input": { "kind": "notes", "contentBase64": "8g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f2",
+          "blobRef": "966c7c47125c74575a9a1153b799faf55be33a04e3d9f98760a3eeac377103df",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/275",
+      "input": { "kind": "notes", "contentBase64": "8w==", "metadata": { "n": 275 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f3",
+          "blobRef": "782e02029374527bd2a5fe7b9545df6c2911078e337a62573970b178d93db481",
+          "metadata": { "n": 275 }
+        }
+      }
+    },
+    {
+      "id": "decode/276",
+      "input": { "kind": "notes", "contentBase64": "9A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f4",
+          "blobRef": "2017ff3461395672aa0aa4f64894fd2f95a4b120e2690e8951656d79adc2eed2",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/277",
+      "input": { "kind": "notes", "contentBase64": "9Q==", "metadata": { "n": 277 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f5",
+          "blobRef": "27abdeddfe8503496adeb623466caa47da5f63abd2bc6fa19f6cfcb73ecfed70",
+          "metadata": { "n": 277 }
+        }
+      }
+    },
+    {
+      "id": "decode/278",
+      "input": { "kind": "notes", "contentBase64": "9g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f6",
+          "blobRef": "b0b2988b6bbe724bacda5e9e524736de0bc7dae41c46b4213c50e1d35d4e5f13",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/279",
+      "input": { "kind": "notes", "contentBase64": "9w==", "metadata": { "n": 279 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f7",
+          "blobRef": "50868f20258bbc9cce0da2719e8654c108733dd2f663b8737c574ec0ead93eb3",
+          "metadata": { "n": 279 }
+        }
+      }
+    },
+    {
+      "id": "decode/280",
+      "input": { "kind": "notes", "contentBase64": "+A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f8",
+          "blobRef": "e596a8e5c49dd20a79bd0c1a7dd190a674507d1129785746fcc1c5e64cd8416c",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/281",
+      "input": { "kind": "notes", "contentBase64": "+Q==", "metadata": { "n": 281 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "f9",
+          "blobRef": "d52022534fa2dba3bb8a45809c425f42a5dd8786ef8d206fcff19c1fd66725b4",
+          "metadata": { "n": 281 }
+        }
+      }
+    },
+    {
+      "id": "decode/282",
+      "input": { "kind": "notes", "contentBase64": "+g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "fa",
+          "blobRef": "aa7225e7d5b0a2552bbb58880b3ec00c286995b801a7aeb69281e76a8b4908de",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/283",
+      "input": { "kind": "notes", "contentBase64": "+w==", "metadata": { "n": 283 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "fb",
+          "blobRef": "04b8d34e20e604cadb04b9db8f6778c35f45a2d2a3335ea517dafe8c9cd9b06e",
+          "metadata": { "n": 283 }
+        }
+      }
+    },
+    {
+      "id": "decode/284",
+      "input": { "kind": "notes", "contentBase64": "/A==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "fc",
+          "blobRef": "98722e2ebed8ed3d3652e11e4181f0dccc1ce7d192d8f1db370af8ec4a4e174a",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/285",
+      "input": { "kind": "notes", "contentBase64": "/Q==", "metadata": { "n": 285 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "fd",
+          "blobRef": "3e151409ace91cb3394fecd59e92b5dc42c0aad29993a1858f2f70a0866a539b",
+          "metadata": { "n": 285 }
+        }
+      }
+    },
+    {
+      "id": "decode/286",
+      "input": { "kind": "notes", "contentBase64": "/g==" },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "fe",
+          "blobRef": "aa687b58b0e73e2e383f8c500d75b591e188efe0168b3ffbcd3771caaa6dd4c7",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "id": "decode/287",
+      "input": { "kind": "notes", "contentBase64": "/w==", "metadata": { "n": 287 } },
+      "oracle": {
+        "accepted": {
+          "kind": "notes",
+          "hex": "ff",
+          "blobRef": "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
+          "metadata": { "n": 287 }
+        }
+      }
+    }
+  ],
+  "substitution": [
+    {
+      "id": "substitution/0",
+      "input": null,
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": null
+    },
+    {
+      "id": "substitution/1",
+      "input": true,
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": true
+    },
+    {
+      "id": "substitution/2",
+      "input": "text",
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": "text"
+    },
+    {
+      "id": "substitution/3",
+      "input": 0,
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": 0
+    },
+    {
+      "id": "substitution/4",
+      "input": [],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": []
+    },
+    {
+      "id": "substitution/5",
+      "input": {},
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {}
+    },
+    {
+      "id": "substitution/6",
+      "input": { "kind": "wrong-kind", "rev": -1 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": 4 }
+    },
+    {
+      "id": "substitution/7",
+      "input": { "kind": "", "rev": -2 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "notes", "rev": 2 }
+    },
+    {
+      "id": "substitution/8",
+      "input": { "rev": -1, "kind": "reversed" },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": 4 }
+    },
+    {
+      "id": "substitution/9",
+      "input": { "kind": "plan", "rev": -3 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -3 }
+    },
+    {
+      "id": "substitution/10",
+      "input": { "kind": "plan", "rev": -1.5 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -1.5 }
+    },
+    {
+      "id": "substitution/11",
+      "input": { "kind": "plan", "rev": 0 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": 0 }
+    },
+    {
+      "id": "substitution/12",
+      "input": { "kind": "plan", "rev": 0 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": 0 }
+    },
+    {
+      "id": "substitution/13",
+      "input": { "kind": "plan", "rev": 1 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": 1 }
+    },
+    {
+      "id": "substitution/14",
+      "input": { "kind": "plan", "rev": "-1" },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": "-1" }
+    },
+    {
+      "id": "substitution/15",
+      "input": { "kind": "plan", "rev": null },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": null }
+    },
+    {
+      "id": "substitution/16",
+      "input": { "kind": 1, "rev": -1 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": 1, "rev": -1 }
+    },
+    {
+      "id": "substitution/17",
+      "input": { "rev": -1 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "rev": -1 }
+    },
+    {
+      "id": "substitution/18",
+      "input": { "kind": "plan" },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan" }
+    },
+    {
+      "id": "substitution/19",
+      "input": { "kind": "plan", "rev": -1, "extra": true },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -1, "extra": true }
+    },
+    {
+      "id": "substitution/20",
+      "input": { "kind": "plan", "rev": -1e25 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -1e25 }
+    },
+    {
+      "id": "substitution/21",
+      "input": { "kind": "plan", "rev": -9007199254740991 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -9007199254740991 }
+    },
+    {
+      "id": "substitution/22",
+      "input": { "kind": { "kind": "wrong", "rev": -1 }, "rev": -1 },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": { "kind": "plan", "rev": 4 }, "rev": -1 }
+    },
+    {
+      "id": "substitution/23",
+      "input": { "kind": "plan", "rev": -1, "nested": { "kind": "wrong", "rev": -2 } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "kind": "plan", "rev": -1, "nested": { "kind": "notes", "rev": 2 } }
+    },
+    {
+      "id": "substitution/24",
+      "input": [null, { "nested": null }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [null, { "nested": null }]
+    },
+    {
+      "id": "substitution/25",
+      "input": { "array": [null], "nested": { "child": null } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [null], "nested": { "child": null } }
+    },
+    {
+      "id": "substitution/26",
+      "input": [true, { "nested": true }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [true, { "nested": true }]
+    },
+    {
+      "id": "substitution/27",
+      "input": { "array": [true], "nested": { "child": true } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [true], "nested": { "child": true } }
+    },
+    {
+      "id": "substitution/28",
+      "input": ["text", { "nested": "text" }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": ["text", { "nested": "text" }]
+    },
+    {
+      "id": "substitution/29",
+      "input": { "array": ["text"], "nested": { "child": "text" } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": ["text"], "nested": { "child": "text" } }
+    },
+    {
+      "id": "substitution/30",
+      "input": [0, { "nested": 0 }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [0, { "nested": 0 }]
+    },
+    {
+      "id": "substitution/31",
+      "input": { "array": [0], "nested": { "child": 0 } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [0], "nested": { "child": 0 } }
+    },
+    {
+      "id": "substitution/32",
+      "input": [[], { "nested": [] }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [[], { "nested": [] }]
+    },
+    {
+      "id": "substitution/33",
+      "input": { "array": [[]], "nested": { "child": [] } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [[]], "nested": { "child": [] } }
+    },
+    {
+      "id": "substitution/34",
+      "input": [{}, { "nested": {} }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{}, { "nested": {} }]
+    },
+    {
+      "id": "substitution/35",
+      "input": { "array": [{}], "nested": { "child": {} } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [{}], "nested": { "child": {} } }
+    },
+    {
+      "id": "substitution/36",
+      "input": [
+        { "kind": "wrong-kind", "rev": -1 },
+        { "nested": { "kind": "wrong-kind", "rev": -1 } }
+      ],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": 4 }, { "nested": { "kind": "plan", "rev": 4 } }]
+    },
+    {
+      "id": "substitution/37",
+      "input": {
+        "array": [{ "kind": "wrong-kind", "rev": -1 }],
+        "nested": { "child": { "kind": "wrong-kind", "rev": -1 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": 4 }],
+        "nested": { "child": { "kind": "plan", "rev": 4 } }
+      }
+    },
+    {
+      "id": "substitution/38",
+      "input": [{ "kind": "", "rev": -2 }, { "nested": { "kind": "", "rev": -2 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "notes", "rev": 2 }, { "nested": { "kind": "notes", "rev": 2 } }]
+    },
+    {
+      "id": "substitution/39",
+      "input": {
+        "array": [{ "kind": "", "rev": -2 }],
+        "nested": { "child": { "kind": "", "rev": -2 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "notes", "rev": 2 }],
+        "nested": { "child": { "kind": "notes", "rev": 2 } }
+      }
+    },
+    {
+      "id": "substitution/40",
+      "input": [{ "rev": -1, "kind": "reversed" }, { "nested": { "rev": -1, "kind": "reversed" } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": 4 }, { "nested": { "kind": "plan", "rev": 4 } }]
+    },
+    {
+      "id": "substitution/41",
+      "input": {
+        "array": [{ "rev": -1, "kind": "reversed" }],
+        "nested": { "child": { "rev": -1, "kind": "reversed" } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": 4 }],
+        "nested": { "child": { "kind": "plan", "rev": 4 } }
+      }
+    },
+    {
+      "id": "substitution/42",
+      "input": [{ "kind": "plan", "rev": -3 }, { "nested": { "kind": "plan", "rev": -3 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": -3 }, { "nested": { "kind": "plan", "rev": -3 } }]
+    },
+    {
+      "id": "substitution/43",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -3 }],
+        "nested": { "child": { "kind": "plan", "rev": -3 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -3 }],
+        "nested": { "child": { "kind": "plan", "rev": -3 } }
+      }
+    },
+    {
+      "id": "substitution/44",
+      "input": [{ "kind": "plan", "rev": -1.5 }, { "nested": { "kind": "plan", "rev": -1.5 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": -1.5 }, { "nested": { "kind": "plan", "rev": -1.5 } }]
+    },
+    {
+      "id": "substitution/45",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -1.5 }],
+        "nested": { "child": { "kind": "plan", "rev": -1.5 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -1.5 }],
+        "nested": { "child": { "kind": "plan", "rev": -1.5 } }
+      }
+    },
+    {
+      "id": "substitution/46",
+      "input": [{ "kind": "plan", "rev": 0 }, { "nested": { "kind": "plan", "rev": 0 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": 0 }, { "nested": { "kind": "plan", "rev": 0 } }]
+    },
+    {
+      "id": "substitution/47",
+      "input": {
+        "array": [{ "kind": "plan", "rev": 0 }],
+        "nested": { "child": { "kind": "plan", "rev": 0 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": 0 }],
+        "nested": { "child": { "kind": "plan", "rev": 0 } }
+      }
+    },
+    {
+      "id": "substitution/48",
+      "input": [{ "kind": "plan", "rev": 0 }, { "nested": { "kind": "plan", "rev": 0 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": 0 }, { "nested": { "kind": "plan", "rev": 0 } }]
+    },
+    {
+      "id": "substitution/49",
+      "input": {
+        "array": [{ "kind": "plan", "rev": 0 }],
+        "nested": { "child": { "kind": "plan", "rev": 0 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": 0 }],
+        "nested": { "child": { "kind": "plan", "rev": 0 } }
+      }
+    },
+    {
+      "id": "substitution/50",
+      "input": [{ "kind": "plan", "rev": 1 }, { "nested": { "kind": "plan", "rev": 1 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": 1 }, { "nested": { "kind": "plan", "rev": 1 } }]
+    },
+    {
+      "id": "substitution/51",
+      "input": {
+        "array": [{ "kind": "plan", "rev": 1 }],
+        "nested": { "child": { "kind": "plan", "rev": 1 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": 1 }],
+        "nested": { "child": { "kind": "plan", "rev": 1 } }
+      }
+    },
+    {
+      "id": "substitution/52",
+      "input": [{ "kind": "plan", "rev": "-1" }, { "nested": { "kind": "plan", "rev": "-1" } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": "-1" }, { "nested": { "kind": "plan", "rev": "-1" } }]
+    },
+    {
+      "id": "substitution/53",
+      "input": {
+        "array": [{ "kind": "plan", "rev": "-1" }],
+        "nested": { "child": { "kind": "plan", "rev": "-1" } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": "-1" }],
+        "nested": { "child": { "kind": "plan", "rev": "-1" } }
+      }
+    },
+    {
+      "id": "substitution/54",
+      "input": [{ "kind": "plan", "rev": null }, { "nested": { "kind": "plan", "rev": null } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": null }, { "nested": { "kind": "plan", "rev": null } }]
+    },
+    {
+      "id": "substitution/55",
+      "input": {
+        "array": [{ "kind": "plan", "rev": null }],
+        "nested": { "child": { "kind": "plan", "rev": null } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": null }],
+        "nested": { "child": { "kind": "plan", "rev": null } }
+      }
+    },
+    {
+      "id": "substitution/56",
+      "input": [{ "kind": 1, "rev": -1 }, { "nested": { "kind": 1, "rev": -1 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": 1, "rev": -1 }, { "nested": { "kind": 1, "rev": -1 } }]
+    },
+    {
+      "id": "substitution/57",
+      "input": {
+        "array": [{ "kind": 1, "rev": -1 }],
+        "nested": { "child": { "kind": 1, "rev": -1 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": 1, "rev": -1 }],
+        "nested": { "child": { "kind": 1, "rev": -1 } }
+      }
+    },
+    {
+      "id": "substitution/58",
+      "input": [{ "rev": -1 }, { "nested": { "rev": -1 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "rev": -1 }, { "nested": { "rev": -1 } }]
+    },
+    {
+      "id": "substitution/59",
+      "input": { "array": [{ "rev": -1 }], "nested": { "child": { "rev": -1 } } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [{ "rev": -1 }], "nested": { "child": { "rev": -1 } } }
+    },
+    {
+      "id": "substitution/60",
+      "input": [{ "kind": "plan" }, { "nested": { "kind": "plan" } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan" }, { "nested": { "kind": "plan" } }]
+    },
+    {
+      "id": "substitution/61",
+      "input": { "array": [{ "kind": "plan" }], "nested": { "child": { "kind": "plan" } } },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": { "array": [{ "kind": "plan" }], "nested": { "child": { "kind": "plan" } } }
+    },
+    {
+      "id": "substitution/62",
+      "input": [
+        { "kind": "plan", "rev": -1, "extra": true },
+        { "nested": { "kind": "plan", "rev": -1, "extra": true } }
+      ],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [
+        { "kind": "plan", "rev": -1, "extra": true },
+        { "nested": { "kind": "plan", "rev": -1, "extra": true } }
+      ]
+    },
+    {
+      "id": "substitution/63",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -1, "extra": true }],
+        "nested": { "child": { "kind": "plan", "rev": -1, "extra": true } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -1, "extra": true }],
+        "nested": { "child": { "kind": "plan", "rev": -1, "extra": true } }
+      }
+    },
+    {
+      "id": "substitution/64",
+      "input": [{ "kind": "plan", "rev": -1e25 }, { "nested": { "kind": "plan", "rev": -1e25 } }],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [{ "kind": "plan", "rev": -1e25 }, { "nested": { "kind": "plan", "rev": -1e25 } }]
+    },
+    {
+      "id": "substitution/65",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -1e25 }],
+        "nested": { "child": { "kind": "plan", "rev": -1e25 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -1e25 }],
+        "nested": { "child": { "kind": "plan", "rev": -1e25 } }
+      }
+    },
+    {
+      "id": "substitution/66",
+      "input": [
+        { "kind": "plan", "rev": -9007199254740991 },
+        { "nested": { "kind": "plan", "rev": -9007199254740991 } }
+      ],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [
+        { "kind": "plan", "rev": -9007199254740991 },
+        { "nested": { "kind": "plan", "rev": -9007199254740991 } }
+      ]
+    },
+    {
+      "id": "substitution/67",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -9007199254740991 }],
+        "nested": { "child": { "kind": "plan", "rev": -9007199254740991 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -9007199254740991 }],
+        "nested": { "child": { "kind": "plan", "rev": -9007199254740991 } }
+      }
+    },
+    {
+      "id": "substitution/68",
+      "input": [
+        { "kind": { "kind": "wrong", "rev": -1 }, "rev": -1 },
+        { "nested": { "kind": { "kind": "wrong", "rev": -1 }, "rev": -1 } }
+      ],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [
+        { "kind": { "kind": "plan", "rev": 4 }, "rev": -1 },
+        { "nested": { "kind": { "kind": "plan", "rev": 4 }, "rev": -1 } }
+      ]
+    },
+    {
+      "id": "substitution/69",
+      "input": {
+        "array": [{ "kind": { "kind": "wrong", "rev": -1 }, "rev": -1 }],
+        "nested": { "child": { "kind": { "kind": "wrong", "rev": -1 }, "rev": -1 } }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": { "kind": "plan", "rev": 4 }, "rev": -1 }],
+        "nested": { "child": { "kind": { "kind": "plan", "rev": 4 }, "rev": -1 } }
+      }
+    },
+    {
+      "id": "substitution/70",
+      "input": [
+        { "kind": "plan", "rev": -1, "nested": { "kind": "wrong", "rev": -2 } },
+        { "nested": { "kind": "plan", "rev": -1, "nested": { "kind": "wrong", "rev": -2 } } }
+      ],
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": [
+        { "kind": "plan", "rev": -1, "nested": { "kind": "notes", "rev": 2 } },
+        { "nested": { "kind": "plan", "rev": -1, "nested": { "kind": "notes", "rev": 2 } } }
+      ]
+    },
+    {
+      "id": "substitution/71",
+      "input": {
+        "array": [{ "kind": "plan", "rev": -1, "nested": { "kind": "wrong", "rev": -2 } }],
+        "nested": {
+          "child": { "kind": "plan", "rev": -1, "nested": { "kind": "wrong", "rev": -2 } }
+        }
+      },
+      "deposited": [
+        {
+          "build": "b",
+          "kind": "plan",
+          "revision": 4,
+          "blobRef": "a",
+          "metadata": {},
+          "createdAt": "ts"
+        },
+        {
+          "build": "b",
+          "kind": "notes",
+          "revision": 2,
+          "blobRef": "b",
+          "metadata": {},
+          "createdAt": "ts"
+        }
+      ],
+      "oracle": {
+        "array": [{ "kind": "plan", "rev": -1, "nested": { "kind": "notes", "rev": 2 } }],
+        "nested": {
+          "child": { "kind": "plan", "rev": -1, "nested": { "kind": "notes", "rev": 2 } }
+        }
+      }
+    }
+  ]
+}

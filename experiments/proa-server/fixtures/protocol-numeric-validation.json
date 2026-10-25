@@ -1,0 +1,1701 @@
+{
+  "sources": {
+    "experiments/proa-server/tools/protocol-numeric-fixtures.ts": "6804506ee4aeb34e3bcc4556bda955355ec78ea490821884904158bf2e9a92c1",
+    "node_modules/zod/package.json": "c630bd10b52dcf71c112a2bf78dbf2734b9db58d62de663b8d86c2ec2c8cda2e",
+    "node_modules/zod/v4/core/schemas.js": "09da9b0cb9b9d2d795c349bc47c7521d5aaffe241885f0c9728f2aa7de3834c9",
+    "node_modules/zod/v4/locales/en.js": "232a0828d64df8e410b23ac9825a667bd9d485fd70acdc4b4d0870539faef0a4"
+  },
+  "cases": [
+    {
+      "id": "number/1e400",
+      "schema": { "type": "number" },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/-1e400",
+      "schema": { "type": "number" },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/1e309",
+      "schema": { "type": "number" },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/-1e309",
+      "schema": { "type": "number" },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/1.7976931348623159e308",
+      "schema": { "type": "number" },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/-1.7976931348623159e308",
+      "schema": { "type": "number" },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "number/1e308",
+      "schema": { "type": "number" },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "number/9007199254740993",
+      "schema": { "type": "number" },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    { "id": "number/-0", "schema": { "type": "number" }, "raw": "-0", "oracle": { "accepted": 0 } },
+    {
+      "id": "number/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "number" },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "number/5e-324",
+      "schema": { "type": "number" },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "number/1e-324",
+      "schema": { "type": "number" },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "int/1e400",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/-1e400",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/1e309",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/-1e309",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/1.7976931348623159e308",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/-1.7976931348623159e308",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/1e308",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 9007199254740991,\n    \"note\": \"Integers must be within the safe integer range.\",\n    \"origin\": \"int\",\n    \"inclusive\": true,\n    \"path\": [],\n    \"message\": \"Too big: expected int to be <=9007199254740991\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/9007199254740993",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 9007199254740991,\n    \"note\": \"Integers must be within the safe integer range.\",\n    \"origin\": \"int\",\n    \"inclusive\": true,\n    \"path\": [],\n    \"message\": \"Too big: expected int to be <=9007199254740991\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/-0",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "int/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"int\",\n    \"format\": \"safeint\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected int, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/5e-324",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"int\",\n    \"format\": \"safeint\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected int, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "int/1e-324",
+      "schema": { "type": "number", "checks": [{ "check": "number_format", "format": "safeint" }] },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "positive/1e400",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/-1e400",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/1e309",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/-1e309",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/1.7976931348623159e308",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/-1.7976931348623159e308",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/1e308",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "positive/9007199254740993",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "positive/-0",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": false,\n    \"path\": [],\n    \"message\": \"Too small: expected number to be >0\"\n  }\n]"
+      }
+    },
+    {
+      "id": "positive/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "positive/5e-324",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "positive/1e-324",
+      "schema": {
+        "type": "number",
+        "checks": [{ "check": "greater_than", "value": 0, "inclusive": false }]
+      },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": false,\n    \"path\": [],\n    \"message\": \"Too small: expected number to be >0\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/1e400",
+      "schema": { "type": "string" },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/-1e400",
+      "schema": { "type": "string" },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/1e309",
+      "schema": { "type": "string" },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/-1e309",
+      "schema": { "type": "string" },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/1.7976931348623159e308",
+      "schema": { "type": "string" },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/-1.7976931348623159e308",
+      "schema": { "type": "string" },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/1e308",
+      "schema": { "type": "string" },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/9007199254740993",
+      "schema": { "type": "string" },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/-0",
+      "schema": { "type": "string" },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "string" },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/5e-324",
+      "schema": { "type": "string" },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "string/1e-324",
+      "schema": { "type": "string" },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/1e400",
+      "schema": { "type": "boolean" },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/-1e400",
+      "schema": { "type": "boolean" },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/1e309",
+      "schema": { "type": "boolean" },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/-1e309",
+      "schema": { "type": "boolean" },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/1.7976931348623159e308",
+      "schema": { "type": "boolean" },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/-1.7976931348623159e308",
+      "schema": { "type": "boolean" },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/1e308",
+      "schema": { "type": "boolean" },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/9007199254740993",
+      "schema": { "type": "boolean" },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/-0",
+      "schema": { "type": "boolean" },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "boolean" },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/5e-324",
+      "schema": { "type": "boolean" },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "boolean/1e-324",
+      "schema": { "type": "boolean" },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected boolean, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/1e400",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/-1e400",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/1e309",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/-1e309",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/1.7976931348623159e308",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/-1.7976931348623159e308",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/1e308",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/9007199254740993",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/-0",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/5e-324",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "object/1e-324",
+      "schema": { "type": "object", "shape": {}, "strict": false },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/1e400",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/-1e400",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/1e309",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/-1e309",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/1.7976931348623159e308",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/-1.7976931348623159e308",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/1e308",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/9007199254740993",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/-0",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/5e-324",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "array/1e-324",
+      "schema": { "type": "array", "element": { "type": "number" } },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected array, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/1e400",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/-1e400",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/1e309",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/-1e309",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/1.7976931348623159e308",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/-1.7976931348623159e308",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/1e308",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/9007199254740993",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/-0",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/5e-324",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "record/1e-324",
+      "schema": { "type": "record", "key": { "type": "string" }, "value": { "type": "unknown" } },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected record, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/1e400",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/-1e400",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/1e309",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/-1e309",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/1.7976931348623159e308",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/-1.7976931348623159e308",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/1e308",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/9007199254740993",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/-0",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/5e-324",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "null/1e-324",
+      "schema": { "type": "literal", "values": [null] },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      null\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected null\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/1e400",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/-1e400",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/1e309",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/-1e309",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/1.7976931348623159e308",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/-1.7976931348623159e308",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/1e308",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/9007199254740993",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/-0",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/5e-324",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "literal/1e-324",
+      "schema": { "type": "literal", "values": [1] },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input: expected 1\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/1e400",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/-1e400",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/1e309",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/-1e309",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/1.7976931348623159e308",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/-1.7976931348623159e308",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/1e308",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "1e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/9007199254740993",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "9007199254740993",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/-0",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "-0",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/5e-324",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "5e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "enum/1e-324",
+      "schema": { "type": "enum", "values": ["a", "b"] },
+      "raw": "1e-324",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"a\",\n      \"b\"\n    ],\n    \"path\": [],\n    \"message\": \"Invalid option: expected one of \\\"a\\\"|\\\"b\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/1e400",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/-1e400",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/1e309",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/-1e309",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/1.7976931348623159e308",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/-1.7976931348623159e308",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nullable-number/1e308",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "nullable-number/9007199254740993",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "nullable-number/-0",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "nullable-number/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "nullable-number/5e-324",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "nullable-number/1e-324",
+      "schema": { "type": "nullable", "inner": { "type": "number" } },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "optional-number/1e400",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/-1e400",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/1e309",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/-1e309",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/1.7976931348623159e308",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/-1.7976931348623159e308",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "optional-number/1e308",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "optional-number/9007199254740993",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "optional-number/-0",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "optional-number/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "optional-number/5e-324",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "optional-number/1e-324",
+      "schema": { "type": "optional", "inner": { "type": "number" } },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "default-number/1e400",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/-1e400",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/1e309",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/-1e309",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/1.7976931348623159e308",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/-1.7976931348623159e308",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"received\": \"Infinity\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected number, received number\"\n  }\n]"
+      }
+    },
+    {
+      "id": "default-number/1e308",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "default-number/9007199254740993",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "default-number/-0",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "default-number/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "default-number/5e-324",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "default-number/1e-324",
+      "schema": { "type": "default", "inner": { "type": "number" }, "value": 0 },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-number-string/1e400",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/-1e400",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/1e309",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/-1e309",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/1.7976931348623159e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/-1.7976931348623159e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-number-string/1e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "union-number-string/9007199254740993",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "union-number-string/-0",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-number-string/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "union-number-string/5e-324",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "union-number-string/1e-324",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-null-number/1e400",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/-1e400",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "-1e400",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/1e309",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/-1e309",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "-1e309",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/1.7976931348623159e308",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/-1.7976931348623159e308",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "-1.7976931348623159e308",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            null\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected null\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "union-null-number/1e308",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "union-null-number/9007199254740993",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "union-null-number/-0",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-null-number/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "union-null-number/5e-324",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "union-null-number/1e-324",
+      "schema": {
+        "type": "union",
+        "options": [{ "type": "literal", "values": [null] }, { "type": "number" }]
+      },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-number-unknown/1e400",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "1e400",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/-1e400",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "-1e400",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/1e309",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "1e309",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/-1e309",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "-1e309",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/1.7976931348623159e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "1.7976931348623159e308",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/-1.7976931348623159e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "-1.7976931348623159e308",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "union-number-unknown/1e308",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "union-number-unknown/9007199254740993",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "union-number-unknown/-0",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "union-number-unknown/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "union-number-unknown/5e-324",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "union-number-unknown/1e-324",
+      "schema": { "type": "union", "options": [{ "type": "number" }, { "type": "unknown" }] },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "unknown/1e400",
+      "schema": { "type": "unknown" },
+      "raw": "1e400",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/-1e400",
+      "schema": { "type": "unknown" },
+      "raw": "-1e400",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/1e309",
+      "schema": { "type": "unknown" },
+      "raw": "1e309",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/-1e309",
+      "schema": { "type": "unknown" },
+      "raw": "-1e309",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/1.7976931348623159e308",
+      "schema": { "type": "unknown" },
+      "raw": "1.7976931348623159e308",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/-1.7976931348623159e308",
+      "schema": { "type": "unknown" },
+      "raw": "-1.7976931348623159e308",
+      "oracle": { "accepted": null }
+    },
+    {
+      "id": "unknown/1e308",
+      "schema": { "type": "unknown" },
+      "raw": "1e308",
+      "oracle": { "accepted": 1e308 }
+    },
+    {
+      "id": "unknown/9007199254740993",
+      "schema": { "type": "unknown" },
+      "raw": "9007199254740993",
+      "oracle": { "accepted": 9007199254740992 }
+    },
+    {
+      "id": "unknown/-0",
+      "schema": { "type": "unknown" },
+      "raw": "-0",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "unknown/0.1000000000000000055511151231257827021181583404541015625",
+      "schema": { "type": "unknown" },
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "oracle": { "accepted": 0.1 }
+    },
+    {
+      "id": "unknown/5e-324",
+      "schema": { "type": "unknown" },
+      "raw": "5e-324",
+      "oracle": { "accepted": 5e-324 }
+    },
+    {
+      "id": "unknown/1e-324",
+      "schema": { "type": "unknown" },
+      "raw": "1e-324",
+      "oracle": { "accepted": 0 }
+    },
+    {
+      "id": "nested/{\"nested\":1e400}",
+      "schema": {
+        "type": "object",
+        "shape": {
+          "nested": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] }
+        },
+        "strict": false
+      },
+      "raw": "{\"nested\":1e400}",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"nested\"\n    ],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    },
+    {
+      "id": "nested/{\"nested\":-1e400}",
+      "schema": {
+        "type": "object",
+        "shape": {
+          "nested": { "type": "union", "options": [{ "type": "number" }, { "type": "string" }] }
+        },
+        "strict": false
+      },
+      "raw": "{\"nested\":-1e400}",
+      "oracle": {
+        "rejected": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"received\": \"Infinity\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected number, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"nested\"\n    ],\n    \"message\": \"Invalid input\"\n  }\n]"
+      }
+    }
+  ]
+}

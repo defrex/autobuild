@@ -8,6 +8,7 @@ import { build, project, root } from './verify'
 import { runExtendedBrowserProof } from './browser-extended-proof'
 import {
   checkRoutes,
+  checkCaptureCapabilities,
   checkFrameMatrix,
   frames,
   palette,
@@ -32,13 +33,21 @@ async function captureSeeded(
   seed: SeedEvidence,
   store: BuildStore,
 ) {
-  checkRoutes(await Bun.file(join(project, 'src/routes.rs')).text())
+  checkRoutes(
+    await Bun.file(join(project, 'src/routes.rs')).text(),
+    await Bun.file(join(project, 'src/protocol/router.rs')).text(),
+  )
   const sources = await Array.fromAsync(
     new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
   )
-  const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
-    '\n',
+  const sourceFiles = Object.fromEntries(
+    await Promise.all(
+      sources.map(async (path) => [path, await Bun.file(join(project, path)).text()] as const),
+    ),
   )
+  const source = Object.values(sourceFiles).join('\n')
+  const config = await Bun.file(join(project, 'proa.config.json')).json()
+  checkCaptureCapabilities(config.database.driver, sourceFiles)
   if (
     !source.includes('x-proa-dev-capability') ||
     !source.includes('ConnectInfo') ||
@@ -51,7 +60,11 @@ async function captureSeeded(
   const binary = await build(true)
   const output = await mkdtemp(join(root, '.ab/proa-frames-'))
   console.log(`Evidence: ${output}`)
-  const reservation = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() })
+  const reservation = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(),
+  })
   const port = reservation.port!
   reservation.stop(true)
   // A clean cwd outside the checkout prevents dotenvy's ancestor search from
@@ -72,6 +85,7 @@ async function captureSeeded(
       GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
       PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
       AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+      AB_STORE_SECRET: randomBytes(32).toString('hex'),
       PROA_ENV: 'development',
       PROA_DEV_AUTH: 'true',
       PROA_DEV_AUTH_EMAIL: 'operator@example.com',
@@ -100,6 +114,7 @@ async function captureSeeded(
       GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
       PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
       AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+      AB_STORE_SECRET: randomBytes(32).toString('hex'),
       PROA_ENV: 'development',
       PROA_DEV_AUTH: 'true',
       PROA_DEV_AUTH_EMAIL: 'refused@example.com',
@@ -130,7 +145,12 @@ async function captureSeeded(
     if (!ready) throw Error('Server readiness timeout')
     for (const path of ['/health', '/readyz', '/sign-in', '/static/styles.css'])
       if (!(await fetch(origin + path)).ok) throw Error(`Response smoke failed: ${path}`)
-    const captured = await captureFrames(origin, output, { capability, refusalOrigin, seed, store })
+    const captured = await captureFrames(origin, output, {
+      capability,
+      refusalOrigin,
+      seed,
+      store,
+    })
     const log = await Bun.file(join(output, 'server.log')).text()
     const reads = log.split('\n').flatMap((line) => {
       const match = line.replace(/\x1b\[[0-9;]*m/g, '').match(/suffix-read (\{.*\})/)
@@ -175,7 +195,12 @@ async function captureSeeded(
 export async function captureFrames(
   origin: string,
   output: string,
-  auth?: { capability: string; refusalOrigin: string; seed?: SeedEvidence; store?: BuildStore },
+  auth?: {
+    capability: string
+    refusalOrigin: string
+    seed?: SeedEvidence
+    store?: BuildStore
+  },
 ) {
   checkFrameMatrix(frames)
   let browser: ReturnType<typeof Bun.spawn> | undefined
@@ -214,7 +239,9 @@ export async function captureFrames(
     }
     if (!debugPort) throw Error('Chromium startup timeout')
     const target = (await (
-      await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })
+      await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, {
+        method: 'PUT',
+      })
     ).json()) as { webSocketDebuggerUrl: string }
     const ws = new WebSocket(target.webSocketDebuggerUrl)
     socket = ws
@@ -244,6 +271,17 @@ export async function captureFrames(
         })
         ws.send(JSON.stringify({ id, method, params }))
       })
+    const intercept = (method: string, params: Record<string, unknown>) => {
+      void send(method, params).catch((error: unknown) => {
+        // Navigation or shutdown may retire a paused request before Chromium
+        // receives its continuation. Every other CDP failure remains fatal.
+        if (
+          !(error instanceof Error) ||
+          error.message !== '{"code":-32602,"message":"Invalid InterceptionId."}'
+        )
+          throw error
+      })
+    }
     ws.onmessage = (event) => {
       const r = JSON.parse(String(event.data))
       const p = pending.get(r.id)
@@ -256,14 +294,17 @@ export async function captureFrames(
         // Chromium invents an implicit favicon request for pages with no icon.
         // It is not an application asset; leave explicit Image requests checked.
         if (r.params.resourceType === 'Other' && r.params.request.url === `${origin}/favicon.ico`) {
-          void send('Fetch.fulfillRequest', { requestId: r.params.requestId, responseCode: 204 })
+          intercept('Fetch.fulfillRequest', {
+            requestId: r.params.requestId,
+            responseCode: 204,
+          })
           return
         }
         const local =
           r.params.request.url.startsWith(`${origin}/`) ||
           Boolean(auth && r.params.request.url.startsWith(`${auth.refusalOrigin}/`))
         if (auth && r.params.request.url === `${auth.refusalOrigin}/auth/dev-session`) {
-          void send('Fetch.continueRequest', {
+          intercept('Fetch.continueRequest', {
             requestId: r.params.requestId,
             method: 'POST',
             headers: [
@@ -274,7 +315,7 @@ export async function captureFrames(
           return
         }
         if (!local) errors.push(`External request: ${r.params.request.url}`)
-        void send(local ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
+        intercept(local ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
           requestId: r.params.requestId,
           ...(local ? {} : { errorReason: 'BlockedByClient' }),
         })
@@ -364,7 +405,7 @@ export async function captureFrames(
       const detail = auth?.seed?.controls?.[frame.id] ?? auth?.seed?.detail
       const route =
         frame.state === 'detail' || frame.state.startsWith('control-')
-          ? `/builds/${detail?.slug ?? 'detail-case'}`
+          ? `/dashboard/builds/${detail?.slug ?? 'detail-case'}`
           : frame.route
       const query =
         projectId && !['sign-in', 'refused'].includes(frame.state)
@@ -461,7 +502,11 @@ export async function captureFrames(
       })
       const fontContexts = (await evaluate(
         `Array.from(document.querySelectorAll('body *'),el=>({store:!!el.closest('[data-store-text]'),text:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(''),storedDescendants:el.closest('[data-store-text]')?el.textContent:Array.from(el.querySelectorAll('[data-store-text]')).map(n=>n.textContent).join('')}))`,
-      )) as unknown as { store: boolean; text: string; storedDescendants: string }[]
+      )) as unknown as {
+        store: boolean
+        text: string
+        storedDescendants: string
+      }[]
       const fonts = new Set<string>()
       const dataFallbacks: { family: string; text: string }[] = []
       for (const [index, nodeId] of nodes.nodeIds.entries()) {
@@ -472,7 +517,10 @@ export async function captureFrames(
             if (!['Atkinson Hyperlegible Next', 'JetBrains Mono'].includes(font.familyName)) {
               const context = fontContexts[index]!
               if (dataFontFallback(font.familyName, context.text, context.store))
-                dataFallbacks.push({ family: font.familyName, text: context.text })
+                dataFallbacks.push({
+                  family: font.familyName,
+                  text: context.text,
+                })
               // Chromium also reports child glyphs against their containing block.
               // Every descendant is checked separately; this only avoids rejecting
               // its duplicate aggregate when the wrapper paints no direct text.
@@ -494,7 +542,13 @@ export async function captureFrames(
       const shot = await send('Page.captureScreenshot', {
         format: 'png',
         captureBeyondViewport: true,
-        clip: { x: 0, y: 0, width: frame.width, height: result.height, scale: 1 },
+        clip: {
+          x: 0,
+          y: 0,
+          width: frame.width,
+          height: result.height,
+          scale: 1,
+        },
       })
       const png = join(output, `${frame.id}.png`)
       const bytes = decodePng(shot.data)
@@ -563,13 +617,16 @@ export async function captureFrames(
         if (await evaluate("Boolean(document.querySelector('[data-page=sign-in]'))")) break
         await Bun.sleep(50)
       }
-      const replay = await fetch(origin, { headers: { cookie: pair }, redirect: 'manual' })
+      const replay = await fetch(origin, {
+        headers: { cookie: pair },
+        redirect: 'manual',
+      })
       if (replay.status !== 307) throw Error('Logout did not revoke the copied session')
       if (errors.length) throw Error(errors.join('; '))
     }
     if (auth?.seed && auth.store) {
       const detail = auth.seed.detail
-      const path = `/builds/${detail.slug}?${new URLSearchParams({ project: detail.project })}`
+      const path = `/dashboard/builds/${detail.slug}?${new URLSearchParams({ project: detail.project })}`
       const issued = await fetch(`${origin}/auth/dev-session`, {
         method: 'POST',
         headers: { 'x-proa-dev-capability': auth.capability },
@@ -587,6 +644,27 @@ export async function captureFrames(
           sameSite: 'Lax',
         })
       }
+      const machineReply = await fetch(`${origin}/builds/${detail.slug}`, {
+        headers: { accept: 'text/html' },
+        redirect: 'manual',
+      })
+      if (
+        machineReply.status !== 409 ||
+        !machineReply.headers.get('content-type')?.startsWith('application/json') ||
+        !(await machineReply.json()).error
+      )
+        throw Error('Machine build path entered browser routing')
+      const browserReply = await fetch(origin + path, {
+        headers: {
+          cookie: issued.headers
+            .getSetCookie()
+            .map((line) => line.split(';')[0])
+            .join('; '),
+          accept: 'text/html',
+        },
+      })
+      if (!browserReply.ok || !(await browserReply.text()).includes('data-page="build-detail"'))
+        throw Error('Browser detail route did not render the seeded build')
       await send('Page.navigate', { url: origin + path })
       for (let i = 0; i < 100; i++) {
         if (await evaluate("Boolean(document.querySelector('[data-page=build-detail]'))")) break
@@ -596,7 +674,11 @@ export async function captureFrames(
       await auth.store.append(detail.slug, {
         actor: { kind: 'agent', role: 'implement', session: 'detail-session' },
         type: 'observation.recorded',
-        payload: { id: 'live-evidence', kind: 'followup', summary: 'Live append evidence' },
+        payload: {
+          id: 'live-evidence',
+          kind: 'followup',
+          summary: 'Live append evidence',
+        },
       })
       const started = Date.now()
       let updated = false
@@ -642,7 +724,9 @@ export async function captureFrames(
           try {
             const doc = await send('DOM.getDocument', { depth: -1 })
             return (
-              (await send('DOM.getOuterHTML', { nodeId: doc.root.nodeId })) as unknown as {
+              (await send('DOM.getOuterHTML', {
+                nodeId: doc.root.nodeId,
+              })) as unknown as {
                 outerHTML: string
               }
             ).outerHTML
@@ -657,11 +741,16 @@ export async function captureFrames(
         for (let attempt = 0; attempt < 10; attempt++) {
           try {
             const doc = await send('DOM.getDocument', { depth: -1 })
-            const found = await send('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector })
+            const found = await send('DOM.querySelectorAll', {
+              nodeId: doc.root.nodeId,
+              selector,
+            })
             const nodeId = found.nodeIds[0]
             if (!nodeId) throw Error(`Missing browser control: ${selector}`)
             await send('DOM.scrollIntoViewIfNeeded', { nodeId })
-            const box = (await send('DOM.getBoxModel', { nodeId })) as unknown as {
+            const box = (await send('DOM.getBoxModel', {
+              nodeId,
+            })) as unknown as {
               model: { content: number[] }
             }
             const points = box.model.content
@@ -690,7 +779,9 @@ export async function captureFrames(
         }
       }
       for (const mode of ['js', 'nojs']) {
-        await send('Emulation.setScriptExecutionDisabled', { value: mode === 'nojs' })
+        await send('Emulation.setScriptExecutionDisabled', {
+          value: mode === 'nojs',
+        })
         for (const action of [
           'pause',
           'cancel-pause',
@@ -704,7 +795,7 @@ export async function captureFrames(
           const fixture = auth.seed.controls[`proof-${mode}-${action}`]!
           const before = (await auth.store.getEvents(fixture.slug)).length
           await send('Page.navigate', {
-            url: `${origin}/builds/${fixture.slug}?${new URLSearchParams({ project: fixture.project })}`,
+            url: `${origin}/dashboard/builds/${fixture.slug}?${new URLSearchParams({ project: fixture.project })}`,
           })
           let loaded = false
           for (let i = 0; i < 100; i++) {
@@ -721,7 +812,9 @@ export async function captureFrames(
           if (mode === 'js') await evaluate('window.__controlDocument=document')
           if (action === 'guidance') {
             await click('#answer-text')
-            await send('Input.insertText', { text: 'Continue with the approved plan.' })
+            await send('Input.insertText', {
+              text: 'Continue with the approved plan.',
+            })
             if (mode === 'js') {
               await Bun.sleep(2400)
               if (
@@ -791,7 +884,11 @@ export async function captureFrames(
               if (!(await evaluate('document===window.__controlDocument')))
                 throw Error('Pause acknowledgment reloaded the document')
               await auth.store.append(fixture.slug, {
-                actor: { kind: 'agent', role: 'implement', session: 'capture-later-question' },
+                actor: {
+                  kind: 'agent',
+                  role: 'implement',
+                  session: 'capture-later-question',
+                },
                 type: 'escalation.raised',
                 payload: {
                   id: 'capture-later-question',
@@ -828,7 +925,9 @@ export async function captureFrames(
         origin,
         driver: {
           scripts: async (enabled) => {
-            await send('Emulation.setScriptExecutionDisabled', { value: !enabled })
+            await send('Emulation.setScriptExecutionDisabled', {
+              value: !enabled,
+            })
           },
           navigate: async (url) => {
             await send('Page.navigate', { url })
@@ -854,7 +953,7 @@ export async function captureFrames(
         .join('; ')
       const formHtml = await (
         await fetch(
-          `${origin}/builds/${admissionFixture.slug}?${new URLSearchParams({ project: admissionFixture.project })}`,
+          `${origin}/dashboard/builds/${admissionFixture.slug}?${new URLSearchParams({ project: admissionFixture.project })}`,
           { headers: { cookie: cookieHeader } },
         )
       ).text()
@@ -885,7 +984,11 @@ export async function captureFrames(
           throw Error(`Browser ${name} boundary returned ${response.status}, expected ${expected}`)
         if ((await auth.store.getEvents(admissionFixture.slug)).length !== beforeAdmission)
           throw Error(`Browser ${name} refusal mutated state`)
-        formProof.push({ boundary: name, status: response.status, unchanged: true })
+        formProof.push({
+          boundary: name,
+          status: response.status,
+          unchanged: true,
+        })
       }
       await Bun.write(
         join(output, 'browser-control-proof.json'),
@@ -909,7 +1012,9 @@ export async function captureFrames(
       if (!response.ok || !(await response.text()).includes('Stored spec'))
         throw Error('No-JS detail snapshot missing')
       const doc = await send('DOM.getDocument', { depth: -1 })
-      const source = (await send('DOM.getOuterHTML', { nodeId: doc.root.nodeId })) as unknown as {
+      const source = (await send('DOM.getOuterHTML', {
+        nodeId: doc.root.nodeId,
+      })) as unknown as {
         outerHTML: string
       }
       if (!source.outerHTML.includes('Stored spec') || !source.outerHTML.includes('data-sessions'))

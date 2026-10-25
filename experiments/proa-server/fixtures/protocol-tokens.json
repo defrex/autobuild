@@ -1,0 +1,1104 @@
+{
+  "sources": {
+    "packages/core/src/store/remote/token.ts": "30a4609c04fa5a18603cd7d96134764d12819dc1bde91d713fb61e4b33e070b0",
+    "packages/core/src/store/remote/protocol.ts": "61b3d66440ac72c664e040207fa4a1e57c2aec52121202289a5b9690789a1562",
+    "packages/core/src/events/envelope.ts": "0a1b70b4615b7e7be70c5b91e5ff77699bd04ee7401ea0f810b10c81a1d6ede8",
+    "packages/hosted-store-service/src/config.ts": "986abef337ef8664e4ffaec910981a47e34172d4a714f8818bfb1770819bbd25",
+    "packages/hosted-store-service/src/machine-auth.ts": "629ccac7872f3930fe1660b96e077241396a382580c056108575215c44dda266",
+    "packages/hosted-store-service/src/delegated-authority.ts": "59bee984cfaa748b35c9ac618cac8deba48b162c68a13262a805080f17415e7f"
+  },
+  "cases": [
+    {
+      "id": "base/build-runner",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "identity/unicode",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLpm6oiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxfX0.v8zb0B8CnTianBBasQ4RcTEpcaRj0hCyeptRhJdVlIE",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": "雪", "kind": "build-runner", "id": "💩", "anchor": 1 }
+      }
+    },
+    {
+      "id": "payload/unicode-standard-alphabet",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLpm6oiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxfX0=.4T1bRNqgDenGvnKV_E6miI90FVHY3ayYjziO-SiSYFc",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": "雪", "kind": "build-runner", "id": "💩", "anchor": 1 }
+      }
+    },
+    {
+      "id": "payload/unicode-ignored-nonascii",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "éeyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.Kz7sR5gxKsxcWcL-bIjnYzDGHykV1Rf4orzyTDpdrQk",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "base/build-phase",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzMSJ9fQ.sIX8hwIOE-6Xqcf9SPbHrIX3hdGjXTTzgS0Sysbybis",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-phase",
+          "id": "build-one",
+          "anchor": 1,
+          "session": "s1"
+        }
+      }
+    },
+    {
+      "id": "base/harvest-runner",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImUxIiwibGVhc2VIb2xkZXIiOiJoMSJ9fQ.ylLPxGVljlyKeymHOoVsQiGJlP68OuU1pdYDS1m0apA",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "harvest-runner",
+          "id": "build-one",
+          "anchor": 1,
+          "execution": "e1",
+          "leaseHolder": "h1"
+        }
+      }
+    },
+    {
+      "id": "base/harvest-phase",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImJ1aWxkLW9uZSIsImFuY2hvciI6MSwic2Vzc2lvbiI6InMxIiwiZXhlY3V0aW9uIjoiZTEifX0.iyeqUIdJWD85y3nwr53VBvaMgvdIKOPwy80ePk5xGWA",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "harvest-phase",
+          "id": "build-one",
+          "anchor": 1,
+          "session": "s1",
+          "execution": "e1"
+        }
+      }
+    },
+    {
+      "id": "identity/repo/\"\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiIiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjF9fQ.6YJ50X8xbnUMPOa3SB7-meFjK-iAX9bkMygmhS8cIII",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/repo/\"*\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiIqIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.GdIo0gb4ckKUgNmaYAIN2ktyTJsOp6zwZWUucg1dWfQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/repo/\" \"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiIgIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.dmhGTzOprb-QqlHbFwKHQiBe3kCIRn_mzrRj8KUKJFQ",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": " ", "kind": "build-runner", "id": "build-one", "anchor": 1 }
+      }
+    },
+    {
+      "id": "identity/repo/\"x*y\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJ4KnkiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjF9fQ.bnfGQJSezufOewR2QXYdqMgo1xLqxY5wXe4d-fqc1oo",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": "x*y", "kind": "build-runner", "id": "build-one", "anchor": 1 }
+      }
+    },
+    {
+      "id": "identity/repo/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOm51bGwsImtpbmQiOiJidWlsZC1ydW5uZXIiLCJpZCI6ImJ1aWxkLW9uZSIsImFuY2hvciI6MX19.23lLzE65XpSYr6FrZU_5y6shDV1CbWGHz9ICyisK5jc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/repo/1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOjEsImtpbmQiOiJidWlsZC1ydW5uZXIiLCJpZCI6ImJ1aWxkLW9uZSIsImFuY2hvciI6MX19.BaNEKxck76LEOSAfODRjRsfCZ7Q2wPfMqBov5ysdFqA",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/id/\"\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiIiwiYW5jaG9yIjoxfX0.jG5m71akW-EInDyBFVCU-QsuDBP2zPqv79eTls1f-78",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/id/\"*\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiKiIsImFuY2hvciI6MX19.Z6_U_oRh9_RmXiIPJeX5hMAq-Mp7oy4mLXRmeO7RMOs",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/id/\" \"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiICIsImFuY2hvciI6MX19.A4xe02J_VdScEEEeowoBJMYXn9eWMJCafehxWi2f-qY",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": " ",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "identity/id/\"x*y\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoieCp5IiwiYW5jaG9yIjoxfX0.QpgzEM8X7suZbk8glChgPxx7z-7rVbJciw7OLaTGYnU",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "x*y",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "identity/id/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjpudWxsLCJhbmNob3IiOjF9fQ.6oU2JWW_WNrXfkjtQiKxrWZd_S78hBOAMBLsYgePRcA",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/id/1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoxLCJhbmNob3IiOjF9fQ.8kwqv7YpQR6citLmFoYerIt8YPW8FCUesFDRnvI_WTk",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/\"\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiIn19.NbieS-9_xH5N_a_XjjJkrI4ZeJefAh-yoNsWp_PZKns",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/\"*\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiKiJ9fQ.R17Tkd5aljHYxifJh3u1aTSske1S_cPJ0CFwX23ZuLQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/\" \"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiICJ9fQ.E9cNJ81nVSq9RbW6tMmTp0_rrmIzEk0GYa7OCTSZiJU",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/\"x*y\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoieCp5In19.t-UQ9EHAfRd3Tu4k8syBkKTaSr_FfXK8hZojsTnvUjM",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjpudWxsfX0.--_d_YKNIaZ50CVczci91WzwRlF-O1SP5relrvFC2OE",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/session/1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoxfX0.qCt2sNSTvdyxxkZvYAKgo7buSLGRlEcmlZL5J8sgoV0",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/\"\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiIifX0.UZH8u4_2ls0Gp1QeabMnvWPXLCg7qX1e2HNrR2TwmLc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/\"*\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiIqIn19.57F7x0Zaaz7yguYpJqmNP9OJiX3xbpFCS6DW2qiF9fo",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/\" \"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiIgIn19.9RAHvF0WvPi6FT-zGGYDKWrK7MV0-6yNxn0uiBjVyao",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/\"x*y\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJ4KnkifX0.iRRvbTkbECL4fFhYDsMKhAWU1J-_YJPaaYF2kkT2zgI",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOm51bGx9fQ.ZH2O4IkbiGEQRB3z-JOxN67oCuD9mzCfqf5oraAf49k",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/execution/1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOjF9fQ.HPsVzk48KF7D75kxLMPN-piPsFyWSYqD453sd1fYhEU",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/leaseHolder/\"\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6IiJ9fQ.Gv9rd7E-l36euA49T1dmpLswbbIk4sIZrZxL-ivTBec",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/leaseHolder/\"*\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6IioifX0.bmA91xC6e2W5Hwv-GT7mhtjZZB6LnmI4-P7V3ZLdu_Q",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/leaseHolder/\" \"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6IiAifX0.LsZRWZh-9qxoH7XJjHnsa7Jps6KoME06in3ZVn4eIGE",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1,
+          "leaseHolder": " "
+        }
+      }
+    },
+    {
+      "id": "identity/leaseHolder/\"x*y\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6IngqeSJ9fQ.TJbaFTOmfexk7cH9cLJdPrB2Jf5PCcL2W6Or3oTwurY",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1,
+          "leaseHolder": "x*y"
+        }
+      }
+    },
+    {
+      "id": "identity/leaseHolder/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6bnVsbH19.-MqPk5WhUyr5Rmlum4H_33WKPd4jgA9AFxQCWELHa2Q",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "identity/leaseHolder/1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6MX19.mGy_JJ7IXte8OPwyVcYfTiE4KzD6Z-2UOqH8orSWPO8",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/0",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjowfX0.vCfSBhmRhaQ-kHgpxW2KNJZ8o3ZZRTrAkrGKjm2Rwrc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/-1",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjotMX19.IGXX5gwpKHJVDsxpKqTcFnBBG33uwrw6zN4RpKhQNXE",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/1.5",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLjV9fQ.UfiHMOcCciaR8dOxadSzLGzsHqcL51tzH5kum1RF3JA",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/9007199254740991",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjo5MDA3MTk5MjU0NzQwOTkxfX0.7oGt27L88cs6UKEXqq3Xl24lTrptNHIOg_W0G0KWnvU",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 9007199254740991
+        }
+      }
+    },
+    {
+      "id": "anchor/9007199254740992",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjo5MDA3MTk5MjU0NzQwOTkyfX0.FIjf79bLTLb49eNoJk1Hp1fK2ZbCht-_4AkotHJDlFQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjpudWxsfX0.1mhXlCXZ9W_seriDJbZfUov66JzzyJkBRdzu9WNM6wQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "anchor/\"1\"",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoiMSJ9fQ.a3iZduIocUtLPKQ_QtEIMx7XOhse1otRMvno3k5CXo4",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/extra-root",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfSwiZXh0cmEiOnRydWV9.vr_XAsH2wAa8E-Ad0DW9VHpfYP8jiLZNIVpArZp8ZqY",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/extra-claim",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleHRyYSI6dHJ1ZX19.xNpvfvY9WjAWpqYdcb5uhntnyuwsr9_I2b7H9juDYD4",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/null",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "bnVsbA.glLZqP3w9mSIsSGfmANrpRoDTaRRSp0kEVuhYv8viSc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/array",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "W10.YHorBo8CyXNuogp4phiD0AEujkaW2K0jDDR7WN5YN4Y",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/unknown-version",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjozLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.701Snb3bBhuEvDPI1unNfZGdibNkoAm7Er3M3SwM9OE",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/runner-with-session",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoicyJ9fQ.ldFwISYVFe_LpaijqbGp6WdrT_C0sQ45CT9oq1MwSMY",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/phase-without-session",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjF9fQ.X8LjKark_V4txN1YK8ibV0lD8Cgsl8plTNS1dmkNk_I",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/build-with-execution",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJlIn19.i2pOcKH8sXbNOKZDrDvIdwjSwsh5bWxaxkPKOYPISlc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/harvest-without-execution",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJidWlsZC1vbmUiLCJhbmNob3IiOjF9fQ.fKaaiKYdK3Jyi5SnK3z98_cPMt1V22Kqp85EvwvJj9o",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "shape/build-with-leaseholder",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImgifX0.tvw-NkKtcB62I8iPOzmNKjJ5l93HGnpy9uaAPeRXyUI",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1,
+          "leaseHolder": "h"
+        }
+      }
+    },
+    {
+      "id": "admin/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgIG93bmVyICAifSwiZXhwIjoxODkzNDU1OTk5OTk5fQ.NgeNI_2XPm6Rreq0SEtZnfC_9nUk8b2264rV7WYI8MY",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "internal/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLCoG9wZXJhdG9y77u_IiwicmVwbyI6InJlcG8ifSwiZXhwIjoxODkzNDU1OTk5OTk5LCJ2aWEiOnsia2luZCI6Im1jcCIsImNsaWVudCI6ImZpeHR1cmUifX0.7rulwcmS1_lMEcCHDAg5qVXsBb_n7snqKovYga22CvE",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJidWlsZCI6IioiLCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NTk5OTk5OX0.kbCA5cIS8_33J_l8jueSs5yr_di_sbYvHyLeoNyD3p0",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "resource/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJyZXNvdXJjZSI6eyJraW5kIjoic2Vzc2lvbiIsImlkIjoib3NfZml4dHVyZSJ9LCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NTk5OTk5OSwidmlhIjp7ImtpbmQiOiJzZXNzaW9uIiwiaWQiOiJvc192aWEifX0.U45DfAwr8KqvXfMgUdX49iX7YmN0n-iQwoOGf_YbLcc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "operator/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6eyJ1c2VyIjoiICB1c2VyICJ9LCJleHAiOjE4OTM0NTU5OTk5OTl9.c3EwUCVXY3PSO3o0Y6C2COcbP3qIgzF6PNc6D4uE2TE",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "deployment/1893455999999",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6dHJ1ZSwic2Vzc2lvbiI6InMiLCJleHAiOjE4OTM0NTU5OTk5OTl9.s8OP0fY68HS4w82ve-FRYsq1FrZcTJNcLNjDntNpGhU",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "admin/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgIG93bmVyICAifSwiZXhwIjoxODkzNDU2MDAwMDAwfQ.D6Jqi1AU8EXRfCbgKesB3Y9ddrY5qOslzpIqxKPKMiw",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "internal/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLCoG9wZXJhdG9y77u_IiwicmVwbyI6InJlcG8ifSwiZXhwIjoxODkzNDU2MDAwMDAwLCJ2aWEiOnsia2luZCI6Im1jcCIsImNsaWVudCI6ImZpeHR1cmUifX0.LTOor7YaiGUOL-kDMkeM_bnekEyJX70TeAJlcvMkkfo",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJidWlsZCI6IioiLCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NjAwMDAwMH0.sWlmjjVMKaj6aSd-BzsbnH_R5p179Y2WEDv92WELbCI",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "resource/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJyZXNvdXJjZSI6eyJraW5kIjoic2Vzc2lvbiIsImlkIjoib3NfZml4dHVyZSJ9LCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NjAwMDAwMCwidmlhIjp7ImtpbmQiOiJzZXNzaW9uIiwiaWQiOiJvc192aWEifX0.jebsnlDwfoLdzmXbjTJEpgIlcH8RqXaKv5B-49Q3pDQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "operator/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6eyJ1c2VyIjoiICB1c2VyICJ9LCJleHAiOjE4OTM0NTYwMDAwMDB9.nWVfOzCtkq8WtCVEOte34by8K1_hiZ5nxnDLH3Qu2FY",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "deployment/1893456000000",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6dHJ1ZSwic2Vzc2lvbiI6InMiLCJleHAiOjE4OTM0NTYwMDAwMDB9.Ymq5XwtSBNCYwNOgSIjpJHbsdqgTJKvvtbEnJ90q7ls",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "admin/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgIG93bmVyICAifSwiZXhwIjoxODkzNDU2MDAwMDAxfQ.jiefGHyeLMZKKykj3WebYTD1V7pNXybi4cOd_Pp09gk",
+      "now": 1893456000000,
+      "expected": { "version": 1, "ownerAdmin": { "user": "owner" }, "exp": 1893456000001 }
+    },
+    {
+      "id": "internal/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLCoG9wZXJhdG9y77u_IiwicmVwbyI6InJlcG8ifSwiZXhwIjoxODkzNDU2MDAwMDAxLCJ2aWEiOnsia2luZCI6Im1jcCIsImNsaWVudCI6ImZpeHR1cmUifX0.e-Q5LCuJtaYq9tQfMB5MOk_haijqtYTL_uJrLWx_moc",
+      "now": 1893456000000,
+      "expected": {
+        "version": 1,
+        "internalOperator": { "user": "operator", "repo": "repo" },
+        "exp": 1893456000001,
+        "via": { "kind": "mcp", "client": "fixture" }
+      }
+    },
+    {
+      "id": "legacy/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJidWlsZCI6IioiLCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NjAwMDAwMX0.fn2lrRDp-UIX3E6czVbQwe8NYVXN5vtCmeRctrVgMb0",
+      "now": 1893456000000,
+      "expected": { "build": "*", "session": "s", "exp": 1893456000001 }
+    },
+    {
+      "id": "resource/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJyZXNvdXJjZSI6eyJraW5kIjoic2Vzc2lvbiIsImlkIjoib3NfZml4dHVyZSJ9LCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NjAwMDAwMSwidmlhIjp7ImtpbmQiOiJzZXNzaW9uIiwiaWQiOiJvc192aWEifX0.VmanEf26nQEHhM75N1fb3wHW0vbrEZxExBTXIIWdET0",
+      "now": 1893456000000,
+      "expected": {
+        "resource": { "kind": "session", "id": "os_fixture" },
+        "session": "s",
+        "exp": 1893456000001,
+        "via": { "kind": "session", "id": "os_via" }
+      }
+    },
+    {
+      "id": "operator/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6eyJ1c2VyIjoiICB1c2VyICJ9LCJleHAiOjE4OTM0NTYwMDAwMDF9.RI5dOWlb3py0gFZ9YxS-Ik6uNOU4JwwuuDd2u8F1uq4",
+      "now": 1893456000000,
+      "expected": { "operator": { "user": "user" }, "exp": 1893456000001 }
+    },
+    {
+      "id": "deployment/1893456000001",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6dHJ1ZSwic2Vzc2lvbiI6InMiLCJleHAiOjE4OTM0NTYwMDAwMDF9.ijI06DJmBsH--ZzHs0g238NJcrgEflzf9Mw597GsqDw",
+      "now": 1893456000000,
+      "expected": { "operator": true, "session": "s", "exp": 1893456000001 }
+    },
+    {
+      "id": "legacy-invalid/72",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgIn0sImV4cCI6MTg5MzQ1NjAwMDAwMX0.V0x8y-MpW2tSEIF5qrnx98weUn18UfQHfkAg9IriucY",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy-invalid/73",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiJ1IiwiZXh0cmEiOnRydWV9LCJleHAiOjE4OTM0NTYwMDAwMDF9.W9b_qenXH3oq9qPDBbNSQa6HYmS2pbfphXqBn9YJFEA",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy-invalid/74",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJ1IiwicmVwbyI6IioifSwiZXhwIjoxODkzNDU2MDAwMDAxfQ.8zxBBV0zpzWD2o1rGJezbXz_LO09L1UFoq-A6o1cMOM",
+      "now": 1893456000000,
+      "expected": {
+        "version": 1,
+        "internalOperator": { "user": "u", "repo": "*" },
+        "exp": 1893456000001
+      }
+    },
+    {
+      "id": "legacy-invalid/75",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJvcGVyYXRvciI6eyJ1c2VyIjoidSJ9LCJleHAiOjE4OTM0NTYwMDAwMDEsInZpYSI6eyJraW5kIjoibWNwIiwiY2xpZW50IjoieCIsImV4dHJhIjp0cnVlfX0.I6eCBqzI-IBdXSOSWz_LxvNv2UQUG0lFW0SaJB-uO6Q",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy-invalid/76",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJidWlsZCI6ImIiLCJzZXNzaW9uIjoicyIsImV4cCI6MS41fQ.9SdXvwM9ZnBq9Bx5KnbNcKrS6Z4LIJtUcqBlDE8zx_w",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "legacy-invalid/77",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJyZXNvdXJjZSI6eyJraW5kIjoicmVwbyIsImlkIjoiciJ9LCJzZXNzaW9uIjoicyIsImV4cCI6MTg5MzQ1NjAwMDAwMSwiZXh0cmEiOnRydWV9.f-avWF1NPGnU53_NEGKzBkBlbw2Jio8H3pjUs8Mk_1o",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/padded",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w=",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/standard-alphabet",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5+ZFf5uOcU++ng+BvL1rJiT/yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/ignored-whitespace",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0. \t5fBV3 \nOC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w ",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/ignored-punctuation",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.!5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w?",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/after-padding-ignored",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w=garbage",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/modified",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb48AA",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/truncated",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/empty",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/extra-dot",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w.x",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/wrong-key",
+      "secret": "other-key",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/permissive-88",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0=.6-P7hoArTxq4m-7gLLC6a0K1ya_Rwz80QC0wpQ7eA6I",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "payload/permissive-89",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0!.jEGpJjTErKRNbCh-hD7HQMw1yxKaBi_-nWYvg6WQVwY",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "payload/permissive-90",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ \n!2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.wfhyi4MSmMoOzksPmk8qZwtP_gf_79B33gvYvLobFUw",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "payload/permissive-91",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/unicode-Ł",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBVŁ3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/unicode-一",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV一3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/unicode-é",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBVé3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "signature/unicode-💩",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV💩3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "signature/unicode-Å",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBVÅ3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "secret/length-0",
+      "secret": "",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.FhVE1jCHn_kV7zM2dbzmpEB85SnNiy7rzSiFSbkLSkA",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "secret/length-1",
+      "secret": " ",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.WkLSEHcvw7LDUP-E_O7lPke2GZ40C5ygCVBXamBFvaI",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "secret/length-200",
+      "secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.FkCfrMpZbiENQhtLSHDnLs2mCn2CFbqwZGZ6sMarPU0",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      }
+    },
+    {
+      "id": "payload/raw-100",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "ew.xhIxOGYynT125ywsoa0YRxmeLsMYRbjEJgUAHJxNWdw",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/raw-101",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "W10.YHorBo8CyXNuogp4phiD0AEujkaW2K0jDDR7WN5YN4Y",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/raw-102",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "bnVsbA.glLZqP3w9mSIsSGfmANrpRoDTaRRSp0kEVuhYv8viSc",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/raw-103",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjFlNDAwfX0.OFM2oTIQTZDr9c6jlM3_UPkmuTUiarvdIY9dToEE6Ss",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/raw-104",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEuMH19.QOuSD7RRzLENv2Ox_aQWItPGx9sH6q43NJ1n1tqF4Yc",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": "repo", "kind": "build-runner", "id": "id", "anchor": 1 }
+      }
+    },
+    {
+      "id": "payload/raw-105",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjkwMDcxOTkyNTQ3NDA5OTN9fQ.deNg2b5k4Gn2L106G0fnPX2L5AKUplql1Kbzzue-VnQ",
+      "now": 1893456000000,
+      "expected": null
+    },
+    {
+      "id": "payload/invalid-utf8-inside-string",
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoi_yIsImFuY2hvciI6MX19.Gq2KcENFH38tEtAfCiyYd9qIUE4vYdpMXDmaOdkmjig",
+      "now": 1893456000000,
+      "expected": {
+        "version": 2,
+        "delegation": { "repo": "repo", "kind": "build-runner", "id": "�", "anchor": 1 }
+      }
+    }
+  ],
+  "mint": [
+    {
+      "input": {
+        "version": 2,
+        "delegation": {
+          "repo": "https://github.com/proa/project",
+          "kind": "build-runner",
+          "id": "build-one",
+          "anchor": 1
+        }
+      },
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vcHJvYS9wcm9qZWN0Iiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYnVpbGQtb25lIiwiYW5jaG9yIjoxfX0.5fBV3OC5-ZFf5uOcU--ng-BvL1rJiT_yawfBdvb485w"
+    },
+    {
+      "input": {
+        "version": 2,
+        "delegation": {
+          "repo": "repo",
+          "kind": "harvest-phase",
+          "id": "run",
+          "anchor": 9,
+          "execution": "e",
+          "session": "s"
+        }
+      },
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6InJ1biIsImFuY2hvciI6OSwiZXhlY3V0aW9uIjoiZSIsInNlc3Npb24iOiJzIn19.R9LjZu0jedRcj8eVOEVQ1gT7jItRCo0KiCAQHwGszkU"
+    },
+    {
+      "input": {
+        "version": 2,
+        "delegation": {
+          "repo": "repo",
+          "kind": "build-phase",
+          "id": "b",
+          "anchor": 1,
+          "session": "s",
+          "leaseHolder": "allowed-extra-holder"
+        }
+      },
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJiIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoicyIsImxlYXNlSG9sZGVyIjoiYWxsb3dlZC1leHRyYS1ob2xkZXIifX0.OuzRK4SSO21GKiDqYLC3Jfor65Jf6kVpv2sKDogKW8s"
+    },
+    {
+      "input": {
+        "version": 2,
+        "delegation": { "repo": " snow/雪 ", "kind": "build-runner", "id": "b", "anchor": 1 }
+      },
+      "secret": "proa-delegation-fixture-secret-🔑",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiIgc25vdy_pm6ogIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiYiIsImFuY2hvciI6MX19.dFu6ijYqKvoi_ppOvvyyjkZIURBs6uE9BrRICa_hvaI"
+    }
+  ],
+  "targets": [
+    {
+      "input": { "kind": "build-runner", "id": "b" },
+      "accepted": { "kind": "build-runner", "id": "b" }
+    },
+    {
+      "input": { "kind": "build-phase", "id": "b", "session": "s" },
+      "accepted": { "kind": "build-phase", "id": "b", "session": "s" }
+    },
+    {
+      "input": {
+        "kind": "harvest-runner",
+        "repo": "r",
+        "id": "h",
+        "execution": "e",
+        "leaseHolder": "holder"
+      },
+      "accepted": {
+        "kind": "harvest-runner",
+        "execution": "e",
+        "repo": "r",
+        "id": "h",
+        "leaseHolder": "holder"
+      }
+    },
+    {
+      "input": { "kind": "harvest-phase", "repo": "r", "id": "h", "session": "s" },
+      "accepted": { "kind": "harvest-phase", "repo": "r", "id": "h", "session": "s" }
+    },
+    {
+      "input": { "kind": "build-runner", "id": "*" },
+      "accepted": { "kind": "build-runner", "id": "*" }
+    },
+    {
+      "input": { "kind": "build-phase", "id": "b", "session": "*" },
+      "accepted": { "kind": "build-phase", "id": "b", "session": "*" }
+    },
+    { "input": { "kind": "build-runner", "id": "b", "extra": true }, "accepted": null },
+    {
+      "input": {
+        "kind": "harvest-phase",
+        "repo": "r",
+        "id": "h",
+        "session": "s",
+        "execution": "e"
+      },
+      "accepted": null
+    },
+    { "input": null, "accepted": null }
+  ]
+}

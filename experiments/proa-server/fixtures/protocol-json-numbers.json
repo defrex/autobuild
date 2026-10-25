@@ -1,0 +1,971 @@
+{
+  "sources": {
+    "experiments/proa-server/tools/protocol-json-number-fixtures.ts": "71779c978a010d7276b7977b37891cfea01e29175ab18c05e1ae21baee19db82"
+  },
+  "cases": [
+    {
+      "id": "raw-number/0",
+      "raw": "0",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/1",
+      "raw": "{\"metadata\":{\"n\":0,\"array\":[0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/2",
+      "raw": "-0",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/3",
+      "raw": "{\"metadata\":{\"n\":-0,\"array\":[-0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/4",
+      "raw": "0.0",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/5",
+      "raw": "{\"metadata\":{\"n\":0.0,\"array\":[0.0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/6",
+      "raw": "-0.0",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/7",
+      "raw": "{\"metadata\":{\"n\":-0.0,\"array\":[-0.0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/8",
+      "raw": "1",
+      "parsed": { "bits": "3ff0000000000000" },
+      "serialized": { "bits": "3ff0000000000000" },
+      "serializedText": "1"
+    },
+    {
+      "id": "raw-number/9",
+      "raw": "{\"metadata\":{\"n\":1,\"array\":[1]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3ff0000000000000" },
+          "array": [{ "bits": "3ff0000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3ff0000000000000" },
+          "array": [{ "bits": "3ff0000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1,\"array\":[1]}}"
+    },
+    {
+      "id": "raw-number/10",
+      "raw": "-1",
+      "parsed": { "bits": "bff0000000000000" },
+      "serialized": { "bits": "bff0000000000000" },
+      "serializedText": "-1"
+    },
+    {
+      "id": "raw-number/11",
+      "raw": "{\"metadata\":{\"n\":-1,\"array\":[-1]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "bff0000000000000" },
+          "array": [{ "bits": "bff0000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "bff0000000000000" },
+          "array": [{ "bits": "bff0000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":-1,\"array\":[-1]}}"
+    },
+    {
+      "id": "raw-number/12",
+      "raw": "9007199254740991",
+      "parsed": { "bits": "433fffffffffffff" },
+      "serialized": { "bits": "433fffffffffffff" },
+      "serializedText": "9007199254740991"
+    },
+    {
+      "id": "raw-number/13",
+      "raw": "{\"metadata\":{\"n\":9007199254740991,\"array\":[9007199254740991]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "433fffffffffffff" },
+          "array": [{ "bits": "433fffffffffffff" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "433fffffffffffff" },
+          "array": [{ "bits": "433fffffffffffff" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740991,\"array\":[9007199254740991]}}"
+    },
+    {
+      "id": "raw-number/14",
+      "raw": "9007199254740992",
+      "parsed": { "bits": "4340000000000000" },
+      "serialized": { "bits": "4340000000000000" },
+      "serializedText": "9007199254740992"
+    },
+    {
+      "id": "raw-number/15",
+      "raw": "{\"metadata\":{\"n\":9007199254740992,\"array\":[9007199254740992]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740992,\"array\":[9007199254740992]}}"
+    },
+    {
+      "id": "raw-number/16",
+      "raw": "9007199254740993",
+      "parsed": { "bits": "4340000000000000" },
+      "serialized": { "bits": "4340000000000000" },
+      "serializedText": "9007199254740992"
+    },
+    {
+      "id": "raw-number/17",
+      "raw": "{\"metadata\":{\"n\":9007199254740993,\"array\":[9007199254740993]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740992,\"array\":[9007199254740992]}}"
+    },
+    {
+      "id": "raw-number/18",
+      "raw": "9007199254740994",
+      "parsed": { "bits": "4340000000000001" },
+      "serialized": { "bits": "4340000000000001" },
+      "serializedText": "9007199254740994"
+    },
+    {
+      "id": "raw-number/19",
+      "raw": "{\"metadata\":{\"n\":9007199254740994,\"array\":[9007199254740994]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4340000000000001" },
+          "array": [{ "bits": "4340000000000001" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4340000000000001" },
+          "array": [{ "bits": "4340000000000001" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740994,\"array\":[9007199254740994]}}"
+    },
+    {
+      "id": "raw-number/20",
+      "raw": "-9007199254740993",
+      "parsed": { "bits": "c340000000000000" },
+      "serialized": { "bits": "c340000000000000" },
+      "serializedText": "-9007199254740992"
+    },
+    {
+      "id": "raw-number/21",
+      "raw": "{\"metadata\":{\"n\":-9007199254740993,\"array\":[-9007199254740993]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "c340000000000000" },
+          "array": [{ "bits": "c340000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "c340000000000000" },
+          "array": [{ "bits": "c340000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":-9007199254740992,\"array\":[-9007199254740992]}}"
+    },
+    {
+      "id": "raw-number/22",
+      "raw": "9007199254740993.0",
+      "parsed": { "bits": "4340000000000000" },
+      "serialized": { "bits": "4340000000000000" },
+      "serializedText": "9007199254740992"
+    },
+    {
+      "id": "raw-number/23",
+      "raw": "{\"metadata\":{\"n\":9007199254740993.0,\"array\":[9007199254740993.0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740992,\"array\":[9007199254740992]}}"
+    },
+    {
+      "id": "raw-number/24",
+      "raw": "9007199254740993e0",
+      "parsed": { "bits": "4340000000000000" },
+      "serialized": { "bits": "4340000000000000" },
+      "serializedText": "9007199254740992"
+    },
+    {
+      "id": "raw-number/25",
+      "raw": "{\"metadata\":{\"n\":9007199254740993e0,\"array\":[9007199254740993e0]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4340000000000000" },
+          "array": [{ "bits": "4340000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9007199254740992,\"array\":[9007199254740992]}}"
+    },
+    {
+      "id": "raw-number/26",
+      "raw": "9223372036854775807",
+      "parsed": { "bits": "43e0000000000000" },
+      "serialized": { "bits": "43e0000000000000" },
+      "serializedText": "9223372036854776000"
+    },
+    {
+      "id": "raw-number/27",
+      "raw": "{\"metadata\":{\"n\":9223372036854775807,\"array\":[9223372036854775807]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "43e0000000000000" },
+          "array": [{ "bits": "43e0000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "43e0000000000000" },
+          "array": [{ "bits": "43e0000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":9223372036854776000,\"array\":[9223372036854776000]}}"
+    },
+    {
+      "id": "raw-number/28",
+      "raw": "-9223372036854775808",
+      "parsed": { "bits": "c3e0000000000000" },
+      "serialized": { "bits": "c3e0000000000000" },
+      "serializedText": "-9223372036854776000"
+    },
+    {
+      "id": "raw-number/29",
+      "raw": "{\"metadata\":{\"n\":-9223372036854775808,\"array\":[-9223372036854775808]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "c3e0000000000000" },
+          "array": [{ "bits": "c3e0000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "c3e0000000000000" },
+          "array": [{ "bits": "c3e0000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":-9223372036854776000,\"array\":[-9223372036854776000]}}"
+    },
+    {
+      "id": "raw-number/30",
+      "raw": "18446744073709551615",
+      "parsed": { "bits": "43f0000000000000" },
+      "serialized": { "bits": "43f0000000000000" },
+      "serializedText": "18446744073709552000"
+    },
+    {
+      "id": "raw-number/31",
+      "raw": "{\"metadata\":{\"n\":18446744073709551615,\"array\":[18446744073709551615]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "43f0000000000000" },
+          "array": [{ "bits": "43f0000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "43f0000000000000" },
+          "array": [{ "bits": "43f0000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":18446744073709552000,\"array\":[18446744073709552000]}}"
+    },
+    {
+      "id": "raw-number/32",
+      "raw": "1000000000000000100",
+      "parsed": { "bits": "43abc16d674ec801" },
+      "serialized": { "bits": "43abc16d674ec801" },
+      "serializedText": "1000000000000000100"
+    },
+    {
+      "id": "raw-number/33",
+      "raw": "{\"metadata\":{\"n\":1000000000000000100,\"array\":[1000000000000000100]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "43abc16d674ec801" },
+          "array": [{ "bits": "43abc16d674ec801" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "43abc16d674ec801" },
+          "array": [{ "bits": "43abc16d674ec801" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1000000000000000100,\"array\":[1000000000000000100]}}"
+    },
+    {
+      "id": "raw-number/34",
+      "raw": "0.9999999999999999",
+      "parsed": { "bits": "3fefffffffffffff" },
+      "serialized": { "bits": "3fefffffffffffff" },
+      "serializedText": "0.9999999999999999"
+    },
+    {
+      "id": "raw-number/35",
+      "raw": "{\"metadata\":{\"n\":0.9999999999999999,\"array\":[0.9999999999999999]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3fefffffffffffff" },
+          "array": [{ "bits": "3fefffffffffffff" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3fefffffffffffff" },
+          "array": [{ "bits": "3fefffffffffffff" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0.9999999999999999,\"array\":[0.9999999999999999]}}"
+    },
+    {
+      "id": "raw-number/36",
+      "raw": "1.2345678901234567",
+      "parsed": { "bits": "3ff3c0ca428c59fb" },
+      "serialized": { "bits": "3ff3c0ca428c59fb" },
+      "serializedText": "1.2345678901234567"
+    },
+    {
+      "id": "raw-number/37",
+      "raw": "{\"metadata\":{\"n\":1.2345678901234567,\"array\":[1.2345678901234567]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3ff3c0ca428c59fb" },
+          "array": [{ "bits": "3ff3c0ca428c59fb" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3ff3c0ca428c59fb" },
+          "array": [{ "bits": "3ff3c0ca428c59fb" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1.2345678901234567,\"array\":[1.2345678901234567]}}"
+    },
+    {
+      "id": "raw-number/38",
+      "raw": "0.1",
+      "parsed": { "bits": "3fb999999999999a" },
+      "serialized": { "bits": "3fb999999999999a" },
+      "serializedText": "0.1"
+    },
+    {
+      "id": "raw-number/39",
+      "raw": "{\"metadata\":{\"n\":0.1,\"array\":[0.1]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3fb999999999999a" },
+          "array": [{ "bits": "3fb999999999999a" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3fb999999999999a" },
+          "array": [{ "bits": "3fb999999999999a" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0.1,\"array\":[0.1]}}"
+    },
+    {
+      "id": "raw-number/40",
+      "raw": "0.1000000000000000055511151231257827021181583404541015625",
+      "parsed": { "bits": "3fb999999999999a" },
+      "serialized": { "bits": "3fb999999999999a" },
+      "serializedText": "0.1"
+    },
+    {
+      "id": "raw-number/41",
+      "raw": "{\"metadata\":{\"n\":0.1000000000000000055511151231257827021181583404541015625,\"array\":[0.1000000000000000055511151231257827021181583404541015625]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3fb999999999999a" },
+          "array": [{ "bits": "3fb999999999999a" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3fb999999999999a" },
+          "array": [{ "bits": "3fb999999999999a" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0.1,\"array\":[0.1]}}"
+    },
+    {
+      "id": "raw-number/42",
+      "raw": "1e20",
+      "parsed": { "bits": "4415af1d78b58c40" },
+      "serialized": { "bits": "4415af1d78b58c40" },
+      "serializedText": "100000000000000000000"
+    },
+    {
+      "id": "raw-number/43",
+      "raw": "{\"metadata\":{\"n\":1e20,\"array\":[1e20]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "4415af1d78b58c40" },
+          "array": [{ "bits": "4415af1d78b58c40" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "4415af1d78b58c40" },
+          "array": [{ "bits": "4415af1d78b58c40" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":100000000000000000000,\"array\":[100000000000000000000]}}"
+    },
+    {
+      "id": "raw-number/44",
+      "raw": "1e21",
+      "parsed": { "bits": "444b1ae4d6e2ef50" },
+      "serialized": { "bits": "444b1ae4d6e2ef50" },
+      "serializedText": "1e+21"
+    },
+    {
+      "id": "raw-number/45",
+      "raw": "{\"metadata\":{\"n\":1e21,\"array\":[1e21]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "444b1ae4d6e2ef50" },
+          "array": [{ "bits": "444b1ae4d6e2ef50" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "444b1ae4d6e2ef50" },
+          "array": [{ "bits": "444b1ae4d6e2ef50" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1e+21,\"array\":[1e+21]}}"
+    },
+    {
+      "id": "raw-number/46",
+      "raw": "1e23",
+      "parsed": { "bits": "44b52d02c7e14af6" },
+      "serialized": { "bits": "44b52d02c7e14af6" },
+      "serializedText": "1e+23"
+    },
+    {
+      "id": "raw-number/47",
+      "raw": "{\"metadata\":{\"n\":1e23,\"array\":[1e23]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "44b52d02c7e14af6" },
+          "array": [{ "bits": "44b52d02c7e14af6" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "44b52d02c7e14af6" },
+          "array": [{ "bits": "44b52d02c7e14af6" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1e+23,\"array\":[1e+23]}}"
+    },
+    {
+      "id": "raw-number/48",
+      "raw": "1e-6",
+      "parsed": { "bits": "3eb0c6f7a0b5ed8d" },
+      "serialized": { "bits": "3eb0c6f7a0b5ed8d" },
+      "serializedText": "0.000001"
+    },
+    {
+      "id": "raw-number/49",
+      "raw": "{\"metadata\":{\"n\":1e-6,\"array\":[1e-6]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3eb0c6f7a0b5ed8d" },
+          "array": [{ "bits": "3eb0c6f7a0b5ed8d" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3eb0c6f7a0b5ed8d" },
+          "array": [{ "bits": "3eb0c6f7a0b5ed8d" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0.000001,\"array\":[0.000001]}}"
+    },
+    {
+      "id": "raw-number/50",
+      "raw": "1e-7",
+      "parsed": { "bits": "3e7ad7f29abcaf48" },
+      "serialized": { "bits": "3e7ad7f29abcaf48" },
+      "serializedText": "1e-7"
+    },
+    {
+      "id": "raw-number/51",
+      "raw": "{\"metadata\":{\"n\":1e-7,\"array\":[1e-7]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "3e7ad7f29abcaf48" },
+          "array": [{ "bits": "3e7ad7f29abcaf48" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "3e7ad7f29abcaf48" },
+          "array": [{ "bits": "3e7ad7f29abcaf48" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1e-7,\"array\":[1e-7]}}"
+    },
+    {
+      "id": "raw-number/52",
+      "raw": "1e308",
+      "parsed": { "bits": "7fe1ccf385ebc8a0" },
+      "serialized": { "bits": "7fe1ccf385ebc8a0" },
+      "serializedText": "1e+308"
+    },
+    {
+      "id": "raw-number/53",
+      "raw": "{\"metadata\":{\"n\":1e308,\"array\":[1e308]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "7fe1ccf385ebc8a0" },
+          "array": [{ "bits": "7fe1ccf385ebc8a0" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "7fe1ccf385ebc8a0" },
+          "array": [{ "bits": "7fe1ccf385ebc8a0" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1e+308,\"array\":[1e+308]}}"
+    },
+    {
+      "id": "raw-number/54",
+      "raw": "1.7976931348623157e308",
+      "parsed": { "bits": "7fefffffffffffff" },
+      "serialized": { "bits": "7fefffffffffffff" },
+      "serializedText": "1.7976931348623157e+308"
+    },
+    {
+      "id": "raw-number/55",
+      "raw": "{\"metadata\":{\"n\":1.7976931348623157e308,\"array\":[1.7976931348623157e308]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "7fefffffffffffff" },
+          "array": [{ "bits": "7fefffffffffffff" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "7fefffffffffffff" },
+          "array": [{ "bits": "7fefffffffffffff" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":1.7976931348623157e+308,\"array\":[1.7976931348623157e+308]}}"
+    },
+    {
+      "id": "raw-number/56",
+      "raw": "1.7976931348623159e308",
+      "parsed": { "nonfinite": "Infinity" },
+      "serialized": null,
+      "serializedText": "null"
+    },
+    {
+      "id": "raw-number/57",
+      "raw": "{\"metadata\":{\"n\":1.7976931348623159e308,\"array\":[1.7976931348623159e308]}}",
+      "parsed": {
+        "metadata": { "n": { "nonfinite": "Infinity" }, "array": [{ "nonfinite": "Infinity" }] }
+      },
+      "serialized": { "metadata": { "n": null, "array": [null] } },
+      "serializedText": "{\"metadata\":{\"n\":null,\"array\":[null]}}"
+    },
+    {
+      "id": "raw-number/58",
+      "raw": "1e400",
+      "parsed": { "nonfinite": "Infinity" },
+      "serialized": null,
+      "serializedText": "null"
+    },
+    {
+      "id": "raw-number/59",
+      "raw": "{\"metadata\":{\"n\":1e400,\"array\":[1e400]}}",
+      "parsed": {
+        "metadata": { "n": { "nonfinite": "Infinity" }, "array": [{ "nonfinite": "Infinity" }] }
+      },
+      "serialized": { "metadata": { "n": null, "array": [null] } },
+      "serializedText": "{\"metadata\":{\"n\":null,\"array\":[null]}}"
+    },
+    {
+      "id": "raw-number/60",
+      "raw": "-1e400",
+      "parsed": { "nonfinite": "-Infinity" },
+      "serialized": null,
+      "serializedText": "null"
+    },
+    {
+      "id": "raw-number/61",
+      "raw": "{\"metadata\":{\"n\":-1e400,\"array\":[-1e400]}}",
+      "parsed": {
+        "metadata": { "n": { "nonfinite": "-Infinity" }, "array": [{ "nonfinite": "-Infinity" }] }
+      },
+      "serialized": { "metadata": { "n": null, "array": [null] } },
+      "serializedText": "{\"metadata\":{\"n\":null,\"array\":[null]}}"
+    },
+    {
+      "id": "raw-number/62",
+      "raw": "1e999999999999999999",
+      "parsed": { "nonfinite": "Infinity" },
+      "serialized": null,
+      "serializedText": "null"
+    },
+    {
+      "id": "raw-number/63",
+      "raw": "{\"metadata\":{\"n\":1e999999999999999999,\"array\":[1e999999999999999999]}}",
+      "parsed": {
+        "metadata": { "n": { "nonfinite": "Infinity" }, "array": [{ "nonfinite": "Infinity" }] }
+      },
+      "serialized": { "metadata": { "n": null, "array": [null] } },
+      "serializedText": "{\"metadata\":{\"n\":null,\"array\":[null]}}"
+    },
+    {
+      "id": "raw-number/64",
+      "raw": "-1e999999999999999999",
+      "parsed": { "nonfinite": "-Infinity" },
+      "serialized": null,
+      "serializedText": "null"
+    },
+    {
+      "id": "raw-number/65",
+      "raw": "{\"metadata\":{\"n\":-1e999999999999999999,\"array\":[-1e999999999999999999]}}",
+      "parsed": {
+        "metadata": { "n": { "nonfinite": "-Infinity" }, "array": [{ "nonfinite": "-Infinity" }] }
+      },
+      "serialized": { "metadata": { "n": null, "array": [null] } },
+      "serializedText": "{\"metadata\":{\"n\":null,\"array\":[null]}}"
+    },
+    {
+      "id": "raw-number/66",
+      "raw": "1e-400",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/67",
+      "raw": "{\"metadata\":{\"n\":1e-400,\"array\":[1e-400]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/68",
+      "raw": "-1e-400",
+      "parsed": { "bits": "0000000000000000" },
+      "serialized": { "bits": "0000000000000000" },
+      "serializedText": "0"
+    },
+    {
+      "id": "raw-number/69",
+      "raw": "{\"metadata\":{\"n\":-1e-400,\"array\":[-1e-400]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000000" },
+          "array": [{ "bits": "0000000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":0,\"array\":[0]}}"
+    },
+    {
+      "id": "raw-number/70",
+      "raw": "5e-324",
+      "parsed": { "bits": "0000000000000001" },
+      "serialized": { "bits": "0000000000000001" },
+      "serializedText": "5e-324"
+    },
+    {
+      "id": "raw-number/71",
+      "raw": "{\"metadata\":{\"n\":5e-324,\"array\":[5e-324]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0000000000000001" },
+          "array": [{ "bits": "0000000000000001" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0000000000000001" },
+          "array": [{ "bits": "0000000000000001" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":5e-324,\"array\":[5e-324]}}"
+    },
+    {
+      "id": "raw-number/72",
+      "raw": "2.2250738585072014e-308",
+      "parsed": { "bits": "0010000000000000" },
+      "serialized": { "bits": "0010000000000000" },
+      "serializedText": "2.2250738585072014e-308"
+    },
+    {
+      "id": "raw-number/73",
+      "raw": "{\"metadata\":{\"n\":2.2250738585072014e-308,\"array\":[2.2250738585072014e-308]}}",
+      "parsed": {
+        "metadata": {
+          "n": { "bits": "0010000000000000" },
+          "array": [{ "bits": "0010000000000000" }]
+        }
+      },
+      "serialized": {
+        "metadata": {
+          "n": { "bits": "0010000000000000" },
+          "array": [{ "bits": "0010000000000000" }]
+        }
+      },
+      "serializedText": "{\"metadata\":{\"n\":2.2250738585072014e-308,\"array\":[2.2250738585072014e-308]}}"
+    },
+    {
+      "id": "raw-number/74",
+      "raw": "{\"$serde_json::private::Number\":\"1\"}",
+      "parsed": { "$serde_json::private::Number": "1" },
+      "serialized": { "$serde_json::private::Number": "1" },
+      "serializedText": "{\"$serde_json::private::Number\":\"1\"}"
+    },
+    {
+      "id": "raw-number/75",
+      "raw": "{\"$serde_json::private::Number\":\"ordinary text\",\"other\":1}",
+      "parsed": {
+        "$serde_json::private::Number": "ordinary text",
+        "other": { "bits": "3ff0000000000000" }
+      },
+      "serialized": {
+        "$serde_json::private::Number": "ordinary text",
+        "other": { "bits": "3ff0000000000000" }
+      },
+      "serializedText": "{\"$serde_json::private::Number\":\"ordinary text\",\"other\":1}"
+    },
+    {
+      "id": "raw-number/76",
+      "raw": "{\"$serde_json::private::Number\":1,\"other\":2}",
+      "parsed": {
+        "$serde_json::private::Number": { "bits": "3ff0000000000000" },
+        "other": { "bits": "4000000000000000" }
+      },
+      "serialized": {
+        "$serde_json::private::Number": { "bits": "3ff0000000000000" },
+        "other": { "bits": "4000000000000000" }
+      },
+      "serializedText": "{\"$serde_json::private::Number\":1,\"other\":2}"
+    },
+    {
+      "id": "raw-number/77",
+      "raw": "{\"other\":1,\"$serde_json::private::Number\":\"1\"}",
+      "parsed": { "other": { "bits": "3ff0000000000000" }, "$serde_json::private::Number": "1" },
+      "serialized": {
+        "other": { "bits": "3ff0000000000000" },
+        "$serde_json::private::Number": "1"
+      },
+      "serializedText": "{\"other\":1,\"$serde_json::private::Number\":\"1\"}"
+    },
+    {
+      "id": "raw-number/78",
+      "raw": "{\"array\":[{\"$serde_json::private::Number\":\"1\"}],\"nested\":{\"$serde_json::private::Number\":\"plain\"}}",
+      "parsed": {
+        "array": [{ "$serde_json::private::Number": "1" }],
+        "nested": { "$serde_json::private::Number": "plain" }
+      },
+      "serialized": {
+        "array": [{ "$serde_json::private::Number": "1" }],
+        "nested": { "$serde_json::private::Number": "plain" }
+      },
+      "serializedText": "{\"array\":[{\"$serde_json::private::Number\":\"1\"}],\"nested\":{\"$serde_json::private::Number\":\"plain\"}}"
+    },
+    {
+      "id": "raw-number/79",
+      "raw": "{\"repeated\":1,\"other\":2,\"repeated\":3}",
+      "parsed": {
+        "repeated": { "bits": "4008000000000000" },
+        "other": { "bits": "4000000000000000" }
+      },
+      "serialized": {
+        "repeated": { "bits": "4008000000000000" },
+        "other": { "bits": "4000000000000000" }
+      },
+      "serializedText": "{\"repeated\":3,\"other\":2}"
+    },
+    {
+      "id": "raw-number/80",
+      "raw": "{\"2\":1,\"1\":2,\"a\":3}",
+      "parsed": {
+        "1": { "bits": "4000000000000000" },
+        "2": { "bits": "3ff0000000000000" },
+        "a": { "bits": "4008000000000000" }
+      },
+      "serialized": {
+        "1": { "bits": "4000000000000000" },
+        "2": { "bits": "3ff0000000000000" },
+        "a": { "bits": "4008000000000000" }
+      },
+      "serializedText": "{\"1\":2,\"2\":1,\"a\":3}"
+    },
+    {
+      "id": "raw-number/81",
+      "raw": "{\"z\":0,\"4294967295\":1,\"4294967294\":2,\"01\":3,\"0\":4,\"-0\":5,\"1\":6,\"a\":7}",
+      "parsed": {
+        "0": { "bits": "4010000000000000" },
+        "1": { "bits": "4018000000000000" },
+        "4294967294": { "bits": "4000000000000000" },
+        "z": { "bits": "0000000000000000" },
+        "4294967295": { "bits": "3ff0000000000000" },
+        "01": { "bits": "4008000000000000" },
+        "-0": { "bits": "4014000000000000" },
+        "a": { "bits": "401c000000000000" }
+      },
+      "serialized": {
+        "0": { "bits": "4010000000000000" },
+        "1": { "bits": "4018000000000000" },
+        "4294967294": { "bits": "4000000000000000" },
+        "z": { "bits": "0000000000000000" },
+        "4294967295": { "bits": "3ff0000000000000" },
+        "01": { "bits": "4008000000000000" },
+        "-0": { "bits": "4014000000000000" },
+        "a": { "bits": "401c000000000000" }
+      },
+      "serializedText": "{\"0\":4,\"1\":6,\"4294967294\":2,\"z\":0,\"4294967295\":1,\"01\":3,\"-0\":5,\"a\":7}"
+    },
+    {
+      "id": "raw-number/82",
+      "raw": "{\"outer\":{\"2\":\"second\",\"1\":\"first\",\"0\":\"zero\",\"02\":\"leading\"}}",
+      "parsed": { "outer": { "0": "zero", "1": "first", "2": "second", "02": "leading" } },
+      "serialized": { "outer": { "0": "zero", "1": "first", "2": "second", "02": "leading" } },
+      "serializedText": "{\"outer\":{\"0\":\"zero\",\"1\":\"first\",\"2\":\"second\",\"02\":\"leading\"}}"
+    }
+  ]
+}

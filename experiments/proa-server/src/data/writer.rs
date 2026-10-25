@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use thiserror::Error;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{MappedMutexGuard, Mutex};
 use tokio_postgres::{Client, Row};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
@@ -55,7 +55,7 @@ impl Drop for Connection {
     }
 }
 pub struct PostgresWriter {
-    connection: Mutex<Connection>,
+    connection: Mutex<Option<Connection>>,
     url: String,
     tls: MakeRustlsConnect,
 }
@@ -216,6 +216,12 @@ fn uuid() -> String {
 }
 impl PostgresWriter {
     pub async fn connect(url: &str) -> Result<Self, WriteError> {
+        let writer = Self::deferred(url)?;
+        drop(writer.client().await?);
+        Ok(writer)
+    }
+    pub fn deferred(url: &str) -> Result<Self, WriteError> {
+        let _: tokio_postgres::Config = url.parse().map_err(|_| WriteError::Connection)?;
         let mut roots = rustls::RootCertStore::empty();
         roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
         let config = rustls::ClientConfig::builder_with_provider(
@@ -226,9 +232,8 @@ impl PostgresWriter {
         .with_root_certificates(roots)
         .with_no_client_auth();
         let tls = MakeRustlsConnect::new(config);
-        let connection = Self::open(url, tls.clone()).await?;
         Ok(Self {
-            connection: Mutex::new(connection),
+            connection: Mutex::new(None),
             url: url.into(),
             tls,
         })
@@ -286,12 +291,14 @@ impl PostgresWriter {
         }
         Ok(result)
     }
-    pub(crate) async fn client(&self) -> Result<MutexGuard<'_, Connection>, WriteError> {
+    pub(crate) async fn client(&self) -> Result<MappedMutexGuard<'_, Connection>, WriteError> {
         let mut connection = self.connection.lock().await;
-        if connection.client.is_closed() {
-            *connection = Self::open(&self.url, self.tls.clone()).await?;
+        if connection.as_ref().is_none_or(|c| c.client.is_closed()) {
+            *connection = Some(Self::open(&self.url, self.tls.clone()).await?);
         }
-        Ok(connection)
+        Ok(tokio::sync::MutexGuard::map(connection, |c| {
+            c.as_mut().unwrap()
+        }))
     }
     async fn append_scope(
         &self,
