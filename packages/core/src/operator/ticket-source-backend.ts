@@ -1,16 +1,7 @@
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
-/**
- * A dispatcher ticket source as the registry's ticket backend (AUT-342):
- * the tick's turn runner takes an `OperatorToolRegistry`, and
- * `buildRegistry`'s ticket tools require an `OperatorTicketBackend` — but
- * the dispatcher's wiring holds a `TicketSource`, not a backend, and
- * `buildMcpTicketBackend` reads a checkout's autobuild.toml, which cannot
- * run in origin mode. This adapter hands the dispatcher's
- * already-constructed source straight through (it was built by
- * `createTicketSource` from the same effective `[tickets]` config the
- * `OperatorTicketContext` would derive, for the same repository) and derives
- * the workflow-state list from the effective config's lifecycle names.
- */
+/** Adapt an already-constructed ticket source to the registry backend without
+ * reading a checkout's configuration. Lifecycle names come from the same
+ * effective configuration used to construct that source. */
 import type { Config } from '../config/schema'
 import type { OperatorTicketBackend, OperatorTicketContext } from './tickets'
 import type { TicketSource } from '../ports/types'

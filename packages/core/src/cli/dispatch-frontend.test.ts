@@ -1,3 +1,4 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
@@ -1316,121 +1317,126 @@ test('frontend preserves unsolicited child failure detail and process evidence',
   )
 })
 
-test('frontend keeps the durable effective config across rejection and adopts a published reload', async () => {
-  const repo = '/reload-repo'
-  const store = new MemoryBuildStore()
-  await store.ensureRepo(repo)
-  const childDone = deferred<DispatchChildResult>()
-  const frames: Array<{
-    capacity: number
-    warnings: readonly string[]
-    availableUpgrade?: string
-  }> = []
-  let runId = ''
-  const write = (_chunk: string): void => {}
-  const configContent = (capacity: number): string =>
-    JSON.stringify({
-      capacity,
-      roles: { default: { runtime: 'claude' } },
-      tickets: { source: 'file', readyState: 'ready' },
-    })
-  const frontend = new DispatchFrontend({
-    repo,
-    storeRef: 'memory',
-    store,
-    env: {},
-    terminal: {
-      write,
-      modes: createTerminalModeController(write, write),
-      columns: 80,
-      rows: 24,
-      interactive: true,
-    },
-    input: { start: () => () => {} },
-    once: false,
-    resolveDashboardRenderer: () => (model) => {
-      frames.push({
-        capacity: model.active.limit,
-        warnings: model.warningLines ?? [],
-        ...(model.availableUpgrade !== undefined
-          ? { availableUpgrade: model.availableUpgrade }
-          : {}),
+test.each([false, true])(
+  'frontend keeps the durable effective config across rejection and adopts a published reload (legacy enabled=%s)',
+  async (enabled) => {
+    const repo = '/reload-repo'
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    const childDone = deferred<DispatchChildResult>()
+    const frames: Array<{
+      capacity: number
+      warnings: readonly string[]
+      availableUpgrade?: string
+    }> = []
+    let runId = ''
+    const write = (_chunk: string): void => {}
+    const configContent = (capacity: number): string =>
+      JSON.stringify({
+        ...historicalEffectiveConfig(enabled),
+        capacity,
+        roles: { default: { runtime: 'claude' } },
+        tickets: { source: 'file', readyState: 'ready' },
       })
-      return ['frame']
-    },
-    launchChild: ({ run }) => {
-      runId = run
-      const startup = store.appendRepoWithArtifacts(
-        repo,
-        [{ kind: 'dispatcher-effective-config', content: configContent(2) }],
-        (artifacts) => ({
-          actor: DISPATCHER,
-          type: 'dispatcher.run-started',
-          payload: {
-            run,
-            pid: 999,
-            effectiveConfig: {
-              kind: artifacts[0]!.kind,
-              rev: artifacts[0]!.revision,
-            },
-            roleWarnings: [],
-          },
-        }),
-      )
-      return {
-        completed: startup.then(() => childDone.promise),
-        async stop() {},
-      }
-    },
-  })
-
-  const running = frontend.run()
-  await waitFor(() => frames.some((frame) => frame.capacity === 2), 'startup effective config')
-  await store.appendRepo(repo, {
-    actor: DISPATCHER,
-    type: 'dispatcher.config-rejected',
-    payload: { run: runId, error: 'invalid capacity on disk' },
-  })
-  await waitFor(
-    () => frames.some((frame) => frame.warnings.some((line) => line.includes('rejected'))),
-    'rejected reload notice',
-  )
-  expect(frames.at(-1)?.capacity).toBe(2)
-
-  await store.appendRepoWithArtifacts(
-    repo,
-    [
-      { kind: 'dispatcher-config', content: 'capacity = 3' },
-      { kind: 'dispatcher-effective-config', content: configContent(3) },
-    ],
-    (artifacts) => ({
-      actor: DISPATCHER,
-      type: 'dispatcher.config-reloaded',
-      payload: {
-        artifact: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-        restartRequired: [],
-        effectiveChanged: true,
-        run: runId,
-        effectiveConfig: { kind: artifacts[1]!.kind, rev: artifacts[1]!.revision },
-        roleWarnings: [],
+    const frontend = new DispatchFrontend({
+      repo,
+      storeRef: 'memory',
+      store,
+      env: {},
+      terminal: {
+        write,
+        modes: createTerminalModeController(write, write),
+        columns: 80,
+        rows: 24,
+        interactive: true,
       },
-    }),
-  )
-  await waitFor(() => frames.some((frame) => frame.capacity === 3), 'accepted effective config')
+      input: { start: () => () => {} },
+      once: false,
+      resolveDashboardRenderer: () => (model) => {
+        frames.push({
+          capacity: model.active.limit,
+          warnings: model.warningLines ?? [],
+          ...(model.availableUpgrade !== undefined
+            ? { availableUpgrade: model.availableUpgrade }
+            : {}),
+        })
+        return ['frame']
+      },
+      launchChild: ({ run }) => {
+        runId = run
+        const startup = store.appendRepoWithArtifacts(
+          repo,
+          [{ kind: 'dispatcher-effective-config', content: configContent(2) }],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: {
+                kind: artifacts[0]!.kind,
+                rev: artifacts[0]!.revision,
+              },
+              roleWarnings: [],
+            },
+          }),
+        )
+        return {
+          completed: startup.then(() => childDone.promise),
+          async stop() {},
+        }
+      },
+    })
 
-  await store.appendRepo(repo, {
-    actor: DISPATCHER,
-    type: 'dispatcher.upgrade-available',
-    payload: { run: runId, version: '0.5.0' },
-  })
-  await waitFor(
-    () => frames.some((frame) => frame.availableUpgrade === '0.5.0'),
-    'durable upgrade notice',
-  )
+    const running = frontend.run()
+    await waitFor(() => frames.some((frame) => frame.capacity === 2), 'startup effective config')
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.config-rejected',
+      payload: { run: runId, error: 'invalid capacity on disk' },
+    })
+    await waitFor(
+      () => frames.some((frame) => frame.warnings.some((line) => line.includes('rejected'))),
+      'rejected reload notice',
+    )
+    expect(frames.at(-1)?.capacity).toBe(2)
 
-  childDone.resolve({ outcome: 'normal', exitCode: 0 })
-  await running
-}, 30_000)
+    await store.appendRepoWithArtifacts(
+      repo,
+      [
+        { kind: 'dispatcher-config', content: 'capacity = 3' },
+        { kind: 'dispatcher-effective-config', content: configContent(3) },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.config-reloaded',
+        payload: {
+          artifact: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+          restartRequired: [],
+          effectiveChanged: true,
+          run: runId,
+          effectiveConfig: { kind: artifacts[1]!.kind, rev: artifacts[1]!.revision },
+          roleWarnings: [],
+        },
+      }),
+    )
+    await waitFor(() => frames.some((frame) => frame.capacity === 3), 'accepted effective config')
+
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.upgrade-available',
+      payload: { run: runId, version: '0.5.0' },
+    })
+    await waitFor(
+      () => frames.some((frame) => frame.availableUpgrade === '0.5.0'),
+      'durable upgrade notice',
+    )
+
+    childDone.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+  },
+  30_000,
+)
 
 test('frontend elapsed repaint cadence advances while the child remains gated', async () => {
   const repo = '/timer-repo'

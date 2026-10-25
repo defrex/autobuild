@@ -127,7 +127,7 @@ export const BUILD_ATTENTION_EVENTS = [
  * store read. Supplying any glob replaces the attention set entirely.
  *
  * The compiler itself lives in `events/globs.ts`, shared with the
- * `[orchestrator].wake` configuration validation (AUT-342).
+ * explicit session wake validation.
  */
 import { compileEventGlobs } from '../events/globs'
 export { compileEventGlobs } from '../events/globs'

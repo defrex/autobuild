@@ -3,7 +3,7 @@
 The hosted service exposes the agent tool registry over [Streamable HTTP](https://modelcontextprotocol.io) at
 `/mcp`, on the same origin as the operator dashboard. External agents — Claude
 web, Claude Desktop, Claude Code, Codex, or any harness with an MCP client —
-get the same operator surface the embedded orchestrator has, at parity by
+get the same operator surface across supported external bindings, at parity by
 construction: tool names, descriptions, JSON schemas, and annotations are read
 from the registry's closed table, and every execution goes through the
 operator API's token-verified protocol.
