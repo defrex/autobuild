@@ -1,0 +1,5137 @@
+{
+  "format": 1,
+  "scope": "request-schema oracle; HTTP, persistence, grants and historical response parity require integration evidence",
+  "sources": {
+    "packages/core/src/ports/tickets/remote-protocol.ts": "efe1edab4f77c8452ee4ae0dc3b8789a888a9c0ca7ab402e6fd8b37b412a5f66",
+    "packages/hosted-store-service/src/ticket-server.ts": "25db89cba561d4841400354a1c5864f663341982c7af0bb0a75d5a764baf6c1f",
+    "packages/postgres-store/src/ticket-policy.ts": "0e2d35f3bca092b25f124b188da853cf558370bfde5aadb6112d0bc67388b6d2",
+    "packages/postgres-store/src/ticket-grants.ts": "e4349f1f162e103d55b040bbaa4047f79fdd0740205a038ef97fd975a6e54bfc"
+  },
+  "operations": [
+    "mutate-if-revision",
+    "list-ready",
+    "states",
+    "add-state",
+    "get",
+    "claim",
+    "comment",
+    "transition",
+    "create",
+    "update",
+    "add-blocker",
+    "remove-blocker",
+    "dependency-states"
+  ],
+  "cases": [
+    {
+      "operation": "mutate-if-revision",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          },
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "null-expectedRevision",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": null,
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "expectedRevision"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "missing-expectedRevision",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "expectedRevision"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "wrong-type-expectedRevision",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": 42,
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "expectedRevision"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "empty-expectedRevision",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "title": "Changed"
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "expectedRevision"],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "null-mutation",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": null
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_type",
+          "expected": "object",
+          "path": ["input", "mutation"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "missing-mutation",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1"
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_type",
+          "expected": "object",
+          "path": ["input", "mutation"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "wrong-type-mutation",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": 42
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_type",
+          "expected": "object",
+          "path": ["input", "mutation"],
+          "message": "Invalid input: expected object, received number"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {}
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [],
+          "note": "No matching discriminator",
+          "discriminator": "kind",
+          "options": ["update", "transition", "blockers"],
+          "path": ["input", "mutation", "kind"],
+          "message": "Invalid discriminator value. Expected 'update' | 'transition' | 'blockers'"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"other\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [],
+          "note": "No matching discriminator",
+          "discriminator": "kind",
+          "options": ["update", "transition", "blockers"],
+          "path": ["input", "mutation", "kind"],
+          "message": "Invalid discriminator value. Expected 'update' | 'transition' | 'blockers'"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"update\",\"patch\":{}}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {}
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "mutation", "patch"],
+          "message": "update must name at least one field"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"transition\",\"state\":\"\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "transition",
+            "state": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "mutation", "state"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"blockers\",\"operation\":\"other\",\"ids\":[1]}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "blockers",
+            "operation": "other",
+            "ids": [1]
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["block", "unblock"],
+          "path": ["input", "mutation", "operation"],
+          "message": "Invalid option: expected one of \"block\"|\"unblock\""
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "mutation", "ids", 0],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"update\",\"patch\":{\"target\":null}}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "target": null
+            }
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "target": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "operation": "list-ready",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      }
+    },
+    {
+      "operation": "list-ready",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "missing-context",
+      "request": {
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {},
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "list-ready",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      }
+    },
+    {
+      "operation": "states",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "missing-context",
+      "request": {
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {},
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "states",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": "Review"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": "Review"
+        }
+      }
+    },
+    {
+      "operation": "add-state",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "name": "review",
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": "Review"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "name": "review",
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": "Review",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "name": "review",
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "null-name",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": null,
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "name"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "missing-name",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "name"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "wrong-type-name",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": 42,
+          "about": "Review"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "name"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "empty-name",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "",
+          "about": "Review"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "",
+          "about": "Review"
+        }
+      }
+    },
+    {
+      "operation": "add-state",
+      "name": "null-about",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "about"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "missing-about",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review"
+        }
+      }
+    },
+    {
+      "operation": "add-state",
+      "name": "wrong-type-about",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "about"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "add-state",
+      "name": "empty-about",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": ""
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "name": "review",
+          "about": ""
+        }
+      }
+    },
+    {
+      "operation": "get",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      }
+    },
+    {
+      "operation": "get",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "get",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      }
+    },
+    {
+      "operation": "claim",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "claim",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        }
+      }
+    },
+    {
+      "operation": "comment",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "body": "Comment\n"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "null-body",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "body"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "missing-body",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "wrong-type-body",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "body"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "comment",
+      "name": "empty-body",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": ""
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "body": ""
+        }
+      }
+    },
+    {
+      "operation": "transition",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        }
+      }
+    },
+    {
+      "operation": "transition",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "state": "done"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "null-state",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "state"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "missing-state",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "state"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "wrong-type-state",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "state"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "transition",
+      "name": "empty-state",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "state": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "state"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        }
+      }
+    },
+    {
+      "operation": "create",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "null-draft",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "draft"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "missing-draft",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "draft"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "wrong-type-draft",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "draft"],
+          "message": "Invalid input: expected object, received number"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-empty",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {}
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-unknown",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "future": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "code": "unrecognized_keys",
+          "keys": ["future"],
+          "path": ["input", "draft"],
+          "message": "Unrecognized key: \"future\""
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-kind",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["work", "node"],
+          "path": ["input", "draft", "kind"],
+          "message": "Invalid option: expected one of \"work\"|\"node\""
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-target",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "target": " \ufeff"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "draft", "target"],
+          "message": "Invalid input"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-title",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-labels",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "labels": [1, null, "valid"]
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "labels", 0],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "labels", 1],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-nullable",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "target": null
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-null",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "options"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {}
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {}
+        }
+      }
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"requestedId\":\"\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "requestedId": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "options", "requestedId"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"requestedId\":1}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "requestedId": 1
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "requestedId"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"state\":null}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "state": null
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "state"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"idempotencyKey\":1}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "idempotencyKey": 1
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "idempotencyKey"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"extra\":true}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "extra": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input", "options"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      }
+    },
+    {
+      "operation": "update",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          },
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "patch": {
+            "title": "Changed"
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "null-patch",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "patch"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "missing-patch",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "patch"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "wrong-type-patch",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "patch"],
+          "message": "Invalid input: expected object, received number"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-empty",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {}
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "patch"],
+          "message": "update must name at least one field"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-unknown",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "future": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["future"],
+          "path": ["input", "patch"],
+          "message": "Unrecognized key: \"future\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-kind",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["work", "node"],
+          "path": ["input", "patch", "kind"],
+          "message": "Invalid option: expected one of \"work\"|\"node\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-target",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": " \ufeff"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "patch", "target"],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-title",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": ""
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": ""
+          }
+        }
+      }
+    },
+    {
+      "operation": "update",
+      "name": "nested-labels",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "labels": [1, null, "valid"]
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "patch", "labels", 0],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "patch", "labels", 1],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-nullable",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": null
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": null
+          }
+        }
+      }
+    },
+    {
+      "operation": "add-blocker",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      }
+    },
+    {
+      "operation": "add-blocker",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "null-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "missing-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "wrong-type-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "add-blocker",
+      "name": "empty-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "blockerId"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      }
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2",
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "null-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": null,
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "missing-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "wrong-type-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": 42,
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "id"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "empty-id",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "",
+          "blockerId": "ENG-2"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "id"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "null-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "missing-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1"
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "wrong-type-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "blockerId"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "remove-blocker",
+      "name": "empty-blockerId",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "blockerId": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "blockerId"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "valid",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        }
+      }
+    },
+    {
+      "operation": "dependency-states",
+      "name": "null",
+      "request": null,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "missing-context",
+      "request": {
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["context"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "missing-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "unknown-envelope",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        },
+        "extra": true
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": [],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "unknown-context",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo",
+          "extra": true
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["context"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "unknown-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"],
+          "extra": true
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "empty-team",
+      "request": {
+        "context": {
+          "teamKey": ""
+        },
+        "input": {
+          "ids": ["ENG-2", "ENG-1", "ENG-2"]
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["context", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "null-input",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": null
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "null-ids",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": ["input", "ids"],
+          "message": "Invalid input: expected array, received null"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "missing-ids",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {}
+      },
+      "issues": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": ["input", "ids"],
+          "message": "Invalid input: expected array, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "dependency-states",
+      "name": "wrong-type-ids",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "ids": 42
+        }
+      },
+      "issues": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": ["input", "ids"],
+          "message": "Invalid input: expected array, received number"
+        }
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "output": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      }
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        },
+        "secret": "forbidden"
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["secret"],
+          "path": [],
+          "message": "Unrecognized key: \"secret\""
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 2,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [1],
+          "path": ["version"],
+          "message": "Invalid input: expected 1"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["hosted"],
+          "path": ["tickets", "source"],
+          "message": "Invalid input: expected \"hosted\""
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "teamKey"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "readyState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "readyState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "triageState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "triageState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "claimedState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "claimedState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "",
+          "createState": "triage",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "doneState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "doneState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "",
+          "proposalState": "triage"
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "createState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "createState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    },
+    {
+      "request": {
+        "version": 1,
+        "tickets": {
+          "source": "hosted",
+          "teamKey": "ENG",
+          "readyState": "ready",
+          "triageState": "triage",
+          "claimedState": "doing",
+          "doneState": "done",
+          "createState": "triage",
+          "proposalState": ""
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["tickets", "proposalState"],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "code": "custom",
+          "path": ["tickets", "proposalState"],
+          "message": "state must be nonblank"
+        }
+      ]
+    }
+  ]
+}

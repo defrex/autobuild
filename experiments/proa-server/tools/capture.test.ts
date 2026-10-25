@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureFrames, decodePng } from './capture'
+import { captureFrames, decodePng, expectedConnectCaptureResponse } from './capture'
 import {
   checkRoutes,
   checkCaptureCapabilities,
@@ -28,7 +28,7 @@ test('route inventory rejects new and unsupported route declarations', async () 
     'Route::page("/new",other)',
   ])
     expect(() => checkRoutes(`${source}\n${declaration}`, machine)).toThrow('Unclassified')
-  expect(new Set(frames.map((f) => f.id)).size).toBe(40)
+  expect(new Set(frames.map((f) => f.id)).size).toBe(68)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
       for (const state of ['open', 'closed'])
@@ -45,10 +45,14 @@ test('machine namespaces and fallback services require explicit evidence classif
     'repos',
     'sessions',
     'streams',
+    'tickets',
   ])
   expect(() =>
     checkMachineNamespaces(
-      machine.replace(/(pub const MACHINE_NAMESPACES[^;]*?)"builds"/, '$1"builds", "tickets"'),
+      machine.replace(
+        /(pub const MACHINE_NAMESPACES[^;]*?)"builds"/,
+        '$1"builds", "future-namespace"',
+      ),
     ),
   ).toThrow('Unclassified machine namespace')
   expect(() =>
@@ -61,6 +65,12 @@ test('machine namespaces and fallback services require explicit evidence classif
       machine.replace('pub const MACHINE_NAMESPACES', 'const MACHINE_NAMESPACES'),
     ),
   ).toThrow('Unclassified machine namespace')
+  expect(() =>
+    checkRoutes(
+      source.replace('proa_server::connection::http::is_public_path(request.uri().path())', 'true'),
+      machine,
+    ),
+  ).toThrow('Unclassified fallback')
   expect(() => checkRoutes(`${source}\n.fallback(other)`, machine)).toThrow('Unclassified fallback')
   expect(() => checkRoutes(`${source}\n.fallback_service(other)`, machine)).toThrow(
     'Unclassified fallback',
@@ -183,4 +193,43 @@ test('only stored multilingual text permits corresponding fallback glyphs', () =
   expect(dataFontFallback('Noto Sans CJK JP', '　', true)).toBe(false)
   expect(dataFontFallback('Noto Sans CJK JP', 'English', true)).toBe(false)
   expect(dataFontFallback('serif', '日本語', true)).toBe(false)
+})
+
+test('only exact documented connection error frames accept HTTP errors', () => {
+  const codes = { unknown: '0000000000', error: 'INVALID' }
+  expect(
+    expectedConnectCaptureResponse(
+      404,
+      'http://local/connect?code=0000000000',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(true)
+  expect(
+    expectedConnectCaptureResponse(
+      503,
+      'http://backend/connect?code=INVALID',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(true)
+  for (const url of [
+    'http://other/connect?code=0000000000',
+    'http://local/static/missing.css',
+    'http://local/connect?code=unexpected',
+  ])
+    expect(expectedConnectCaptureResponse(404, url, 'http://local', 'http://backend', codes)).toBe(
+      false,
+    )
+  expect(
+    expectedConnectCaptureResponse(
+      500,
+      'http://local/connect?code=0000000000',
+      'http://local',
+      'http://backend',
+      codes,
+    ),
+  ).toBe(false)
 })

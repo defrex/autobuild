@@ -900,3 +900,46 @@ capture variants use that path. Cookie authentication, SSR and live refresh rema
 on the browser branch. The seeded capture asserts both JSON machine refusal and
 rendered detail HTML, alongside the router regression. The upstream live dashboard
 and its 24-frame matrix coexist with the full native protocol gate.
+
+## Tickets and connect: crossing the CLI/browser boundary
+
+A connection request spans two independent credentials: a CLI-held capability
+and a freshly admitted browser session. Proa's synchronous rendering works well
+when the handler loads the durable request once and passes a value to
+`WebRenderSync`; HTML rendering performs no database I/O. Native forms carry a
+CSRF token, canonical code and explicit decision. The page never serializes the
+capability, credential digest or secret, and the displayed grouped code is
+separate from the submitted canonical code. The existing sign-in return-path
+validator retains `/connect?code=...` through authentication.
+
+The shared database, rather than the component lifetime, joins the steps.
+`tools/connect-persistence-integration.ts` reproduces native-start/TypeScript-
+approve and TypeScript-start/native-approve, process restart, revocation,
+expiry, collision rollback and approval/cancel races. It authenticates prepared
+credentials using the unchanged TypeScript adapter. This evidence is separate
+from browser rendering and does not substitute for the CLI/browser proof.
+
+The HTTP boundaries need three admission paths. Public capability endpoints
+skip release headers and cookies. Status/revoke authenticate the project bearer
+freshly. Browser JSON lookup/decide check canonical Origin and current session
+admission, returning JSON errors; ordinary HTML forms use the existing browser
+origin layer plus CSRF. Sending all these through either the browser gateway or
+BuildStore authorization would impose the wrong contract. The capture seed
+creates real requests and terminal decisions through the shared TypeScript
+connection store; it does not manufacture page view models. Approval remains
+project scoped: the reference's organization picker is deliberately omitted.
+
+The first expanded capture caught a clock-fixture defect: looking up a pending
+request with a future clock and then resetting the clock does not durably expire
+it. The browser correctly showed pending again. The expired capture now starts
+the real request eleven minutes in the past, so its stored expiry is already
+past when the normal server reads it. Backend-failure capture uses a separate
+normal server with storage unconfigured, rather than a fabricated error model.
+
+Review exposed a request-lifetime mismatch in the machine ticket/connect path:
+constructing a deferred writer in every handler reloaded TLS roots and discarded
+its connection after each poll. The machine database now owns one shared writer,
+so its existing reconnect/preflight boundary survives across requests. This does
+not cache credentials, policy or grants: those still read current database state.
+The writer lifetime regression test checks shared ownership across successive
+requests; the normal HTTP and CLI proofs exercise the retained connection.
