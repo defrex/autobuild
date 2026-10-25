@@ -81,6 +81,19 @@ export function parseConfig(tomlText: string, source = 'autobuild.toml'): Config
     throw error
   }
 
+  if (table && typeof table === 'object' && 'orchestrator' in table) {
+    const orchestrator = table.orchestrator
+    if (orchestrator && typeof orchestrator === 'object') {
+      const removed = ['model', 'invocationBudgetSeconds', 'approvals', 'wake'].filter((key) =>
+        Object.hasOwn(orchestrator, key),
+      )
+      if (removed.length > 0) {
+        throw new ConfigError(
+          `${source}: [orchestrator].${removed.join(', [orchestrator].')} removed: the embedded runner was removed; operators run externally. Keep only enabled and sandbox settings.`,
+        )
+      }
+    }
+  }
   const result = configSchema.safeParse(table)
   if (!result.success) {
     // Expanded for the operator, raw for the payload: the expanded copies carry

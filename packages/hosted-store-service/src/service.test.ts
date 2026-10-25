@@ -1,3 +1,4 @@
+import { OperatorApiClient } from './operator-api'
 import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
 import { ticketProject } from './testing/ticket-project'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
@@ -5,8 +6,6 @@ import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { parseConfig } from '@defrex/autobuild/testing'
-import { OperatorApiClient } from './operator-api'
-import { reduceSession } from './session-reducer'
 import {
   AUTOBUILD_VERSION,
   supportedClientRange,
@@ -31,78 +30,6 @@ const env = {
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
 const repo = 'acme/widgets'
-
-const ORCHESTRATOR_CONFIG = parseConfig(`
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = []
-[finalize]
-steps = []
-[orchestrator]
-enabled = true
-model = "test/mock"
-`)
-
-/** Publish an enabled orchestrator effective-config artifact exactly as the
- * dispatcher does — copied from operator-server.test.ts so the artifact shape
- * matches what `orchestratorConfig(store, repo)` reads. */
-async function publishOrchestratorConfig(store: MemoryBuildStore): Promise<void> {
-  await store.ensureRepo(repo)
-  const { verify, finalize, ...root } = ORCHESTRATOR_CONFIG
-  await store.putRepoArtifact(repo, {
-    kind: 'dispatcher-effective-config',
-    content: JSON.stringify({
-      ...root,
-      verify: { steps: verify.steps, ...verify.stepConfigs },
-      finalize: { steps: finalize.steps, ...finalize.stepConfigs },
-    }),
-  })
-}
-
-/** The message route's raw response through the service seam — the typed
- * client collapses the body, and these tests assert its shape. */
-function postMessage(
-  service: ReturnType<typeof createHostedStoreService>,
-  sid: string,
-  text: string,
-): Promise<Response> {
-  return service.fetch(
-    new Request(
-      `http://hosted.test/operator/v1/repos/${encodeURIComponent(repo)}/sessions/${encodeURIComponent(sid)}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
-            version: 1,
-            ownerAdmin: { user: 'Ada' },
-            exp: now.getTime() + 60_000,
-          })}`,
-          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ text }),
-      },
-    ),
-  )
-}
-
-function operatorClientFor(service: ReturnType<typeof createHostedStoreService>) {
-  return new OperatorApiClient({
-    url: 'http://hosted.test',
-    token: mintToken(env.AB_STORE_SECRET, {
-      version: 1,
-      ownerAdmin: { user: 'Ada' },
-      exp: now.getTime() + 60_000,
-    }),
-    fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
-      service.fetch(
-        input instanceof Request ? new Request(input, init) : new Request(String(input), init),
-      )) as typeof fetch,
-  })
-}
 
 const token = mintToken(env.AB_STORE_SECRET, {
   version: 1,
@@ -605,127 +532,6 @@ describe('hosted store service', () => {
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ kind: 'validation' })
   })
-
-  test('forwards scheduleBackground from the service options to the operator server (AUT-342 hop)', async () => {
-    const backing = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(backing)
-    const scheduled: (() => Promise<void>)[] = []
-    const service = createHostedStoreService({
-      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
-      issueDispatcherCredential: async () => 'abp_1_fixture',
-      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
-      env,
-      clock,
-      openStore: async () => backing,
-      scheduleBackground: (fn) => {
-        scheduled.push(fn)
-        // The turn loop starts eagerly inside `startTurn` (the outcome
-        // promise is already running when `scheduleBackground` is called),
-        // and this test never awaits the handed function — attach a catch so
-        // whatever the loop's promise does stays contained.
-        void fn().catch(() => {})
-      },
-    })
-    const ada = operatorClientFor(service)
-    const created = await ada.createSession(repo, { title: 'wiring' })
-
-    // The message route awaits only `turn.started` and returns the turn and
-    // stream; the loop continues in the background handed to us above.
-    const posted = await postMessage(service, created.id, 'hello')
-    expect(posted.status).toBe(200)
-    expect(await posted.json()).toEqual({
-      ok: true,
-      turn: expect.stringMatching(/^ot_/),
-      stream: expect.stringMatching(/^st_/),
-    })
-
-    // The invocation itself is the proof: the wiring handed to
-    // `createHostedStoreService` reached the operator server constructed in
-    // `openStoreHandler` — there is no other path for it to travel.
-    expect(scheduled.length).toBeGreaterThanOrEqual(1)
-  })
-
-  test('without scheduleBackground the detached-promise default still runs the turn to a durable failure', async () => {
-    if (process.env.TEST_SERVICE_BACKGROUND_CHILD !== '1') {
-      // Gateway resolution reads process.env rather than the service's env.
-      // Isolate this test without credentials or dotenv loading so failure is
-      // local and deterministic, without mutating the parent suite's globals.
-      const child = Bun.spawn(
-        [
-          process.execPath,
-          '--no-env-file',
-          'test',
-          import.meta.path,
-          '-t',
-          'without scheduleBackground the detached-promise default',
-        ],
-        {
-          env: { PATH: process.env.PATH, TEST_SERVICE_BACKGROUND_CHILD: '1' },
-          stdout: 'pipe',
-          stderr: 'pipe',
-        },
-      )
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ])
-      expect({ exitCode, output: stdout + stderr }).toMatchObject({
-        exitCode: 0,
-        output: expect.stringContaining('credential-free background turn verified'),
-      })
-      return
-    }
-    const backing = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(backing)
-    // Neither scheduleBackground nor a reporter: pin only what the default
-    // guarantees through the public surface.
-    const service = createHostedStoreService({
-      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
-      issueDispatcherCredential: async () => 'abp_1_fixture',
-      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
-      env,
-      clock,
-      openStore: async () => backing,
-    })
-    const ada = operatorClientFor(service)
-    const created = await ada.createSession(repo, { title: 'default' })
-
-    // The HTTP response is unaffected by the option being absent.
-    const posted = await postMessage(service, created.id, 'hello')
-    expect(posted.status).toBe(200)
-    const body = (await posted.json()) as { ok: boolean; turn?: string; stream?: string }
-    expect(body).toEqual({
-      ok: true,
-      turn: expect.stringMatching(/^ot_/),
-      stream: expect.stringMatching(/^st_/),
-    })
-
-    // The detached-promise default ran the loop to its durable outcome: the
-    // turn reaches a terminal failed state without anyone awaiting it.
-    // The child has no gateway credentials, so no remote request is needed.
-    const deadline = Date.now() + 5_000
-    for (;;) {
-      const state = reduceSession(await backing.getSessionEvents(created.id))
-      const turn = state.turns.find((candidate) => candidate.turn === body.turn)
-      if (turn !== undefined && (turn.state === 'completed' || turn.state === 'failed')) {
-        expect(turn.state).toBe('failed')
-        expect(
-          (await backing.getSessionEvents(created.id)).find(
-            (event) => event.type === 'turn.failed',
-          ),
-        ).toMatchObject({ payload: { kind: 'credentials' } })
-        break
-      }
-      if (Date.now() > deadline) {
-        throw new Error(
-          `turn ${body.turn} never reached a terminal state; last: ${JSON.stringify(state)}`,
-        )
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    console.log('credential-free background turn verified')
-  })
 })
 
 describe('hostedPublicOrigin (AUT-584)', () => {
@@ -758,7 +564,6 @@ steps = []
 steps = []
 [orchestrator]
 enabled = true
-model = "test/mock"
 `)
 
   async function publishSandboxConfig(store: MemoryBuildStore): Promise<void> {
@@ -768,6 +573,13 @@ model = "test/mock"
       kind: 'dispatcher-effective-config',
       content: JSON.stringify({
         ...root,
+        orchestrator: {
+          ...root.orchestrator,
+          model: 'test/historical',
+          invocationBudgetSeconds: 240,
+          approvals: [],
+          wake: ['*'],
+        },
         verify: { steps: verify.steps, ...verify.stepConfigs },
         finalize: { steps: finalize.steps, ...finalize.stepConfigs },
       }),
@@ -795,6 +607,7 @@ model = "test/mock"
     service: ReturnType<typeof createHostedStoreService>,
     sid: string,
     extraHeaders: Record<string, string> = {},
+    action = 'messages',
   ): Promise<Response> {
     const token = mintToken(env.AB_STORE_SECRET, {
       version: 1,
@@ -802,7 +615,7 @@ model = "test/mock"
       exp: now.getTime() + 60_000,
     })
     return service.fetch(
-      new Request(`http://hosted.test/operator/v1/repos/acme%2Frepo/sessions/${sid}/messages`, {
+      new Request(`http://hosted.test/operator/v1/repos/acme%2Frepo/sessions/${sid}/${action}`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
@@ -816,7 +629,7 @@ model = "test/mock"
     )
   }
 
-  test('a message turn on a vercel-sandbox repository composes the backend from the request credential and starts the turn', async () => {
+  test('a message on an enabled sandbox repository remains inert with request credentials', async () => {
     const backing = new MemoryBuildStore({ clock })
     await publishSandboxConfig(backing)
     const { service, reports } = sandboxService(backing, {
@@ -841,19 +654,26 @@ model = "test/mock"
       )
     ).json()) as { id: string }
 
-    // The turn runner's sandbox backend composes from the request's OIDC
-    // header (construction-only: no SDK call happens at this depth), so the
-    // turn starts cleanly and no containment diagnostic is reported.
     const posted = await postMessage(service, created.id, {
       'x-vercel-oidc-token': 'request-oidc-token',
     })
     expect(posted.status).toBe(200)
     const events = await backing.getSessionEvents(created.id)
-    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
+    expect(events.some((event) => event.type === 'turn.started')).toBe(false)
     expect(reports).toEqual([])
+    const archived = await postMessage(
+      service,
+      created.id,
+      { 'x-vercel-oidc-token': 'request-oidc-token' },
+      'archive',
+    )
+    expect(archived.status).toBe(200)
+    expect(await archived.json()).toEqual({ ok: true })
+    expect(reports).toEqual([])
+    expect((await backing.getSessionEvents(created.id)).at(-1)?.type).toBe('session.archived')
   })
 
-  test('without any Vercel credential the sandbox tools degrade, the diagnostic is reported, and the orchestrator still starts turns', async () => {
+  test('a message without Vercel credentials records only durable facts', async () => {
     const backing = new MemoryBuildStore({ clock })
     await publishSandboxConfig(backing)
     const { service, reports } = sandboxService(backing, {
@@ -880,16 +700,12 @@ model = "test/mock"
 
     const posted = await postMessage(service, created.id)
     expect(posted.status).toBe(200)
-    // The orchestrator is unaffected: the turn starts (its registry merely
-    // carries no sandbox backend), and the composition failure surfaces as
-    // the contained diagnostic — the vercelSdkCredentials message.
-    const events = await backing.getSessionEvents(created.id)
-    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
-    expect(reports).toHaveLength(1)
-    expect(String(reports[0]![0])).toContain(
-      'vercel-sandbox requires VERCEL_OIDC_TOKEN or VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
-    )
-    expect(reports[0]![1]).toMatchObject({ backend: 'operator' })
+    expect(await posted.json()).toEqual({ ok: true })
+    expect((await backing.getSessionEvents(created.id)).map((event) => event.type)).toEqual([
+      'session.created',
+      'message.posted',
+    ])
+    expect(reports).toEqual([])
   })
 
   test('an absent BETTER_AUTH_URL leaves the deployment sandbox-free without degrading anything else', async () => {
@@ -919,7 +735,7 @@ model = "test/mock"
     })
     expect(posted.status).toBe(200)
     const events = await backing.getSessionEvents(created.id)
-    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
+    expect(events.some((event) => event.type === 'turn.started')).toBe(false)
     // No origin → no composition attempt → no diagnostic.
     expect(reports).toEqual([])
   })

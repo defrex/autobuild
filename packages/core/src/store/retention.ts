@@ -39,9 +39,8 @@
 export const OPERATOR_NOTES_REPO_KIND = 'operator-notes'
 
 /** The repository artifact carrying the schema-validated composed Config one
- * dispatch run used. The embedded orchestrator's hosted wiring resolves its
- * per-repository configuration from the latest revision of this kind
- * (AUT-342). Defined here — the store must not import from the CLI — and
+ * dispatch run used. Hosted external operator tools and archive cleanup resolve
+ * their sandbox gate from the latest revision of this kind. Defined here — the store must not import from the CLI — and
  * re-exported by `cli/dispatch.ts`, which deposits it. */
 export const DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT = 'dispatcher-effective-config'
 

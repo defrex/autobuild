@@ -1,3 +1,4 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -151,7 +152,10 @@ test('build child uses durable location and a close failure cannot falsify a cle
     })
     await store.putArtifact(slug, {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-      content: effectiveBuildConfigContent(config),
+      content: JSON.stringify({
+        ...JSON.parse(effectiveBuildConfigContent(config)),
+        orchestrator: historicalEffectiveConfig(true).orchestrator,
+      }),
     })
     await store.close()
 
@@ -293,7 +297,10 @@ skill = "must-never-launch"
 `)
     await store.putArtifact(slug, {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-      content: effectiveBuildConfigContent(config),
+      content: JSON.stringify({
+        ...JSON.parse(effectiveBuildConfigContent(config)),
+        orchestrator: historicalEffectiveConfig(true).orchestrator,
+      }),
     })
     // Park after verification so this test exercises the real child's config
     // loading/getConfig and routing without launching a finalize agent.
@@ -428,7 +435,10 @@ test('a real local child suspends on shutdown and a new child resumes the native
     )
     await store.putArtifact(slug, {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-      content: effectiveBuildConfigContent(config),
+      content: JSON.stringify({
+        ...JSON.parse(effectiveBuildConfigContent(config)),
+        orchestrator: historicalEffectiveConfig(true).orchestrator,
+      }),
     })
     const start = (instance: string) => {
       const child = Bun.spawn(

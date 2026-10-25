@@ -84,9 +84,7 @@ const tickCountersSchema = z.strictObject({
   sandboxIdleStops: z.number().int().nonnegative().optional(),
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: z.number().int().nonnegative().optional(),
-  /** Contained sandbox-backend construction failures this tick; re-reported
-   * every tick until the config is repaired. Optional so historical tick
-   * facts replay. */
+  /** Historical embedded-runner counter, retained for strict event replay. */
   orchestratorSandboxFailures: z.number().int().nonnegative().optional(),
   harvestStarted: z.number().int().nonnegative(),
   harvestResumed: z.number().int().nonnegative(),
@@ -743,7 +741,7 @@ export const REPOSITORY_EVENT_TYPES = Object.keys(
 ) as RepositoryEventType[]
 
 /** Repository attention followed by `ab watch` with no slugs or explicit
- * `--repository`, and scanned by the orchestrator wake pass. */
+ * `--repository`. Historical session wakes also used this catalog. */
 export const REPOSITORY_ATTENTION_EVENTS = [
   'harvest.escalated',
   'harvest.failed',

@@ -18,9 +18,6 @@ import {
 
 import { OperatorApiClient, OperatorApiError } from './operator-client'
 import { createOperatorServer, REGISTRY_ERROR_STATUS } from './operator-server'
-import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
-import { buildRegistry, createOrchestratorTurnRunner, humanActor } from '@defrex/autobuild/operator'
-import { sequentialIds } from '@defrex/autobuild/testing'
 import { reduceSession } from './session-reducer'
 
 const now = new Date('2026-09-02T00:00:00.000Z')
@@ -411,6 +408,84 @@ describe('operator session routes', () => {
     return stream.id
   }
 
+  for (const legacy of [false, true]) {
+    test(`enabled sandbox sessions record only facts, legacy=${legacy}`, async () => {
+      const store = new MemoryBuildStore({ clock })
+      await store.ensureRepo(repo)
+      await store.putRepoArtifact(repo, {
+        kind: 'dispatcher-effective-config',
+        content: JSON.stringify({
+          tickets: { source: 'file', readyState: 'ready' },
+          orchestrator: {
+            enabled: true,
+            ...(legacy
+              ? { model: 'test/old', invocationBudgetSeconds: 240, approvals: [], wake: ['*'] }
+              : {}),
+          },
+        }),
+      })
+      const server = createOperatorServer({ projects: testProjects([repo]), store, secret, clock })
+      const ada = operatorClient(server, 'Ada')
+      const created = await ada.createSession(repo, { title: 'inert' })
+      expect((await store.getSessionEvents(created.id)).map((e) => e.type)).toEqual([
+        'session.created',
+      ])
+      const post = async (suffix: string, body: object, method = 'POST') =>
+        server.fetch(
+          new Request(
+            `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/sessions/${created.id}/${suffix}`,
+            {
+              method,
+              headers: {
+                authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo }, exp: now.getTime() + 60_000 })}`,
+                [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+                [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(body),
+            },
+          ),
+        )
+      expect(await (await post('messages', { text: 'hello' })).json()).toEqual({ ok: true })
+      expect(await (await post('wake', { globs: ['escalation.*'] }, 'PUT')).json()).toEqual({
+        ok: true,
+      })
+      const stream = await startTurn(store, created.id)
+      await store.appendSessionEvent(created.id, {
+        actor: AGENT,
+        type: 'approval.requested',
+        payload: { turn: 't1', toolCallId: 'c1', toolName: 'notes.write', input: {} },
+      })
+      await store.appendSessionEvent(created.id, {
+        actor: AGENT,
+        type: 'turn.suspended',
+        payload: { turn: 't1', cause: 'approval' },
+      })
+      const before = await store.readStream(stream)
+      expect(
+        await (
+          await post('approvals', { turn: 't1', toolCallId: 'c1', decision: 'approve' })
+        ).json(),
+      ).toEqual({ ok: true })
+      const state = reduceSession(await store.getSessionEvents(created.id))
+      expect(state.pendingApproval).toBeUndefined()
+      expect(state.status).toBe('suspended')
+      expect(await store.readStream(stream)).toEqual(before)
+      expect((await store.getSessionEvents(created.id)).map((e) => e.type)).toEqual([
+        'session.created',
+        'message.posted',
+        'session.wake-set',
+        'turn.started',
+        'approval.requested',
+        'turn.suspended',
+        'approval.answered',
+      ])
+      await ada.archiveSession(repo, created.id)
+      expect((await store.getSessionEvents(created.id)).at(-1)?.type).toBe('session.archived')
+      expect(await store.readStream(stream)).toEqual(before)
+    })
+  }
+
   test('requires an operator token; raw store and deployment tokens are 403', async () => {
     const store = await runningStore()
     const server = createOperatorServer({
@@ -783,334 +858,7 @@ describe('the generic tools route', () => {
   })
 })
 
-describe('operator session routes — embedded orchestrator (AUT-342)', () => {
-  const AGENT = agentActor('orchestrator', 'os_turn')
-
-  function operatorClient(
-    server: { fetch(req: Request): Promise<Response> },
-    user: string,
-  ): OperatorApiClient {
-    return new OperatorApiClient({
-      url: 'http://operator.test',
-      token: mintToken(secret, {
-        version: 1,
-        internalOperator: { user, repo },
-        exp: now.getTime() + 60_000,
-      }),
-      fetchFn: fetchFor(server),
-    })
-  }
-
-  /** The message route's raw response — the tests assert its body shape
-   * ({ok, turn, stream}), which the typed client collapses. */
-  function postMessage(
-    server: { fetch(req: Request): Promise<Response> },
-    repoArg: string,
-    sid: string,
-    text: string,
-  ): Promise<Response> {
-    return server.fetch(
-      new Request(
-        `http://operator.test/operator/v1/repos/${encodeURIComponent(repoArg)}/sessions/${encodeURIComponent(sid)}/messages`,
-        {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
-            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({ text }),
-        },
-      ),
-    )
-  }
-
-  const usage = (inputTokens: number, outputTokens: number) => ({
-    inputTokens: {
-      total: inputTokens,
-      noCache: undefined,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-    },
-    outputTokens: {
-      total: outputTokens,
-      text: undefined,
-      reasoning: undefined,
-      toolCall: undefined,
-    },
-    totalTokens: inputTokens + outputTokens,
-  })
-
-  function textModel(): MockLanguageModelV3 {
-    let call = 0
-    return new MockLanguageModelV3({
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
-            { type: 'text-start', id: 't' },
-            { type: 'text-delta', id: 't', delta: `turn ${++call}` },
-            { type: 'text-end', id: 't' },
-            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: usage(10, 5) },
-          ] as never,
-          initialDelayInMs: 0,
-        }),
-      }),
-    })
-  }
-
-  const ORCHESTRATOR_CONFIG = parseConfig(`
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = []
-[finalize]
-steps = []
-[orchestrator]
-enabled = true
-model = "test/mock"
-`)
-
-  async function publishOrchestratorConfig(
-    store: MemoryBuildStore,
-    config: ReturnType<typeof parseConfig> = ORCHESTRATOR_CONFIG,
-  ): Promise<void> {
-    await store.ensureRepo(repo)
-    const { verify, finalize, ...root } = config
-    await store.putRepoArtifact(repo, {
-      kind: 'dispatcher-effective-config',
-      content: JSON.stringify({
-        ...root,
-        verify: { steps: verify.steps, ...verify.stepConfigs },
-        finalize: { steps: finalize.steps, ...finalize.stepConfigs },
-      }),
-    })
-  }
-
-  /** A server wired for turns: the runner factory binds the in-process
-   * registry over the same store, exactly as the production wiring does. */
-  function orchestratorServer(store: MemoryBuildStore, model = textModel()) {
-    const backgrounds: Promise<void>[] = []
-    const server = createOperatorServer({
-      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
-      store,
-      secret,
-      clock,
-      orchestrator: {
-        createRunner: (config, runnerRepo) =>
-          createOrchestratorTurnRunner({
-            store,
-            registry: buildRegistry({ store, clock, allowedRepo: runnerRepo }),
-            repo: runnerRepo,
-            config,
-            clock,
-            ids: sequentialIds(),
-            model,
-            maxRetries: 0,
-          }),
-        scheduleBackground: (fn) => {
-          backgrounds.push(fn())
-        },
-      },
-    })
-    return { server, backgrounds }
-  }
-
-  test('a message post to an enabled repository starts a turn in the same invocation', async () => {
-    const store = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(store)
-    const { server, backgrounds } = orchestratorServer(store)
-    const ada = operatorClient(server, 'Ada')
-
-    // A new session inherits the default wake set (the attention set).
-    const created = await ada.createSession(repo, { title: 'orchestrator' })
-    const events = await store.getSessionEvents(created.id)
-    expect(events.map((event) => event.type)).toEqual(['session.created', 'session.wake-set'])
-    const wakeSet = events.find((event) => event.type === 'session.wake-set')
-    expect(wakeSet?.payload.globs).toContain('escalation.raised')
-    expect(wakeSet?.payload.globs).toContain('integration.verification-failed')
-    expect(wakeSet?.actor).toEqual({ kind: 'human', user: 'Ada' })
-
-    // The message route awaits only turn.started and returns the turn and
-    // stream; the loop continues in the background.
-    const posted = await postMessage(server, repo, created.id, 'hello')
-    const body = (await posted.json()) as { ok: boolean; turn?: string; stream?: string }
-    expect(body.ok).toBe(true)
-    expect(body.turn).toMatch(/^ot_/)
-    expect(body.stream).toMatch(/^st_/)
-
-    await Promise.all(backgrounds)
-    const state = reduceSession(await store.getSessionEvents(created.id))
-    expect(state.status).toBe('idle')
-    expect(state.turns[0]).toMatchObject({
-      turn: body.turn,
-      stream: body.stream,
-      state: 'completed',
-      trigger: { kind: 'message', messageSeq: 3 },
-      usage: { inputTokens: 10, outputTokens: 5, steps: 1 },
-    })
-    // The turn's stream carried the model's output as protocol parts.
-    const read = await store.readStream(body.stream!)
-    const types = read.chunks.flatMap((chunk) => chunk.parts.map((part) => part.type))
-    expect(types).toContain('text-delta')
-    expect(read.status).toBe('closed')
-  })
-
-  test('a disabled or absent-config repository behaves exactly as before', async () => {
-    const store = new MemoryBuildStore({ clock })
-    // No artifact at all.
-    const { server, backgrounds } = orchestratorServer(store)
-    const ada = operatorClient(server, 'Ada')
-    const created = await ada.createSession(repo, { title: 'plain' })
-    expect((await store.getSessionEvents(created.id)).map((e) => e.type)).toEqual([
-      'session.created',
-    ])
-    const posted = await postMessage(server, repo, created.id, 'hello')
-    expect(await posted.json()).toEqual({ ok: true })
-    await Promise.all(backgrounds)
-    expect(reduceSession(await store.getSessionEvents(created.id)).turns).toHaveLength(0)
-
-    // An artifact whose orchestrator is disabled.
-    const store2 = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(
-      store2,
-      parseConfig(`
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = []
-[finalize]
-steps = []
-[orchestrator]
-enabled = false
-`),
-    )
-    const server2 = orchestratorServer(store2)
-    const ada2 = operatorClient(server2.server, 'Ada')
-    const created2 = await ada2.createSession(repo, {})
-    expect((await store2.getSessionEvents(created2.id)).map((e) => e.type)).toEqual([
-      'session.created',
-    ])
-    const posted2 = await postMessage(server2.server, repo, created2.id, 'hello')
-    expect(await posted2.json()).toEqual({ ok: true })
-  })
-
-  test('a broken effective-config artifact is a 500, never a silent disable', async () => {
-    const store = new MemoryBuildStore({ clock })
-    await store.ensureRepo(repo)
-    await store.putRepoArtifact(repo, {
-      kind: 'dispatcher-effective-config',
-      content: 'not json at all',
-    })
-    const { server } = orchestratorServer(store)
-    const ada = operatorClient(server, 'Ada')
-    // The create route resolves the config too (wake inheritance), so the
-    // broken artifact fails it with a 500 as well — never a silent disable.
-    await expect(ada.createSession(repo, {})).rejects.toMatchObject({ status: 500 })
-  })
-
-  test('an approval answer resumes the suspended turn in the same invocation', async () => {
-    const store = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(store)
-    const { server, backgrounds } = orchestratorServer(store)
-    const ada = operatorClient(server, 'Ada')
-
-    // Seed a turn suspended for approval with a persisted request part.
-    const created = await ada.createSession(repo, {})
-    const stream = await store.createStream({ kind: 'session', session: created.id }, 'turn:ot_1')
-    await store.appendStreamParts(stream.id, [
-      { type: 'start', messageId: 'm1' },
-      { type: 'tool-approval-request', approvalId: 'a1', toolCallId: 'c1' },
-    ])
-    await store.appendSessionEvent(created.id, {
-      actor: humanActor('Ada'),
-      type: 'message.posted',
-      payload: { text: 'do it' },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: AGENT,
-      type: 'turn.started',
-      payload: {
-        turn: 'ot_1',
-        stream: stream.id,
-        trigger: { kind: 'message', messageSeq: 2 },
-      },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: AGENT,
-      type: 'approval.requested',
-      payload: { turn: 'ot_1', toolCallId: 'c1', toolName: 'notes.write', input: {} },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: AGENT,
-      type: 'turn.suspended',
-      payload: { turn: 'ot_1', cause: 'approval' },
-    })
-
-    await ada.answerSessionApproval(repo, created.id, {
-      turn: 'ot_1',
-      toolCallId: 'c1',
-      decision: 'approve',
-    })
-    await Promise.all(backgrounds)
-
-    const state = reduceSession(await store.getSessionEvents(created.id))
-    expect(state.status).toBe('idle')
-    expect(state.turns[0]).toMatchObject({ state: 'completed' })
-    // The resume recovered the wire approvalId and appended the response.
-    const parts = (await store.readStream(stream.id)).chunks.flatMap((c) => c.parts)
-    expect(parts.some((part) => part.type === 'tool-approval-response')).toBe(true)
-  })
-})
-
 describe('request credential threading and sandboxFor (AUT-584)', () => {
-  const usage = (inputTokens: number, outputTokens: number) => ({
-    inputTokens: {
-      total: inputTokens,
-      noCache: undefined,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-    },
-    outputTokens: {
-      total: outputTokens,
-      text: undefined,
-      reasoning: undefined,
-      toolCall: undefined,
-    },
-    totalTokens: inputTokens + outputTokens,
-  })
-
-  const AGENT = agentActor('orchestrator', 'os_turn')
-  const ORCHESTRATOR_CONFIG = parseConfig(`
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = []
-[finalize]
-steps = []
-[orchestrator]
-enabled = true
-model = "test/mock"
-`)
-
-  async function publishOrchestratorConfig(store: MemoryBuildStore): Promise<void> {
-    await store.ensureRepo(repo)
-    const { verify, finalize, ...root } = ORCHESTRATOR_CONFIG
-    await store.putRepoArtifact(repo, {
-      kind: 'dispatcher-effective-config',
-      content: JSON.stringify({
-        ...root,
-        verify: { steps: verify.steps, ...verify.stepConfigs },
-        finalize: { steps: finalize.steps, ...finalize.stepConfigs },
-      }),
-    })
-  }
-
   function operatorClient(
     server: { fetch(req: Request): Promise<Response> },
     user: string,
@@ -1125,164 +873,6 @@ model = "test/mock"
       fetchFn: fetchFor(server),
     })
   }
-
-  /** Raw session POST with caller-supplied extra headers (the OIDC header the
-   * routes thread into the runner factory). */
-  function sessionPost(
-    server: { fetch(req: Request): Promise<Response> },
-    repoArg: string,
-    sid: string,
-    leaf: 'messages' | 'approvals',
-    payload: unknown,
-    extraHeaders: Record<string, string> = {},
-  ): Promise<Response> {
-    return server.fetch(
-      new Request(
-        `http://operator.test/operator/v1/repos/${encodeURIComponent(repoArg)}/sessions/${encodeURIComponent(sid)}/${leaf}`,
-        {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
-            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-            'content-type': 'application/json',
-            ...extraHeaders,
-          },
-          body: JSON.stringify(payload),
-        },
-      ),
-    )
-  }
-
-  function localTextModel(): MockLanguageModelV3 {
-    let call = 0
-    return new MockLanguageModelV3({
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
-            { type: 'text-start', id: 't' },
-            { type: 'text-delta', id: 't', delta: `turn ${++call}` },
-            { type: 'text-end', id: 't' },
-            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: usage(10, 5) },
-          ] as never,
-          initialDelayInMs: 0,
-        }),
-      }),
-    })
-  }
-
-  /** The production-shaped wiring: a createRunner double that records its
-   * arguments and returns a real runner over the in-process registry. */
-  function recordingOrchestratorServer(store: MemoryBuildStore, model = localTextModel()) {
-    const runnerCalls: Array<{
-      repo: string
-      credentials: { oidcToken?: string } | undefined
-    }> = []
-    const backgrounds: Promise<void>[] = []
-    const server = createOperatorServer({
-      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
-      store,
-      secret,
-      clock,
-      orchestrator: {
-        createRunner: (config, runnerRepo, credentials) => {
-          runnerCalls.push({ repo: runnerRepo, credentials })
-          return createOrchestratorTurnRunner({
-            store,
-            registry: buildRegistry({ store, clock, allowedRepo: runnerRepo }),
-            repo: runnerRepo,
-            config,
-            clock,
-            ids: sequentialIds(),
-            model,
-            maxRetries: 0,
-          })
-        },
-        scheduleBackground: (fn) => {
-          backgrounds.push(fn())
-        },
-      },
-    })
-    return { server, runnerCalls, backgrounds }
-  }
-
-  test('a message post whose request carries the OIDC header threads it into createRunner; no header passes undefined', async () => {
-    const store = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(store)
-    const { server, runnerCalls, backgrounds } = recordingOrchestratorServer(store)
-    const ada = operatorClient(server, 'Ada')
-
-    const created = await ada.createSession(repo, { title: 'one' })
-    await sessionPost(
-      server,
-      repo,
-      created.id,
-      'messages',
-      { text: 'hello' },
-      {
-        'x-vercel-oidc-token': '  req-oidc-token  ',
-      },
-    )
-    await Promise.all(backgrounds)
-    expect(runnerCalls).toHaveLength(1)
-    // The header value is threaded (trimmed — a blank header is absent).
-    expect(runnerCalls[0]!.credentials).toEqual({ oidcToken: 'req-oidc-token' })
-
-    const second = await ada.createSession(repo, { title: 'two' })
-    await sessionPost(server, repo, second.id, 'messages', { text: 'hello again' })
-    await Promise.all(backgrounds)
-    expect(runnerCalls).toHaveLength(2)
-    expect(runnerCalls[1]!.credentials).toBeUndefined()
-  })
-
-  test("an approval answer threads the request's credential into the resuming createRunner", async () => {
-    const store = new MemoryBuildStore({ clock })
-    await publishOrchestratorConfig(store)
-    const { server, runnerCalls, backgrounds } = recordingOrchestratorServer(store)
-
-    // Seed a turn suspended for approval, exactly as the same-invocation
-    // resume test does.
-    const created = await store.createSession({ repo, operator: 'Ada' })
-    const stream = await store.createStream({ kind: 'session', session: created.id }, 'turn:ot_1')
-    await store.appendStreamParts(stream.id, [
-      { type: 'start', messageId: 'm1' },
-      { type: 'tool-approval-request', approvalId: 'a1', toolCallId: 'c1' },
-    ])
-    await store.appendSessionEvent(created.id, {
-      actor: humanActor('Ada'),
-      type: 'message.posted',
-      payload: { text: 'do it' },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: AGENT,
-      type: 'turn.started',
-      payload: { turn: 'ot_1', stream: stream.id, trigger: { kind: 'message', messageSeq: 2 } },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: agentActor('orchestrator', 'ot_1'),
-      type: 'approval.requested',
-      payload: { turn: 'ot_1', toolCallId: 'c1', toolName: 'notes.write', input: {} },
-    })
-    await store.appendSessionEvent(created.id, {
-      actor: agentActor('orchestrator', 'ot_1'),
-      type: 'turn.suspended',
-      payload: { turn: 'ot_1', cause: 'approval' },
-    })
-
-    await sessionPost(
-      server,
-      repo,
-      created.id,
-      'approvals',
-      { turn: 'ot_1', toolCallId: 'c1', decision: 'approve' },
-      { 'x-vercel-oidc-token': 'resume-token' },
-    )
-    await Promise.all(backgrounds)
-    expect(runnerCalls).toHaveLength(1)
-    expect(runnerCalls[0]!.credentials).toEqual({ oidcToken: 'resume-token' })
-  })
 
   test('sandboxFor wins over the static option and a disabled/unresolvable resolution releases nothing', async () => {
     const store = new MemoryBuildStore({ clock })

@@ -114,8 +114,6 @@ import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
  */
 import { createHash } from 'node:crypto'
 import type { Config } from '../config/schema'
-import type { LanguageModel } from 'ai'
-import { runOrchestratorTickStep } from './orchestrator-tick'
 import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
@@ -132,7 +130,6 @@ import {
   harvestCreationsFromStates,
 } from '../kernel/harvest'
 import type { BuildState } from '../kernel/reducer'
-import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
 import type { ArtifactRef, TicketRef } from '../ontology'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type {
@@ -437,11 +434,6 @@ export interface TickReport {
   sandboxIdleStops: number
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: number
-  /** Contained sandbox-backend construction failures this tick (AUT-584):
-   * deterministic and config-shaped, so it re-reports every tick until the
-   * config is repaired. The affected tick runs with sandbox tools filtered
-   * exactly as when no backend exists. */
-  orchestratorSandboxFailures: number
 }
 
 export function emptyTickReport(): TickReport {
@@ -479,7 +471,6 @@ export function emptyTickReport(): TickReport {
     harvestFailed: 0,
     sandboxIdleStops: 0,
     sandboxSettleFailures: 0,
-    orchestratorSandboxFailures: 0,
   }
 }
 
@@ -635,11 +626,6 @@ export interface DispatcherDeps {
    * supplies cancellation and treats every absence/failure/invalid result as a
    * local deterministic fallback, so naming can never prevent build creation. */
   nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
-  /** The orchestrator turn runner's language model, injected for tests. When
-   * absent the configured gateway model is resolved in process (AUT-342);
-   * the step itself only ever constructs in origin mode with the orchestrator
-   * enabled, so a local dispatcher never resolves a model. */
-  orchestratorModel?: LanguageModel
   /** Settle pending publication for `slug` after durable proof that the
    * guest execution ended. Supplied by the DispatchLoop; the settlement stage
    * invokes it only on a recorded completion. */
@@ -1003,61 +989,6 @@ export class Dispatcher {
     // launch. Pending control commands still launch the runner so the kernel
     // can settle them under the repository lease.
     await this.triggerHarvest()
-    // The orchestrator step (AUT-342) — LAST, after every build stage, so it
-    // can only consume slack: resumes, crash reaping, and wake turns run
-    // against min(configured, remaining tick budget) with a 30 s floor, and
-    // a busy repository simply defers its sessions to later ticks (durable
-    // state makes that safe). Two independent gates keep it inert where it
-    // does not belong: the step is constructed ONLY in origin mode (a local
-    // `ab dispatch` never constructs it — enabled = true in a local
-    // repository's autobuild.toml lists no sessions, builds no registry, and
-    // calls no model), and in origin mode only when the effective config
-    // enables the orchestrator.
-    if (this.deps.repoOrigin !== undefined && this.deps.config.orchestrator.enabled) {
-      if (!this.outOfBudget(opts)) {
-        const remainingSeconds =
-          opts.deadlineAt === undefined
-            ? undefined
-            : Math.max(0, Math.floor((opts.deadlineAt - this.deps.clock().getTime()) / 1000))
-        // The origin-mode tick's sandbox backend (AUT-584), built from the
-        // dispatcher's own deps — the same wired provider and forge the
-        // settlement stage already consumes. Construction is cheap and
-        // network-free (one idempotent ensureRepo), and building per tick
-        // picks up hot config reloads the way the rest of the tick does.
-        // A construction failure is contained: the step runs with sandbox
-        // tools filtered exactly as today, and the standing counter names
-        // the condition (the same discipline as sandboxSettleFailures).
-        let sandbox: OperatorSandboxService | undefined
-        try {
-          sandbox = await createOperatorSandboxService({
-            store: this.store,
-            repo: this.deps.repo,
-            provider: this.deps.workspaces,
-            sandbox: this.deps.config.orchestrator.sandbox,
-            baseBranch: this.deps.config.baseBranch,
-            forge: this.deps.forge,
-            clock: this.deps.clock,
-          })
-        } catch {
-          report.orchestratorSandboxFailures += 1
-          sandbox = undefined
-        }
-        await runOrchestratorTickStep({
-          store: this.store,
-          view: this.store,
-          repo: this.deps.repo,
-          config: this.deps.config,
-          clock: this.deps.clock,
-          ids: this.deps.ids,
-          tickets: this.deps.tickets,
-          ...(sandbox !== undefined ? { sandbox } : {}),
-          ...(this.deps.orchestratorModel !== undefined
-            ? { model: this.deps.orchestratorModel }
-            : {}),
-          ...(remainingSeconds !== undefined ? { remainingBudgetSeconds: remainingSeconds } : {}),
-        })
-      }
-    }
     return report
   }
 
