@@ -4,6 +4,7 @@ use proa_macros::html_sync;
 pub struct Shell<C> {
     pub project: Option<String>,
     pub projects: Vec<String>,
+    pub builds_href: String,
     pub content: C,
     pub viewer: Option<crate::auth::Viewer>,
 }
@@ -36,7 +37,7 @@ impl<L: DataLoader, C: WebRenderSync<L>> WebRenderSync<L> for Shell<C> {
                         </button>
                         <nav class="menu-panel" id="account-panel" aria-label="Account" hidden>
                             <div class="label">{self.viewer.as_ref().unwrap().email.as_str()}</div>
-                            <a href="/" aria-current="page">"Builds"</a>
+                            <a href={self.builds_href.as_str()} aria-current="page">"Builds"</a>
                             <div class="sep"></div>
                             <div class="label" id="theme-label">"Theme"</div>
                             <div class="seg" role="group" aria-labelledby="theme-label">

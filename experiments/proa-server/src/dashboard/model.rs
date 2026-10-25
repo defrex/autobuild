@@ -74,15 +74,21 @@ pub fn effective_status(state: &Value) -> String {
     }
     status.into()
 }
+pub struct ProjectionFacts<'a> {
+    pub dashboard: &'a Value,
+    pub restack: &'a Value,
+    pub deferral: &'a Value,
+}
 pub fn project(
     record: &Value,
     state: &Value,
-    facts: &Value,
-    restack: &Value,
+    projections: ProjectionFacts<'_>,
     config: &Value,
     streams: Option<&[Value]>,
     pinned: Option<&Value>,
 ) -> Option<Value> {
+    let facts = projections.dashboard;
+    let restack = projections.restack;
     let status = effective_status(state);
     if ![
         "queued",
@@ -469,6 +475,37 @@ pub fn project(
             out["blockers"].as_array_mut().unwrap().push(json!(
                 "verification failed: file a repair child targeting this node"
             ));
+        }
+    }
+    // Terminal pipeline boundaries match the engine's final awaiting-PR route.
+    // Operator/policy gates above that route must never carry an old diagnostic.
+    let no_commands = !array(&state["pendingCommands"])
+        .iter()
+        .any(|command| command["command"] == "pause" || command["command"] == "abort");
+    let settled = state["kind"] != "node"
+        && plan_done
+        && code_done
+        && finalize_done
+        && !failed
+        && !pending_restart
+        && !state["specRev"].is_null()
+        && array(&pipeline["verify"]["steps"]).iter().all(satisfied)
+        && array(&pipeline["finalize"]["steps"])
+            .iter()
+            .all(|name| posts.iter().any(|f| &f["step"] == name))
+        && state["prState"] != "conflicted";
+    let node_wait = state["kind"] == "node"
+        && state["nodeRestack"]["conflict"].is_null()
+        && (!super::tree::integration_current(state)
+            || (!super::tree::integration_failed(state) && super::tree::cycle_verified(state)));
+    if (settled || node_wait)
+        && number(&state["compatibility"]["decisiveFacts"]) == 0
+        && no_commands
+        && state["status"] != "paused"
+        && array(&state["openEscalations"]).is_empty()
+    {
+        if let Some(reason) = super::routing::current_deferral(projections.deferral, state) {
+            out["blockers"].as_array_mut().unwrap().push(json!(reason));
         }
     }
     out["steps"] = json!(steps);

@@ -65,13 +65,18 @@ impl HomePage {
                             value: step.clone(),
                             timer: elapsed
                                 .map(|ms| {
-                                    super::duration(
+                                    let value = super::duration(
                                         ms + since
                                             .map(|since| {
                                                 chrono::Utc::now().timestamp_millis() - since
                                             })
                                             .unwrap_or(0),
-                                    )
+                                    );
+                                    if step["count"].as_i64().is_some_and(|count| count > 1) {
+                                        format!("{value}/{}", step["count"])
+                                    } else {
+                                        value
+                                    }
                                 })
                                 .unwrap_or_default(),
                             accumulated: elapsed.unwrap_or(0).to_string(),
@@ -123,6 +128,7 @@ impl HomePage {
         }
     }
 }
+struct Reasons<'a>(&'a Value);
 struct Rows<'a>(&'a HomePage);
 pub struct Steps<'a>(&'a [StepView]);
 pub struct Questions<'a>(pub &'a Value);
@@ -140,8 +146,11 @@ impl<L: DataLoader> WebRenderSync<L> for Steps<'_> {
             html_sync! {
                 <li data-state={state}>
                     <span aria-hidden="true">{glyph}</span>
+                    " "
                     {text(&step["label"])}
+                    " "
                     <span class="slack">{text(&step["qualifier"])}</span>
+                    " "
                     <span
                         class="slack"
                         data-elapsed={view.accumulated.as_str()}
@@ -192,6 +201,7 @@ impl<L: DataLoader> WebRenderSync<L> for Rows<'_> {
                             {text(&view.landing)}
                         </p>
                         <ol class="steps" aria-label="Pipeline steps">{Steps(&view.steps)}</ol>
+                        {Reasons(&row["steps"])}
                         <p class="diagnostic">
                             {text(&row["dispatch"])}
                             {text(&row["abortProgress"])}
@@ -285,7 +295,12 @@ pub async fn handler(
 ) -> Result<impl IntoResponse, AppError> {
     let page = HomePage::new(load(state, selection.project).await);
     let project = page.snapshot.project.clone();
+    let builds_href = project
+        .as_deref()
+        .map(|project| link(project, None))
+        .unwrap_or_else(|| "/".into());
     let html = RouteResponse::ssr(RootDocument {
+        builds_href,
         title: "Builds · Proa server",
         project,
         projects: page.snapshot.projects.clone(),
@@ -306,4 +321,18 @@ pub async fn markdown(
     Ok(explicit_markdown(HomePage::new(
         load(state, selection.project).await,
     ))?)
+}
+
+impl<L: DataLoader> WebRenderSync<L> for Reasons<'_> {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        for step in array(self.0) {
+            if let Some(reason) = step["reason"].as_str() {
+                html_sync! {
+                    <p class="slack" data-step-reason>{reason}</p>
+                }
+                .render(cx)?;
+            }
+        }
+        Ok(())
+    }
 }

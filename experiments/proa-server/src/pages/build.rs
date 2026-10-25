@@ -12,6 +12,7 @@ use proa_server::dashboard::model::array;
 use serde_json::Value;
 pub struct BuildPage {
     pub value: Value,
+    status: String,
     back: String,
     findings: String,
     verify: String,
@@ -28,6 +29,7 @@ struct FrameView {
 struct Frames<'a>(&'a [FrameView]);
 impl BuildPage {
     pub fn new(value: Value) -> Self {
+        let status = proa_server::dashboard::model::effective_status(&value["state"]);
         let back = link(text(&value["project"]), None);
         let findings =
             serde_json::to_string_pretty(&value["state"]["reviewFindings"]).unwrap_or_default();
@@ -58,6 +60,7 @@ impl BuildPage {
             .collect();
         Self {
             value,
+            status,
             back,
             findings,
             verify,
@@ -131,7 +134,9 @@ impl<L: DataLoader> WebRenderSync<L> for BuildPage {
             <main class="page" data-page="build-detail" data-live="detail">
                 <a href={self.back.as_str()}>"Back to Builds"</a>
                 <h1>{text(&v["record"]["slug"])}</h1>
-                <p class="m">{text(&v["state"]["status"])}</p>
+                <p class="build-status m" data-status={self.status.as_str()}>
+                    {self.status.as_str()}
+                </p>
                 <section data-escalations>
                     <h2>"Open escalations"</h2>
                     {super::home::Questions(&self.questions)}
@@ -204,9 +209,11 @@ pub async fn handler(
     let (Some(reader), Some(project)) = (state.data, selection.project) else {
         return (StatusCode::NOT_FOUND, "Project unavailable").into_response();
     };
+    let builds_href = link(&project, None);
     match load_detail(reader, project.clone(), slug).await {
         Ok(value) => RouteResponse::ssr(RootDocument {
             title: "Build · Proa server",
+            builds_href,
             project: Some(project),
             projects: Vec::new(),
             viewer: Some(viewer),

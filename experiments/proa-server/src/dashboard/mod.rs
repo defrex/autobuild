@@ -6,4 +6,5 @@ pub mod integration;
 pub mod landing;
 pub mod model;
 pub mod restack;
+pub mod routing;
 pub mod tree;

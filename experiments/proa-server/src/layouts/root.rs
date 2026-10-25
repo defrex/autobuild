@@ -6,6 +6,7 @@ use proa_macros::html_sync;
 pub struct RootDocument<C> {
     pub project: Option<String>,
     pub projects: Vec<String>,
+    pub builds_href: String,
     pub title: &'static str,
     pub viewer: Option<crate::auth::Viewer>,
     pub content: C,
@@ -32,6 +33,7 @@ impl<L: DataLoader, C: WebRenderSync<L>> WebRenderSync<L> for RootDocument<C> {
                         viewer: self.viewer,
                         project: self.project,
                         projects: self.projects,
+                        builds_href: self.builds_href,
                     }}
                 </body>
             </html>

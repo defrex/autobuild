@@ -43,6 +43,7 @@ pub fn response(email: Option<String>, refused: bool, enabled: bool, return_to: 
         .finish();
     RouteResponse::ssr(RootDocument {
         project: None,
+        builds_href: "/".into(),
         projects: Vec::new(),
         title: "Sign in · Proa server",
         viewer: None,

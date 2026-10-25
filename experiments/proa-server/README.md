@@ -183,3 +183,8 @@ The offline TypeScript projection oracle is regenerated with
 `bun tools/projection-fixtures.ts --write` and checked without writing by
 `bun tools/projection-fixtures.ts`. Whole logs, corpus prefix boundaries, session
 stream metadata and tree composition are compared by native Rust tests.
+
+A JSON verify report can attach stored frames with
+`frames: [{kind, rev, mediaType, caption?}]`. Only PNG, JPEG and WebP artifacts are
+served; `/frame` accepts a selected project/build and a report frame index,
+never a blob URL or arbitrary artifact reference.

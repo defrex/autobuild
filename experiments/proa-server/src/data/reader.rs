@@ -24,6 +24,7 @@ struct Cached {
     accumulator: Accumulator,
     display: crate::dashboard::facts::DashboardFacts,
     restack: crate::dashboard::restack::RestackFacts,
+    deferral: crate::dashboard::routing::DeferralFacts,
     failure: Option<DataError>,
 }
 impl Cached {
@@ -51,6 +52,7 @@ impl Cached {
         if self.accumulator.scope() == ReduceScope::Build {
             self.display.advance(events);
             self.restack.advance(events);
+            self.deferral.advance(events);
         }
         self.cursor = cursor;
         Ok(())
@@ -124,6 +126,7 @@ impl DataReader {
                     accumulator: Accumulator::new(reduce_scope),
                     display: Default::default(),
                     restack: Default::default(),
+                    deferral: Default::default(),
                     failure: None,
                 }))
             })
@@ -161,7 +164,7 @@ impl DataReader {
         }
         Ok((
             cached.accumulator.finish(),
-            serde_json::json!({"dashboard":cached.display.finish(),"restack":cached.restack.finish()}),
+            serde_json::json!({"dashboard":cached.display.finish(),"restack":cached.restack.finish(),"deferral":cached.deferral.finish()}),
             cached.cursor,
         ))
     }
@@ -319,6 +322,7 @@ mod tests {
             accumulator: Accumulator::new(ReduceScope::Session),
             display: Default::default(),
             restack: Default::default(),
+            deferral: Default::default(),
             failure: None,
         };
         let before = cached.accumulator.finish();
@@ -344,6 +348,7 @@ mod tests {
             accumulator: Accumulator::new(ReduceScope::Build),
             display: Default::default(),
             restack: Default::default(),
+            deferral: Default::default(),
             failure: None,
         };
         let before = cached.accumulator.finish();

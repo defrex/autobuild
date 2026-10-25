@@ -9,7 +9,7 @@
     "experiments/proa-server/tools/capture-scenario-logs.ts": "e6fc7d9524584f64b2b6c37cbfa4626131cc1970d77b00a7ad36f47e96cd77bf",
     "experiments/proa-server/tools/fixture-core.ts": "b2cf3bcb62478e096eddba3a53f8e5135399905e17c7cfee51d525b0392b4fe3",
     "experiments/proa-server/tools/generate-fixtures.ts": "b21421f4c5d96221b3f169e713c95e2443834ddd9f11ba9640e618949e0c1c7b",
-    "experiments/proa-server/tools/projection-fixtures.ts": "4e500c723cd08bb0aa22e80a71805562c1435813ef150313dd01ff83340af672",
+    "experiments/proa-server/tools/projection-fixtures.ts": "c23dcc452e5c720cef20c308a924fcfbfa3c88436bb90d9e07fb4db3eec2c824",
     "package.json": "7507080992cd3ae4e56cc195150ff0da8a4935255b0bdba6d4c52dd5b4cf4bdd",
     "packages/core/package.json": "d7c7e0bf807a59b9faf550bef5bf815835d36719ef61673d42069da8350d5c8e",
     "packages/core/src/cli/args.test.ts": "eb8fa6ef0cebcf26278cd984794df52a0d5a1e3a3ca1f2dd5dd9ca12d0ee09b4",

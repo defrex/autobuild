@@ -6,6 +6,10 @@ import { isDeepStrictEqual } from 'node:util'
 import { gunzipSync } from 'node:zlib'
 import type { Config } from '../../../packages/core/src/config/schema'
 import { parseConfig } from '../../../packages/core/src/config/load'
+import {
+  currentDeferralObservationReducer,
+  currentAutoMergeDeferralFrom,
+} from '../../../packages/core/src/kernel/auto-merge'
 import { buildReducer } from '../../../packages/core/src/kernel/reducer'
 import { dashboardFactsReducer } from '../../../packages/core/src/cli/dashboard/facts'
 import { enrichIntegrationRows } from '../../../packages/core/src/cli/dashboard/integration-row'
@@ -52,6 +56,10 @@ export function projectionOutcome(
     return {
       row: projectBuild(record, state, configuration, events, streams, pinnedConfig),
       facts: dashboardFactsReducer.reduce(events),
+      deferral: currentDeferralObservationReducer.reduce(events),
+      currentDeferral:
+        currentAutoMergeDeferralFrom(currentDeferralObservationReducer.reduce(events), state) ??
+        null,
       landing: landingPolicyDisplay(state.landing),
     }
   } catch (error) {
@@ -89,6 +97,7 @@ export function generateProjection() {
       ['cycle-a', 'node', 'cycle-b'],
       ['cycle-b', 'node', 'cycle-a'],
     ],
+    [['node-deferral', 'node', null]],
   ].map((definitions) =>
     definitions.map(([slug, kind, parent]) => {
       const record: BuildRecord = {
@@ -135,6 +144,43 @@ export function generateProjection() {
             children: [{ source: 'file', id: 'nested', title: 'title unavailable' }],
           },
         } as unknown as AbEvent)
+      }
+      if (slug === 'node-deferral') {
+        const finalized = witnessEvent(
+          'build',
+          'finalize.completed',
+          schemas.build['finalize.completed'],
+        )
+        const requested = witnessEvent(
+          'build',
+          'build.auto-merge-requested',
+          schemas.build['build.auto-merge-requested'],
+        )
+        const observation = witnessEvent(
+          'build',
+          'observation.recorded',
+          schemas.build['observation.recorded'],
+        )
+        const payload = finalized.payload as { pr: Record<string, unknown> }
+        events.push(
+          {
+            ...finalized,
+            build: slug,
+            seq: 3,
+            payload: { ...payload, pr: { ...payload.pr, number: 1 } },
+          } as unknown as AbEvent,
+          { ...requested, build: slug, seq: 4 } as unknown as AbEvent,
+          {
+            ...observation,
+            build: slug,
+            seq: 5,
+            payload: {
+              ...(observation.payload as object),
+              summary: 'Scoped node deferral',
+              refs: ['auto-merge-gate:pr:1:command:4'],
+            },
+          } as unknown as AbEvent,
+        )
       }
       return { record, events, expected: projectionOutcome(record, events) }
     }),

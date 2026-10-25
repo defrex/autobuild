@@ -38,8 +38,11 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
         let actual = proa_server::dashboard::model::project(
             &fixture["record"],
             &state.finish()["build"],
-            &fixture["expected"]["facts"],
-            &restack.finish(),
+            proa_server::dashboard::model::ProjectionFacts {
+                dashboard: &fixture["expected"]["facts"],
+                restack: &restack.finish(),
+                deferral: &fixture["expected"]["deferral"],
+            },
             &corpus["config"],
             streams,
             fixture.get("pinnedConfig"),
@@ -64,8 +67,11 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
             let row = proa_server::dashboard::model::project(
                 &fixture["record"],
                 &state.finish()["build"],
-                &fixture["expected"]["facts"],
-                &restack.finish(),
+                proa_server::dashboard::model::ProjectionFacts {
+                    dashboard: &fixture["expected"]["facts"],
+                    restack: &restack.finish(),
+                    deferral: &fixture["expected"]["deferral"],
+                },
                 &corpus["config"],
                 None,
                 None,
@@ -107,6 +113,24 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
     for fixture in corpus["fixtures"].as_array().unwrap() {
         let events = fixture["events"].as_array().unwrap();
         let expected = &fixture["expected"]["facts"];
+        let mut deferral = proa_server::dashboard::routing::DeferralFacts::default();
+        deferral.advance(events);
+        assert_eq!(deferral.finish(), fixture["expected"]["deferral"]);
+        if fixture["unreadable"].is_null() {
+            let mut state = proa_server::data::reducers::Accumulator::new(
+                proa_server::data::reducers::Scope::Build,
+            );
+            state.advance(events).unwrap();
+            assert_eq!(
+                serde_json::to_value(proa_server::dashboard::routing::current_deferral(
+                    &deferral.finish(),
+                    &state.finish()["build"]
+                ))
+                .unwrap(),
+                fixture["expected"]["currentDeferral"]
+            );
+        }
+
         if fixture["unreadable"].is_null() {
             let mut state = proa_server::data::reducers::Accumulator::new(
                 proa_server::data::reducers::Scope::Build,
@@ -117,8 +141,11 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
             let actual = proa_server::dashboard::model::project(
                 &fixture["record"],
                 &state.finish()["build"],
-                expected,
-                &restack.finish(),
+                proa_server::dashboard::model::ProjectionFacts {
+                    dashboard: expected,
+                    restack: &restack.finish(),
+                    deferral: &fixture["expected"]["deferral"],
+                },
                 &corpus["config"],
                 None,
                 None,
@@ -152,18 +179,24 @@ fn retained_display_facts_match_the_typescript_oracle_whole_and_chunked() {
         );
         let mut restack = proa_server::dashboard::restack::RestackFacts::default();
         let mut cursor = 0;
+        let mut deferral = proa_server::dashboard::routing::DeferralFacts::default();
         for checkpoint in fixture["checkpoints"].as_array().unwrap() {
             let end = checkpoint["end"].as_u64().unwrap() as usize;
             let suffix = &events[cursor..end];
             chunked.advance(suffix);
+            deferral.advance(suffix);
+            assert_eq!(deferral.finish(), checkpoint["expected"]["deferral"]);
             if fixture["unreadable"].is_null() {
                 state.advance(suffix).unwrap();
                 restack.advance(suffix);
                 let row = proa_server::dashboard::model::project(
                     &fixture["record"],
                     &state.finish()["build"],
-                    &chunked.finish(),
-                    &restack.finish(),
+                    proa_server::dashboard::model::ProjectionFacts {
+                        dashboard: &chunked.finish(),
+                        restack: &restack.finish(),
+                        deferral: &checkpoint["expected"]["deferral"],
+                    },
                     &corpus["config"],
                     None,
                     None,

@@ -108,8 +108,11 @@ impl DataReader {
                     let row = model::project(
                         record,
                         &state["build"],
-                        &facts["dashboard"],
-                        &facts["restack"],
+                        model::ProjectionFacts {
+                            dashboard: &facts["dashboard"],
+                            restack: &facts["restack"],
+                            deferral: &facts["deferral"],
+                        },
                         &config,
                         Some(&streams),
                         pinned.as_ref(),
