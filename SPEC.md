@@ -357,6 +357,11 @@ from the held run. It reads runtime-owned durable projections while generations 
 live runtime reserved. Overlap requires explicit launcher and target capabilities; unsupported
 targets fail safely with manual-restart attention. Operator stop wins and joins
 all live children. Only the presentation owner installs terminal cleanup.
+Its active input subscription maintains raw termios across retired generation
+exits, including repeated handoffs, restart and rollback. Repair occurs on the
+next maintenance turn (normally within 100 ms; event-loop stalls can delay it).
+Maintenance stops before input release, job-control suspension or operator stop;
+clean exit restores the shell's prior cooked tty state.
 `[upgrade] automatic = false` disables target preparation; `--once`, origin
 `--repository`, hosted cron and development hot rendering remain direct.
 

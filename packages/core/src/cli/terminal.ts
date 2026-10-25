@@ -332,6 +332,12 @@ export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin):
       const priorRaw = stream.isRaw === true
       const priorFlowing = stream.readableFlowing
       let cleaned = false
+      let maintenance: ReturnType<typeof setInterval> | undefined
+      const reassertRaw = (): void => {
+        // Bun caches isRaw even when a retired process restores shared termios.
+        stream.setRawMode(false)
+        stream.setRawMode(true)
+      }
       // One decoder per activation: its paste and CSI state belongs to this
       // region's lifetime, and an unterminated paste dies with it.
       const decoder = createTerminalInputDecoder(hooks)
@@ -344,6 +350,7 @@ export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin):
       const cleanup = (): void => {
         if (cleaned) return
         cleaned = true
+        clearInterval(maintenance)
         decoder.cleanup()
         if (listening) stream.removeListener('keypress', listener)
         try {
@@ -358,8 +365,22 @@ export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin):
         emitKeypressEvents(stream)
         stream.on('keypress', listener)
         listening = true
-        stream.setRawMode(true)
+        reassertRaw()
         stream.resume()
+        maintenance = setInterval(() => {
+          if (cleaned) return
+          try {
+            reassertRaw()
+          } catch {
+            // A lost terminal must not throw from a timer or retain ownership.
+            try {
+              cleanup()
+            } catch {
+              // Restoration is best-effort after the terminal has failed.
+            }
+          }
+        }, 100)
+        maintenance.unref()
         hooks.onListening?.()
         return cleanup
       } catch (error) {
