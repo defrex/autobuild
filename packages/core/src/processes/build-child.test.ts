@@ -540,23 +540,17 @@ for (const kind of ['work', 'node'] as const) {
       return new TextDecoder().decode(result.stdout).trim()
     }
     try {
-      git('init', '-q')
-      await writeFile(join(tmp, 'file'), 'base')
-      git('add', 'file')
-      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'base')
-      const parent = git('rev-parse', 'HEAD')
-      await writeFile(join(tmp, 'file'), 'head')
-      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'head')
-      const head = git('rev-parse', 'HEAD')
-      const config = parseConfig(`forge = "local-git"
+      // Neither command can finish until its sibling has actually begun.
+      // The bounded barrier also fails a serial pipeline without timing assumptions.
+      const pipeline = `forge = "local-git"
 [roles.default]
 runtime = "pi"
 [tickets]
 source = "file"
 readyState = "ready"
 [commands]
-a = "touch a.started; sleep 1; test -f b.started"
-b = "touch b.started; sleep 1; test -f a.started"
+a = "touch a.started; i=0; until test -f b.started; do i=$((i+1)); test $i -lt 400 || exit 1; sleep 0.05; done"
+b = "touch b.started; i=0; until test -f a.started; do i=$((i+1)); test $i -lt 400 || exit 1; sleep 0.05; done"
 [verify]
 steps = [["a", "b"]]
 [verify.a]
@@ -567,7 +561,17 @@ always = true
 kind = "check"
 command = "b"
 always = true
-`)
+`
+      const config = parseConfig(pipeline)
+      git('init', '-q')
+      await writeFile(join(tmp, 'file'), 'base')
+      await writeFile(join(tmp, 'autobuild.toml'), pipeline)
+      git('add', 'file', 'autobuild.toml')
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'base')
+      const parent = git('rev-parse', 'HEAD')
+      await writeFile(join(tmp, 'file'), 'head')
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'head')
+      const head = git('rev-parse', 'HEAD')
       await store.createBuild({ slug, repo: tmp, branch: `ab/${slug}`, ticket })
       const seed = async (write: EventWrite) => {
         await store.append(slug, write)
@@ -671,7 +675,7 @@ always = true
         return event
       }
       const shutdown = new AbortController()
-      const timer = setTimeout(() => shutdown.abort(), 8000)
+      const timer = setTimeout(() => shutdown.abort(), 30_000)
       try {
         await runBuildChild(
           { slug, storeRef: 'memory', instance: 'stage-child', workspaceRef: tmp },
@@ -704,5 +708,5 @@ always = true
       await store.close()
       await rm(tmp, { recursive: true, force: true })
     }
-  }, 12_000)
+  }, 40_000)
 }
